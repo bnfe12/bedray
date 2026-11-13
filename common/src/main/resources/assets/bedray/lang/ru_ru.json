@@ -499,7 +499,7 @@
   "bedray.opt.rays_cull_shared_glass.desc": "Консервативное удаление совпадающих внутренних граней полных стеклянных блоков после захвата Sodium. Для перестроения всех секций после изменения настройки перезагрузите мир.",
   "bedray.opt.rays_transparency_stats": "Счётчики прозрачности",
   "bedray.opt.rays_transparency_stats.desc": "Показывать в F3 отложенные GPU-счётчики запросов, кандидатов, слоёв и переполнений. Атомарные операции нагружают GPU; по умолчанию выключено. Это количества, а не время.",
-  "bedray.natives.partner_sdk_required": "Требуется партнёрский SDK NVIDIA",
+  "bedray.natives.partner_sdk_required": "Требуется обёртка Neural Rendering",
   "bedray.natives.partner_file_found": "[ ФАЙЛ НАЙДЕН ]",
   "bedray.natives.partner_sdk": "[ ПАРТНЁРСКИЙ SDK ]",
   "bedray.natives.partner_file_detection": "Проверка локальных файлов служит для диагностики.",
