@@ -203,6 +203,9 @@ BedrayStatus BloomPass::render(const BedrayBloomFrameDesc& frame, BedrayError* e
             if (status != BEDRAY_OK) return status;
         }
     }
+    // Bloom off forces strength to zero (validated above) and glare off means glareK is zero, so the apply shader's
+    // add is zero and it early-returns per pixel without touching the output: the full-screen dispatch is a no-op.
+    if (!frame.bloom_enabled && glare <= 0.0f) return BEDRAY_OK;
     return dispatch(3, frame.width, frame.height, bits(views_[0].view), frame.output_view);
 }
 

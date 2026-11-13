@@ -814,8 +814,8 @@ public final class RtFrameRenderer {
 
     /** Only completed, still-leased slots may be read; sequence orders results, never proves completion. */
     private static void consumeCompletedStats() {
-        var ready = statsReadbacks.ready().stream()
-            .sorted(java.util.Comparator.comparingLong(lease -> lease.metadata().sequence())).toList();
+        var ready = new java.util.ArrayList<>(statsReadbacks.ready());
+        ready.sort(java.util.Comparator.comparingLong(lease -> lease.metadata().sequence()));
         for (var lease : ready) {
             var metadata = lease.metadata();
             if (metadata.sequence() > lastStatsSequence) {
