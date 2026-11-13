@@ -57,14 +57,27 @@ class RtTonemapTest {
     @Test void acesMatchesTheNarkowiczAnchor() {
         // (1*(2.51+0.03)) / (1*(2.43+0.59)+0.14) = 2.54 / 3.16
         float[] c = RtTonemap.applyMode(1, 1, 1, 1);
-        assertEquals(2.54f / 3.16f, c[0], 1e-4f);
+        assertEquals(2.54f / 3.16f, decodeSrgb(c[0]), 1e-4f);
         assertEquals(c[0], c[1], 1e-6f);
     }
 
     @Test void pbrNeutralPreservesLowColoursMinusTheOffset() {
         // min 0.5 >= 0.08 -> offset 0.04; peak 0.46 < startCompression 0.76 -> colour - offset, no compression
         float[] c = RtTonemap.applyMode(0.5f, 0.5f, 0.5f, 2);
-        assertEquals(0.46f, c[0], 1e-4f);
+        assertEquals(0.46f, decodeSrgb(c[0]), 1e-4f);
+    }
+
+    private static float decodeSrgb(float c) {
+        return c <= 0.04045f ? c / 12.92f : (float) Math.pow((c + 0.055f) / 1.055f, 2.4);
+    }
+
+    @Test void standardCurvesEncodeDisplayLinearOutputExactlyOnce() {
+        // Khronos PBR Neutral specifies linear output: mid gray minus the 0.04 Fresnel offset is 0.14 linear.
+        assertEquals(0.14f, decodeSrgb(RtTonemap.applyMode(0.18f, 0.18f, 0.18f, 2)[0]), 1e-5f);
+        // Uchimura's linear section passes its middle-gray knot through unchanged before display encoding.
+        assertEquals(0.22f, decodeSrgb(RtTonemap.applyMode(0.22f, 0.22f, 0.22f, 3)[0]), 1e-5f);
+        // The minimal AgX reference maps 18% gray near a 0.5 display signal, not a second encoded 0.74 signal.
+        assertEquals(0.5f, RtTonemap.applyMode(0.18f, 0.18f, 0.18f, 4)[0], 0.025f);
     }
 
     @Test void theModesAreGenuinelyDifferentLooks() {
