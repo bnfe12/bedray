@@ -9,6 +9,11 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerRequest;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessRuntime;
+import io.github.andrexarlay.vulkancompat.shaderhost.IrisShaderHost;
+import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostKind;
+import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostSelector;
+import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHosts;
+import io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisPassGraph;
 import net.caffeinemc.mods.sodium.client.render.SodiumWorldRenderer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.SectionPos;
@@ -32,8 +37,9 @@ import org.slf4j.LoggerFactory;
 public final class RtCaptureControl {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
 
-    private static boolean lastOn = false;
+    private static boolean lastCaptureOn = false;
     private static RtActivation.Reason lastReason = null;
+    private static boolean lastIrisOn = false;
     private static boolean first = true;
     private static long rebuildRequests;
     private static long rebuildScheduledSections;
@@ -43,28 +49,64 @@ public final class RtCaptureControl {
 
     public static void onFrameBegin() {
         RtActivation.Reason reason = currentReason();
-        boolean on = reason == null;
-        RtGeometryGate.publish(on, reason);
-        if (!first && on == lastOn && reason == lastReason) {
+        boolean rtOn = reason == null;
+        RtGeometryGate.publish(rtOn, reason);
+        // The Iris raster host draws gbuffers/shadow from the same captured geometry, so capture runs for it even with RT
+        // off. Native rays are suppressed separately (RtFrameRenderer.render returns early while iris is active).
+        boolean irisOn = irisWantsCapture();
+        RtGeometryGate.publishIris(irisOn);
+        boolean captureOn = rtOn || irisOn;
+        if (!first && captureOn == lastCaptureOn && reason == lastReason && irisOn == lastIrisOn) {
             return;
         }
-        boolean wasOn = lastOn;
+        boolean wasOn = lastCaptureOn;
         first = false;
-        lastOn = on;
+        lastCaptureOn = captureOn;
         lastReason = reason;
-        if (on && !wasOn) {
+        lastIrisOn = irisOn;
+        if (captureOn && !wasOn) {
             int scheduled = scheduleFullRebuild();
-            LOGGER.info("[VKB-RT] [VKB-AUTOTEST] capture=on rebuild_scheduled_box={} (all built Sodium sections are re-meshed and captured)",
-                scheduled < 0 ? "no_world" : String.valueOf(scheduled));
-        } else if (!on && wasOn) {
+            LOGGER.info("[VKB-RT] [VKB-AUTOTEST] capture=on rebuild_scheduled_box={} rt={} iris={} (all built Sodium sections are re-meshed and captured)",
+                scheduled < 0 ? "no_world" : String.valueOf(scheduled), rtOn, irisOn);
+        } else if (!captureOn && wasOn) {
             int dropped = SectionGeometryRegistry.INSTANCE.clear();
-            LOGGER.info("[VKB-RT] [VKB-AUTOTEST] capture=off reason={} ({}) dropped_sections={}", reason.name().toLowerCase(java.util.Locale.ROOT),
-                reason.text(), dropped);
+            LOGGER.info("[VKB-RT] [VKB-AUTOTEST] capture=off reason={} ({}) dropped_sections={}",
+                reason == null ? "none" : reason.name().toLowerCase(java.util.Locale.ROOT),
+                reason == null ? "" : reason.text(), dropped);
         } else {
-            LOGGER.info("[VKB-RT] [VKB-AUTOTEST] capture={} reason={}{}", on ? "on" : "off",
+            LOGGER.info("[VKB-RT] [VKB-AUTOTEST] capture={} rt={} iris={} reason={}{}", captureOn ? "on" : "off", rtOn, irisOn,
                 reason == null ? "none" : reason.name().toLowerCase(java.util.Locale.ROOT),
                 reason == null ? "" : " (" + reason.text() + ")");
         }
+    }
+
+    /**
+     * True when the Iris raster host needs geometry capture this frame: it is the active host, not disabled for the session,
+     * and its full raster graph draws at least one geometry pass (shadow/gbuffers). A composite-only pack (no geometry pass)
+     * does not capture, so the I3.5 post path keeps its zero-capture cost.
+     */
+    private static boolean irisWantsCapture() {
+        if (ShaderHosts.active() != ShaderHostKind.IRIS) {
+            return false;
+        }
+        ShaderHostSelector selector = ShaderHosts.selector();
+        if (selector != null && selector.isDisabledForSession(ShaderHostKind.IRIS)) {
+            return false;
+        }
+        IrisShaderHost host = ShaderHosts.iris();
+        if (host == null) {
+            return false;
+        }
+        IrisPassGraph.FullResult full = host.activeFullGraph();
+        if (full == null) {
+            return false;
+        }
+        for (IrisPassGraph.FullPass p : full.passes()) {
+            if (!p.fullscreen()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static RtActivation.Reason currentReason() {

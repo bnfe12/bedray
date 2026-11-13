@@ -102,6 +102,93 @@ public final class IrisUniforms {
     public static final java.util.Set<String> CONSTANT_MATRICES = java.util.Set.of("modelViewMatrix", "projectionMatrix",
         "modelViewMatrixInverse", "projectionMatrixInverse", "textureMatrix");
 
+    /**
+     * Raster-core UBO catalog: name -> canonical GLSL type, in layout order. Every gbuffers/shadow/deferred/composite/final
+     * program shares these FIXED std140 offsets ({@link #UBO_LAYOUT}); a program emits only the members it uses, so any
+     * subset is layout-compatible and the executor writes one block per pass. Scalar uniforms (float/int/bool) may be
+     * declared with any scalar type by the pack (Iris binds per declaration); the declared type is what gets emitted.
+     */
+    public static final Map<String, String> UBO;
+    public static final IrisUniformBlock.Layout UBO_LAYOUT;
+    public static final int UBO_BINDING = 30;
+
+    /** Raster-core sampler name -> binding (set 0). Aliases share a binding; custom pack textures start at 31 (30 is the UBO). */
+    public static final Map<String, Integer> GB_SAMPLERS;
+    public static final int GB_CUSTOM_BINDING_BASE = 31;
+
+    static {
+        Map<String, String> u = new LinkedHashMap<>();
+        for (String m : new String[] {"modelViewMatrix", "projectionMatrix", "modelViewMatrixInverse", "projectionMatrixInverse",
+            "textureMatrix", "shadowModelView", "shadowProjection", "shadowModelViewInverse", "shadowProjectionInverse"}) {
+            u.put(m, "mat4");
+        }
+        for (String v : new String[] {"cameraPosition", "previousCameraPosition", "sunPosition", "moonPosition",
+            "shadowLightPosition", "upPosition"}) {
+            u.put(v, "vec3");
+        }
+        for (String v : new String[] {"entityColor", "fogColor", "skyColor", "blocklightColor", "ambientColor"}) {
+            u.put(v, "vec4");
+        }
+        u.put("eyeBrightness", "ivec2");
+        u.put("eyeBrightnessSmooth", "ivec2");
+        for (String f : new String[] {"worldTime", "frameTimeCounter", "frameTime", "rainStrength", "wetness", "aspectRatio",
+            "viewWidth", "viewHeight", "near", "far", "sunAngle", "moonAngle", "shadowDistance", "shadowMapResolution",
+            "centerDepthSmooth", "playerMood", "hideGUI", "blindness", "nightVision", "darknessFactor", "darknessLightFactor",
+            "screenBrightness", "cloudHeight", "cloudSpeed", "endFlashIntensity", "sunPathRotation"}) {
+            u.put(f, "float");
+        }
+        u.put("frameCounter", "int");
+        u.put("worldDay", "int");
+        u.put("isEyeInWater", "int");
+        u.put("isRightHanded", "bool");
+        for (String m : new String[] {"previousModelViewMatrix", "previousProjectionMatrix"}) {
+            u.put(m, "mat4");
+        }
+        u.put("relativeEyePosition", "vec3");
+        for (String i : new String[] {"heldBlockLightValue", "heldBlockLightValue2", "heldItemId", "heldItemId2", "moonPhase"}) {
+            u.put(i, "int");
+        }
+        for (String i : new String[] {"bedrockLevel", "blockEntityId", "entityId", "renderStage"}) {
+            u.put(i, "int");
+        }
+        u.put("atlasSize", "ivec2");
+        u.put("cameraPositionFract", "vec3");
+        u.put("endFlashPosition", "vec3");
+        UBO = java.util.Collections.unmodifiableMap(u);
+        UBO_LAYOUT = IrisUniformBlock.layout(UBO);
+
+        Map<String, Integer> g = new LinkedHashMap<>();
+        g.put("colortex0", 0);
+        g.put("gcolor", 0);
+        g.put("depthtex0", 1);
+        g.put("gdepthtex", 1);
+        for (int i = 1; i <= 15; i++) {
+            g.put("colortex" + i, i + 1);
+        }
+        g.put("gaux1", 2);
+        g.put("gaux2", 3);
+        g.put("gaux3", 4);
+        g.put("gaux4", 5);
+        g.put("depthtex1", 17);
+        g.put("depthtex2", 18);
+        g.put("shadowtex0", 19);
+        g.put("shadow", 19);
+        g.put("shadowtex1", 20);
+        g.put("shadowcolor0", 21);
+        g.put("shadowcolor", 21);
+        g.put("shadowcolor1", 22);
+        g.put("lightmap", 23);
+        g.put("normals", 24);
+        g.put("specular", 25);
+        g.put("texture", 26);
+        g.put("gtexture", 26);
+        g.put("tex", 26);
+        g.put("noisetex", 27);
+        g.put("lighttex0", 28);
+        g.put("lighttex1", 29);
+        GB_SAMPLERS = java.util.Collections.unmodifiableMap(g);
+    }
+
     /** Stable bindings preserve the original color/depth/frame ABI. */
     public static int colorBinding(int index) {
         if (index < 0 || index >= COLOR_TARGETS) throw new IllegalArgumentException("Color target index " + index);

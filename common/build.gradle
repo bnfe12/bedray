@@ -73,6 +73,10 @@ test {
     inputs.files(rootProject.file('gradle/slang.gradle'))
     inputs.files(rootProject.fileTree('compute-common/src/main'))
     jvmArgs '--enable-native-access=ALL-UNNAMED'
+    def slangcProp = System.getProperty('bedray.slangc')
+    if (slangcProp != null) systemProperty 'bedray.slangc', slangcProp
+    def rootsProp = System.getProperty('vkrtx.test.instanceRoots')
+    if (rootsProp != null) systemProperty 'vkrtx.test.instanceRoots', rootsProp
     // A test that blocks in native code must fail the run, not hold the whole gate forever. JUnit's default timeout
     // applies to every test in this module; individual tests may override it with a shorter @Timeout.
     systemProperty 'junit.jupiter.execution.timeout.default', '120 s'

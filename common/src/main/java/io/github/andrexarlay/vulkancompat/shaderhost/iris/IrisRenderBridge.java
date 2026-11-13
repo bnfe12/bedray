@@ -19,28 +19,42 @@ import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrameCapture;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import java.nio.ByteBuffer;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkFormatProperties;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
 
+import io.github.andrexarlay.vulkancompat.rt.entity.EntityGeometryFrame;
+import io.github.andrexarlay.vulkancompat.rt.world.RtConfig;
+import io.github.andrexarlay.vulkancompat.rt.world.RtEntityGeometryManager;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
+import io.github.andrexarlay.vulkancompat.rt.world.RtSky;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.shaderhost.IrisShaderHost;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostState;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.IrisPackSettings;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.client.renderer.state.level.LevelRenderState;
+import net.minecraft.client.renderer.state.level.SkyRenderState;
+import net.minecraft.client.renderer.texture.AbstractTexture;
+import net.minecraft.client.renderer.texture.TextureAtlas;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Game render bridge connecting Minecraft's frame loop to {@link IrisPostExecutor}.
+ * Game render bridge connecting Minecraft's frame loop to the Iris executors.
  * <p>
- * Manages the singleton lifecycle of {@link IrisPostExecutor} (initialization on first call
- * with an active {@link VkDevice}, destruction and recreation on shaderpack change, and
- * {@link #teardown()}), timing counters for Iris uniforms, and executes the compiled
- * composite/final pass graph for the active {@link IrisShaderHost}.
+ * When the host has a full raster-core graph ({@link IrisShaderHost#activeFullGraph()}) the bridge drives
+ * {@link IrisForwardExecutor} (shadow -> gbuffers -> deferred/composite/final) from capture-fed geometry; otherwise it
+ * drives the composite-only {@link IrisPostExecutor} over the engine color image. It manages the singleton lifecycle of
+ * whichever executor is active (initialization on first call with an active {@link VkDevice}, destruction and recreation
+ * on shaderpack change, and {@link #teardown()}), the Iris uniform timing counters, and the per-frame {@link
+ * IrisForwardExecutor.FrameInputs} (meshes, matrices, sky uniforms, engine views).
  */
 public final class IrisRenderBridge {
 
@@ -48,6 +62,12 @@ public final class IrisRenderBridge {
 
     private static IrisPostExecutor executor;
     private static String activePackName;
+
+    private static IrisForwardExecutor forwardExecutor;
+    private static String forwardPackName;
+    private static IrisPassGraph.FullResult forwardGraph;
+    private static final IrisFrameGeometry frameGeometry = new IrisFrameGeometry();
+    private static boolean lightmapFallbackLogged;
 
     // Frame timing tracking
     private static long lastFrameNano = 0L;
@@ -58,9 +78,10 @@ public final class IrisRenderBridge {
     private IrisRenderBridge() {}
 
     /**
-     * Shuts down and releases the active {@link IrisPostExecutor} instance.
+     * Shuts down and releases the active executor instances (post and forward).
      */
     public static synchronized void teardown() {
+        teardownForward();
         if (owner != null) { retire(); return; }
         if (executor != null) {
             executor.close();
@@ -69,11 +90,24 @@ public final class IrisRenderBridge {
         activePackName = null;
     }
 
+    private static void teardownForward() {
+        if (forwardExecutor != null) {
+            try {
+                forwardExecutor.close();
+            } catch (Throwable t) {
+                LOGGER.warn("[IrisRenderBridge] Error closing IrisForwardExecutor during teardown: {}", t.getMessage());
+            }
+            forwardExecutor = null;
+        }
+        forwardPackName = null;
+        forwardGraph = null;
+    }
+
     /**
-     * Checks whether an {@link IrisPostExecutor} instance is currently initialized.
+     * Checks whether an executor instance (post or forward) is currently initialized.
      */
     public static synchronized boolean isInitialized() {
-        return executor != null;
+        return executor != null || forwardExecutor != null;
     }
 
     /**
@@ -149,8 +183,22 @@ public final class IrisRenderBridge {
         return executor;
     }
 
+    private static VkDevice resolveDevice(VkCommandBuffer cmd) {
+        var vd = VulkanCapabilityChecker.getVulkanDevice();
+        if (vd != null) {
+            return vd.vkDevice();
+        }
+        if (cmd != null) {
+            try {
+                return cmd.getDevice();
+            } catch (Throwable ignored) {}
+        }
+        return null;
+    }
+
     /**
-     * Renders Iris composite and final fullscreen passes into the engine color image.
+     * Renders the active pack's passes into the engine color image. Uses the full raster-core forward executor when the
+     * host built one, else the composite-only post executor.
      *
      * @param cmd              active command buffer
      * @param host             active {@link IrisShaderHost}
@@ -160,6 +208,7 @@ public final class IrisRenderBridge {
      * @param width            render width
      * @param height           render height
      * @param camera           camera render state
+     * @param levelState       level render state (sky angles, rain); may be null on the post-only path
      * @param frameTimeCounter time in seconds (wraps at 3600)
      * @param frameCounter     monotonic frame count (wraps at 720720)
      * @param near             camera near plane
@@ -176,6 +225,7 @@ public final class IrisRenderBridge {
         int width,
         int height,
         CameraRenderState camera,
+        LevelRenderState levelState,
         float frameTimeCounter,
         int frameCounter,
         float near,
@@ -191,6 +241,19 @@ public final class IrisRenderBridge {
         if (host.state() != ShaderHostState.READY) {
             return false;
         }
+        if (engineColorImage == 0L || engineColorView == 0L || depthView == 0L) {
+            return false;
+        }
+        if (width <= 0 || height <= 0) {
+            return false;
+        }
+
+        IrisPassGraph.FullResult full = host.activeFullGraph();
+        if (full != null && !full.passes().isEmpty()) {
+            return renderForward(cmd, host, full, engineColorImage, engineColorView, depthView, width, height,
+                camera, levelState, frameTimeCounter, frameCounter, near, far, frameTime);
+        }
+
         IrisPassGraph graph = host.activeGraph();
         if (graph == null || graph.passes().isEmpty()) {
             return false;
@@ -198,12 +261,6 @@ public final class IrisRenderBridge {
         // Legacy raw-handle callers have no provenance/conversion or frame history contract.
         if (graph.passes().stream().anyMatch(pass -> !pass.allFrameUsed().isEmpty()
             || pass.allSamplerBindings().contains(IrisUniforms.BINDING_DEPTHTEX0))) return false;
-        if (engineColorImage == 0L || engineColorView == 0L || depthView == 0L) {
-            return false;
-        }
-        if (width <= 0 || height <= 0) {
-            return false;
-        }
 
         IrisPostExecutor exec = getOrCreateExecutor(cmd, graph);
         if (exec == null) {
@@ -230,6 +287,147 @@ public final class IrisRenderBridge {
             LOGGER.error("[IrisRenderBridge] Exception during IrisPostExecutor.record\n{}", LogPaths.stack(t));
             return false;
         }
+    }
+
+    private static boolean renderForward(
+        VkCommandBuffer cmd, IrisShaderHost host, IrisPassGraph.FullResult full,
+        long engineColorImage, long engineColorView, long depthView, int width, int height,
+        CameraRenderState camera, LevelRenderState levelState, float frameTimeCounter, int frameCounter,
+        float near, float far, float frameTime
+    ) {
+        IrisForwardExecutor exec = getOrCreateForwardExecutor(cmd, host, full);
+        if (exec == null) {
+            return false;
+        }
+        try {
+            IrisForwardExecutor.FrameInputs in = buildForwardInputs(engineColorImage, engineColorView, depthView,
+                width, height, camera, levelState, frameTimeCounter, frameCounter, near, far, frameTime);
+            return exec.record(cmd, in);
+        } catch (Throwable t) {
+            LOGGER.error("[IrisRenderBridge] Exception during IrisForwardExecutor.record: {}", t.getMessage(), t);
+            return false;
+        }
+    }
+
+    private static synchronized IrisForwardExecutor getOrCreateForwardExecutor(
+        VkCommandBuffer cmd, IrisShaderHost host, IrisPassGraph.FullResult full
+    ) {
+        String packName = host.lastReport() != null ? host.lastReport().name() : null;
+        if (forwardExecutor != null && forwardPackName != null && packName != null && !forwardPackName.equals(packName)) {
+            LOGGER.info("[IrisRenderBridge] Shaderpack changed from '{}' to '{}', recreating IrisForwardExecutor",
+                forwardPackName, packName);
+            teardownForward();
+        }
+        if (forwardExecutor == null) {
+            VkDevice device = resolveDevice(cmd);
+            IrisPackSettings settings = host.activeSettings();
+            if (device != null && settings != null) {
+                forwardExecutor = new IrisForwardExecutor(device, new RtMemory(device), settings);
+                LOGGER.info("[IrisRenderBridge] Initialized IrisForwardExecutor on VkDevice for pack '{}'", packName);
+            } else {
+                forwardExecutor = IrisForwardExecutor.createForTesting();
+                LOGGER.info("[IrisRenderBridge] Initialized test/fallback IrisForwardExecutor for pack '{}'", packName);
+            }
+            forwardPackName = packName;
+            forwardGraph = null;
+        }
+        if (forwardGraph != full) {
+            forwardExecutor.setGraph(full);
+            forwardGraph = full;
+        }
+        return forwardExecutor;
+    }
+
+    private static IrisForwardExecutor.FrameInputs buildForwardInputs(
+        long engineColorImage, long engineColorView, long depthView, int width, int height,
+        CameraRenderState camera, LevelRenderState levelState, float frameTimeCounter, int frameCounter,
+        float near, float far, float frameTime
+    ) {
+        EntityGeometryFrame entityFrame = RtEntityGeometryManager.getInstance().getCurrentFrame();
+        Map<String, IrisGeometrySource.Mesh> meshes =
+            frameGeometry.build(camera.pos.x, camera.pos.y, camera.pos.z, entityFrame);
+
+        float[] modelView = new float[16];
+        camera.viewRotationMatrix.get(modelView);
+        float[] projection = new float[16];
+        WorldTargetManager.levelProjectionOr(camera.projectionMatrix).get(projection);
+
+        float[] sunDir = {0f, 1f, 0f};
+        float[] moonDir = {0f, -1f, 0f};
+        float rainStrength = 0f;
+        float sunAngle = 0.25f;
+        float moonAngle = 0.75f;
+        if (levelState != null && levelState.skyRenderState != null) {
+            SkyRenderState sky = levelState.skyRenderState;
+            RtSky.sunDirection(sky.sunAngle, RtConfig.SUN_FLIP_X, sunDir);
+            RtSky.sunDirection(sky.moonAngle, RtConfig.SUN_FLIP_X, moonDir);
+            rainStrength = clamp01(1f - sky.rainBrightness);
+            sunAngle = dayFraction(sky.sunAngle);
+            moonAngle = dayFraction(sky.moonAngle);
+        }
+        long clock = 0L;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc != null && mc.level != null) {
+            clock = mc.level.getOverworldClockTime();
+        }
+        IrisShadowMatrices.Result shadow = IrisShadowMatrices.build(sunDir, far);
+
+        Map<String, float[]> uniforms = new LinkedHashMap<>();
+        float camX = (float) camera.pos.x;
+        float camY = (float) camera.pos.y;
+        float camZ = (float) camera.pos.z;
+        uniforms.put("cameraPosition", new float[] {camX, camY, camZ});
+        uniforms.put("previousCameraPosition", new float[] {camX, camY, camZ});
+        // Iris expresses the celestial direction uniforms as a unit vector scaled by 100.
+        uniforms.put("sunPosition", scale(sunDir, 100f));
+        uniforms.put("moonPosition", scale(moonDir, 100f));
+        uniforms.put("shadowLightPosition", scale(sunDir, 100f));
+        uniforms.put("upPosition", new float[] {0f, 100f, 0f});
+        uniforms.put("worldTime", new float[] {(float) clock});
+        uniforms.put("rainStrength", new float[] {rainStrength});
+        uniforms.put("wetness", new float[] {rainStrength});
+        uniforms.put("sunAngle", new float[] {sunAngle});
+        uniforms.put("moonAngle", new float[] {moonAngle});
+
+        long atlasView = resolveAtlasView();
+        long lightmapView = 0L;
+        if (!lightmapFallbackLogged) {
+            LOGGER.info("[IrisRenderBridge] lightmap view unavailable; binding white fallback (pack lightmap sampling disabled)");
+            lightmapFallbackLogged = true;
+        }
+
+        return new IrisForwardExecutor.FrameInputs(
+            meshes, modelView, projection, shadow.modelView(), shadow.projection(), uniforms,
+            engineColorImage, engineColorView, depthView, atlasView, lightmapView, width, height,
+            frameTimeCounter, frameCounter, near, far, frameTime
+        );
+    }
+
+    private static long resolveAtlasView() {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc == null) {
+                return 0L;
+            }
+            AbstractTexture atlas = mc.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
+            return atlas != null ? WorldTargetManager.extractVkImageView(atlas.getTextureView()) : 0L;
+        } catch (Throwable t) {
+            return 0L;
+        }
+    }
+
+    private static float clamp01(float x) {
+        return Math.max(0f, Math.min(1f, x));
+    }
+
+    private static float[] scale(float[] v, float s) {
+        return new float[] {v[0] * s, v[1] * s, v[2] * s};
+    }
+
+    // Vanilla sunAngle is radians with 0 at noon; the Iris sunAngle uniform is the 0..1 day fraction with 0 at sunrise.
+    private static float dayFraction(float angleRadians) {
+        float f = (float) (angleRadians / (2.0 * Math.PI) + 0.25);
+        return f - (float) Math.floor(f);
     }
 
     private static VulkanDevice owner;

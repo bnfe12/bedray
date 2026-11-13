@@ -67,7 +67,7 @@ public class MixinEntityRenderDispatcher {
     private <E extends net.minecraft.world.entity.Entity> void vkb$keepOffscreenForRt(E entity, net.minecraft.client.renderer.culling.Frustum frustum,
             double camX, double camY, double camZ, float partialTick,
             org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Boolean> cir) {
-        if (cir.getReturnValueZ() || !io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.enabled()) {
+        if (cir.getReturnValueZ() || !io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.captureEnabled()) {
             return;
         }
         double r = RT_ENTITY_RADIUS;

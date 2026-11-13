@@ -3,9 +3,16 @@ package io.github.andrexarlay.vulkancompat.shaderhost.iris;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostKind;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostState;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostStatus;
+import io.github.andrexarlay.vulkancompat.shaderhost.glsl.GlslPreprocessor;
+import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IncludeExpander;
+import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisGbGlslTranslator;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisSourcePreprocessor;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisGlslTranslator;
+import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisUniformBlock;
+import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisUniforms;
+import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SlangCompiler;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.IrisPackSettings;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackReport;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackScanException;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackSource;
@@ -15,6 +22,7 @@ import io.github.andrexarlay.vulkancompat.shaderhost.pack.ShaderpackScanner;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -50,6 +58,21 @@ public final class IrisPassGraph {
     private static final List<String> FULLSCREEN_ORDER = List.of("prepare", "deferred", "composite");
     private static final Pattern FINAL_PATTERN = Pattern.compile("^final(_[a-z])?$");
     private static final Pattern VEC2_TEXCOORD = Pattern.compile("\\b(?:varying|in)\\s+vec2\\s+texcoord\\b");
+
+    /** Iris StandardMacros: {@code MC_RENDER_STAGE_<phase> = WorldRenderingPhase.ordinal()} (Iris 1.11.7 enum order). */
+    private static final Map<String, String> RENDER_STAGE_MACROS = renderStageMacros();
+
+    private static Map<String, String> renderStageMacros() {
+        String[] phases = {"NONE", "SKY", "SUNSET", "CUSTOM_SKY", "SUN", "MOON", "STARS", "VOID",
+            "TERRAIN_SOLID", "TERRAIN_CUTOUT_MIPPED", "TERRAIN_CUTOUT", "ENTITIES", "BLOCK_ENTITIES",
+            "DESTROY", "OUTLINE", "DEBUG", "HAND_SOLID", "TERRAIN_TRANSLUCENT", "TRIPWIRE", "PARTICLES",
+            "CLOUDS", "RAIN_SNOW", "WORLD_BORDER", "HAND_TRANSLUCENT"};
+        Map<String, String> m = new LinkedHashMap<>();
+        for (int i = 0; i < phases.length; i++) {
+            m.put("MC_RENDER_STAGE_" + phases[i], Integer.toString(i));
+        }
+        return Collections.unmodifiableMap(m);
+    }
 
     /**
      * Represents a single fullscreen raster pass in the graph.
@@ -609,6 +632,310 @@ public final class IrisPassGraph {
             "void main() {",
             "    gl_Position = ftransform();",
             "    texcoord = gl_MultiTexCoord0;",
+            "}",
+            "");
+    }
+
+    // ---- Raster-core full graph (shadow -> gbuffers -> deferred -> composite -> final) ----
+
+    /** Iris gbuffers draw order; unknown gbuffers_* names sort after these, alphabetically. */
+    private static final List<String> GBUFFER_ORDER = List.of(
+        "gbuffers_basic", "gbuffers_textured", "gbuffers_textured_lit", "gbuffers_skybasic", "gbuffers_skytextured",
+        "gbuffers_clouds", "gbuffers_terrain", "gbuffers_terrain_solid", "gbuffers_terrain_cutout", "gbuffers_terrain_cutout_mipped",
+        "gbuffers_damagedblock", "gbuffers_block", "gbuffers_beaconbeam", "gbuffers_item", "gbuffers_water",
+        "gbuffers_armor_glint", "gbuffers_entities", "gbuffers_entities_glowing", "gbuffers_spidereyes", "gbuffers_hand",
+        "gbuffers_hand_water", "gbuffers_weather", "gbuffers_lightning");
+
+    private static final Pattern DEFERRED_PATTERN = Pattern.compile("^deferred(\\d*)(_[a-z])?$");
+
+    /** One raster-core pass: geometry (gbuffers/shadow) or fullscreen (deferred/composite/final), translated and compiled. */
+    public record FullPass(
+        String name,
+        ProgramName.Family family,
+        int orderIndex,
+        String vertexPath,
+        String fragmentPath,
+        String vertexSource,
+        String fragmentSource,
+        IrisGbGlslTranslator.Result vertexTranslation,
+        IrisGbGlslTranslator.Result fragmentTranslation,
+        ByteBuffer vertexSpirv,
+        ByteBuffer fragmentSpirv
+    ) {
+        public boolean fullscreen() {
+            return family == ProgramName.Family.DEFERRED || family == ProgramName.Family.COMPOSITE || family == ProgramName.Family.FINAL;
+        }
+
+        public List<Integer> drawBuffers() {
+            return fragmentTranslation.drawBuffers();
+        }
+
+        /** Union of both stages' UBO members (declaration order: vertex first). Types must agree between stages. */
+        public Map<String, String> allUboUsed() {
+            Map<String, String> union = new LinkedHashMap<>(vertexTranslation.uboUsed());
+            union.putAll(fragmentTranslation.uboUsed());
+            return Collections.unmodifiableMap(union);
+        }
+
+        public Set<Integer> allSamplerBindings() {
+            Set<Integer> set = new TreeSet<>(vertexTranslation.samplerBindings());
+            set.addAll(fragmentTranslation.samplerBindings());
+            return Collections.unmodifiableSet(set);
+        }
+
+        /** Absolute byte offset of every UBO member this pass uses (canonical region + pack expression tail). */
+        public Map<String, Integer> uboOffsets() {
+            Map<String, Integer> union = new LinkedHashMap<>(vertexTranslation.uboOffsets());
+            union.putAll(fragmentTranslation.uboOffsets());
+            return Collections.unmodifiableMap(union);
+        }
+
+        /** Total UBO size this pass needs (max of both stages, rounded to 16). */
+        public int uboBytes() {
+            return Math.max(vertexTranslation.uboBytes(), fragmentTranslation.uboBytes());
+        }
+    }
+
+    /**
+     * @param passes  ordered shadow -> gbuffers -> deferred -> composite -> final
+     * @param skipped programs not run, with reason (disabled by pack options, or optional family not enabled)
+     */
+    public record FullResult(boolean success, ShaderHostStatus status, List<FullPass> passes, List<String> skipped) {}
+
+    public static FullResult build(PackSource src, PackReport report, IrisPackSettings settings) throws IOException {
+        return build(src, report, settings, "minecraft:overworld");
+    }
+
+    /**
+     * Builds the raster-core graph for one world dimension: dimension-folder programs override root programs per name,
+     * pack options disable programs, and anything outside the raster core (compute/geometry/RT/SSBO/custom images) is
+     * refused by name. Compiles via slangc's GLSL frontend when available, shaderc otherwise.
+     */
+    public static FullResult build(PackSource src, PackReport report, IrisPackSettings settings, String worldDimension) throws IOException {
+        Objects.requireNonNull(src, "src");
+        Objects.requireNonNull(report, "report");
+        Objects.requireNonNull(settings, "settings");
+
+        List<String> unsupported = new ArrayList<>();
+        List<String> optionalNotes = new ArrayList<>();
+        if (report.rtModel() != PackReport.RtModel.NONE) {
+            unsupported.add("ray tracing (" + report.rtModel() + ")");
+        }
+        if (!report.rtDispatch().isEmpty()) {
+            unsupported.add("vulkanite rt passes " + report.rtDispatch().keySet());
+        }
+        if (!report.bufferObjects().isEmpty() || report.requiredFeatures().contains("SSBO")) {
+            unsupported.add("SSBO buffer objects " + report.bufferObjects());
+        }
+        if (report.requiredFeatures().contains("CUSTOM_IMAGES")) {
+            unsupported.add("custom images " + report.customImages());
+        } else if (!report.customImages().isEmpty()) {
+            optionalNotes.add("custom images " + report.customImages() + " (optional, not provided; programs that use them are refused by name)");
+        }
+        if (!unsupported.isEmpty()) {
+            return new FullResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                "pack " + report.name() + " has unsupported features: " + String.join("; ", unsupported)), List.of(), List.of());
+        }
+
+        String folder = settings.dimensionFolder(worldDimension);
+        SortedMap<String, Set<ProgramName.Stage>> root = report.dimensions().getOrDefault("", new java.util.TreeMap<>());
+        SortedMap<String, Set<ProgramName.Stage>> dim = folder.isEmpty()
+            ? new java.util.TreeMap<>() : report.dimensions().getOrDefault(folder, new java.util.TreeMap<>());
+
+        List<String> skipped = new ArrayList<>(optionalNotes);
+        List<String> ordered = new ArrayList<>();
+        Map<String, ProgramName.Family> families = new LinkedHashMap<>();
+        Map<String, String> programFolder = new LinkedHashMap<>();
+        TreeSet<String> allNames = new TreeSet<>(root.keySet());
+        allNames.addAll(dim.keySet());
+        List<String> names = new ArrayList<>(allNames);
+        for (String prog : names) {
+            boolean fromDim = dim.containsKey(prog);
+            Set<ProgramName.Stage> stages = fromDim ? dim.get(prog) : root.get(prog);
+            ProgramName pn = null;
+            for (ProgramName.Stage st : stages) {
+                pn = ProgramName.classify(prog + "." + st.ext);
+                if (pn != null) break;
+            }
+            if (pn == null) {
+                skipped.add(prog + " (unknown program)");
+                continue;
+            }
+            boolean enabled = settings.isProgramEnabled(prog)
+                && settings.isProgramEnabled(fromDim ? folder : "", prog) && settings.isProgramEnabled("", prog);
+            if (!enabled) {
+                skipped.add(prog + " (disabled by pack options)");
+                continue;
+            }
+            ProgramName.Family family = pn.family();
+            if (family == ProgramName.Family.DISTANT_HORIZONS) {
+                skipped.add(prog + " (Distant Horizons integration not provided)");
+                continue;
+            }
+            if (family != ProgramName.Family.SHADOW && family != ProgramName.Family.GBUFFERS && family != ProgramName.Family.DEFERRED
+                && family != ProgramName.Family.COMPOSITE && family != ProgramName.Family.FINAL) {
+                unsupported.add(prog + " (" + family + " is outside the raster core)");
+                continue;
+            }
+            for (ProgramName.Stage st : stages) {
+                if (st != ProgramName.Stage.VERTEX && st != ProgramName.Stage.FRAGMENT) {
+                    unsupported.add(prog + "." + st.ext + " (" + st + " stage is outside the raster core)");
+                }
+            }
+            if (!stages.contains(ProgramName.Stage.FRAGMENT)) {
+                unsupported.add(prog + " missing fragment shader (.fsh)");
+                continue;
+            }
+            families.put(prog, family);
+            programFolder.put(prog, fromDim ? folder : "");
+            ordered.add(prog);
+        }
+        if (!unsupported.isEmpty()) {
+            return new FullResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                "pack " + report.name() + " has unsupported features: " + String.join("; ", unsupported)), List.of(), skipped);
+        }
+
+        ordered.sort((a, b) -> {
+            int fa = familyRank(families.get(a));
+            int fb = familyRank(families.get(b));
+            if (fa != fb) return Integer.compare(fa, fb);
+            if (families.get(a) == ProgramName.Family.GBUFFERS) {
+                int ia = GBUFFER_ORDER.indexOf(a);
+                int ib = GBUFFER_ORDER.indexOf(b);
+                if (ia < 0) ia = GBUFFER_ORDER.size();
+                if (ib < 0) ib = GBUFFER_ORDER.size();
+                if (ia != ib) return Integer.compare(ia, ib);
+                return a.compareTo(b);
+            }
+            return Integer.compare(passNumber(a), passNumber(b)) != 0
+                ? Integer.compare(passNumber(a), passNumber(b)) : a.compareTo(b);
+        });
+
+        Map<String, Integer> customSamplers = new LinkedHashMap<>();
+        int binding = IrisUniforms.GB_CUSTOM_BINDING_BASE;
+        for (String custom : settings.customTextureNames()) {
+            customSamplers.put(custom, binding++);
+        }
+        IrisUniformBlock.Layout exprLayout = IrisUniformBlock.layout(settings.expressionUniforms());
+        Map<String, String> defines = new LinkedHashMap<>();
+        defines.put("MC_VERSION", "260300");
+        defines.put("IS_IRIS", "");
+        defines.put("MC_GL_VERSION", "450");
+        defines.putAll(RENDER_STAGE_MACROS);
+        Map<String, String> options = settings.options();
+
+        IncludeExpander expander = new IncludeExpander(report.shadersRoot(), entry -> new String(src.read(entry), StandardCharsets.UTF_8));
+        List<FullPass> passes = new ArrayList<>();
+        int orderIndex = 0;
+        for (String prog : ordered) {
+            ProgramName.Family family = families.get(prog);
+            String base = report.shadersRoot() + (programFolder.get(prog).isEmpty() ? "" : programFolder.get(prog) + "/") + prog;
+            String fshPath = base + ".fsh";
+            String vshPath = base + ".vsh";
+            String expandedFsh;
+            String expandedVsh;
+            try {
+                expandedFsh = GlslPreprocessor.process(GlslPreprocessor.applyOptions(expander.expand(fshPath), options), defines);
+                if (src.entries().contains(vshPath)) {
+                    expandedVsh = GlslPreprocessor.process(GlslPreprocessor.applyOptions(expander.expand(vshPath), options), defines);
+                } else {
+                    boolean fullscreen = family == ProgramName.Family.DEFERRED || family == ProgramName.Family.COMPOSITE
+                        || family == ProgramName.Family.FINAL;
+                    expandedVsh = GlslPreprocessor.process(fullscreen ? defaultFullscreenVertexShader(expandedFsh) : defaultGeometryVertexShader(), defines);
+                    vshPath = vshPath + " [default]";
+                }
+            } catch (PackScanException e) {
+                return new FullResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                    "failed expanding " + prog + ": " + e.getMessage()), List.of(), skipped);
+            }
+
+            boolean fullscreen = family == ProgramName.Family.DEFERRED || family == ProgramName.Family.COMPOSITE
+                || family == ProgramName.Family.FINAL;
+            Map<String, Integer> varyingLocations = new LinkedHashMap<>();
+            IrisGbGlslTranslator.Result vResult = IrisGbGlslTranslator.translate(expandedVsh, IrisGlslTranslator.Stage.VERTEX,
+                varyingLocations, prog + ".vsh", fullscreen, customSamplers, exprLayout);
+            if (!vResult.unsupported().isEmpty()) {
+                return new FullResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                    prog + ".vsh unsupported features: " + vResult.unsupported()), List.of(), skipped);
+            }
+            IrisGbGlslTranslator.Result fResult = IrisGbGlslTranslator.translate(expandedFsh, IrisGlslTranslator.Stage.FRAGMENT,
+                vResult.varyings(), prog + ".fsh", fullscreen, customSamplers, exprLayout);
+            if (!fResult.unsupported().isEmpty()) {
+                return new FullResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                    prog + ".fsh unsupported features: " + fResult.unsupported()), List.of(), skipped);
+            }
+            for (Map.Entry<String, String> e : fResult.uboUsed().entrySet()) {
+                String vt = vResult.uboUsed().get(e.getKey());
+                if (vt != null && !vt.equals(e.getValue())) {
+                    return new FullResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                        prog + " uniform " + e.getKey() + " declared " + vt + " in vertex but " + e.getValue() + " in fragment"),
+                        List.of(), skipped);
+                }
+            }
+
+            ByteBuffer vSpv;
+            ByteBuffer fSpv;
+            try {
+                vSpv = compileRaster(vResult.source(), "vertex", prog + ".vsh");
+                fSpv = compileRaster(fResult.source(), "fragment", prog + ".fsh");
+            } catch (SpirvCompiler.SpirvCompileException e) {
+                return new FullResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.COMPILE_FAILED,
+                    prog + " compile error: " + e.errorLog()), List.of(), skipped);
+            }
+            passes.add(new FullPass(prog, family, orderIndex++, vshPath, fshPath, expandedVsh, expandedFsh, vResult, fResult, vSpv, fSpv));
+        }
+
+        if (passes.isEmpty()) {
+            return new FullResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                "pack " + report.name() + " has no enabled raster-core programs"), List.of(), skipped);
+        }
+        return new FullResult(true, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.READY,
+            "all " + passes.size() + " raster-core passes (" + ordered + ") translated and compiled to SPIR-V"), passes, skipped);
+    }
+
+    private static int familyRank(ProgramName.Family family) {
+        return switch (family) {
+            case SHADOW -> 0;
+            case GBUFFERS -> 1;
+            case DEFERRED -> 2;
+            case COMPOSITE -> 3;
+            case FINAL -> 4;
+            default -> 5;
+        };
+    }
+
+    private static int passNumber(String name) {
+        Matcher m = Pattern.compile("^(?:deferred|composite)(\\d+)").matcher(name);
+        return m.find() ? Integer.parseInt(m.group(1)) : 0;
+    }
+
+    /** slangc GLSL frontend when available (owner directive: prefer Slang), shaderc fallback. */
+    private static ByteBuffer compileRaster(String source, String stage, String name) throws SpirvCompiler.SpirvCompileException {
+        IrisGlslTranslator.Stage glslStage = "fragment".equals(stage) ? IrisGlslTranslator.Stage.FRAGMENT : IrisGlslTranslator.Stage.VERTEX;
+        if (SlangCompiler.available()) {
+            try {
+                return SlangCompiler.compileGlsl450(source, stage, "main", name);
+            } catch (SlangCompiler.SlangCompileException e) {
+                // slangc's GLSL frontend rejects some valid Vulkan GLSL (e.g. explicit UBO member offsets); shaderc is authoritative.
+                return SpirvCompiler.compile(source, glslStage, name);
+            }
+        }
+        return SpirvCompiler.compile(source, glslStage, name);
+    }
+
+    /** Default gbuffers/shadow vertex when the pack omits the .vsh: position/color/uv passthrough. */
+    public static String defaultGeometryVertexShader() {
+        return String.join("\n",
+            "#version 120",
+            "attribute vec3 vaPosition;",
+            "attribute vec4 vaColor;",
+            "attribute vec2 vaUV0;",
+            "varying vec2 texcoord;",
+            "varying vec4 color;",
+            "void main() {",
+            "    gl_Position = ftransform();",
+            "    texcoord = vaUV0;",
+            "    color = vaColor;",
             "}",
             "");
     }
