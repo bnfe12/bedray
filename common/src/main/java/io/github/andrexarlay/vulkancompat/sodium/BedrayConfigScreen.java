@@ -202,6 +202,16 @@ public final class BedrayConfigScreen extends Screen {
             captureButton.setTooltip(Tooltip.create(tr("bedray.settings.capture_profile_hint",
                 "Apply or revert changes first. Requires a world with active Path Tracing. Returns to play, waits 5 seconds and records 30 seconds at your current settings. Saves raw CPU/GPU timings and actual dimensions to bedray/profiles. No settings are changed.")));
             addAction(tr("bedray.settings.libraries", "Runtime libraries..."), () -> minecraft.gui.setScreen(new NativesManagerScreen(this)));
+            addAction(tr("bedray.settings.bedrock_open", "Bedrock RTX packs: open folder"), () -> {
+                try {
+                    com.mojang.blaze3d.Blaze3D.openPath(
+                        io.github.andrexarlay.vulkancompat.rt.material.bedrock.BedrockRtxPackImporter.sourceDir(minecraft));
+                } catch (java.io.IOException e) {
+                    LOGGER.warn("[BEDROCK-RTX] cannot open the pack folder: {}", e.toString());
+                }
+            });
+            addAction(tr("bedray.settings.bedrock_import", "Bedrock RTX packs: import"), () ->
+                io.github.andrexarlay.vulkancompat.rt.material.bedrock.BedrockRtxPackImporter.importAllAsync());
             addAction(tr("bedray.settings.report", "Copy diagnostics report"), () -> io.github.andrexarlay.vulkancompat.rtx.debug.Diagnostics.generateAndNotify());
             addAction(tr("bedray.settings.reset", "Reset editable settings (pending)"), () -> { draft.reset(); rebuildRows(); });
         }
