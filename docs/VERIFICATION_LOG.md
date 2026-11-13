@@ -4367,3 +4367,114 @@ checked bootstrap, resize and CUSTOM extent provenance. Vendor image/FPS and liv
 UI acceptance remain open. The separate SR/native-release ownership findings are
 recorded in docs/ai-agent-addenda/SR_RELEASE_OWNERSHIP_AUDIT.md; no release or
 residency repair is claimed by this commit.
+
+## 2026-11-04 - Main promotion, local lights, NORT and RR stability (L1/L2; no live run)
+
+`origin/main` advanced to `1c59ba49ee078e689500153e8c936802cca9d5b9`,
+the merge of PR #74. This includes the earlier PRs #67-#74: the Slang
+promotion with the previous main privacy fixes, the local-light BVH, typed
+NORT AOT voxel passes, RR camera/history and guide fixes, safe acceleration
+structure updates with entity topology, and live DLSS SDK quality/extents.
+The `refactor/slang-pipeline` branch was deleted after the promotion; local
+work now tracks `main`.
+
+Both native DLLs were rebuilt from this checkout. `bedray_core.dll` 488,960 B
+SHA-256 `299C11F5D274CF746CD483A69C8D67CF202C08EB5BF1476298FEFDF84D412338`;
+`bedray_scene.dll` 248,832 B SHA-256
+`BC5069B997C1D957549D5AFE32199C7CFCEDA785175BDCD5878C31534FA82E58`.
+Core CTest passed 29/29. The standalone scene CTest first ran a stale test
+executable left by the previous build and reported 14 contract failures; after
+`cmake --build build/bedray-native-scene/windows-x64 --config Release` rebuilt
+the test target, `bedray_scene_contract` passed 1/1. The failures were a stale
+binary, not a source result.
+
+Java validation: `:core:test` 121 tests, zero failures/errors; `:common:test`
+1,234 tests, zero failures/errors, 3 skipped; `:common:runShimTests` 34/34.
+
+Both combined jars were built from the clean commit with manifest
+`Git-Commit 1c59ba49ee078e689500153e8c936802cca9d5b9`, `Git-Dirty false`:
+Fabric 20,503,985 B SHA-256
+`3B634914ABBB6A3C23257D0D4AFC5AD2FD4EC60D5D1EC21764E8107724E2F5D7`;
+NeoForge 20,511,222 B SHA-256
+`F886BF7AF8BF17B1D2467DF63640BA2AE3127AE6DC039C0BBB9C5C93B7A3CADD`.
+The Fabric jar still contains the `RtOutputResolve` direct-buffer fix from
+`4035f79` and the new NORT Slang passes.
+
+The jars and both DLLs were copied to the five BedRay instances; the replaced
+files are in backup `bedray-deploy-20261104-191715`. No BedRay instance was
+running during the replacement and nothing was launched.
+
+L1/L2 only. The promoted main, the rebuilt native pair and the RR/AS/NORT
+changes have not run on a GPU. L3-L5, visual parity and the absence of the
+earlier `RtOutputResolve` crash still require an owner run.
+
+## 2026-11-05 - DLSS vendor resource ownership promotion (L1/L2; no live run)
+
+`origin/main` advanced to `73f450a76feff457f39f2547e77328e307ecc173`,
+the merge of PR #75 "retry-safe vendor resource ownership and dormant SR
+retirement". The Java-side changes retain DLSS resource owners through vendor
+failures, bound capability-refresh retries and suspend dormant SR retirement;
+the native DLSS bridge gained the additive v1 resource contract.
+
+Both core native DLLs were rebuilt from this checkout and are byte-identical to
+the previous promotion because PR #75 does not touch their sources:
+`bedray_core.dll` 488,960 B SHA-256
+`299C11F5D274CF746CD483A69C8D67CF202C08EB5BF1476298FEFDF84D412338`;
+`bedray_scene.dll` 248,832 B SHA-256
+`BC5069B997C1D957549D5AFE32199C7CFCEDA785175BDCD5878C31534FA82E58`.
+
+The vendor bridges were rebuilt because their sources changed in PR #75:
+`vkb_dlss.dll` 973,824 B SHA-256
+`0D249463B650921E15B9E9122846DEC25FCB9CC3FCF4A0AD804FBB59473943AE`,
+`vkb_sl.dll` 222,208 B SHA-256
+`8856DA23348C7A523A6FA00609EDFE1BC56F4D33F068D34C575ACE18C51ECAC2`.
+`dumpbin /exports` confirms both binaries export
+`vkb_dlss_resource_contract_version` and `vkb_dlss_shutdown_checked`; the SL
+shim carries the vkb_dlss_* surface used by the Streamline path.
+
+Java validation: `:core:test` 121 tests, zero failures/errors; `:common:test`
+1,242 tests, zero failures/errors, 3 skipped; `:common:runShimTests` 34/34.
+Native validation: core CTest 29/29 and standalone scene CTest 1/1.
+
+Both combined jars were built from clean `73f450a` with manifest
+`Git-Commit 73f450a76feff457f39f2547e77328e307ecc173`, `Git-Dirty false`:
+Fabric 20,508,038 B SHA-256
+`1B421422E3BE2C282DC24E45AE09B17D3DA48E923D32922A3A2DD6D223110CEB`;
+NeoForge 20,515,272 B SHA-256
+`E3A16C1635F14828F9B6BF264F3432BCD92ACC526A5ADF7FE62183ECE8BD21A2`.
+The jar binds the two new optional exports and fails back to the old behaviour
+when an older bridge is present, but the promoted resource-retention path needs
+these rebuilt bridges.
+
+The jars, both core/scene DLLs, `vkb_dlss.dll` and the streamline
+`vkb_sl.dll` were copied to the five BedRay instances. Replaced files are in
+backup `bedray-deploy-20261105-001758`. No BedRay instance was running during
+the replacement and nothing was launched.
+
+L1/L2 only. The promoted DLSS resource ownership, dormant SR retirement and the
+rebuilt vendor bridges have not run on a GPU. L3-L5 and visual parity still
+require an owner run.
+
+## 2026-11-12 — See-through triangle (#15 / open owner report) A/B localization
+
+Agent testbed "Vulkan Testbed 26.3 Agent" (NeoForge), native scene `path_trace_scene`,
+VKB_Autotest world seed, fixed camera (-41.5, 89, 2.5) yaw 135 pitch 12 unless noted.
+Screenshots + `latest.log` archived under `C:/Temp/ab-triangle/<run>/`.
+
+| run | config | result |
+| --- | --- | --- |
+| denoiser-off | path, spp 8, denoiser=off, ReSTIR on | light/dark "one triangle" pattern present |
+| restir-off | path, spp 8, denoiser=off, ReSTIR di/pt/spatial=off | pattern present -> ReSTIR reconstruction ruled out |
+| close-cam | as legacy-scene + camera (-52.1, 84, -8.1) | every face a complete shaded rectangle up close -> missing/degenerate triangle and per-triangle shading defect ruled out |
+| raster-ref | rt=off (vanilla raster), same camera | clean steps; far hill absent only from chunk-mesh build latency at shot time |
+
+Statics re-verified self-consistent: index emission 6/quad, 64 B stride, vertex decoder,
+BLAS index/vertex setup, face-forward geometric normal, cull disable; `GlassFaceFilter`
+is a no-op for sand (material 0). Pixel-aligned crops `cmp_center_{rt,raster}.png`;
+sampled shadowed-riser luminance RT ~70 vs vanilla ~70 (no over-darkening).
+
+Conclusion: not missing geometry, not denoiser/ReSTIR reconstruction, not a per-triangle
+shading defect. The "see-through triangle" is the shadowed stair riser of a distant
+staircase (normal lit-tread/shadowed-riser shading) misread as a hole. Triangle sub-issue
+localized; see MIGRATION_STATUS.md open owner report. No code change: the root cause is
+appearance, not a geometry/reconstruction bug.
