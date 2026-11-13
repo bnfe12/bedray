@@ -57,11 +57,15 @@ class RtSlangNrdMotionTest {
     void theWriteIsGatedByItsOwnOptionBit() {
         for (String pass : new String[] {PASS, SCENE_PASS}) {
             String source = read(pass) + "\n" + read(SHADERS + "/pathtrace/path_trace_entry.slang");
-            String store = block(source, "if ((options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {");
+            String store = block(source, "if (worldMotion || (options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {");
+            assertTrue(source.contains("bool worldMotion = (pc.flags & PATH_TRACE_OPTION_WORLD_MOTION) != 0u;"));
+            assertTrue(store.contains("uint index = uint(p.x) + uint(p.y) * f.camera.size.x;"));
             assertTrue(store.contains(
-                "outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result, sampleTrusted);"),
+                "outMotionBuffer[index] = pathTraceNrdMotion(result, sampleTrusted);"),
                 pass + ": the pixel index is the row-major one, one record per render pixel, and the"
                     + " sample's verdict gates the write");
+            assertTrue(store.contains("if (worldMotion) outMotionBuffer[index + f.camera.size.x * f.camera.size.y] = worldMotionSample;"),
+                "only the world-motion option enables its second, canonical-primary pixel range");
         }
     }
 
@@ -112,7 +116,8 @@ class RtSlangNrdMotionTest {
     @Test
     void theMotionBufferIsTheDenoisersOwnVec4PixelBuffer() {
         String renderer = read(RENDERER);
-        assertTrue(renderer.contains("if (useDenoiser && wantsEntityMotion()) {"),
+        assertTrue(renderer.contains("params.worldMotion = wantsWorldMotion();"));
+        assertTrue(renderer.contains("if (params.worldMotion || (useDenoiser && wantsEntityMotion())) {"),
             "both NRD and RR velocity consume the world-motion producer; neither may read an unwritten allocation");
         assertTrue(renderer.contains("long motionAddr = motionHandle != 0L ? frameMotion().address : 0L;"),
             "consumer addresses follow the actual producer, including zero when disabled");
@@ -122,7 +127,7 @@ class RtSlangNrdMotionTest {
         assertTrue(read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameResources.java").contains("void ensureMotion(int w, int h) {"),
             "one allocation site for both the address and the binding");
         String preflight = block(renderer, "private static void prepareFrameResources(");
-        assertTrue(preflight.contains("frameResources.ensureMotion(w, h);"));
+        assertTrue(preflight.contains("frameResources.ensureMotion(w, h, wantsWorldMotion());"));
         String frame = block(renderer, "private static void frame(");
         int prepare = frame.indexOf("prepareFrameResources(device, WorldTargetManager.traceWidth");
         int allocateCommand = frame.indexOf("encoder.allocateAndBeginTransientCommandBuffer()");
@@ -130,7 +135,7 @@ class RtSlangNrdMotionTest {
             "motion allocation and any required drain happen before a new recording captures the previous generation");
         String record = block(renderer, "private static void recordPrimaryRays(");
         assertFalse(record.contains("ensureEntityMotionBuffer("), "an open command buffer may only borrow prepared storage");
-        int require = record.indexOf("frameResources.requireMotion(w, h);");
+        int require = record.indexOf("frameResources.requireMotion(w, h, params.worldMotion);");
         int bind = record.indexOf("pass.bind(new RtFrameBindings.Views(");
         assertTrue(require >= 0 && bind > require, "the prepared range is checked before its handle is bound");
         assertFalse(renderer.contains("the Slang path does not fill yet"),

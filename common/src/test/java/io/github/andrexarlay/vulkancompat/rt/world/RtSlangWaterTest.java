@@ -38,9 +38,8 @@ class RtSlangWaterTest {
     private static final String OPTICAL =
         "src/main/java/io/github/andrexarlay/vulkancompat/rt/material/OpticalMaterials.java";
 
-    /** The fluid branch is the third test of the translucency bit, so its header has to name the fluid test too. */
-    private static final String FLUID_BRANCH =
-        "if ((hit.flags & HIT_FLAG_TRANSLUCENT) != 0u\n                && waterIsSurface(true,";
+    /** The atlas-tag classification is captured before normal variance can change the decoded roughness. */
+    private static final String FLUID_BRANCH = "if (waterSurface) {";
 
     /** Six deep-water components, dispersed as gravity waves and filtered by the pixel footprint. */
     @Test
@@ -96,7 +95,11 @@ class RtSlangWaterTest {
         assertTrue(read(FRAME).contains("return (frame.frame.w & FRAME_FLAG_WATER_REALISTIC) != 0u;"),
             "the frame word is the host's verdict; the shader must not re-read a player setting");
 
-        String fluid = block(read(SURFACE), FLUID_BRANCH);
+        String surface = read(SURFACE);
+        assertTrue(surface.contains("bool waterSurface = (hit.flags & HIT_FLAG_TRANSLUCENT) != 0u\n"
+            + "            && waterIsSurface(true, material.f0, materialTexel.r, material.metallic);"),
+            "the fluid classification uses the unfiltered atlas roughness, not the variance-adjusted shading value");
+        String fluid = block(surface, FLUID_BRANCH);
         assertTrue(fluid.contains("waterStyledWaveNormal(hit.worldPosition, geometricNormal,"),
             "the decoder asks the same test the atlas tag is written for, then waves the face: two answers"
                 + " would mean water that refracts but does not move");
@@ -117,8 +120,9 @@ class RtSlangWaterTest {
             "realistic: the unresolved ripples become a rougher sheen, bounded so far water is not a mirror or fog");
         assertTrue(surface.contains(": clamp(0.02 + sqrt(max(lostVar, 0.0)) * 0.8, 0.02, 0.16);"),
             "damped: a gentler floor and a tighter ceiling, so the flat sheet reads as calmer and not as a different material");
-        assertTrue(surface.contains("float footprint = hit.t * WATER_PIXEL_ANGLE /"),
-            "the filter width is the pixel footprint at this distance: far water fades to a sheen instead of sparkling");
+        assertTrue(surface.contains("float footprint = hit.surfaceFootprint > 0.0 ? hit.surfaceFootprint\n"
+            + "                    : hit.t * WATER_PIXEL_ANGLE /"),
+            "the propagated ray footprint filters the water; older traversal inputs retain the distance-based fallback");
         assertTrue(surface.contains("max(abs(dot(rayDirection, geometricNormal)), 0.06)"),
             "a grazing ray would otherwise divide by nearly zero and make the footprint enormous");
     }

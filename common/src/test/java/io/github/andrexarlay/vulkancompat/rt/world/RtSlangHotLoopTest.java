@@ -38,8 +38,8 @@ class RtSlangHotLoopTest {
         assertEquals(1, count(body, "SurfaceSample surface ="),
             "one SurfaceSample local feeds NEE, the BSDF and the guide record; three live copies is the spill the "
                 + "legacy test removed");
-        assertEquals(1, count(body, "throughput * surface.material.emission;"),
-            "the emissive exitance is added once at the vertex, not re-evaluated per consumer");
+        assertEquals(1, count(body, "throughput * surface.material.emission * emissionWeight;"),
+            "the decoded emissive exitance is added once with its emitter-hit MIS weight, not re-evaluated per consumer");
         assertEquals(1, count(body, "result.primary.valid = true;"),
             "the pixel's guide record is filled from the single primary decode");
     }

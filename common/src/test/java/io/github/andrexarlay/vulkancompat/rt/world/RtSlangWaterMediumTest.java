@@ -75,7 +75,7 @@ class RtSlangWaterMediumTest {
     @Test
     void theInterfaceIsClearAndTheColourIsDistance() {
         String surface = read(SURFACE);
-        String fluid = block(surface, "&& waterIsSurface(true, material.f0");
+        String fluid = block(surface, "if (waterSurface) {");
         assertTrue(fluid.contains("material.ior = WATER_IOR;"), "the interface refracts at water's index");
         assertTrue(fluid.contains("material.transmission = 1.0;"), "a fluid is a full optical interface");
         assertTrue(fluid.contains("material.albedo = float3(1.0);"),
@@ -384,7 +384,7 @@ class RtSlangWaterMediumTest {
                 || block(water, "WaterBeam waterBeamToLight(").contains("waveMix"),
             "the column itself is the plane model: the style cannot move where the light enters or how deep it goes");
 
-        String fluid = block(read(SURFACE), "&& waterIsSurface(true, material.f0");
+        String fluid = block(read(SURFACE), "if (waterSurface) {");
         assertTrue(fluid.contains("waterStyledWaveNormal(hit.worldPosition, geometricNormal,\n"
                 + "                    options.portalTime, footprint, options.waterWaveMix, lostVar)"),
             "the decoded face keeps the field the switch scales");

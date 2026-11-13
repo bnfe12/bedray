@@ -195,7 +195,7 @@ class RtSlangWaterBeamTest {
     void theBeamAndTheTracedFacePayTheSameCrossing() {
         double f0 = shaderFloat(WATER, "WATER_INTERFACE_F0");
         assertEquals(0.02, f0, 1.0e-12, "water's reflectance at normal incidence, the number the fluid decode hands the interface");
-        String surface = block(read(SURFACE), "&& waterIsSurface(true, material.f0");
+        String surface = block(read(SURFACE), "if (waterSurface) {");
         assertTrue(surface.contains("material.f0 = float3(WATER_INTERFACE_F0);"),
             "the sheet takes it from the same constant, so a beam and a traced crossing cannot drift apart");
         assertFalse(surface.contains("float3(0.02)"), "no second copy of the number left in the decoder");
@@ -220,9 +220,9 @@ class RtSlangWaterBeamTest {
                 + "medium the light is in");
         assertTrue(term.contains("float3 arrival = beam.valid ? -beam.direction : lightDirection;"),
             "the beam travels down, so the direction the receiver sees the light in is its negation");
-        assertTrue(term.contains("bsdf = bsdfEvaluate(shadingMaterial, view, normal, arrival);"),
-            "the lobe is asked about the direction the light arrived from, which is what moves a shadow under water");
-        assertFalse(term.contains("bsdfEvaluate(shadingMaterial, view, normal, lightDirection)"),
+        assertTrue(term.contains("bsdf = bsdfEvaluateWeighted(shadingMaterial, view, normal, arrival, specularWeight);"),
+            "the weighted lobe is asked about the refracted arrival direction, including finite-emitter specular weight");
+        assertFalse(term.contains("bsdfEvaluateWeighted(shadingMaterial, view, normal, lightDirection"),
             "the air-side sight line is not an underwater arrival direction");
         assertTrue(term.contains("float cosine = max(dot(normal, arrival), 0.0);"), "and neither is it the horizon test");
         assertTrue(term.contains("traceShadowBeam(traversal, atlas, blockMaterials, shadowPosition, shadowNormal, lightDirection,")
@@ -305,7 +305,7 @@ class RtSlangWaterBeamTest {
             + "                materialOptions.waterWaveMix, (surface.hit.worldPosition - surface.hit.position).xz) : 1.0)"),
             "area times étendue: the focus rides on the same weight the crossing needs, bends through the same scaled "
                 + "face the sheet shows, and 1.0 when the player turned the focus off");
-        String surface = block(read(SURFACE), "&& waterIsSurface(true, material.f0");
+        String surface = block(read(SURFACE), "if (waterSurface) {");
         assertTrue(surface.contains("options.portalTime"), "the wave normal the decoded face uses");
         assertTrue(term.contains("beam = waterBeamToLight(lightDirection, light.distance, position, medium);"),
             "the sample's own distance bounds the column, so an emitter inside the water is not treated as a sun");

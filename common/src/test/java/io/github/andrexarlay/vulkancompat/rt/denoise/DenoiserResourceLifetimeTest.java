@@ -67,14 +67,15 @@ class DenoiserResourceLifetimeTest {
         assertTrue(drain >= 0 && drain < preflight.indexOf("frameResources.ensureOutput(w, h)"));
         assertTrue(drain < preflight.indexOf("dlssRrDenoiser.ensure(w, h, rrOutput())"));
         assertTrue(drain < preflight.indexOf("denoiser.ensure(w, h, frameOutput().view)"));
-        assertTrue(drain < preflight.indexOf("frameResources.ensureMotion(w, h)"));
-        assertTrue(preflight.contains("wantsEntityMotion() && frameResources.needsMotion(w, h)"),
-            "first-time motion allocation also needs completion of prior frame readers");
+        assertTrue(drain < preflight.indexOf("frameResources.ensureMotion(w, h, wantsWorldMotion())"));
+        assertTrue(preflight.contains("boolean needMotion = (pass.usesGbuffer() && wantsEntityMotion()) || wantsWorldMotion();"));
+        assertTrue(preflight.contains("boolean motionChanged = needMotion && frameResources.needsMotion(w, h, wantsWorldMotion());"),
+            "allocation or a world-motion range change also needs completion of prior frame readers");
         String record = body(renderer, "private static void recordPrimaryRays(");
         assertFalse(record.contains(".ensure(w, h, output"));
         assertFalse(record.contains("vkDeviceWaitIdle"));
         assertFalse(record.contains("frameResources.ensureMotion("));
-        assertTrue(record.contains("frameResources.requireMotion(w, h)"));
+        assertTrue(record.contains("frameResources.requireMotion(w, h, params.worldMotion)"));
         String resources = source("world/RtFrameResources.java");
         String replace = body(resources, "private void ensureOutput(");
         assertTrue(replace.indexOf("next[2] = allocator.image") < replace.indexOf("destroyOutputs()"));

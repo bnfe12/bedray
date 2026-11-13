@@ -556,14 +556,18 @@ public final class SettingsCatalog {
             "Extra mipmap bias; negative values make textures sharper (-0.2 to -0.5 suits pixel art). The automatic bias for upscalers is always on.",
             "", "", "A sub-pixel sharpness bias is not visible in a downscaled screenshot.");
         putNoImage("dlss_custom_scale", Tier.ESSENTIAL, "DLSS Render Scale",
-            "Render resolution per axis in Custom mode. NVIDIA's runtime limits the supported input size.", "", "DLSS Super Resolution.", "");
+            "Render resolution per axis in Custom mode. NVIDIA's runtime limits the supported input size.", "", "DLSS Super Resolution.",
+            "The effective input size depends on the runtime and output resolution; no matching custom-scale capture is available.");
         putNoImage("xess_custom_scale", Tier.ESSENTIAL, "XeSS Render Scale",
-            "Render resolution per axis in Custom mode. The active XeSS implementation supplies the effective size.", "", "Intel XeSS.", "");
+            "Render resolution per axis in Custom mode. The active XeSS implementation supplies the effective size.", "", "Intel XeSS.",
+            "The effective input size depends on the runtime and output resolution; no matching custom-scale capture is available.");
         putNoImage("fsr_custom_scale", Tier.ESSENTIAL, "FSR Render Scale",
-            "Render resolution per axis in Custom mode. The SDK limits the effective size for FSR 4.", "", "AMD FSR.", "");
+            "Render resolution per axis in Custom mode. The SDK limits the effective size for FSR 4.", "", "AMD FSR.",
+            "The effective input size depends on the runtime and output resolution; no matching custom-scale capture is available.");
         putNoImage("fsr_version", Tier.ESSENTIAL, "FSR Version",
             "Auto selects the best provider the active device can use. Choose a version to keep that provider family fixed.",
-            "", "FSR 4 requires AMD FSR SDK 2.4 and a supported Vulkan GPU and driver.", "");
+            "", "FSR 4 requires AMD FSR SDK 2.4 and a supported Vulkan GPU and driver.",
+            "Provider availability depends on the active GPU and SDK; no matching provider comparison has been captured.");
         putNoImage("atm_godrays_range", Tier.EXPERT, "Light Shaft Range", "Distance in blocks the beams are computed over.", "", "", "A range value.");
         putNoImage("atm_bloom_threshold", Tier.EXPERT, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "", "", "Shares the Bloom screenshots.");
         putNoImage("atm_bloom_scatter", Tier.EXPERT, "Bloom Spread", "Balance between a tight and a wide glow.", "", "", "Shares the Bloom screenshots.");

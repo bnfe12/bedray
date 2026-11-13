@@ -241,26 +241,23 @@ public class MotionVectorStabilityTest {
     }
 
     /**
-     * The DLSS-RR image is resolved on the render grid and already carries entity and RT-geometry motion. Feeding the
-     * upscaler the raster-depth vectors instead drags moving entities and water across block edges, because that pass
-     * only knows camera motion. The raster pass must still run: frame generation reads its output.
+     * SR and frame generation share raster hardware depth. Merge RT object motion only where its traced surface
+     * matches that depth, rather than pairing denoiser motion with a different surface's raster depth.
      */
     @Test
-    public void testSrReusesDenoiserMotionVectors() throws Exception {
+    public void testSrMergesRtMotionOntoMatchingRasterDepth() throws Exception {
         String world = readSource("src/main/java/io/github/andrexarlay/vulkancompat/rtx/WorldTargetManager.java");
-        assertTrue(world.contains(
-                "final long resolvedMvView = colorResolved ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeMotionVectorView() : 0L;"),
-            "the upscaler must take the denoiser's motion vectors when the colour is denoiser-resolved");
-        assertTrue(world.contains(
-                "final long resolvedMvImg = colorResolved ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeMotionVectorImage() : 0L;"),
-            "the image handle must come from the same denoiser buffer");
-        assertTrue(world.contains("final long srMvView = reuseDenoiserMotion ? resolvedMvView : mvView;"),
-            "the upscaler input falls back to the raster vectors");
-        assertTrue(world.contains("new FrameContext.ImageRef(srMvImg, srMvView, fmtMv,"),
-            "FrameContext must be built from the resolved-or-raster pair");
+        assertTrue(world.contains("long worldMotion = resetHistory ? 0L : RtFrameRenderer.displayedWorldMotion(worldTarget);"),
+            "RT motion must belong to the displayed producer, and a reset must not consume stale history");
+        assertTrue(world.contains("velocityPipeline.dispatchWorld(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta, worldMotion);"),
+            "the velocity pass merges the current RT motion onto the same raster depth sent to the SDK");
+        assertTrue(world.contains("var depth = new FrameContext.ImageRef(rasterDepthImg, rasterDepthView, fmtDepth,"));
+        assertTrue(world.contains("var motion = new FrameContext.ImageRef(mvImg, mvView, fmtMv,"),
+            "the image and view must name that merged velocity producer");
         int ctx = world.indexOf("FrameContext ctx = new FrameContext");
-        assertTrue(world.indexOf("velocityPipeline.dispatch(cmd, rasterDepthView, mvView", 0) < ctx,
-            "the raster pass still feeds frame generation and must run before the upscaler");
+        int velocity = world.indexOf("velocityPipeline.dispatchWorld(cmd, rasterDepthView, mvView");
+        assertTrue(velocity >= 0 && velocity < ctx,
+            "the merged raster-depth velocity producer must run before the upscaler consumes it");
     }
 
     /**

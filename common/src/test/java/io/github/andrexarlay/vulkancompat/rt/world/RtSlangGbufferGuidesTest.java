@@ -48,10 +48,17 @@ class RtSlangGbufferGuidesTest {
     void theSplitRadianceStillSumsToTheColourInput() {
         String source = read(ENTRY);
         String guides = block(source, "void pathTraceWriteGuides(");
-        assertTrue(guides.contains("outDiffuse[p] = float4(result.denoiser.diffuse, result.denoiser.diffuseHitDistance);"),
-            "diffuse owns only the suffix of a selected primary diffuse lobe, with secondary distance");
-        assertTrue(guides.contains("outDirect[p] = float4(pathDenoiserBypass(result.radiance, result.denoiser),"),
-            "the exact remainder includes emission and unsupported transport without changing raw HDR");
+        assertTrue(guides.contains("float3 diffuseSignal = result.denoiser.diffuse;"));
+        assertTrue(guides.contains("float3 bypassRadiance = pathDenoiserBypass(result.radiance, result.denoiser);"));
+        String directSplit = block(guides, "if (!rrGuides && !result.denoiser.bypass && result.primary.metallic <= 0.5) {");
+        assertTrue(directSplit.contains("float3 direct = min(max(result.primary.direct, float3(0.0)), bypassRadiance);"));
+        String finiteDirect = block(directSplit, "if (isFinite(direct)) {");
+        assertTrue(finiteDirect.contains("diffuseSignal += direct;") && finiteDirect.contains("bypassRadiance -= direct;"),
+            "NRD transfers the same finite primary NEE term from bypass to diffuse, preserving their exact sum");
+        assertTrue(guides.contains("outDiffuse[p] = float4(diffuseSignal, result.denoiser.diffuseHitDistance);"),
+            "diffuse carries its selected suffix and NRD's matched primary direct term, with secondary distance");
+        assertTrue(guides.contains("outDirect[p] = float4(bypassRadiance, result.denoiser.bypass ? 1.0 : 0.0);"),
+            "the remainder retains emission and unsupported transport; RR and bypassed pixels keep the unsplit integrand");
         assertTrue(guides.contains("outSpecular[p] = float4(result.denoiser.specular, result.denoiser.specularHitDistance);"),
             "specular owns the primary specular suffix even if a later bounce is diffuse");
         assertTrue(guides.contains("outAlbedo[p] = float4(result.primary.albedo, result.primary.metallic > 0.5 ? 1.0 : 0.0);"),

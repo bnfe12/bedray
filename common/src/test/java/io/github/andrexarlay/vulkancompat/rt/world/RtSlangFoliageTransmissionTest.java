@@ -221,7 +221,7 @@ class RtSlangFoliageTransmissionTest {
             "the sun-side normal exists before the transmission cosine reads it");
         assertTrue(tracer.contains("float leafBack = foliage && keyLight ? max(dot(-shadowNormal, arrival), 0.0) : 0.0;"),
             "the term must use the sun-facing normal; the shaded one makes every back-lit leaf black");
-        assertTrue(tracer.contains("if (cosine <= 0.0 && leafBack <= 0.0) {"),
+        assertTrue(tracer.contains("if ((cosine <= 0.0 || dot(shadowNormal, arrival) <= 0.0) && leafBack <= 0.0) {"),
             "the transmission term lives outside the front-face gate, which is the whole point");
         assertTrue(tracer.contains("float3 estimator = leafBack > 0.0 ? leafTerm : bsdf;"),
             "a back-lit leaf is shaded by its transmission term instead of the zero BSDF");
