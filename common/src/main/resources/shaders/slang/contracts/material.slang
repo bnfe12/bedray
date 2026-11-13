@@ -28,6 +28,13 @@ static const uint MATERIAL_FLAG_EMISSIVE    = 1u << 1u;
 static const uint MATERIAL_FLAG_CUTOUT      = 1u << 2u;
 static const uint MATERIAL_FLAG_THIN_GLASS  = 1u << 3u;
 static const uint MATERIAL_FLAG_SUBSURFACE  = 1u << 4u;
+// A pane that passes camera rays but stops all light (vanilla tinted_glass).  The visibility walks read it; the
+// camera pane filter does not, so the pane stays see-through to the eye.
+static const uint MATERIAL_FLAG_BLOCKS_LIGHT = 1u << 5u;
+
+// Optical-profile sentinel for vanilla tinted_glass, carried in the high source-metadata bits of the atlas.
+// Must equal OpticalMaterials.TINTED_GLASS_PROFILE_ID, which the baker writes into those bits.
+static const uint OPTICAL_PROFILE_TINTED_GLASS = 5u;
 
 struct MaterialSample {
     float3 albedo;              // linear diffuse albedo
@@ -74,6 +81,12 @@ bool materialIsTranslucent(MaterialSample material) {
     return material.alphaMode == AlphaMode.Translucent ||
            material.alphaMode == AlphaMode.Optical ||
            material.transmission > 0.0;
+}
+
+// A light blocker passes camera rays but ends a visibility/shadow ray.  Kept beside the other material predicates so
+// every walk applies exactly the same rule.
+bool materialBlocksLight(MaterialSample material) {
+    return (material.flags & MATERIAL_FLAG_BLOCKS_LIGHT) != 0u;
 }
 
 // Cutout decision lives here, not in the traversal backend, so every backend

@@ -54,8 +54,10 @@ public class VulkanSodiumConfigIdsTest {
 
         List<String> required = List.of(
             "renderer", "renderer_status", "rt_mode", "path_bounces", "path_auto_exposure", "water_style", "atm_godrays",
+            "gi_execution_status",
             "upscaler_backend", "quality_preset", "dlss_mode", "xess_mode", "fsr_mode", "frame_generation_provider",
             "pt_preset", "path_spp", "path_distance", "path_denoiser", "path_caustics", "adaptive_quality",
+            "dlss_rr_preset",
             "atm_bloom", "atm_sunglare", "rt_fog", "rt_fog_density", "auto_normals", "debug_overlay", "reset_all_defaults",
             "presets_open", "natives_manager_open", "reset_page_main", "reset_group_adv_pt",
             "rays_pixel_shadows", "rays_pixel_shadow_size",
@@ -73,6 +75,20 @@ public class VulkanSodiumConfigIdsTest {
             .filter(p -> !p.startsWith("reset_") && !p.endsWith("_open") && !p.equals("copy_diagnostics"))
             .filter(p -> SettingsCatalog.get(p) == null).sorted().toList();
         assertTrue(invisible.isEmpty(), "registered options with no catalog row (unreachable in the Bedray screen): " + invisible);
+    }
+
+    @Test
+    public void textureStyleRowsAreRegisteredWithoutExpertUi() {
+        List<Identifier> ids = new ArrayList<>();
+        List<Identifier> dependencies = new ArrayList<>();
+        new VulkanSodiumConfig().registerSettings(recordingBuilder(ids, dependencies));
+        // The Texture style presets stage these two rows, so they must exist for every player. texture_lod_bias_offset
+        // used to live in the expert-only group: with expert UI off it was never registered, the preset staged it into a
+        // null option, and the gi_settings autotest read back lod_bias_offset=null (2026-11-12 L4 FAIL).
+        assertTrue(ids.contains(Identifier.fromNamespaceAndPath("bedray", "point_sampling_sharpness")),
+            "point_sampling_sharpness must be registered without expert UI");
+        assertTrue(ids.contains(Identifier.fromNamespaceAndPath("bedray", "texture_lod_bias_offset")),
+            "texture_lod_bias_offset must be registered without expert UI (the Texture style presets stage it)");
     }
 
     private static ConfigBuilder recordingBuilder(List<Identifier> ids, List<Identifier> dependencies) {

@@ -220,7 +220,13 @@ public final class AutoPbr {
         if (n.equals("blue_ice")) {
             return new Material(0.08f, 0.04f, false, 0f, Emission.NONE, RULE_ICE_OPAQUE);
         }
-        if (n.equals("glass") || n.endsWith("_stained_glass") || n.equals("tinted_glass") || n.startsWith("glass_pane")
+        // Vanilla tinted_glass (amethyst glass) is see-through to the camera but blocks ALL light, unlike clear and
+        // stained glass which transmit (tinted) light. Its own rule lets the baker tag it as a light blocker for the
+        // visibility walk while the camera path keeps it a translucent pane.
+        if (n.equals("tinted_glass")) {
+            return new Material(0.02f, 0.04f, false, 0f, Emission.NONE, RULE_TINTED_GLASS);
+        }
+        if (n.equals("glass") || n.endsWith("_stained_glass") || n.startsWith("glass_pane")
             || n.endsWith("_stained_glass_pane_top")) {
             return new Material(0.02f, 0.04f, false, 0f, Emission.NONE, RULE_GLASS);
         }
@@ -312,6 +318,8 @@ public final class AutoPbr {
     public static final String RULE_ANCHOR = "respawn_anchor_glow";
     /** Sprite rule for glass blocks and panes. */
     public static final String RULE_GLASS = "glass";
+    /** Sprite rule for vanilla tinted_glass: see-through to the camera but blocks all light. */
+    public static final String RULE_TINTED_GLASS = "tinted_glass";
     /** Sprite rule whose texels are decided by {@link #flameEmission}. */
     public static final String RULE_FLAME = "emissive_flame";
     /** Sprite rule for redstone dust/wire. */

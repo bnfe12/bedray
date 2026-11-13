@@ -146,6 +146,24 @@ struct BarrierRecord {
     std::vector<VkBufferMemoryBarrier> buffers;
 };
 
+struct QueryPoolState {
+    uint32_t count = 0;
+    std::vector<uint64_t> results;
+    std::vector<bool> written;
+};
+
+struct AsCopyRecord {
+    VkAccelerationStructureKHR src = VK_NULL_HANDLE;
+    VkAccelerationStructureKHR dst = VK_NULL_HANDLE;
+    VkCopyAccelerationStructureModeKHR mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+};
+
+struct AsPropertyWriteRecord {
+    VkAccelerationStructureKHR accel = VK_NULL_HANDLE;
+    uint32_t query_slot = 0;
+    uint64_t compacted_size = 0;
+};
+
 struct State {
     std::map<uint64_t, BufferState> buffers;
     std::map<uint64_t, MemoryState> memories;
@@ -154,13 +172,18 @@ struct State {
     std::vector<SizeQueryRecord> size_queries;
     std::vector<CopyRecord> copies;
     std::vector<BarrierRecord> barriers;
+    std::map<uint64_t, QueryPoolState> query_pools;
+    std::vector<AsCopyRecord> as_copies;
+    std::vector<AsPropertyWriteRecord> as_property_writes;
     std::vector<std::string> unknown_proc_requests;
     uint64_t next_buffer = 0x100;
     uint64_t next_memory = 0x1000;
     uint64_t next_accel = 0x2000;
+    uint64_t next_query_pool = 0x3000;
     uint64_t next_buffer_address = 0x100000010ull; // valid buffer address, deliberately not AS scratch-aligned
     uint64_t next_accel_address = 0x200000000ull;
     int fail_create_buffer_countdown = -1;
+    VkResult create_buffer_failure = VK_ERROR_DEVICE_LOST;
     bool zero_device_address = false;
     int faults = 0;
 };
@@ -274,7 +297,7 @@ static void VKAPI_CALL fakeGetPhysicalDeviceProperties2(
 static VkResult VKAPI_CALL fakeCreateBuffer(
     VkDevice, const VkBufferCreateInfo* info, const VkAllocationCallbacks*, VkBuffer* out) {
     if (fake::g.fail_create_buffer_countdown == 0) {
-        return VK_ERROR_DEVICE_LOST;
+        return fake::g.create_buffer_failure;
     }
     if (fake::g.fail_create_buffer_countdown > 0) {
         --fake::g.fail_create_buffer_countdown;
@@ -585,6 +608,132 @@ static void VKAPI_CALL fakeCmdPipelineBarrier(
     fake::g.barriers.push_back(std::move(record));
 }
 
+static uint64_t query_pool_id(VkQueryPool pool) {
+    return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pool));
+}
+
+static VkResult VKAPI_CALL fakeCreateQueryPool(
+    VkDevice, const VkQueryPoolCreateInfo* info, const VkAllocationCallbacks*, VkQueryPool* out) {
+    const uint64_t id = fake::g.next_query_pool++;
+    fake::QueryPoolState state;
+    state.count = info->queryCount;
+    state.results.assign(info->queryCount, 0);
+    state.written.assign(info->queryCount, false);
+    fake::g.query_pools.emplace(id, std::move(state));
+    *out = reinterpret_cast<VkQueryPool>(static_cast<uintptr_t>(id));
+    return VK_SUCCESS;
+}
+
+static void VKAPI_CALL fakeDestroyQueryPool(VkDevice, VkQueryPool pool, const VkAllocationCallbacks*) {
+    const auto it = fake::g.query_pools.find(query_pool_id(pool));
+    if (it == fake::g.query_pools.end()) {
+        fake::fault("vkDestroyQueryPool on an unknown handle");
+        return;
+    }
+    fake::g.query_pools.erase(it);
+}
+
+static void VKAPI_CALL fakeCmdResetQueryPool(
+    VkCommandBuffer, VkQueryPool pool, uint32_t first, uint32_t count) {
+    const auto it = fake::g.query_pools.find(query_pool_id(pool));
+    if (it == fake::g.query_pools.end()) {
+        fake::fault("vkCmdResetQueryPool on an unknown handle");
+        return;
+    }
+    for (uint32_t i = 0; i < count && first + i < it->second.count; ++i) {
+        it->second.results[first + i] = 0;
+        it->second.written[first + i] = false;
+    }
+}
+
+static void VKAPI_CALL fakeCmdWriteAccelerationStructuresProperties(
+    VkCommandBuffer,
+    uint32_t count,
+    const VkAccelerationStructureKHR* accels,
+    VkQueryType query_type,
+    VkQueryPool pool,
+    uint32_t first) {
+    if (query_type != VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR) {
+        fake::fault("unexpected AS property query type");
+        return;
+    }
+    const auto it = fake::g.query_pools.find(query_pool_id(pool));
+    if (it == fake::g.query_pools.end()) {
+        fake::fault("vkCmdWriteAccelerationStructuresPropertiesKHR on an unknown pool");
+        return;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        fake::AsState* state = fake::find_accel(accels[i]);
+        if (state == nullptr) {
+            fake::fault("AS property write on an unknown handle");
+            return;
+        }
+        const auto buffer = fake::g.buffers.find(state->buffer);
+        const uint64_t capacity = buffer != fake::g.buffers.end() ? buffer->second.size : 0;
+        /* Emulate a compacted size of half the build storage so compaction is
+           always worthwhile and the readback path is exercised. */
+        const uint64_t compacted = capacity / 2;
+        fake::AsPropertyWriteRecord record;
+        record.accel = accels[i];
+        record.query_slot = first + i;
+        record.compacted_size = compacted;
+        fake::g.as_property_writes.push_back(record);
+        if (first + i < it->second.count) {
+            it->second.results[first + i] = compacted;
+            it->second.written[first + i] = true;
+        }
+    }
+}
+
+static VkResult VKAPI_CALL fakeGetQueryPoolResults(
+    VkDevice,
+    VkQueryPool pool,
+    uint32_t first,
+    uint32_t count,
+    size_t data_size,
+    void* data,
+    VkDeviceSize stride,
+    VkQueryResultFlags flags) {
+    const auto it = fake::g.query_pools.find(query_pool_id(pool));
+    if (it == fake::g.query_pools.end()) {
+        fake::fault("vkGetQueryPoolResults on an unknown pool");
+        return VK_ERROR_UNKNOWN;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        if (first + i >= it->second.count || !it->second.written[first + i]) {
+            if ((flags & VK_QUERY_RESULT_WAIT_BIT) == 0) return VK_NOT_READY;
+        }
+        if (static_cast<size_t>(i) * stride + sizeof(uint64_t) > data_size) return VK_ERROR_UNKNOWN;
+        const uint64_t value = it->second.results[first + i];
+        std::memcpy(static_cast<uint8_t*>(data) + static_cast<size_t>(i) * stride, &value, sizeof(value));
+    }
+    return VK_SUCCESS;
+}
+
+static void VKAPI_CALL fakeCmdCopyAccelerationStructure(
+    VkCommandBuffer, const VkCopyAccelerationStructureInfoKHR* info) {
+    fake::AsState* src = fake::find_accel(info->src);
+    fake::AsState* dst = fake::find_accel(info->dst);
+    if (src == nullptr || dst == nullptr) {
+        fake::fault("vkCmdCopyAccelerationStructureKHR on an unknown handle");
+        return;
+    }
+    if (info->mode == VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR) {
+        const auto buffer = fake::g.buffers.find(dst->buffer);
+        const uint64_t dst_capacity = buffer != fake::g.buffers.end() ? buffer->second.size : 0;
+        const auto src_buffer = fake::g.buffers.find(src->buffer);
+        const uint64_t src_capacity = src_buffer != fake::g.buffers.end() ? src_buffer->second.size : 0;
+        if (dst_capacity >= src_capacity) {
+            fake::fault("compaction destination is not smaller than the source");
+        }
+    }
+    fake::AsCopyRecord record;
+    record.src = info->src;
+    record.dst = info->dst;
+    record.mode = info->mode;
+    fake::g.as_copies.push_back(record);
+}
+
 static PFN_vkVoidFunction VKAPI_CALL fakeGetDeviceProcAddr(VkDevice, const char* name) {
     if (std::strcmp(name, "vkCreateBuffer") == 0) {
         return reinterpret_cast<PFN_vkVoidFunction>(&fakeCreateBuffer);
@@ -637,6 +786,24 @@ static PFN_vkVoidFunction VKAPI_CALL fakeGetDeviceProcAddr(VkDevice, const char*
     }
     if (std::strcmp(name, "vkCmdPipelineBarrier") == 0) {
         return reinterpret_cast<PFN_vkVoidFunction>(&fakeCmdPipelineBarrier);
+    }
+    if (std::strcmp(name, "vkCreateQueryPool") == 0) {
+        return reinterpret_cast<PFN_vkVoidFunction>(&fakeCreateQueryPool);
+    }
+    if (std::strcmp(name, "vkDestroyQueryPool") == 0) {
+        return reinterpret_cast<PFN_vkVoidFunction>(&fakeDestroyQueryPool);
+    }
+    if (std::strcmp(name, "vkCmdResetQueryPool") == 0) {
+        return reinterpret_cast<PFN_vkVoidFunction>(&fakeCmdResetQueryPool);
+    }
+    if (std::strcmp(name, "vkCmdWriteAccelerationStructuresPropertiesKHR") == 0) {
+        return reinterpret_cast<PFN_vkVoidFunction>(&fakeCmdWriteAccelerationStructuresProperties);
+    }
+    if (std::strcmp(name, "vkGetQueryPoolResults") == 0) {
+        return reinterpret_cast<PFN_vkVoidFunction>(&fakeGetQueryPoolResults);
+    }
+    if (std::strcmp(name, "vkCmdCopyAccelerationStructureKHR") == 0) {
+        return reinterpret_cast<PFN_vkVoidFunction>(&fakeCmdCopyAccelerationStructure);
     }
     fake::g.unknown_proc_requests.emplace_back(name);
     return nullptr;
@@ -1530,6 +1697,152 @@ static void test_rebuild_without_update_capability_retires_after_frame() {
     fixture.release(2);
 }
 
+static void test_section_blas_compacts_after_release() {
+    Fixture fixture(2);
+    /* Sixteen quads so the emulated compacted size (half of build storage)
+       clears the scene's minimum-savings threshold. */
+    Mesh mesh;
+    for (uint16_t q = 0; q < 16; ++q) {
+        const float x = static_cast<float>(q);
+        mesh.vertices.insert(mesh.vertices.end(), {
+            x, 0.0f, 0.0f, x + 1.0f, 0.0f, 0.0f,
+            x + 1.0f, 1.0f, 0.0f, x, 1.0f, 0.0f });
+        mesh.indices.insert(mesh.indices.end(), { 0, 1, 2, 0, 2, 3 });
+    }
+    CHECK_STATUS(fixture.add_section(7, 1, mesh), BEDRAY_SCENE_OK);
+
+    const auto first = fixture.prepare(1, 0x700);
+    CHECK(first.blas_builds == 1);
+    const fake::BuildRecord* blas_build = nullptr;
+    for (const auto& build : fake::g.builds) {
+        if (build.type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR) blas_build = &build;
+    }
+    CHECK(blas_build != nullptr);
+    CHECK((blas_build->flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR) != 0);
+    const VkAccelerationStructureKHR original = blas_build->dst;
+    CHECK(fake::g.as_property_writes.size() == 1);
+    CHECK(fake::g.as_copies.empty()); // build frame not yet released
+
+    const auto res1 = fixture.resources();
+    const auto* inst1 = fake::bytes_at_address(res1.instance_buffer_address);
+    CHECK(inst1 != nullptr);
+    uint64_t addr1 = 0;
+    std::memcpy(&addr1, inst1->data() + 56, sizeof(addr1));
+    CHECK(addr1 == fake::find_accel(original)->address);
+
+    fixture.release(1); // proves the build + compacted-size query completed
+
+    const auto second = fixture.prepare(2, 0x701);
+    CHECK((second.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0
+        || (second.flags & BEDRAY_SCENE_FRAME_TLAS_REBUILT) != 0);
+    CHECK(fake::g.as_copies.size() == 1);
+    CHECK(fake::g.as_copies[0].mode == VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR);
+    CHECK(fake::g.as_copies[0].src == original);
+    const VkAccelerationStructureKHR compact = fake::g.as_copies[0].dst;
+    CHECK(compact != original);
+    CHECK(fake::accel_is_alive(original)); // copy source survives this frame
+    CHECK(fake::accel_is_alive(compact));
+    CHECK(fake::g.buffers[fake::find_accel(compact)->buffer].size
+        < fake::g.buffers[fake::find_accel(original)->buffer].size);
+
+    const auto res2 = fixture.resources();
+    const auto* inst2 = fake::bytes_at_address(res2.instance_buffer_address);
+    CHECK(inst2 != nullptr);
+    uint64_t addr2 = 0;
+    std::memcpy(&addr2, inst2->data() + 56, sizeof(addr2));
+    CHECK(addr2 == fake::find_accel(compact)->address);
+    CHECK(addr2 != addr1);
+
+    fixture.release(2);
+    CHECK(!fake::accel_is_alive(original)); // original retired once the copy completes
+    CHECK(fake::accel_is_alive(compact));
+
+    const auto third = fixture.prepare(3, 0x702);
+    CHECK(third.blas_builds == 0);
+    CHECK(fake::g.as_copies.size() == 1); // compacted BLAS is not compacted again
+    fixture.release(3);
+}
+
+static Mesh compaction_mesh() {
+    Mesh mesh;
+    for (uint16_t q = 0; q < 16; ++q) {
+        const float x = static_cast<float>(q);
+        mesh.vertices.insert(mesh.vertices.end(), {
+            x, 0.0f, 0.0f, x + 1.0f, 0.0f, 0.0f,
+            x + 1.0f, 1.0f, 0.0f, x, 1.0f, 0.0f });
+        const uint16_t base = q * 4;
+        const uint16_t quad_indices[6] = { 0, 1, 2, 0, 2, 3 };
+        for (uint16_t index : quad_indices) {
+            mesh.indices.push_back(base + index);
+        }
+    }
+    return mesh;
+}
+
+static void test_compaction_allocation_retry_keeps_query_slots_unique() {
+    Fixture fixture(2);
+    const Mesh mesh = compaction_mesh();
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x710);
+    fixture.release(1);
+    fake::g.create_buffer_failure = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    fake::g.fail_create_buffer_countdown = 0;
+    CHECK_STATUS(fixture.prepare_status(2, 0x711), BEDRAY_SCENE_ERROR_OUT_OF_MEMORY);
+    CHECK(fake::g.as_copies.empty());
+    fake::g.fail_create_buffer_countdown = -1;
+    fixture.prepare(2, 0x711);
+    CHECK(fake::g.as_copies.size() == 1);
+    fixture.release(2);
+    CHECK_STATUS(fixture.add_section(2, 1, mesh), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(3, 1, mesh), BEDRAY_SCENE_OK);
+    const size_t first_query = fake::g.as_property_writes.size();
+    fixture.prepare(3, 0x712);
+    CHECK(fake::g.as_property_writes.size() == first_query + 2);
+    if (fake::g.as_property_writes.size() == first_query + 2) {
+        CHECK(fake::g.as_property_writes[first_query].query_slot
+            != fake::g.as_property_writes[first_query + 1].query_slot);
+    }
+    fixture.release(3);
+}
+
+static void test_stale_compaction_query_waits_for_build_completion() {
+    Fixture fixture(2);
+    const Mesh mesh = compaction_mesh();
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x720);
+    CHECK_STATUS(fixture.add_section(1, 2, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(2, 0x721);
+    CHECK(fake::g.as_property_writes.size() == 2);
+    if (fake::g.as_property_writes.size() == 2) {
+        CHECK(fake::g.as_property_writes[0].query_slot != fake::g.as_property_writes[1].query_slot);
+    }
+    CHECK(fake::g.as_copies.empty());
+    fixture.release(1);
+    fixture.release(2);
+    fixture.prepare(3, 0x722);
+    CHECK(fake::g.as_copies.size() == 1);
+    fixture.release(3);
+}
+
+static void test_failed_prepare_retries_all_planned_compactions() {
+    Fixture fixture(2);
+    const Mesh mesh = compaction_mesh();
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(2, 1, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x730);
+    fixture.release(1);
+    const size_t live_accels = fake::g.accels.size();
+    fake::g.create_buffer_failure = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    fake::g.fail_create_buffer_countdown = 1;
+    CHECK_STATUS(fixture.prepare_status(2, 0x731), BEDRAY_SCENE_ERROR_OUT_OF_MEMORY);
+    CHECK(fake::g.accels.size() == live_accels);
+    CHECK(fake::g.as_copies.empty());
+    fake::g.fail_create_buffer_countdown = -1;
+    fixture.prepare(2, 0x731);
+    CHECK(fake::g.as_copies.size() == 2);
+    fixture.release(2);
+}
+
 static void test_update_copies_inputs_and_coalesces_pending() {
     Fixture fixture(1);
     Mesh mesh = quad_mesh(0.0f, 0.0f, 0.0f);
@@ -2059,6 +2372,10 @@ int main() {
     test_nonfinite_activation_changes_rebuild_instead_of_refitting();
     test_replacement_blas_relinks_a_live_cached_tlas_without_a_build();
     test_rebuild_without_update_capability_retires_after_frame();
+    test_section_blas_compacts_after_release();
+    test_compaction_allocation_retry_keeps_query_slots_unique();
+    test_stale_compaction_query_waits_for_build_completion();
+    test_failed_prepare_retries_all_planned_compactions();
     test_table_coalescing_and_clear();
     test_stale_in_use_and_destroy();
     test_update_is_transactional();

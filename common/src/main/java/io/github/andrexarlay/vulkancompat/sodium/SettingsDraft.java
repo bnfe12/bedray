@@ -145,6 +145,33 @@ final class SettingsDraft {
         if (experience == Experience.PATH || experience == Experience.VOXEL) applySelectedProfile();
     }
     void customize() { stage(voxel() ? "voxel_quality_profile" : "path_quality_profile", VulkanSodiumConfig.QualityProfile.CUSTOM); }
+
+    /**
+     * The runtime-toggleable settings an auto-policy plan stages. Pure so it is unit-tested without a game
+     * ({@code GiPlanSettingsTest}); the profile is left Custom so the player can tune the staged values afterwards. SER is
+     * a startup device feature, not a runtime row, so it is reported in the plan's reason rather than staged here.
+     */
+    static Map<String, Object> giPlanValues(io.github.andrexarlay.vulkancompat.rtx.config.GiStackPolicy.Plan plan) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("path_quality_profile", VulkanSodiumConfig.QualityProfile.CUSTOM);
+        values.put("path_spp", plan.spp());
+        values.put("path_bounces", plan.bounces());
+        values.put("path_distance", plan.distance());
+        values.put("path_restir_di", plan.restirDi());
+        values.put("path_restir_pt", plan.restirPt());
+        values.put("path_restir_pt_spatial", plan.restirPtSpatial());
+        return values;
+    }
+
+    /** Stages an auto-policy recommendation into the pending model; Apply commits it like any other edit. */
+    void applyGiPlan(io.github.andrexarlay.vulkancompat.rtx.config.GiStackPolicy.Plan plan) {
+        giPlanValues(plan).forEach(this::stage);
+    }
+
+    /** Stages a texture sampling style into the pending model; Apply commits it like any other edit. */
+    void applyTexturePreset(io.github.andrexarlay.vulkancompat.rtx.config.TexturePreset preset) {
+        preset.stagedValues().forEach(this::stage);
+    }
     void revert() { imported.clear(); config.resetAllOptionsFromBindings(); }
     void reset() { imported.clear(); entries.stream().filter(e -> !SESSION.contains(e.path())).forEach(e -> e.option().resetToDefault()); }
     void reset(Entry entry) {

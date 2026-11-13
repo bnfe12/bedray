@@ -57,7 +57,8 @@ public final class DlssRayReconstruction implements AutoCloseable {
         JAVA_INT.withName("enable_output_subrects"),
         JAVA_INT.withName("roughness_mode"),
         JAVA_INT.withName("depth_type"),
-        MemoryLayout.sequenceLayout(2, JAVA_INT).withName("reserved")
+        JAVA_INT.withName("preset"),
+        JAVA_INT.withName("reserved")
     );
 
     /** FFM layout for VkbDlssRrEvalInfo (968 bytes, 8-byte aligned). */
@@ -285,6 +286,7 @@ public final class DlssRayReconstruction implements AutoCloseable {
             info.set(JAVA_INT, DlssLayouts.offset(RR_CREATE_INFO, "enable_output_subrects"), params.enableOutputSubrects() ? 1 : 0);
             info.set(JAVA_INT, DlssLayouts.offset(RR_CREATE_INFO, "roughness_mode"), params.roughnessMode());
             info.set(JAVA_INT, DlssLayouts.offset(RR_CREATE_INFO, "depth_type"), params.depthType());
+            info.set(JAVA_INT, DlssLayouts.offset(RR_CREATE_INFO, "preset"), params.preset().nativeValue());
 
             MemorySegment handleSeg = a.allocate(JAVA_LONG);
             int rc = (int) createFeatureHandle.invokeExact(commandBuffer, info, handleSeg);

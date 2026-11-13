@@ -28,6 +28,7 @@
 #include "vkb_dlss.h"
 
 #include <cstdio>
+#include <cstddef>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -42,6 +43,7 @@ static_assert(sizeof(VkbDlssCreateInfo) == 32, "VkbDlssCreateInfo layout changed
 static_assert(sizeof(VkbDlssCaps) == 32, "VkbDlssCaps layout changed: update Java FFM layout");
 static_assert(sizeof(VkbDlssOptimalSettings) == 36, "VkbDlssOptimalSettings layout changed: update Java FFM layout");
 static_assert(sizeof(VkbDlssRrCreateInfo) == 48, "VkbDlssRrCreateInfo layout changed: update Java FFM layout");
+static_assert(offsetof(VkbDlssRrCreateInfo, preset) == 40, "VkbDlssRrCreateInfo.preset must occupy former reserved[0] (additive)");
 static_assert(sizeof(VkbDlssRrEvalInfo) == 968, "VkbDlssRrEvalInfo layout changed: update Java FFM layout");
 
 namespace {
@@ -705,6 +707,11 @@ VKB_DLSS_API int32_t vkb_dlss_rr_create_feature(uint64_t cmd, const VkbDlssRrCre
         return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] render/output width and height must be positive");
     NVSDK_NGX_PerfQuality_Value pq;
     if (!toPerfQuality(info->quality_mode, pq)) return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] bad quality mode");
+    if (info->preset != NVSDK_NGX_RayReconstruction_Hint_Render_Preset_Default
+        && info->preset != NVSDK_NGX_RayReconstruction_Hint_Render_Preset_D
+        && info->preset != NVSDK_NGX_RayReconstruction_Hint_Render_Preset_E
+        && info->preset != NVSDK_NGX_RayReconstruction_Hint_Render_Preset_F)
+        return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] preset must be 0 (default), 4 (D), 5 (E) or 6 (F)");
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
     if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX RR unavailable or retiring");
@@ -736,6 +743,20 @@ VKB_DLSS_API int32_t vkb_dlss_rr_create_feature(uint64_t cmd, const VkbDlssRrCre
     NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_AllocateParameters(&f->params);
     if (NVSDK_NGX_FAILED(r)) return failNgx("[DLSS-RR] NVSDK_NGX_VULKAN_AllocateParameters", r);
     if (!f->params) return fail(VKB_DLSS_ERR_NGX, "RR AllocateParameters returned null");
+    // Additive render-preset hint: 0 (default) leaves the NGX parameter untouched, preserving prior behavior.
+    if (info->preset != NVSDK_NGX_RayReconstruction_Hint_Render_Preset_Default) {
+        const char* presetParam = nullptr;
+        switch (info->quality_mode) {
+            case VKB_DLSS_MODE_DLAA:              presetParam = NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA; break;
+            case VKB_DLSS_MODE_MAX_QUALITY:       presetParam = NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality; break;
+            case VKB_DLSS_MODE_BALANCED:          presetParam = NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced; break;
+            case VKB_DLSS_MODE_MAX_PERFORMANCE:   presetParam = NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance; break;
+            case VKB_DLSS_MODE_ULTRA_PERFORMANCE: presetParam = NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance; break;
+            case VKB_DLSS_MODE_ULTRA_QUALITY:     presetParam = NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality; break;
+            default: break;
+        }
+        if (presetParam) NVSDK_NGX_Parameter_SetUI(f->params, presetParam, static_cast<unsigned int>(info->preset));
+    }
     r = NGX_VULKAN_CREATE_DLSSD_EXT1(s.device, reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(cmd)), 1, 1,
                                      &f->handle, f->params, &cp);
     if (NVSDK_NGX_FAILED(r)) {

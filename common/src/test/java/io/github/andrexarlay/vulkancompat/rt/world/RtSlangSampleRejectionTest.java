@@ -73,10 +73,11 @@ class RtSlangSampleRejectionTest {
             sites++;
             at = found + 1;
         }
-        assertEquals(8, sites, "eight arithmetic faults: primary ray, interval, hit parameter, two cutout advances, "
-            + "primary advance, throughput and the final radiance");
-        assertEquals(6, count(tracer, "result.flags |= " + TRUNCATED + ";"),
-            "and six stops that only cut the path short: the four above plus the ray profile's two effect gates");
+        assertEquals(9, sites, "nine arithmetic faults: primary ray, interval, hit parameter, two cutout advances, "
+            + "primary advance, pane-transmission throughput, throughput and the final radiance");
+        assertEquals(7, count(tracer, "result.flags |= " + TRUNCATED + ";"),
+            "and seven stops that only cut the path short: empty interval, unnamed hit, spent lobe, two firefly guards "
+                + "(pane and general) and the ray profile's two effect gates");
     }
 
     /** Each of the stops, named by the guard that decides it. */

@@ -23,6 +23,7 @@ import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerSwitch;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.rr.DlssRrParams;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FfxNative;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrVersion;
@@ -79,6 +80,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     /** Ordinals match {@code RtSettings.SELF_SHADOW_*}. */
     public enum SelfShadow { FULL, NO_FOOTPRINT, OFF }
     public enum RendererStatus { STATUS }
+    public enum GiExecutionStatusRow { STATUS }
     public enum QualityProfile { FAST, BEAUTIFUL, CUSTOM }
 
     private enum Mark { NONE, RT, PATH }
@@ -350,6 +352,16 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setEnabledProvider(s -> false).setControlHiddenWhenDisabled(false)
             .setBinding(v -> {}, () -> RendererStatus.STATUS).setStorageHandler(st);
         rt.addOption(track("renderer_status", rendererStatus));
+        EnumOptionBuilder<GiExecutionStatusRow> giStatus = builder.createEnumOption(id("gi_execution_status"), GiExecutionStatusRow.class);
+        giStatus.setName(nameOf("gi_execution_status")).setTooltip(v -> Component.empty()
+            .append(tipOf("gi_execution_status")).append("\n")
+            .append(io.github.andrexarlay.vulkancompat.rtx.raytracing.GiExecutionStatus.live()))
+            .setDefaultValue(GiExecutionStatusRow.STATUS)
+            .setElementNameProvider(v -> Component.literal(
+                io.github.andrexarlay.vulkancompat.rtx.raytracing.GiExecutionStatus.live()))
+            .setEnabledProvider(s -> false).setControlHiddenWhenDisabled(false)
+            .setBinding(v -> {}, () -> GiExecutionStatusRow.STATUS).setStorageHandler(st);
+        rt.addOption(track("gi_execution_status", giStatus));
         for (boolean voxel : new boolean[] {false, true}) {
             String path = voxel ? "voxel_quality_profile" : "path_quality_profile";
             EnumOptionBuilder<QualityProfile> profile = builder.createEnumOption(id(path), QualityProfile.class);
@@ -692,6 +704,23 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         pt.addOption(track("adaptive_quality", aq));
         pt.addOption(boolOpt(builder, "path_caustics", true, v -> RtSettings.caustics = v, () -> RtSettings.caustics,
             pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
+        Identifier denId = id("path_denoiser");
+        // Additive DLSS-RR render preset hint (D/E/F). DEFAULT leaves the NGX parameter untouched; opt-in until measured.
+        EnumOptionBuilder<DlssRrParams.Preset> rrPreset = builder.createEnumOption(id("dlss_rr_preset"), DlssRrParams.Preset.class);
+        rrPreset.setName(nameOf("dlss_rr_preset")).setTooltip(v -> tipOf("dlss_rr_preset")).setDefaultValue(DlssRrParams.Preset.DEFAULT)
+            .setAllowedValues(EnumSet.allOf(DlssRrParams.Preset.class))
+            .setElementNameProvider(val -> switch (val) {
+                case DEFAULT -> tr("bedray.dlss_rr_preset.default", "Default");
+                case D -> tr("bedray.dlss_rr_preset.d", "Preset D (transformer)");
+                case E -> tr("bedray.dlss_rr_preset.e", "Preset E (transformer, DoF)");
+                case F -> tr("bedray.dlss_rr_preset.f", "Preset F (RR2)");
+            })
+            .setEnabledProvider(s -> anyRt.apply(s) && s.readEnumOption(denId, RtSettings.PathDenoiser.class) == RtSettings.PathDenoiser.DLSS_RR,
+                rtDependencies(modeId, denId))
+            .setControlHiddenWhenDisabled(false)
+            .setBinding(customPath(v -> RtSettings.dlssRrPreset = v, () -> RtSettings.dlssRrPreset), () -> RtSettings.dlssRrPreset)
+            .setImpact(OptionImpact.LOW).setStorageHandler(st);
+        pt.addOption(track("dlss_rr_preset", rrPreset));
         endGroup(builder, page, pt, "adv_pt");
 
         // ---- Light and atmosphere
@@ -753,6 +782,14 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             VulkanRtxConfig.pointSamplingSharpness = v;
             TextureLodBias.setPointSamplingSharpness(v);
         }, () -> VulkanRtxConfig.pointSamplingSharpness, null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
+        // Always registered (not expert-only): the Texture style presets stage this row, so it must exist for every player.
+        img.addOption(intOpt(builder, "texture_lod_bias_offset", 0, -20, 10, 1,
+            v -> Component.literal(String.format(Locale.ROOT, "%.1f", v / 10.0f)),
+            v -> {
+                float offset = v / 10.0f;
+                VulkanRtxConfig.textureLodBiasOffset = offset;
+                TextureLodBias.textureLodBiasOffset = offset;
+            }, () -> Math.round(VulkanRtxConfig.textureLodBiasOffset * 10.0f), null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
         img.addOption(intOpt(builder, "custom_scale", 100, 25, 100, 5, percent(),
             v -> {
                 VulkanRtxConfig.customScalePercent = v;
@@ -942,13 +979,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             () -> RtSettings.sunSizeTenths, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
         ex.addOption(intOpt(builder, "auto_normal_strength", 100, 0, 400, 10, percent(), v -> RtSettings.autoNormalStrength = v,
             () -> RtSettings.autoNormalStrength, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
-        ex.addOption(intOpt(builder, "texture_lod_bias_offset", 0, -20, 10, 1,
-            v -> Component.literal(String.format(Locale.ROOT, "%.1f", v / 10.0f)),
-            v -> {
-                float offset = v / 10.0f;
-                VulkanRtxConfig.textureLodBiasOffset = offset;
-                TextureLodBias.textureLodBiasOffset = offset;
-            }, () -> Math.round(VulkanRtxConfig.textureLodBiasOffset * 10.0f), null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
         ex.addOption(atmSlider(builder, "atm_godrays_range", "godrays_range", 128, 32, 256, 16, anyRt, dMode, false, st));
         ex.addOption(atmSlider(builder, "atm_bloom_threshold", "bloom_threshold", 400, 50, 800, 10, anyRt, dMode, false, st));
         ex.addOption(atmSlider(builder, "atm_bloom_scatter", "bloom_scatter", 70, 30, 95, 5, anyRt, dMode, false, st));

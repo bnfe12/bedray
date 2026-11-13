@@ -69,7 +69,8 @@ public final class DlssRrChecks {
         check(DlssLayouts.offset(DlssRayReconstruction.RR_CREATE_INFO, "enable_output_subrects") == 28, "create enable_output_subrects @28");
         check(DlssLayouts.offset(DlssRayReconstruction.RR_CREATE_INFO, "roughness_mode") == 32, "create roughness_mode @32");
         check(DlssLayouts.offset(DlssRayReconstruction.RR_CREATE_INFO, "depth_type") == 36, "create depth_type @36");
-        check(DlssLayouts.offset(DlssRayReconstruction.RR_CREATE_INFO, "reserved") == 40, "create reserved @40");
+        check(DlssLayouts.offset(DlssRayReconstruction.RR_CREATE_INFO, "preset") == 40, "create preset @40 (additive, former reserved[0])");
+        check(DlssLayouts.offset(DlssRayReconstruction.RR_CREATE_INFO, "reserved") == 44, "create reserved @44");
 
         // RR_EVAL_INFO offsets
         check(DlssLayouts.offset(DlssRayReconstruction.RR_EVAL_INFO, "struct_size") == 0, "eval struct_size @0");
@@ -131,6 +132,15 @@ public final class DlssRrChecks {
         );
         check(ci.renderWidth() == 1280 && ci.renderHeight() == 720, "render size preserved");
         check(ci.quality() == DlssQuality.QUALITY, "quality preserved");
+        check(ci.preset() == DlssRrParams.Preset.DEFAULT, "9-arg CreateInfo defaults preset to DEFAULT (additive)");
+        DlssRrParams.CreateInfo ciE = new DlssRrParams.CreateInfo(
+            1280, 720, 1920, 1080, DlssQuality.QUALITY, 0, false,
+            DlssRrParams.ROUGHNESS_PACKED, DlssRrParams.DEPTH_HW, DlssRrParams.Preset.E);
+        check(ciE.preset() == DlssRrParams.Preset.E && ciE.preset().nativeValue() == 5, "10-arg CreateInfo preserves preset E");
+        DlssRrParams.CreateInfo ciNull = new DlssRrParams.CreateInfo(
+            1280, 720, 1920, 1080, DlssQuality.QUALITY, 0, false,
+            DlssRrParams.ROUGHNESS_PACKED, DlssRrParams.DEPTH_HW, null);
+        check(ciNull.preset() == DlssRrParams.Preset.DEFAULT, "null preset canonicalized to DEFAULT");
 
         // Invalid CreateInfo
         check(throwsIae(() -> new DlssRrParams.CreateInfo(0, 720, 1920, 1080, DlssQuality.QUALITY, 0, false, 0, 0)), "renderWidth=0 throws");

@@ -185,6 +185,11 @@ public final class SettingsCatalog {
             "Reports the requested renderer and host command recording. A recorded frame does not establish gameplay compatibility.",
             "Read-only status.", "Missing add-ons and initialization failures are shown explicitly.",
             "Runtime status has no comparison image.");
+        putNoImage("gi_execution_status", Tier.ADVANCED, "GI Execution Technologies",
+            "Honest supported / enabled / implemented state of the GI execution and geometry paths: raygen, NV Shader Execution Reordering, opacity micromap and partitioned TLAS. Raygen and SER are startup device features (-Dbedray.rt.raygen / -Dbedray.rt.ser); OMM and partitioned TLAS are deferred and not implemented. The regional in-place TLAS update is already active.",
+            "Read-only status; no FPS claim. Measured: raygen -7.8% gpu_rt vs compute (RD16, PT on).",
+            "Path Tracing. SER needs the NV invocation-reorder feature; read the line for the current device.",
+            "Runtime capability status has no comparison image.");
         putNoImage("compute_scene", Tier.EXPERT, "Compute Diagnostic Scene",
             "Session diagnostic preference for the selected voxel renderer. Synthetic replaces the world with a fixed test scene; live mode draws opaque occupancy. World Renderer remains the main hardware/voxel switch. A saved voxel choice starts in live mode on the next launch.",
             "GPU cost is experimental and has not been measured in gameplay.", "Requires the included Bedray Compute provider.",
@@ -358,6 +363,10 @@ public final class SettingsCatalog {
             "Sunlight focused by the water surface into moving bright patterns on the ground under water.",
             "", "Path Tracing only.", Scene.WATER, 0.5f, 0.75f, "path_caustics", List.of(
                 onOff(false, () -> RtSettings.caustics = false), onOff(true, () -> RtSettings.caustics = true)), null);
+        putNoImage("dlss_rr_preset", Tier.ADVANCED, "Ray Reconstruction Preset",
+            "Selects the DLSS Ray Reconstruction model: Default leaves NVIDIA's choice untouched; D and E are transformer models (E adds depth-of-field guidance); F is the RR2 model. Additive and opt-in until measured on this GPU.",
+            "", "Only with Path Tracing and DLSS Ray Reconstruction.",
+            "No preset A/B has been captured yet; Default preserves prior behavior, so no screenshot is shipped.");
         putNoImage("path_exposure_ev", Tier.ADVANCED, "Exposure Compensation",
             "Manual brightness offset in EV (-4.0 to +4.0). Shifts Auto Exposure when it is on, or sets the fixed brightness when Auto Exposure is off.",
             "", "Needs ray tracing on.",
@@ -501,7 +510,7 @@ public final class SettingsCatalog {
             "", "", "Visible only as shadow softness at a moment of day; not captured.");
         putNoImage("auto_normal_strength", Tier.EXPERT, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",
             "Shares the Surface Relief screenshots.");
-        putNoImage("texture_lod_bias_offset", Tier.EXPERT, "Texture Sharpness Offset",
+        putNoImage("texture_lod_bias_offset", Tier.ADVANCED, "Texture Sharpness Offset",
             "Extra mipmap bias; negative values make textures sharper (-0.2 to -0.5 suits pixel art). The automatic bias for upscalers is always on.",
             "", "", "A sub-pixel sharpness bias is not visible in a downscaled screenshot.");
         putNoImage("fsr_version", Tier.EXPERT, "FSR Version", "Which FSR inside the AMD library is used. Auto picks the newest (3.1).", "", "FSR only.",

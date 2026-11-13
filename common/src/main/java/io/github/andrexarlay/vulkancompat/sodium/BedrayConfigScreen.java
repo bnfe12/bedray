@@ -168,6 +168,33 @@ public final class BedrayConfigScreen extends Screen {
         }
         if (!searching && category == SettingsDraft.Category.OVERVIEW && draft.hasQualityProfile())
             addAction(tr("bedray.settings.customize", "Customize current quality"), () -> { draft.customize(); rebuildRows(); });
+        if (!searching && category == SettingsDraft.Category.OVERVIEW && draft.hasQualityProfile() && !draft.voxel())
+            addAction(tr("bedray.settings.gi_auto", "Auto-select GI quality (recommended)"), () -> {
+                var device = io.github.andrexarlay.vulkancompat.rtx.raytracing.GiDeviceProbe.probe();
+                if (device == null) {
+                    runtime = tr("bedray.settings.gi_auto_unavailable", "Auto-select needs the Vulkan device; open a world first.");
+                    return;
+                }
+                var plan = io.github.andrexarlay.vulkancompat.rtx.config.GiStackPolicy.recommend(
+                    device, minecraft.getWindow().getWidth(), minecraft.getWindow().getHeight());
+                draft.applyGiPlan(plan);
+                runtime = tr("bedray.settings.gi_auto_staged", "Auto: %s. Apply to commit.",
+                    io.github.andrexarlay.vulkancompat.rtx.config.GiStackPolicy.describe(plan));
+                rebuildRows();
+            });
+        if (!searching && category == SettingsDraft.Category.OVERVIEW)
+            addAction(tr("bedray.settings.texture_style", "Texture style..."), () -> {
+                var presets = io.github.andrexarlay.vulkancompat.rtx.config.TexturePreset.values();
+                openChoices(java.util.Arrays.stream(presets).map(p -> switch (p) {
+                    case PIXEL_ART -> tr("bedray.settings.texture.pixel_art", "Pixel-Sharp");
+                    case BALANCED -> tr("bedray.settings.texture.balanced", "Balanced");
+                    case SOFT -> tr("bedray.settings.texture.soft", "Soft");
+                }).toList(), index -> {
+                    draft.applyTexturePreset(presets[index]);
+                    runtime = tr("bedray.settings.texture_staged", "Texture style staged. Apply to commit.");
+                    rebuildRows();
+                }, contentX, listTop, contentWidth - 6);
+            });
         if (!searching && category == SettingsDraft.Category.SYSTEM) {
             addAction(tr("bedray.settings.addons", "Add-on settings…"), () -> minecraft.gui.setScreen(new AddonSettingsScreen(this)));
             captureButton = addAction(tr("bedray.settings.capture_profile", "Record 30 s gameplay profile"),

@@ -1,0 +1,149 @@
+{
+  "schema": 1,
+  "label": "raygen_pt_off",
+  "variant_props": {
+    "vkbridge.autotest": "native_perf",
+    "vkrtx.rt.adaptive_quality": "off",
+    "vkrtx.autotest.captureLabel": "raygen_pt_off",
+    "vkrtx.autotest.revisionHint": "cf3f5f97-abi2",
+    "vkrtx.rt.path_denoiser": "dlss_rr",
+    "vkrtx.rt.path_restir_di": "false",
+    "bedray.rt.nativeMemoryMiB": "4096",
+    "bedray.rt.raygen": "true",
+    "vkrtx.rt.path_restir_pt": "false",
+    "vkrtx.rt.path_restir_pt_spatial": "false"
+  },
+  "revision_hint": "cf3f5f97-abi2",
+  "render_distance": 16,
+  "started_utc": "2026-11-12T04:36:06.584326+00:00",
+  "capture_status": "saved",
+  "game_exited_cleanly": true,
+  "instance": "C:\\Users\\andre\\AppData\\Roaming\\FreesmLauncher\\instances\\Vulkan Experimental RT 26.3",
+  "log_copy": "C:\\Dev\\Sky\\scratch\\bedray-gi-bench-20261112\\latest-raygen_pt_off.log",
+  "capture_dir": "C:\\Users\\andre\\AppData\\Roaming\\FreesmLauncher\\instances\\Vulkan Experimental RT 26.3\\minecraft\\autotest\\native_perf\\capture-4f05af3d-c82c-4c0c-a2b4-92707c9a6b17",
+  "capture_sha256": {
+    "frames.csv": "664e5556b1cb74f5ff2bccefcd0cacc83d7570a9f8921a3c16ead3e4dcea8271",
+    "manifest.json": "280b086da310a9679080b0c501d10e787cfdcd7b09850be063a33c8211e8c3c1"
+  },
+  "acceptance": {
+    "schema": 1,
+    "valid_native_capture": true,
+    "frames": 895,
+    "duration_seconds": 30.009904599999995,
+    "target_fps": 60,
+    "frame_budget_ms": 16.666666666666668,
+    "criterion": "average_fps >= target and slowest_1_percent_mean_fps >= target",
+    "target_met_in_capture": false,
+    "all_frames_within_budget": false,
+    "frames_over_budget": 894,
+    "frame_intervals": {
+      "mean_ms": 33.53061966480447,
+      "p95_ms": 34.9369,
+      "p99_ms": 35.9722,
+      "max_ms": 70.7002,
+      "average_fps": 29.82348700968546,
+      "one_percent_low_fps": 20.8262128897134,
+      "point_one_percent_low_fps": 14.144231558043684
+    },
+    "mean_cpu_total_ms": 9.122103351955307,
+    "mean_gpu_total_ms": 17.955198963128492,
+    "mean_gpu_rt_ms": 17.273787852513966,
+    "quality": {
+      "program": "path_trace_scene.raygen",
+      "spp": 1,
+      "bounces": 2,
+      "ray_distance": 256.0,
+      "trace_flags": 4259843,
+      "denoiser_request": "DLSS_RR"
+    },
+    "context": {
+      "revision_hint": "cf3f5f97-abi2",
+      "label": "raygen_pt_off",
+      "vsync": "false",
+      "frame_limit": "260",
+      "gpu": "NVIDIA GeForce RTX 5060 Ti",
+      "driver": "1.4.357 NVIDIA 621.14",
+      "gpu_backend": "Vulkan",
+      "adaptive_budget_ms": "0.0",
+      "scenario": "native_perf",
+      "render_distance": "16"
+    },
+    "scope": "One recorded workload; CPU/GPU totals exclude submit/present. No hardware FPS guarantee."
+  },
+  "medians": {
+    "interval_ms": {
+      "median": 33.2969,
+      "p95": 34.9349,
+      "mean": 33.5306,
+      "n": 895
+    },
+    "cpu_total_ms": {
+      "median": 9.5849,
+      "p95": 18.0647,
+      "mean": 9.1221,
+      "n": 895
+    },
+    "gpu_total_ms": {
+      "median": 17.888607999999998,
+      "p95": 18.820096,
+      "mean": 17.9552,
+      "n": 895
+    },
+    "gpu_rt_ms": {
+      "median": 17.202175999999998,
+      "p95": 18.105311999999998,
+      "mean": 17.2738,
+      "n": 895
+    }
+  },
+  "log_evidence": {
+    "raygen_selections": [
+      {
+        "pass": "path_trace_scene.raygen",
+        "stage": "raygeneration",
+        "ser_requested": "false",
+        "reordering_hint": "unavailable",
+        "enabled": "0xe77"
+      }
+    ],
+    "native_scene": {
+      "dll": "bedray_core.dll",
+      "abi": 2,
+      "frames": 8,
+      "max_sections": 16383,
+      "max_geometry_mb": 48,
+      "features": "0x1"
+    },
+    "denoiser": {
+      "requested": "DLSS_RR",
+      "active": "dlss_rr"
+    },
+    "memory": {
+      "samples": 3,
+      "reserved_max": 2167668736,
+      "used_max": 1907618240,
+      "peak_reserved_max": 2188244416,
+      "heap_usage_max": 3943276544
+    },
+    "scene_sections": {
+      "sections": 4295,
+      "quads": 3668624,
+      "solid": 1955833,
+      "cutout": 1579599,
+      "translucent": 133192
+    },
+    "rt_pass_gpu_ewma": {
+      "samples": 65,
+      "work_ms_median": 16.0,
+      "work_ms_p95": 16.3,
+      "work_ms_mean": 16.023
+    },
+    "autotest_events": [
+      "event=installed scenario=native_perf",
+      "event=armed scenario=native_perf",
+      "event=world_ready terrainComplete=true grounded=true settleFrames=120 yaw=135.00 pitch=12.00 x=-41.50 y=89.00 z=2.50",
+      "scenario=native_perf event=capture_saved directory=<gameDir>\\autotest\\native_perf\\capture-4f05af3d-c82c-4c0c-a2b4-92707c9a6b17 frames=895 reason=duration_elapsed fps_acceptance=offline_required",
+      "scenario=native_perf frames=2381 fps=30 window=1920x1080 renderTarget=1920x1080 durationSec=101 unexpected_screens=0 yaw=135.00 pitch=12.00 x=-41.50 y=89.00 z=2.50 result=PASS"
+    ]
+  }
+}
