@@ -13,7 +13,7 @@ import java.util.Set;
 
 /**
  * Light list for next event estimation of emissive surfaces (both RT modes). Every quad of a built section whose atlas
- * region is emissive in the material atlas (mean emission of a 4x4 texel grid over the quad's UV rectangle > 0.02) becomes
+ * region is emissive in the material atlas (mean emission over the quad's UV rectangle exceeds MIN_EMISSION) becomes
  * an emitter record of 96 bytes:
  * <pre>
  *   vec4 p0   corner (blocks, relative to the emitter origin), w = area (blocks^2)
@@ -38,12 +38,12 @@ public final class RtEmitters {
     /** Texel scan of a quad: at most this many texels per axis (hi-res packs are sampled with a stride). */
     static final int MAX_SCAN = 32;
     /**
-     * Minimum luminous power (area x mean emission x boost, in block faces) of a quad that has any emissive texel. Vanilla puts a
+     * Minimum luminous power at peak emission 1 (area x mean emission x boost, in block faces). Vanilla puts a
      * torch at light level 14 and glowstone at 15, and a glowstone face carries about one block face of power (area 1 x the mean
      * emission of its texture, around 0.65), so a flame must carry about 14/15 of that: 0.6, not the fifth of a face (0.2) this
      * floor used to be, which left a torch lighting a puddle and a cave with a torch in it effectively black (owner report
-     * 2026-10-24). The floor is only reachable while {@code area * mean emission >= MIN_POWER / MAX_BOOST = 0.0094}, i.e. a
-     * spot about 0.1 blocks across; a smaller spot stops at the cap and stays dim instead of becoming a floodlight.
+     * 2026-10-24). Dim materials scale this floor by their brightest texel. At full strength it is only reachable while
+     * {@code area * mean emission >= MIN_POWER / MAX_BOOST = 0.0094}; smaller spots stop at the cap and stay dim.
      */
     public static final float MIN_POWER = 0.6f;
     /** Cap of the power boost (a single emissive texel of a big quad must not become a floodlight). */
@@ -948,14 +948,16 @@ public final class RtEmitters {
     }
 
     /**
-     * Power boost of an emitter rectangle: the power of half its brightest texel spread over the rectangle (small bright spots
-     * get a lift), then at least {@link #MIN_POWER} for area x mean emission x boost; at most {@link #MAX_BOOST}.
+     * Power boost of an emitter rectangle: small bright spots get a lift, with a minimum power proportional to their
+     * brightest texel. Scaling a material's emission must scale its light instead of lifting dim growth to torch power.
+     * Full-strength torch flames retain {@link #MIN_POWER}; all boosts remain capped by {@link #MAX_BOOST}.
      */
     public static float powerBoost(float area, float meanEmission, float bestEmission) {
         float boost = Math.max(1f, bestEmission * 0.5f / meanEmission);
         float power = area * meanEmission * boost;
-        if (power < MIN_POWER) {
-            boost *= MIN_POWER / Math.max(power, 1.0e-9f);
+        float minimumPower = MIN_POWER * Math.max(0f, Math.min(bestEmission, 1f));
+        if (power < minimumPower) {
+            boost *= minimumPower / Math.max(power, 1.0e-9f);
         }
         return Math.min(boost, MAX_BOOST);
     }

@@ -30,7 +30,13 @@ import java.util.Locale;
  * {@code off|rays|path}; modifiers: {@code t<N>} time of day (default 6000), {@code f<N>} frames to wait (default 300 path / 120 rays),
  * {@code b<N>} path bounces, {@code cx=<d> cy=<d> cz=<d>} camera offset in blocks, {@code aim=<yaw>_<pitch>}, {@code v<N>} named view,
  * {@code refl gi ao} (rays mode options), {@code water=vanilla|realistic}, {@code perf} (four 0.5 s PerfMonitor windows are logged as
- * {@code perf=} before the shot). Shots: {@code NN_<step>.png}. Log lines: {@code [VKB-AUTOTEST] scenario=rt_look ...}.
+ * {@code perf=} before the shot), {@code pan=<N>} camera yaw pan of N centidegrees per rendered frame (may be negative;
+ * {@code pan=10} = 0.1 deg/frame). Panning advances in the post-frame hook on every rendered frame (screenshot stalls do not change
+ * the per-frame step) with {@code yRotO} = the previous frame's yaw, so the game's interpolation and the motion vectors see real
+ * motion. Consecutive steps of the same scene that all carry {@code pan=} keep panning without re-placing the camera (only the first
+ * one places it and starts from its aim / view; camera modifiers of the following ones are ignored); a step without {@code pan=}
+ * stops it. Example: {@code I:path+t18000+dn=rr+pan=10+f300,I:path+t18000+dn=rr+pan=10+f1,...}. The {@code state} line carries
+ * {@code pan=} and {@code yaw_at_shot=}. Shots: {@code NN_<step>.png}. Log lines: {@code [VKB-AUTOTEST] scenario=rt_look ...}.
  */
 public final class LookScenario implements AutotestScenario {
     public static final String STEPS_PROPERTY = "vkrtx.autotest.lookSteps";
@@ -65,6 +71,12 @@ public final class LookScenario implements AutotestScenario {
             return 1;
         }
 
+        /** Pan rate in centidegrees of yaw per rendered frame; 0 = no pan. */
+        int pan() {
+            String v = value("pan");
+            return v == null ? 0 : Integer.parseInt(v);
+        }
+
         String label() {
             return raw.replace(':', '_').replace('+', '_').replace('=', '-').toLowerCase(Locale.ROOT);
         }
@@ -73,6 +85,10 @@ public final class LookScenario implements AutotestScenario {
     private volatile boolean aimOverride;
     private volatile float aimYaw;
     private volatile float aimPitch;
+    /** Active pan rate (centidegrees of yaw per rendered frame), 0 = not panning; persists across consecutive pan steps. */
+    private volatile int panCentidegPerFrame;
+    /** Scene of the step that started the current pan, null when not panning. */
+    private String panScene;
     private boolean listening;
     private int bx;
     private int by;
@@ -103,7 +119,7 @@ public final class LookScenario implements AutotestScenario {
             for (int i = 1; i < parts.length; i++) {
                 String m = parts[i].trim().toLowerCase(Locale.ROOT);
                 if (!(m.matches("[tbfvsd]\\d+") || m.matches("c[xyz]=-?\\d+(\\.\\d+)?") || m.matches("aim=-?\\d+_-?\\d+") || m.equals("refl")
-                    || m.equals("gi") || m.equals("ao") || m.equals("perf") || m.matches("water=(vanilla|realistic)") || m.matches("self=(full|nofoot|off)") || m.equals("dn=rr") || m.matches("lb=\\d+") || m.equals("noaccum") || m.equals("noglass") || m.equals("glass"))) {
+                    || m.equals("gi") || m.equals("ao") || m.equals("perf") || m.matches("water=(vanilla|realistic)") || m.matches("self=(full|nofoot|off)") || m.equals("dn=rr") || m.matches("lb=\\d+") || m.matches("pan=-?\\d+") || m.equals("noaccum") || m.equals("noglass") || m.equals("glass"))) {
                     throw new IllegalArgumentException("step '" + item + "': unknown modifier " + m);
                 }
                 mods.add(m);
@@ -308,10 +324,38 @@ public final class LookScenario implements AutotestScenario {
         if (!aimOverride || player == null) {
             return;
         }
-        player.setYRot(aimYaw);
-        player.yRotO = aimYaw;
+        int pan = panCentidegPerFrame;
+        if (pan != 0) {
+            // 26.3: Camera.alignWithEntity(pt) reads Entity.getViewYRot(pt); LocalPlayer.getViewYRot(F) -> Entity.getYRot(F) =
+            // pt == 1 ? yRot : Mth.rotLerp(pt, yRotO, yRot) (javap -c libs/minecraft-26.3-client.jar). yRotO = the previous
+            // frame's yaw keeps a real per-frame rotation in the interpolated camera instead of a teleport-like yRotO == yRot.
+            float prevYaw = aimYaw;
+            float yaw = nextYaw(prevYaw, pan);
+            aimYaw = yaw;
+            player.setYRot(yaw);
+            player.yRotO = prevYaw;
+        } else {
+            player.setYRot(aimYaw);
+            player.yRotO = aimYaw;
+        }
         player.setXRot(aimPitch);
         player.xRotO = aimPitch;
+    }
+
+    /** Yaw after one rendered frame of panning at {@code centidegPerFrame}, wrapped to [-180, 180) (rotLerp handles the wrap). */
+    static float nextYaw(float yaw, int centidegPerFrame) {
+        float r = (yaw + centidegPerFrame / 100f) % 360f;
+        if (r >= 180f) {
+            r -= 360f;
+        } else if (r < -180f) {
+            r += 360f;
+        }
+        return r;
+    }
+
+    /** True when step {@code s} continues the pan already running for {@code panScene} (no camera re-placement, yaw kept). */
+    static boolean continuesPan(String panScene, int activePan, Step s) {
+        return activePan != 0 && s.pan() != 0 && s.scene().equals(panScene);
     }
 
     private void command(AutotestContext ctx, String cmd) {
@@ -482,7 +526,19 @@ public final class LookScenario implements AutotestScenario {
         }
         Step s = steps.get(index);
         var mc = ctx.minecraft();
-        placeCamera(ctx, s);
+        int pan = s.pan();
+        if (continuesPan(panScene, panCentidegPerFrame, s)) {
+            // keep position and the running yaw: a tp here would snap the camera back and break the continuous pan
+            panCentidegPerFrame = pan;
+        } else {
+            panCentidegPerFrame = 0;   // stop advancing while the camera is re-placed
+            placeCamera(ctx, s);
+            panScene = pan != 0 ? s.scene() : null;
+            panCentidegPerFrame = pan;
+        }
+        if (pan != 0) {
+            aimOverride = true;
+        }
         String time = "6000";
         for (String m : s.mods()) {
             if (m.matches("t\\d+")) {
@@ -510,6 +566,7 @@ public final class LookScenario implements AutotestScenario {
             ctx.log("scenario", name(), "step", String.valueOf(index), "event", "state", "spec", s.raw(),
                 "mode", s.mode().logName(), "pass", pass == null ? "none" : pass.logName(),
                 "player", String.format(Locale.ROOT, "%.1f,%.1f,%.1f", mc.player.getX(), mc.player.getY(), mc.player.getZ()),
+                "pan", String.valueOf(pan), "yaw_at_shot", String.format(Locale.ROOT, "%.2f", mc.player.getYRot()),
                 "file", file);
             if (s.mode().isActive() && pass != s.mode()) {
                 ctx.fail("rt_look step " + index + " " + s.raw() + ": renderer pass is " + pass + ", expected " + s.mode(), null);

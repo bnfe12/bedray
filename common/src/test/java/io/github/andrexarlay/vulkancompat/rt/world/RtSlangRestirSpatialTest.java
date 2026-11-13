@@ -288,7 +288,7 @@ class RtSlangRestirSpatialTest {
             "the host binds the trace pass's own frame upload and the captured entity atlas");
         assertTrue(host.contains("record(VkCommandBuffer cmd, RtPathTraceSlangPass.Atlases atlases,"),
             "and takes the resources from the trace pass's own records");
-        assertTrue(host.contains("program.groups(width, 0), program.groups(height, 1), 1"),
+        assertTrue(host.contains("program.groups(checkerColumns(width), 0), program.groups(height, 1), 1"),
             "dispatched with x from width and y from height");
         assertTrue(host.contains("program.dispatchPhases(cmd.address()")
                 && host.contains("frame), push, 8, PHASES);"),

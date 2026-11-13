@@ -29,8 +29,8 @@ static const float PATH_STATS_SKY_DISTANCE = 999999.0;
 // The range 64*(log2 l + 16) can hold: 0 at 2^-16 and 2048 at 2^16.
 static const float PATH_STATS_LUM_FLOOR = 1.52587890625e-5; // 2^-16
 static const float PATH_STATS_LUM_CEIL = 65536.0;           // 2^16
-// One 4x4 tile in sixteen is metered, every pixel of it: the same rate the legacy counters used, and the rate the
-// host's hit_pct, hist_pct and average luminance were calibrated for.
+// One 4x4 tile in sixteen is metered. Its leader counts every valid pixel: the same sample rate the legacy counters
+// used, and the rate the host's hit_pct, hist_pct and average luminance were calibrated for.
 static const uint PATH_STATS_TILES_PER_SAMPLE = 16u;
 
 [[vk::image_format("rgba16f")]] [[vk::binding(0, 0)]] RWTexture2D<float4> radiance;

@@ -104,15 +104,15 @@ public final class DlssChecks {
         Map.of(), null, LibraryDescriptor.DEFAULT_MAX_FILE_BYTES);
 
     private static LibraryResolution missing() {
-        return new LibraryResolution(DESCRIPTOR, LibraryStatus.missing("nvngx_dlss.dll not found"), Map.of(), Map.of(), false);
+        return new LibraryResolution(DESCRIPTOR, LibraryStatus.missing("nvngx_dlss.dll not found"), Map.of(), Map.of());
     }
 
-    private static LibraryResolution present(boolean withWrapper, boolean legacy) {
+    private static LibraryResolution present(boolean withWrapper) {
         Path dir = Path.of("natives-test");
         Map<String, Path> files = withWrapper
             ? Map.of(DlssAvailability.NGX_DLL, dir.resolve(DlssAvailability.NGX_DLL), DlssAvailability.WRAPPER_DLL, dir.resolve(DlssAvailability.WRAPPER_DLL))
             : Map.of(DlssAvailability.NGX_DLL, dir.resolve(DlssAvailability.NGX_DLL));
-        return new LibraryResolution(DESCRIPTOR, LibraryStatus.presentUnverified("ok"), files, Map.of(), legacy);
+        return new LibraryResolution(DESCRIPTOR, LibraryStatus.presentUnverified("ok"), files, Map.of());
     }
 
     private static void availability() {
@@ -122,18 +122,16 @@ public final class DlssChecks {
             check(!lib.usable() && lib.reason().contains("MISSING"), "missing nvngx_dlss.dll: unusable with the state in the reason: " + lib.reason());
             check(lib.wrapperDll() == null && lib.featureDir() == null, "no paths for an unusable library");
 
-            DlssAvailability.setResolverForTesting(() -> present(false, false));
+            DlssAvailability.setResolverForTesting(() -> present(false));
             lib = DlssAvailability.library();
             check(!lib.usable() && lib.reason().contains(DlssAvailability.WRAPPER_DLL), "nvngx without vkb_dlss.dll: unusable, names the wrapper: " + lib.reason());
 
-            DlssAvailability.setResolverForTesting(() -> present(true, false));
+            DlssAvailability.setResolverForTesting(() -> present(true));
             lib = DlssAvailability.library();
             check(lib.usable(), "both libraries: usable");
             check(lib.wrapperDll().equals(Path.of("natives-test").resolve(DlssAvailability.WRAPPER_DLL)), "wrapper path comes from resolve()");
             check(lib.featureDir().equals(Path.of("natives-test")), "feature dir is the folder of nvngx_dlss.dll");
 
-            DlssAvailability.setResolverForTesting(() -> present(true, true));
-            check(DlssAvailability.library().reason().contains("legacy"), "legacy folder is reported");
 
             // the default resolver outside the game: reported as unusable, not thrown and not "present"
             DlssAvailability.setResolverForTesting(null);
@@ -141,7 +139,7 @@ public final class DlssChecks {
             check(!lib.usable() && lib.reason().contains("unavailable"), "outside the game Bedray Core manager is unavailable: " + lib.reason());
 
             // GPU verdicts
-            DlssAvailability.setResolverForTesting(() -> present(true, false));
+            DlssAvailability.setResolverForTesting(() -> present(true));
             DlssAvailability.setNvidiaForTesting(() -> null);
             check(DlssAvailability.isUsable(), "device unknown is not a veto");
             DlssAvailability.setNvidiaForTesting(() -> Boolean.TRUE);
@@ -165,7 +163,7 @@ public final class DlssChecks {
             VulkanRtxConfig.applyKeyValue("active_backend", "DLSS");
             check(VulkanRtxConfig.activeBackend == UpscalerBackend.BILINEAR, "config DLSS without libraries -> BILINEAR");
 
-            DlssAvailability.setResolverForTesting(() -> present(true, false));
+            DlssAvailability.setResolverForTesting(() -> present(true));
             DlssAvailability.setNvidiaForTesting(() -> Boolean.TRUE);
             check(UpscalerBackend.DLSS.isImplemented(), "DLSS with libraries on NVIDIA");
             check(UpscalerSelection.status(UpscalerBackend.DLSS, dir) == UpscalerSelection.Status.AVAILABLE, "status AVAILABLE");
@@ -205,7 +203,7 @@ public final class DlssChecks {
     private static void providerDecisions() {
         io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration.resetForTests();
         try {
-            DlssAvailability.setResolverForTesting(() -> present(true, false));
+            DlssAvailability.setResolverForTesting(() -> present(true));
             io.github.andrexarlay.vulkanbridge.core.DeviceFeatureRegistryImpl reg = new io.github.andrexarlay.vulkanbridge.core.DeviceFeatureRegistryImpl();
             DlssDeviceRequirements.register(reg, false, true);
             check(reg.snapshot().size() == 1 && reg.snapshot().get(0).id().equals(DlssDeviceRequirements.ID), "usable library, not requested, prereg: registered");

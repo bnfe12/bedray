@@ -59,20 +59,10 @@ public final class XessConfig {
     }
 
     /**
-     * {@code <gameDir>/bedray/natives/libxess.dll}: explicit path, never searched on PATH or in other games. Pre-release folders
-     * (see NativeLibrariesImpl.LEGACY_ROOTS) are used only when the file exists there and not in the new folder.
+     * {@code <gameDir>/bedray/natives/libxess.dll}: explicit path, never searched on PATH or in other games.
      */
     public static Path libraryPath(Path gameDir) {
-        Path current = gameDir.resolve("bedray").resolve("natives").resolve(DLL_NAME);
-        if (!Files.isRegularFile(current)) {
-            for (String root : io.github.andrexarlay.vulkanbridge.core.NativeLibrariesImpl.LEGACY_ROOTS) {
-                Path legacy = gameDir.resolve(root).resolve("natives").resolve(DLL_NAME);
-                if (Files.isRegularFile(legacy)) {
-                    return legacy;
-                }
-            }
-        }
-        return current;
+        return gameDir.resolve("bedray").resolve("natives").resolve(DLL_NAME);
     }
 
     public static boolean libraryExists(Path gameDir) {

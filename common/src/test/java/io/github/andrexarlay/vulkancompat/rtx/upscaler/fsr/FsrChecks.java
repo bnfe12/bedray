@@ -103,10 +103,10 @@ public final class FsrChecks {
 
     private static LibraryResolution resolution(Path dll) {
         if (dll == null) {
-            return new LibraryResolution(LibraryDescriptor.FSR, LibraryStatus.missing("amd_fidelityfx_vk.dll not found"), Map.of(), Map.of(), false);
+            return new LibraryResolution(LibraryDescriptor.FSR, LibraryStatus.missing("amd_fidelityfx_vk.dll not found"), Map.of(), Map.of());
         }
         return new LibraryResolution(LibraryDescriptor.FSR, LibraryStatus.presentUnverified("ok"),
-            Map.of(FsrLibrary.DLL, dll), Map.of(FsrLibrary.DLL, "1.0.1.41314"), true);
+            Map.of(FsrLibrary.DLL, dll), Map.of(FsrLibrary.DLL, "1.0.1.41314"));
     }
 
     private static void officialLibraryCheck() throws Exception {

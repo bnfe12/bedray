@@ -103,23 +103,7 @@ public final class MaterialRegion {
             } else if (auto.emissionMode() == AutoPbr.Emission.WHOLE) {
                 e = a < 128 ? 0f : auto.emission() * (0.15f + 0.85f * AutoPbr.smoothstep(lumLo, lumHi, luminance(c)));
             } else if (auto.emissionMode() == AutoPbr.Emission.BRIGHT) {
-                if (AutoPbr.RULE_FLAME.equals(auto.rule())) {
-                    e = auto.emission() * AutoPbr.flameEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                } else if (AutoPbr.RULE_REDSTONE.equals(auto.rule())) {
-                    e = a < 128 ? 0f : auto.emission();
-                } else if (AutoPbr.RULE_CANDLE.equals(auto.rule())) {
-                    e = auto.emission() * AutoPbr.candleEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                } else if (AutoPbr.RULE_ANCHOR.equals(auto.rule())) {
-                    e = auto.emission() * AutoPbr.anchorEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                } else if (AutoPbr.RULE_END_ROD.equals(auto.rule())) {
-                    e = auto.emission() * AutoPbr.endRodEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                } else if (AutoPbr.RULE_MAGMA.equals(auto.rule())) {
-                    e = auto.emission() * AutoPbr.magmaEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                } else if (AutoPbr.RULE_ENCHANTING_TABLE.equals(auto.rule())) {
-                    e = AutoPbr.enchantingTableEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                } else {
-                    e = auto.emission() * AutoPbr.brightPixelEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                }
+                e = AutoPbr.pixelEmission(auto, c);
             }
             mask[i] = e;
             any |= e > 0f;
@@ -235,23 +219,7 @@ public final class MaterialRegion {
                                 : auto.emission() * (0.15f + 0.85f * AutoPbr.smoothstep(lumLo, lumHi, luminance(c)));
                         }
                     } else if (auto.emissionMode() == AutoPbr.Emission.BRIGHT && albedo != null) {
-                        if (AutoPbr.RULE_FLAME.equals(auto.rule())) {
-                            e = auto.emission() * AutoPbr.flameEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                        } else if (AutoPbr.RULE_REDSTONE.equals(auto.rule())) {
-                            e = a < 128 ? 0f : auto.emission();
-                        } else if (AutoPbr.RULE_CANDLE.equals(auto.rule())) {
-                            e = auto.emission() * AutoPbr.candleEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                        } else if (AutoPbr.RULE_ANCHOR.equals(auto.rule())) {
-                            e = auto.emission() * AutoPbr.anchorEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                        } else if (AutoPbr.RULE_END_ROD.equals(auto.rule())) {
-                            e = auto.emission() * AutoPbr.endRodEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                        } else if (AutoPbr.RULE_MAGMA.equals(auto.rule())) {
-                            e = auto.emission() * AutoPbr.magmaEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                        } else if (AutoPbr.RULE_ENCHANTING_TABLE.equals(auto.rule())) {
-                            e = AutoPbr.enchantingTableEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                        } else {
-                            e = auto.emission() * AutoPbr.brightPixelEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
-                        }
+                        e = AutoPbr.pixelEmission(auto, c);
                     }
                     mat = LabPbr.materialFromAuto(auto, e);
                     if (perPixel) {
@@ -318,6 +286,13 @@ public final class MaterialRegion {
                                     mineral = l < meanLum - 0.15f;
                                 } else if (spritePath != null && spritePath.toLowerCase(java.util.Locale.ROOT).contains("quartz")) {
                                     mineral = l > 0.65f;
+                                } else if (spritePath != null && (spritePath.endsWith("nether_gold_ore")
+                                    || spritePath.endsWith("gilded_blackstone"))) {
+                                    // Red netherrack and purple blackstone are saturated too; only the gold flecks are metal.
+                                    int cr = (c >>> 16) & 255;
+                                    int cg = (c >>> 8) & 255;
+                                    int cb = c & 255;
+                                    mineral = cr >= 120 && cg >= 85 && cg > cr * 0.55f && cr >= cg * 0.95f && cg > cb * 1.25f;
                                 } else {
                                     mineral = sat > 0.15f;
                                 }
