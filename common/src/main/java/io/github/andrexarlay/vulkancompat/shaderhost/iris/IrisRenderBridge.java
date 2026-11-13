@@ -95,7 +95,7 @@ public final class IrisRenderBridge {
             try {
                 forwardExecutor.close();
             } catch (Throwable t) {
-                LOGGER.warn("[IrisRenderBridge] Error closing IrisForwardExecutor during teardown: {}", t.getMessage());
+                LOGGER.warn("[IrisRenderBridge] Error closing IrisForwardExecutor during teardown\n{}", LogPaths.stack(t));
             }
             forwardExecutor = null;
         }
@@ -304,7 +304,7 @@ public final class IrisRenderBridge {
                 width, height, camera, levelState, frameTimeCounter, frameCounter, near, far, frameTime);
             return exec.record(cmd, in);
         } catch (Throwable t) {
-            LOGGER.error("[IrisRenderBridge] Exception during IrisForwardExecutor.record: {}", t.getMessage(), t);
+            LOGGER.error("[IrisRenderBridge] Exception during IrisForwardExecutor.record\n{}", LogPaths.stack(t));
             return false;
         }
     }
