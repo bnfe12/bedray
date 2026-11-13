@@ -20,6 +20,7 @@ public final class RtxAutotest {
         AutotestScenarios.register(new RtModesScenario());
         AutotestScenarios.register(new PerfScenario());
         AutotestScenarios.register(new NativePerfScenario());
+        AutotestScenarios.register(new FriendTestScenario());
         AutotestScenarios.register(new RtUpscalerScenario());
         AutotestScenarios.register(new LightScenario());
         AutotestScenarios.register(new LightingScenario());

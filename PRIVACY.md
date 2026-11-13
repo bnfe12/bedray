@@ -1,6 +1,9 @@
 # Privacy
 
-Bedray does not collect, store or send personal data, and it has no telemetry. It makes **no network connections of its own**.
+Bedray has no background telemetry. It makes no HTTP requests of its own. The explicit **Prepare GitHub test report** action
+opens the user's browser on the public Bedray issue form with a short scrubbed hardware/build/performance summary in the URL.
+The browser sends that summary to GitHub; the user reviews the form, attaches a local ZIP and submits it through their own account.
+Bedray never reads or stores GitHub credentials or submits an issue automatically.
 
 ## What stays on your computer
 
@@ -8,6 +11,11 @@ Bedray does not collect, store or send personal data, and it has no telemetry. I
 * `bedray/natives/`: vendor libraries you installed yourself.
 * `bedray/reports/bedray-report-<time>.txt`: a diagnostics report, **only when you ask for one** (`/bedray report` on NeoForge, or the
   "Copy diagnostics report" button in Video Settings). The same text is copied to your clipboard.
+* `bedray/profiles/capture-*/`: an explicit 30 second gameplay capture, including application FPS, 1% low, frame intervals,
+  per-frame rendering facts and available CPU/GPU timings. Generated display frames do not inflate these FPS statistics.
+* `bedray/reports/bedray-test-*.zip`: a tester bundle prepared after a requested FPS capture or by `/bedray share`.
+  It contains scrubbed diagnostics, at most the last 2 MiB of `latest.log`, and the last capture from the current session.
+  It includes no world saves, account files, launcher credentials or screenshots.
 
 ## What a diagnostics report contains
 
@@ -21,5 +29,5 @@ nick, UUIDs, e-mail addresses, IP addresses and values after `token` / `password
 
 ## What is not done
 
-Nothing is uploaded or sent, ever; you decide whether to attach a report to an issue. Scrubbing is automatic but not perfect: read the
-report before you post it, and remove anything else you do not want to share (for example a custom instance name).
+No files are uploaded by Bedray. The GitHub action opens a review form and the reports folder; the user attaches and submits.
+Scrubbing is automatic but not perfect: read the report before posting and remove anything else you do not want to share.
