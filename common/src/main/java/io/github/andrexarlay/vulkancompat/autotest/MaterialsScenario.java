@@ -32,11 +32,16 @@ import java.util.Locale;
  *   <li>{@code X}: living/dead chorus flowers against End stone and purpur, without an end rod filling the room.</li>
  * </ul>
  * Modifiers: {@code item=<id>}, {@code cam=3}, {@code t<N>} (time, default 18000), {@code b<N>} (bounces), {@code f<N>} (frames before the
- * shot, default 400), {@code aim=<yaw>_<pitch>}, {@code cx=<dx>}, {@code cz=<dz>}.
+ * shot, default 400), {@code s<N>} (samples per pixel, 1..8), {@code open} (remove the room's roof),
+ * {@code tm=peak|aces|pbr_neutral|gt|agx}, {@code fixed} (fixed exposure), {@code ev=<tenths>}, {@code dn=off|nrd|rr},
+ * {@code aim=<yaw>_<pitch>}, {@code cx=<dx>}, {@code cz=<dz>}.
+ * {@code -Dvkrtx.autotest.materialDimension=nether|end|overworld} selects the real dimension (default overworld).
+ * Nether/End reference rooms are built at y=200, clear of natural terrain; they are controlled material scenes, not biome captures.
  * Shots: {@code NN_<step>.png}; a {@code [VKB-AUTOTEST] scenario=rt_materials ... event=state} line per step.
  */
 public final class MaterialsScenario implements AutotestScenario {
     public static final String STEPS_PROPERTY = "vkrtx.autotest.materialSteps";
+    public static final String DIMENSION_PROPERTY = "vkrtx.autotest.materialDimension";
     public static final String DEFAULT_STEPS = "D:path,N:path,G:path,T:path,H:path+item=iron_ingot";
     private static final String SCENES = "DNGTHSEBKRWCFX";
 
@@ -71,6 +76,16 @@ public final class MaterialsScenario implements AutotestScenario {
     private int bx;
     private int by;
     private int bz;
+    private String dimension;
+
+    public static String dimensionId(String value) {
+        return switch (value) {
+            case "overworld" -> "minecraft:overworld";
+            case "nether" -> "minecraft:the_nether";
+            case "end" -> "minecraft:the_end";
+            default -> throw new IllegalArgumentException("unknown material dimension: " + value);
+        };
+    }
 
     @Override
     public String name() {
@@ -97,6 +112,9 @@ public final class MaterialsScenario implements AutotestScenario {
             for (int i = 1; i < parts.length; i++) {
                 String m = parts[i].trim().toLowerCase(Locale.ROOT);
                 if (!(m.startsWith("item=") || m.equals("cam=3") || m.matches("c[xz]=-?\\d+(\\.\\d+)?") || m.matches("[tbf]\\d+")
+                    || m.matches("s[1-8]") || m.equals("open")
+                    || m.matches("tm=(peak|aces|pbr_neutral|gt|agx)") || m.equals("fixed") || m.matches("ev=-?\\d{1,2}")
+                    || m.matches("dn=(off|nrd|rr)")
                     || m.matches("aim=-?\\d+_-?\\d+") || m.equals("water=vanilla") || m.equals("water=realistic"))) {
                     throw new IllegalArgumentException("step '" + item + "': unknown modifier " + m);
                 }
@@ -115,6 +133,7 @@ public final class MaterialsScenario implements AutotestScenario {
         List<Step> steps;
         try {
             steps = parseSteps(System.getProperty(STEPS_PROPERTY, DEFAULT_STEPS));
+            dimension = dimensionId(System.getProperty(DIMENSION_PROPERTY, "overworld"));
         } catch (IllegalArgumentException e) {
             ctx.fail("rt_materials: " + e.getMessage(), e);
             return;
@@ -128,23 +147,33 @@ public final class MaterialsScenario implements AutotestScenario {
         bx = mc.player.getBlockX();
         by = mc.player.getBlockY();
         bz = mc.player.getBlockZ();
+        if (!dimension.equals("minecraft:overworld")) {
+            by = 200;
+        }
         if (!listening) {
             listening = true;
             Platforms.get().registerPostFrameHook(HookPriority.LOW, () -> applyAim(ctx));
         }
-        List<String> cmds = buildCommands();
-        server.execute(() -> {
-            try {
-                for (String c : cmds) {
-                    server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), c);
+        command(ctx, "gamemode creative @a");
+        // The staging dimension may have no ground under the initial teleport while its chunks load.
+        command(ctx, "effect give @a minecraft:slow_falling 60 0 true");
+        command(ctx, String.format(Locale.ROOT, "tp @a %d %d %d", bx, by, bz));
+        // Enter the dimension before editing it: fill/setblock reject chunks that have not been loaded yet.
+        ctx.waitFrames(200, () -> {
+            List<String> cmds = buildCommands();
+            server.execute(() -> {
+                try {
+                    for (String c : cmds) {
+                        server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), inDimension(c));
+                    }
+                } catch (Throwable t) {
+                    ctx.fail("rt_materials: server command failed: " + t, t);
                 }
-            } catch (Throwable t) {
-                ctx.fail("rt_materials: server command failed: " + t, t);
-            }
+            });
+            ctx.log("scenario", name(), "event", "scene_built", "dimension", dimension, "base", bx + "," + by + "," + bz,
+                "commands", String.valueOf(cmds.size()), "steps", steps.toString().replace(' ', '_'));
+            ctx.waitFrames(400, () -> step(ctx, steps, 0));
         });
-        ctx.log("scenario", name(), "event", "scene_built", "base", bx + "," + by + "," + bz, "commands", String.valueOf(cmds.size()),
-            "steps", steps.toString().replace(' ', '_'));
-        ctx.waitFrames(400, () -> step(ctx, steps, 0));
     }
 
     /** West corner (x) of the room of a scene; rooms are 11 x 11 blocks, interior 9 x 4 x 9, 14 blocks apart. */
@@ -340,7 +369,11 @@ public final class MaterialsScenario implements AutotestScenario {
 
     private void command(AutotestContext ctx, String cmd) {
         var server = ctx.minecraft().getSingleplayerServer();
-        server.execute(() -> server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), cmd));
+        server.execute(() -> server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), inDimension(cmd)));
+    }
+
+    private String inDimension(String command) {
+        return "execute in " + dimension + " run " + command;
     }
 
     private void placeCamera(AutotestContext ctx, Step s) {
@@ -424,14 +457,22 @@ public final class MaterialsScenario implements AutotestScenario {
         RtSettings.pathSpp = 1;
         RtSettings.pathAccumulate = true;
         RtSettings.pathDistance = 256;
-        RtSettings.pathAutoExposure = true;
+        RtSettings.pathAutoExposure = !s.mods().contains("fixed");
+        RtSettings.pathExposureEvTenths = s.value("ev") == null ? 0 : Integer.parseInt(s.value("ev"));
+        RtSettings.tonemapper = s.value("tm") == null ? RtSettings.Tonemapper.PEAK
+            : RtSettings.Tonemapper.valueOf(s.value("tm").toUpperCase(Locale.ROOT));
         RtSettings.pathDenoiser = RtSettings.PathDenoiser.OFF;
+        if ("nrd".equals(s.value("dn"))) RtSettings.pathDenoiser = RtSettings.PathDenoiser.NRD;
+        if ("rr".equals(s.value("dn"))) RtSettings.pathDenoiser = RtSettings.PathDenoiser.DLSS_RR;
+        RtSettings.filmGrain = false;
         RtSettings.autoNormals = true;
         RtSettings.autoNormalStrength = 100;
         RtSettings.preset = RtSettings.Preset.CUSTOM;
         for (String m : s.mods()) {
             if (m.matches("b\\d+")) {
                 RtSettings.pathBounces = Integer.parseInt(m.substring(1));
+            } else if (m.matches("s[1-8]")) {
+                RtSettings.pathSpp = Integer.parseInt(m.substring(1));
             }
         }
         for (String m : s.mods()) {
@@ -454,6 +495,10 @@ public final class MaterialsScenario implements AutotestScenario {
         }
         Step s = steps.get(index);
         var mc = ctx.minecraft();
+        command(ctx, "effect clear @a minecraft:slow_falling");
+        int roomX = roomX(s.scene()), roomZ = roomZ(s.scene());
+        boolean open = s.mods().contains("open");
+        command(ctx, fill(roomX + 1, 5, roomZ + 1, roomX + 9, open ? 20 : 5, roomZ + 9, open ? "air" : "stone_bricks"));
         placeCamera(ctx, s);
         // F1 hides the hand too: only the H scene (item in the hand) keeps the HUD on
         if (mc.gui.hud.isHidden() != !s.scene().equals("H")) {
@@ -490,6 +535,11 @@ public final class MaterialsScenario implements AutotestScenario {
                 "mode", s.mode().logName(), "pass", pass == null ? "none" : pass.logName(),
                 "player", String.format(Locale.ROOT, "%.1f,%.1f,%.1f", mc.player.getX(), mc.player.getY(), mc.player.getZ()),
                 "hand", String.valueOf(mc.player.getMainHandItem().getItem()),
+                "dimension", String.valueOf(mc.player.level().dimension()),
+                "accum_frames", String.valueOf(RtFrameRenderer.lastAccumulatedFrames()),
+                "tonemapper", RtSettings.tonemapper().name(),
+                "exposure_ev", String.valueOf(RtSettings.exposureEvTenths()),
+                "denoiser", RtSettings.denoiser().name(),
                 "emitters", RtFrameRenderer.lightTelemetry(),
                 "file", file);
             if (s.mode().isActive() && pass != s.mode()) {

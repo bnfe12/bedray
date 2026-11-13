@@ -61,6 +61,30 @@ public class RtEmittersStabilityTest {
         }
     }
 
+    @Test
+    void sparseWeakTexelsRetainAreaIntegratedPower() {
+        float[] positions = {0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1};
+        float[] uv = {0, 0, 1, 0, 1, 1, 0, 1};
+        for (int emission : new int[] {26, 128, 230}) {
+            for (boolean open : new boolean[] {false, true}) {
+                RtEmitters.TexelEmission sparse = new RtEmitters.TexelEmission() {
+                    public int width() { return 16; }
+                    public int height() { return 16; }
+                    public float at(int x, int y) {
+                        return (x < 2 || x >= 14) && (y < 2 || y >= 14) ? emission / 255f : 0f;
+                    }
+                };
+                float[] record = new float[RtEmitters.FLOATS];
+                assertTrue(RtEmitters.buildQuadRecord(record, 0, positions, 0, uv, 0, sparse, open));
+                float power = record[3] * record[14] * record[7];
+                assertEquals(16f / 256f * emission / 255f, power, 1e-6f,
+                    "weak spores must keep their texel area instead of receiving a lamp's minimum power");
+                assertEquals(open ? 1f : 0f, record[11], 1e-6f,
+                    "weak emission must preserve the source's sidedness");
+            }
+        }
+    }
+
 
     private static final float EPSILON = 1e-4f;
 
