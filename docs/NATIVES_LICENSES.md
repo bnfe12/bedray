@@ -5,6 +5,9 @@
 Review date: **2026-11-13**. This records Bedray's current distribution policy and a proposed improvement to library setup.
 It does not approve a new vendor binary for release. A changed SDK, binary or licence requires a fresh review.
 
+The opt-in single-JAR packaging tool can assemble a local Windows test build from exact SDK inputs. That build includes the
+applicable notices. Publication of a public release is a separate step governed by the policy below.
+
 ## Current package policy
 
 | Component | Reviewed source | Current delivery policy |

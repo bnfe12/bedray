@@ -9,7 +9,8 @@ there is no published `0.2.0-alpha` package yet.
 ## Start with what you need
 
 The renderer core supplies path tracing with accumulation. Extra vendor libraries enable optional features.
-Release builds can include the reviewed AMD FSR and Intel XeSS runtimes; ordinary source builds omit them.
+The Windows `-all-natives.jar` extracts the runtime from the JAR on launch. Regular release builds can include the reviewed
+AMD FSR and Intel XeSS runtimes. Ordinary source builds omit them.
 Check the release contents before downloading another copy.
 
 | Feature | Official download | What Bedray needs |

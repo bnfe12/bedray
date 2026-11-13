@@ -48,6 +48,8 @@ libraries and local wrapper builds outside version control.
 
 ## Install and verify in Minecraft
 
+With a Windows `-all-natives.jar`, start at step 2. The JAR already includes the wrapper and signed model.
+
 1. Close the game. Install `native/dlss_bridge/build/vkb_dlss.dll`, the public
    SDK's `nvngx_dlss.dll`, and the overlay's
    `lib/Windows_x86_64/rel/nvngx_dlssnr.dll` in `bedray/natives/` in the game

@@ -30,7 +30,7 @@ public final class BridgeBootstrap {
     }
 
     /**
-     * Creates bedray/natives (+ streamline/ and README.txt) and extracts the DLLs bundled in the jar (AMD FidelityFX, Intel XeSS).
+     * Creates bedray/natives (+ streamline/ and README.txt) and extracts the DLLs bundled in the jar.
      * A failure is logged with its cause and the game goes on: the folders are a convenience, a missing library is reported later by
      * the loader that needs it.
      */

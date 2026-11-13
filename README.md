@@ -62,7 +62,7 @@ These requirements describe the **development version**. For a download, use its
 | Renderer | The Bedray JAR and matching `bedray_core.dll` from the same build |
 
 1. Create a separate test instance and back up any worlds you use.
-2. Install Sodium and Bedray for your loader, then place the matching core in `bedray/natives/`.
+2. Install Sodium and the Windows `-all-natives.jar` for your loader. For a source build, place the matching core in `bedray/natives/`.
 3. Open **Options → Video Settings → Bedray Settings** to configure the renderer.
 
 **[Full installation guide →](docs/INSTALL.md)** Optional vendor features need compatible libraries;

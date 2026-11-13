@@ -114,6 +114,19 @@ Set `SLANG_DIR` to the Slang SDK directory and run `gradlew fabricBedrayDistribu
 The distribution pairs the loader JAR and the matching `bedray_core.dll`, which exports the native GPU scene ABI.
 See [distribution paths and build options](https://github.com/bnfe12/bedray/blob/main/native/bedray_core/DISTRIBUTION.md).
 
+### Windows single-JAR distribution
+
+Build `:fabric:combinedJar` and `:neoforge:combinedJar` from a clean checkout with the default native bundle mode.
+The `onefile_runtime=true` input to [Native Windows contracts](https://github.com/bnfe12/bedray/actions/workflows/native-windows.yml)
+produces matching `renderer-core-*` and `onefile-runtime-*` artifacts. Use the ZIP downloads directly. The latter contains
+the DLSS 5-capable NGX wrapper, Streamline wrapper, NRD 4.18 runtime and NRD wrapper.
+
+Run `python tools/package_windows_jar.py --help` for the required inputs. Supply the official FSR 1.1.4 and XeSS 3.0.2 archives,
+the official Streamline 2.14.16 Windows x64 archive, and the signed DLSS Neural Rendering model and SDK licence from the
+[DLSS 5 guide](experiments/dlss5.md). Choose a distinct output ending in `-all-natives.jar` for each loader. Record both full Git
+revisions. Use the same revision unless you have checked that the native sources are identical. The packager verifies provenance,
+checksums and Windows x64 DLL headers and writes an extraction manifest. It embeds the licences alongside the runtime.
+
 ### Continuous integration and compatibility checks
 
 * `.github/workflows/native-windows.yml` runs on pull requests and pushes to `main`: it builds the DLSS resource wrappers against pinned Vulkan-Headers and
