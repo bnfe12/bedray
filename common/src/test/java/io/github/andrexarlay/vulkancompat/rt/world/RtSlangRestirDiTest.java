@@ -30,6 +30,8 @@ class RtSlangRestirDiTest {
     private static final String GRADLE = "../gradle/slang.gradle";
     private static final String HOST_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtPathTraceSlangPass.java";
+    private static final String HOST_VALIDATION = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
+        + "RtPathManifestValidation.java";
     private static final String GAME_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtSlangPathPass.java";
     private static final String CONFIG = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtConfig.java";
@@ -65,7 +67,7 @@ class RtSlangRestirDiTest {
             assertTrue(gradle.contains(offset), "gradle pins the DIReservoir lane " + offset);
         }
         assertEquals(64, RtPathTraceSlangPass.RESERVOIR_BYTES, "the host allocates the same record");
-        assertTrue(read(HOST_PASS).contains("requireElementBytes(manifest, \"reservoirs\", RESERVOIR_BYTES)"),
+        assertTrue(read(HOST_VALIDATION).contains("requireElementBytes(manifest, \"reservoirs\", RESERVOIR_BYTES)"),
             "and re-checks it against the generated manifest before the first dispatch");
     }
 
