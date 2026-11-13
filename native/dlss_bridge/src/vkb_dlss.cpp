@@ -25,17 +25,13 @@
 #include "nvsdk_ngx_params_dlssd.h"
 #include "nvsdk_ngx_helpers_dlssd_vk.h"
 
-#include "vkb_dlss.h"
+#include "vkb_ngx_state.h"
 
 #include <cstdio>
 #include <cstddef>
 #include <cstring>
 #include <exception>
 #include <memory>
-#include <mutex>
-#include <set>
-#include <string>
-#include <vector>
 
 static_assert(sizeof(VkbDlssImage) == 56, "VkbDlssImage layout changed: update Java FFM layout");
 static_assert(sizeof(VkbDlssEvalInfo) == 344, "VkbDlssEvalInfo layout changed: update Java FFM layout");
@@ -46,40 +42,12 @@ static_assert(sizeof(VkbDlssRrCreateInfo) == 48, "VkbDlssRrCreateInfo layout cha
 static_assert(offsetof(VkbDlssRrCreateInfo, preset) == 40, "VkbDlssRrCreateInfo.preset must occupy former reserved[0] (additive)");
 static_assert(sizeof(VkbDlssRrEvalInfo) == 968, "VkbDlssRrEvalInfo layout changed: update Java FFM layout");
 
-namespace {
+namespace vkb::ngx {
 
 // Default project id for this mod (custom engine, no NVIDIA-issued application id).
 const char* const kDefaultProjectId = "6f1d2c3e-8a4b-4c5d-9e7f-5b0a1c2d3e4f";
 const char* const kDefaultEngineVersion = "26.3";
 const unsigned long long kDiscoveryApplicationId = 0x564B42ULL;  // "VKB": custom id, not issued by NVIDIA
-
-struct Feature {
-    NVSDK_NGX_Handle* handle = nullptr;
-    NVSDK_NGX_Parameter* params = nullptr;
-    bool usable = false; // Failed creation and retirement are release-only.
-    bool is_rr = false;
-    uint32_t roughness_mode = 0;
-};
-
-struct State {
-    std::recursive_mutex mutex;
-    bool initialised = false;
-    bool shuttingDown = false;
-    VkDevice device = VK_NULL_HANDLE;
-    NVSDK_NGX_Parameter* capParams = nullptr;
-    bool capabilitiesReady = false;
-    // NGX may keep pointers into these after Init, so they live as long as the state.
-    std::wstring featurePath;
-    std::wstring dataPath;
-    const wchar_t* pathList[4] = {nullptr};
-    NVSDK_NGX_FeatureCommonInfo commonInfo{};
-    std::string projectId;
-    std::string engineVersion;
-    std::set<Feature*> features;
-    VkbDlssLogCallback logCb = nullptr;
-    std::vector<std::string> instExtStore, devExtStore;
-    std::vector<const char*> instExtPtrs, devExtPtrs;
-};
 
 State& st() {
     static State s;
@@ -94,8 +62,18 @@ Feature* registerFeature(State& s, uint64_t* outFeature) {
     return raw;
 }
 
+Feature* findFeature(State& s, uint64_t feature) {
+    auto* owner = reinterpret_cast<Feature*>(static_cast<uintptr_t>(feature));
+    return s.features.find(owner) == s.features.end() ? nullptr : owner;
+}
+
 thread_local std::string g_lastError;
 thread_local uint32_t g_lastNgx = 0;
+
+void clearError() {
+    g_lastError.clear();
+    g_lastNgx = 0;
+}
 
 std::string wideToUtf8(const wchar_t* w) {
     if (!w) return std::string();
@@ -151,12 +129,12 @@ bool toPerfQuality(int32_t mode, NVSDK_NGX_PerfQuality_Value& out) {
 
 // Fills the discovery info. featureInfo/pathList storage is owned by the caller's locals.
 void makeDiscovery(NVSDK_NGX_FeatureDiscoveryInfo& d, NVSDK_NGX_FeatureCommonInfo& ci,
-                   const wchar_t** pathEntries, uint32_t& pathCount, const wchar_t* featurePath, const wchar_t* dataPath,
-                   const std::string& projectId, const std::string& engineVersion) {
+                   const wchar_t** pathEntries, NVSDK_NGX_Feature feature, const wchar_t* featurePath,
+                   const wchar_t* dataPath) {
     std::memset(&ci, 0, sizeof(ci));
     ci.LoggingInfo.LoggingCallback = ngxLogCallback;
     ci.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_VERBOSE;
-    pathCount = 0;
+    uint32_t pathCount = 0;
     if (featurePath && featurePath[0]) {
         pathEntries[pathCount++] = featurePath;
     }
@@ -166,27 +144,49 @@ void makeDiscovery(NVSDK_NGX_FeatureDiscoveryInfo& d, NVSDK_NGX_FeatureCommonInf
     ci.PathListInfo.Length = pathCount;
     std::memset(&d, 0, sizeof(d));
     d.SDKVersion = NVSDK_NGX_Version_API;
-    d.FeatureID = NVSDK_NGX_Feature_SuperSampling;
+    d.FeatureID = feature;
     // TRAP: GetFeatureDeviceExtensionRequirements returns NVSDK_NGX_Result_FAIL_InvalidParameter (0xBAD00005)
     // when the discovery info uses Identifier_Type_Project_Id (verified with DLSS 310.9.0 / driver 617.14).
     // With Identifier_Type_Application_Id it succeeds. This is only a requirements query, so a custom
     // application id is fine; NVSDK_NGX_VULKAN_Init_with_ProjectID (real init) keeps using the project id.
-    (void)projectId;
-    (void)engineVersion;
     d.Identifier.IdentifierType = NVSDK_NGX_Application_Identifier_Type_Application_Id;
     d.Identifier.v.ApplicationId = kDiscoveryApplicationId;
     d.ApplicationDataPath = dataPath ? dataPath : (featurePath ? featurePath : L".");
     d.FeatureInfo = &ci;
 }
 
-int32_t copyExtensions(uint32_t count, VkExtensionProperties* props, std::vector<std::string>& store,
-                       std::vector<const char*>& ptrs, uint32_t* outCount, const char* const** outNames) {
-    store.clear();
-    ptrs.clear();
-    for (uint32_t i = 0; i < count; ++i) store.emplace_back(props[i].extensionName);
-    for (auto& s : store) ptrs.push_back(s.c_str());
+int32_t queryExtensions(NVSDK_NGX_Feature feature, uint64_t instance, uint64_t physicalDevice,
+    const wchar_t* featurePath, const wchar_t* dataPath, ExtensionList& extensions,
+    uint32_t* outCount, const char* const** outNames) {
+    if (!outCount || !outNames || ((instance == 0) != (physicalDevice == 0)))
+        return fail(VKB_DLSS_ERR_INVALID_ARG, "invalid instance/physicalDevice or null extension outputs");
+    *outCount = 0;
+    *outNames = nullptr;
+    std::lock_guard<std::recursive_mutex> lock(st().mutex);
+    NVSDK_NGX_FeatureDiscoveryInfo discovery;
+    NVSDK_NGX_FeatureCommonInfo common;
+    const wchar_t* paths[4] = {};
+    makeDiscovery(discovery, common, paths, feature, featurePath, dataPath);
+    uint32_t count = 0;
+    VkExtensionProperties* properties = nullptr;
+    NVSDK_NGX_Result result;
+    if (instance) {
+        result = NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements(
+            reinterpret_cast<VkInstance>(static_cast<uintptr_t>(instance)),
+            reinterpret_cast<VkPhysicalDevice>(static_cast<uintptr_t>(physicalDevice)),
+            &discovery, &count, &properties);
+    } else {
+        result = NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements(&discovery, &count, &properties);
+    }
+    if (NVSDK_NGX_FAILED(result)) return failNgx(instance ? "NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements"
+        : "NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements", result);
+    if (count != 0 && !properties) return fail(VKB_DLSS_ERR_NGX, "NGX returned an empty extension list");
+    extensions.storage.clear();
+    extensions.names.clear();
+    for (uint32_t i = 0; i < count; ++i) extensions.storage.emplace_back(properties[i].extensionName);
+    for (const auto& extension : extensions.storage) extensions.names.push_back(extension.c_str());
     *outCount = count;
-    *outNames = ptrs.empty() ? nullptr : ptrs.data();
+    *outNames = extensions.names.empty() ? nullptr : extensions.names.data();
     return VKB_DLSS_OK;
 }
 
@@ -207,7 +207,23 @@ NVSDK_NGX_Resource_VK toResource(const VkbDlssImage& i) {
         toRange(i), static_cast<VkFormat>(i.format), i.width, i.height, i.read_write != 0);
 }
 
-}  // namespace
+bool refreshCapabilityParameters(State& s) {
+    s.capabilitiesReady = false;
+    // Never acquire a second owner while cleanup of the first one is unacknowledged.
+    if (s.capParams) {
+        auto r = NVSDK_NGX_VULKAN_DestroyParameters(s.capParams);
+        if (NVSDK_NGX_FAILED(r)) { failNgx("DestroyParameters(capabilities refresh)", r); return false; }
+        s.capParams = nullptr;
+    }
+    auto r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&s.capParams);
+    if (NVSDK_NGX_FAILED(r)) { failNgx("GetCapabilityParameters(refresh)", r); return false; }
+    s.capabilitiesReady = s.capParams != nullptr;
+    return s.capabilitiesReady;
+}
+
+}  // namespace vkb::ngx
+
+using namespace vkb::ngx;
 
 // Exception containment (ADR-0005 rule 4). These exports are reached through a java.lang.foreign (FFM)
 // downcall: a C++ exception escaping an extern "C" function surfaces in the JVM as an unhandled native
@@ -271,18 +287,8 @@ VKB_DLSS_API void vkb_dlss_set_log_callback(VkbDlssLogCallback cb) {
 VKB_DLSS_API int32_t vkb_dlss_get_required_instance_extensions(
     const wchar_t* featurePath, const wchar_t* dataPath, uint32_t* outCount, const char* const** outNames) {
     API_TRY
-    if (!outCount || !outNames) return fail(VKB_DLSS_ERR_INVALID_ARG, "outCount/outNames is null");
-    std::lock_guard<std::recursive_mutex> lk(st().mutex);
-    NVSDK_NGX_FeatureDiscoveryInfo d;
-    NVSDK_NGX_FeatureCommonInfo ci;
-    const wchar_t* pathEntries[4] = {nullptr};
-    uint32_t pathCount = 0;
-    makeDiscovery(d, ci, pathEntries, pathCount, featurePath, dataPath, kDefaultProjectId, kDefaultEngineVersion);
-    uint32_t count = 0;
-    VkExtensionProperties* props = nullptr;
-    NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements(&d, &count, &props);
-    if (NVSDK_NGX_FAILED(r)) return failNgx("NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements", r);
-    return copyExtensions(count, props, st().instExtStore, st().instExtPtrs, outCount, outNames);
+    return queryExtensions(NVSDK_NGX_Feature_SuperSampling, 0, 0, featurePath, dataPath,
+        st().instanceExtensions, outCount, outNames);
     API_CATCH()
 }
 
@@ -290,36 +296,11 @@ VKB_DLSS_API int32_t vkb_dlss_get_required_device_extensions(
     uint64_t instance, uint64_t physicalDevice, const wchar_t* featurePath, const wchar_t* dataPath,
     uint32_t* outCount, const char* const** outNames) {
     API_TRY
-    if (!outCount || !outNames || !instance || !physicalDevice)
-        return fail(VKB_DLSS_ERR_INVALID_ARG, "null instance/physicalDevice/out pointer");
-    std::lock_guard<std::recursive_mutex> lk(st().mutex);
-    NVSDK_NGX_FeatureDiscoveryInfo d;
-    NVSDK_NGX_FeatureCommonInfo ci;
-    const wchar_t* pathEntries[4] = {nullptr};
-    uint32_t pathCount = 0;
-    makeDiscovery(d, ci, pathEntries, pathCount, featurePath, dataPath, kDefaultProjectId, kDefaultEngineVersion);
-    uint32_t count = 0;
-    VkExtensionProperties* props = nullptr;
-    NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements(
-        reinterpret_cast<VkInstance>(static_cast<uintptr_t>(instance)),
-        reinterpret_cast<VkPhysicalDevice>(static_cast<uintptr_t>(physicalDevice)), &d, &count, &props);
-    if (NVSDK_NGX_FAILED(r)) return failNgx("NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements", r);
-    return copyExtensions(count, props, st().devExtStore, st().devExtPtrs, outCount, outNames);
+    if (!instance || !physicalDevice)
+        return fail(VKB_DLSS_ERR_INVALID_ARG, "null instance or physical device");
+    return queryExtensions(NVSDK_NGX_Feature_SuperSampling, instance, physicalDevice, featurePath, dataPath,
+        st().deviceExtensions, outCount, outNames);
     API_CATCH()
-}
-
-bool refreshCapabilityParameters(State& s) {
-    s.capabilitiesReady = false;
-    // Never acquire a second owner while cleanup of the first one is unacknowledged.
-    if (s.capParams) {
-        auto r = NVSDK_NGX_VULKAN_DestroyParameters(s.capParams);
-        if (NVSDK_NGX_FAILED(r)) { failNgx("DestroyParameters(capabilities refresh)", r); return false; }
-        s.capParams = nullptr;
-    }
-    auto r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&s.capParams);
-    if (NVSDK_NGX_FAILED(r)) { failNgx("GetCapabilityParameters(refresh)", r); return false; }
-    s.capabilitiesReady = s.capParams != nullptr;
-    return s.capabilitiesReady;
 }
 
 // ============================================================================================
@@ -600,10 +581,11 @@ VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const Vkb
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
     if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX unavailable or retiring");
-    Feature* f = reinterpret_cast<Feature*>(static_cast<uintptr_t>(feature));
-    if (s.features.find(f) == s.features.end()) return fail(VKB_DLSS_ERR_INVALID_ARG, "unknown feature handle");
+    Feature* f = findFeature(s, feature);
+    if (!f) return fail(VKB_DLSS_ERR_INVALID_ARG, "unknown feature handle");
     if (!f->usable) return fail(VKB_DLSS_ERR_INVALID_ARG, "feature is release-only");
-    if (f->is_rr) return fail(VKB_DLSS_ERR_INVALID_ARG, "feature handle belongs to DLSS-RR, use vkb_dlss_rr_evaluate");
+    if (f->kind != FeatureKind::super_resolution)
+        return fail(VKB_DLSS_ERR_INVALID_ARG, "feature handle does not belong to DLSS-SR");
 
     NVSDK_NGX_Resource_VK color = toResource(info->color);
     NVSDK_NGX_Resource_VK output = toResource(info->output);
@@ -738,7 +720,7 @@ VKB_DLSS_API int32_t vkb_dlss_rr_create_feature(uint64_t cmd, const VkbDlssRrCre
     cp.InEnableOutputSubrects = info->enable_output_subrects != 0;
 
     Feature* f = registerFeature(s, outFeature);
-    f->is_rr = true;
+    f->kind = FeatureKind::ray_reconstruction;
     f->roughness_mode = info->roughness_mode;
     NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_AllocateParameters(&f->params);
     if (NVSDK_NGX_FAILED(r)) return failNgx("[DLSS-RR] NVSDK_NGX_VULKAN_AllocateParameters", r);
@@ -781,10 +763,11 @@ VKB_DLSS_API int32_t vkb_dlss_rr_evaluate(uint64_t cmd, uint64_t feature, const 
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
     if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX RR unavailable or retiring");
-    Feature* f = reinterpret_cast<Feature*>(static_cast<uintptr_t>(feature));
-    if (s.features.find(f) == s.features.end()) return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] unknown feature handle");
+    Feature* f = findFeature(s, feature);
+    if (!f) return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] unknown feature handle");
     if (!f->usable) return fail(VKB_DLSS_ERR_INVALID_ARG, "RR feature is release-only");
-    if (!f->is_rr) return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] feature handle belongs to DLSS-SR, use vkb_dlss_evaluate");
+    if (f->kind != FeatureKind::ray_reconstruction)
+        return fail(VKB_DLSS_ERR_INVALID_ARG, "feature handle does not belong to DLSS-RR");
     if (f->roughness_mode == 0 && !info->roughness.view)
         return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] roughness view must be non-null when created with roughness_mode=0 (unpacked)");
 

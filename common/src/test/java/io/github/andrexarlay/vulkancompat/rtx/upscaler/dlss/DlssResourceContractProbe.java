@@ -14,12 +14,30 @@ public final class DlssResourceContractProbe {
     }
 
     public static void main(String[] args) throws Throwable {
-        if (args.length != 2) throw new IllegalArgumentException("DLL path and ngx/sl/production");
+        if (args.length != 2) throw new IllegalArgumentException("DLL path and wrapper test kind");
         Path library = Path.of(args[0]);
         try (DlssNative sr = DlssNative.load(library); Arena control = Arena.ofConfined()) {
             require(sr.supportsSafeResourceRetirement(), "resource contract v1 missing");
-            if (args[1].equals("production")) {
+            if (args[1].startsWith("production")) {
+                DlssNrNative.verifyLayouts();
+                require(sr.neuralRendering() == null, "public wrapper unexpectedly enables Neural Rendering");
+                if (args[1].equals("production-ngx")) {
+                    var lookup = SymbolLookup.libraryLookup(library, control);
+                    MethodHandle contract = DlssNative.bind(Linker.nativeLinker(), lookup, DlssNrNative.VERSION_SYMBOL,
+                        FunctionDescriptor.of(JAVA_INT));
+                    require((int) contract.invokeExact() == 0, "public NGX wrapper should export Neural Rendering contract 0");
+                }
                 System.out.println(library.getFileName() + " production FFM resource contract=1; no GPU initialized");
+                return;
+            }
+            if (args[1].equals("partner-ngx")) {
+                DlssNrNative nr = sr.neuralRendering();
+                require(nr != null, "optional Neural Rendering ABI did not bind");
+                DlssNrNative.Caps caps = nr.queryCaps();
+                require(!caps.available() && caps.status().code() == 2, "caps without an NGX session: " + caps);
+                long[] owner = {42};
+                require(!nr.createFeature(0, 128, 96, owner).ok() && owner[0] == 0, "invalid create produced an owner");
+                System.out.println("Neural Rendering contract=1; typed build, FFM and no-device rejection passed");
                 return;
             }
             var lookup = SymbolLookup.libraryLookup(library, control);

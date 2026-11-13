@@ -66,6 +66,7 @@ public final class DlssRuntime {
     private static long initializingStartNanos;
     private static long lastInitializingPollLogNanos;
     private static DlssNative nativeLib;
+    private static DlssNrNative neuralRendering;
     /** Actual device NGX was initialized against; a different current device is never completion proof. */
     private static VulkanDevice contextDevice;
     private static boolean ngxInitialised;
@@ -341,6 +342,7 @@ public final class DlssRuntime {
         }
 
         if (!ngxInitialised) {
+            neuralRendering = DlssNrDeviceRequirements.verifyEnabled(nativeLib, lib.featureDir(), logDir, device);
             FunctionProvider provider = VK.getFunctionProvider();
             long gipa = provider.getFunctionAddress("vkGetInstanceProcAddr");
             long gdpa = provider.getFunctionAddress("vkGetDeviceProcAddr");
@@ -523,7 +525,7 @@ public final class DlssRuntime {
         return best;
     }
 
-    private static Path gameLogDir() {
+    static Path gameLogDir() {
         Path dir = resolveGameDir().resolve("logs").resolve("vkb_dlss");
         try {
             Files.createDirectories(dir);
@@ -612,6 +614,11 @@ public final class DlssRuntime {
         return nativeLib;
     }
 
+    /** The direct NGX session and enabled Vulkan extensions have to be ready before creating Neural Rendering. */
+    public static synchronized DlssNrNative neuralRendering() {
+        return ngxInitialised && state == State.READY ? neuralRendering : null;
+    }
+
     /**
      * Called when creating the feature or {@code vkb_dlss_evaluate} reported an error: logs the stage, disables DLSS for
      * the current request (the caller falls back to bilinear); the feature is released after host completion,
@@ -688,6 +695,7 @@ public final class DlssRuntime {
     static synchronized void resetForTests() {
         state = State.IDLE;
         nativeLib = null;
+        neuralRendering = null;
         contextDevice = null;
         ngxInitialised = false;
         activeMode = null;

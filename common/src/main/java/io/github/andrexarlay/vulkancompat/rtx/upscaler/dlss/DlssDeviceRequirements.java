@@ -88,6 +88,7 @@ public final class DlssDeviceRequirements {
         }
         registry.requestInstanceExtensions(INSTANCE_REQUEST_ID, INSTANCE_EXTENSIONS);
         registry.register(requirement());
+        DlssNrDeviceRequirements.registerInstanceExtensions(registry, lib);
         UpscalerPreregistration.record(UpscalerBackend.DLSS, true);
         LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] upscaler_prereg backend=DLSS registered=true reason={} instance_ext={} device_ext={}",
             decision == UpscalerPreregistration.Decision.REGISTER_REQUESTED ? "requested" : "preregistered",
