@@ -1,6 +1,6 @@
 # Install Bedray (ALPHA)
 
-For official DLL sources and the local archive-import workflow, use [Runtime library downloads](RUNTIME_LIBRARIES.md).
+For direct official DLL links, use **[DLL downloads](DOWNLOADS.html)**. The [runtime library guide](RUNTIME_LIBRARIES.md) covers local import.
 
 Bedray is an alpha for Minecraft 26.3 and was tested only on an **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, driver 617.42**.
 Use a **clean test instance**, not your main world or a large modpack.

@@ -1,5 +1,7 @@
 # Runtime library downloads
 
+**[Open DLL downloads →](DOWNLOADS.html)** Choose a graphics feature to get direct official DLL links and installation steps.
+
 [Installation](INSTALL.md) · [Every DLL](DLL_REFERENCE.md) · [GPU recommendations](GPU_GUIDE.md) · [Library licences](NATIVES_LICENSES.md)
 
 Use the instructions for your **exact Bedray build**. The published `0.1.0-alpha.1` and development `0.2.0-alpha`
