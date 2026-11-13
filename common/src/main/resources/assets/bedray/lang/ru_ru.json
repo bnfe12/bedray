@@ -353,7 +353,7 @@
   "bedray.settings.saved_hint": "Настройки сохранены",
   "bedray.settings.results": "Результаты поиска",
   "bedray.settings.capture_profile": "Записать 30 с производительности",
-  "bedray.settings.capture_profile_hint": "Сначала примените или отмените изменения. Нужен открытый мир с активной трассировкой путей. Возвращает в игру, ждёт 5 секунд и записывает 30 секунд с текущими настройками. Сохраняет исходные времена CPU/GPU и фактическое разрешение в bedray/profiles. Настройки не меняются.",
+  "bedray.settings.capture_profile_hint": "Сначала примените или отмените изменения. Нужен открытый мир. Возвращает в игру, ждёт 5 секунд и записывает 30 секунд с текущими настройками. Сохраняет FPS, исходные времена CPU/GPU и ZIP с отчётом. Настройки не меняются.",
   "bedray.profile.done": "Запись производительности Bedray",
   "bedray.opt.voxel_distance_auto": "Дальность вокселей: как в Minecraft",
   "bedray.opt.voxel_distance_auto.desc": "Запрашивает дальность прорисовки игры. Захватываются только загруженные секции; память и бюджет потоковой загрузки могут ограничить фактический охват.",
@@ -555,5 +555,6 @@
   "bedray.natives.downloads": "Скачать DLL",
   "bedray.natives.downloads.tip": "Официальные загрузки DLL и инструкция установки в браузере",
   "bedray.natives.downloads.opened": "Страница открыта. Перетащите скачанный ZIP или DLL сюда и перезапустите игру.",
-  "bedray.natives.downloads.failed": "Откройте раздел скачивания DLL на странице Bedray."
+  "bedray.natives.downloads.failed": "Откройте раздел скачивания DLL на странице Bedray.",
+  "bedray.settings.share_test": "Подготовить отчёт для GitHub"
 }

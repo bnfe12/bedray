@@ -30,6 +30,12 @@ public final class VulkanRtxMod {
             net.minecraft.commands.Commands.literal("bedray").then(net.minecraft.commands.Commands.literal("report").executes(ctx -> {
                 io.github.andrexarlay.vulkancompat.rtx.debug.Diagnostics.generateAndNotify();
                 return 1;
+            })).then(net.minecraft.commands.Commands.literal("test").executes(ctx -> {
+                io.github.andrexarlay.vulkancompat.rtx.debug.GameplayCapture.start();
+                return 1;
+            })).then(net.minecraft.commands.Commands.literal("share").executes(ctx -> {
+                io.github.andrexarlay.vulkancompat.rtx.debug.TestReportSharing.share();
+                return 1;
             }))));
         modBus.addListener(RegisterKeyMappingsEvent.class, event -> {
             event.registerCategory(VulkanRtxKeyBinds.CATEGORY);

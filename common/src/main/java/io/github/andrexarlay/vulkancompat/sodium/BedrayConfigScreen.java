@@ -200,7 +200,7 @@ public final class BedrayConfigScreen extends Screen {
             captureButton = addAction(tr("bedray.settings.capture_profile", "Record 30 s gameplay profile"),
                 io.github.andrexarlay.vulkancompat.rtx.debug.GameplayCapture::start);
             captureButton.setTooltip(Tooltip.create(tr("bedray.settings.capture_profile_hint",
-                "Apply or revert changes first. Requires a world with active Path Tracing. Returns to play, waits 5 seconds and records 30 seconds at your current settings. Saves raw CPU/GPU timings and actual dimensions to bedray/profiles. No settings are changed.")));
+                "Apply or revert changes first. Requires a world. Returns to play, waits 5 seconds and records 30 seconds at your current settings. Saves FPS statistics, raw CPU/GPU timings and a tester ZIP. No settings are changed.")));
             addAction(tr("bedray.settings.libraries", "Runtime libraries..."), () -> minecraft.gui.setScreen(new NativesManagerScreen(this)));
             addAction(tr("bedray.settings.bedrock_open", "Bedrock RTX packs: open folder"), () -> {
                 try {
@@ -213,6 +213,7 @@ public final class BedrayConfigScreen extends Screen {
             addAction(tr("bedray.settings.bedrock_import", "Bedrock RTX packs: import"), () ->
                 io.github.andrexarlay.vulkancompat.rt.material.bedrock.BedrockRtxPackImporter.importAllAsync());
             addAction(tr("bedray.settings.report", "Copy diagnostics report"), () -> io.github.andrexarlay.vulkancompat.rtx.debug.Diagnostics.generateAndNotify());
+            addAction(tr("bedray.settings.share_test", "Prepare GitHub test report"), io.github.andrexarlay.vulkancompat.rtx.debug.TestReportSharing::share);
             addAction(tr("bedray.settings.reset", "Reset editable settings (pending)"), () -> { draft.reset(); rebuildRows(); });
         }
         maxScroll = Math.max(0, rowWidgets.size() * ROW_HEIGHT - Math.max(0, listBottom - listTop));

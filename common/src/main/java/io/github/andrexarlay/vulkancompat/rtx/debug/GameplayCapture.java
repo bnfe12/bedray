@@ -18,24 +18,25 @@ public final class GameplayCapture {
     private static CompletableFuture<FrameBenchmark.Result> pending;
     private static long started;
     private static boolean timeoutRequested;
+    private static java.nio.file.Path lastCapture;
 
     private GameplayCapture() {}
 
     public static boolean canStart() {
         var mc = Minecraft.getInstance();
-        return mc != null && mc.level != null && !FrameBenchmark.busy()
-            && io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.enabled()
-            && io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.failure() == null
-            && RtConfig.displayed() && "path".equals(RtConfig.effectiveModeName());
+        return mc != null && mc.level != null && !FrameBenchmark.busy();
     }
+
+    public static java.nio.file.Path lastCapture() { return lastCapture; }
 
     /** Render thread, from the explicit settings action. Pending settings are guarded by that screen. */
     public static void start() {
-        if (!canStart()) return;
+        if (!canStart()) { TestReportSharing.notifyUser("Enter a world and wait for any current FPS capture to finish."); return; }
         var mc = Minecraft.getInstance();
         var output = mc.gameDirectory.toPath().resolve("bedray/profiles/capture-" + UUID.randomUUID());
         var device = RenderSystem.getDevice().getDeviceInfo();
-        var config = new FrameCapture.Config(5_000_000_000L, 30_000_000_000L, 30_000, 5_000_000_000L);
+        var config = new FrameCapture.Config(5_000_000_000L, 30_000_000_000L, 30_000, 5_000_000_000L,
+            FrameCapture.WORLD | FrameCapture.SCREEN_CLOSED | FrameCapture.FOCUSED);
         pending = FrameBenchmark.start(output, config, Map.of(
             "scenario", "gameplay_profile", "fps_acceptance", "not_native_acceptance",
             "gpu", device.name(), "driver", device.driverInfo(),
@@ -48,6 +49,10 @@ public final class GameplayCapture {
         started = System.nanoTime();
         timeoutRequested = false;
         pending.whenComplete((saved, failure) -> mc.execute(() -> {
+            if (failure == null) {
+                lastCapture = saved.directory();
+                TestReportSharing.export();
+            }
             Component title = Component.translatableWithFallback("bedray.profile.done", "Bedray performance capture");
             String detail = failure != null ? "write_failed: " + failure
                 : (saved.complete() ? "saved: " : "incomplete: " + saved.reason() + " ") + saved.directory();
@@ -57,6 +62,7 @@ public final class GameplayCapture {
         LoggerFactory.getLogger("VKB-BENCH").info("[VKB-BENCH] gameplay_profile armed directory={} warmup_s=5 duration_s=30 settings=unchanged",
             output);
         mc.gui.setScreen(null);
+        TestReportSharing.notifyUser("FPS test started: 5 seconds warmup, then 30 seconds. Keep playing with the game focused; a tester ZIP will be saved.");
     }
 
     /** Prevent a capture waiting forever after the world unloads or RT stops producing frames. */

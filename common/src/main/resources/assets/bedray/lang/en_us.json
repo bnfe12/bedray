@@ -266,7 +266,7 @@
   "bedray.settings.saved_hint": "Saved settings",
   "bedray.settings.results": "Search results",
   "bedray.settings.capture_profile": "Record 30 s gameplay profile",
-  "bedray.settings.capture_profile_hint": "Apply or revert changes first. Requires a world with active Path Tracing. Returns to play, waits 5 seconds and records 30 seconds at your current settings. Saves raw CPU/GPU timings and actual dimensions to bedray/profiles. No settings are changed.",
+  "bedray.settings.capture_profile_hint": "Apply or revert changes first. Requires a world. Returns to play, waits 5 seconds and records 30 seconds at your current settings. Saves FPS statistics, raw CPU/GPU timings and a tester ZIP. No settings are changed.",
   "bedray.profile.done": "Bedray performance capture",
   "bedray.opt.voxel_distance_auto": "Voxel Distance: Follow Minecraft",
   "bedray.opt.voxel_distance_auto.desc": "Request the game render distance. Only loaded sections are captured; residency can be limited by memory and streaming budgets.",
@@ -482,5 +482,6 @@
   "bedray.natives.downloads": "Download DLLs",
   "bedray.natives.downloads.tip": "Official DLL downloads and import instructions in your browser",
   "bedray.natives.downloads.opened": "Download page opened. Drop the downloaded ZIP or DLL here, then restart.",
-  "bedray.natives.downloads.failed": "Open DLL downloads from the Bedray project page."
+  "bedray.natives.downloads.failed": "Open DLL downloads from the Bedray project page.",
+  "bedray.settings.share_test": "Prepare GitHub test report"
 }

@@ -29,6 +29,7 @@ public final class FrameCaptureWriter {
         manifest.addProperty("rows", capture.rows().size());
         manifest.addProperty("requested_warmup_ns", config.warmupNs());
         manifest.addProperty("requested_duration_ns", config.durationNs());
+        manifest.addProperty("warmup_required_flags", config.warmupFlags());
         manifest.addProperty("measured_interval_ns", capture.endNs() - capture.startNs());
         manifest.addProperty("native_required_flags", FrameCapture.NATIVE_REQUIRED);
         manifest.addProperty("interval_source", "application_render_begin_to_next_render_begin");
@@ -38,6 +39,10 @@ public final class FrameCaptureWriter {
         JsonObject tags = new JsonObject();
         context.forEach(tags::addProperty);
         manifest.add("context", tags);
+        JsonObject summary = FrameCaptureSummary.summarize(capture);
+        manifest.add("summary", summary);
+        Files.writeString(directory.resolve("summary.txt"), FrameCaptureSummary.describe(summary) + "\n",
+            StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
         try (Writer out = Files.newBufferedWriter(directory.resolve("manifest.json"), StandardCharsets.UTF_8,
             StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
             new GsonBuilder().setPrettyPrinting().create().toJson(manifest, out);
