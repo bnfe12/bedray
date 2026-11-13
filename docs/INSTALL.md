@@ -1,5 +1,7 @@
 # Install Bedray (ALPHA)
 
+For official DLL sources and the local archive-import workflow, use [Runtime library downloads](RUNTIME_LIBRARIES.md).
+
 Bedray is an alpha for Minecraft 26.3 and was tested only on an **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, driver 617.42**.
 Use a **clean test instance**, not your main world or a large modpack.
 
@@ -59,8 +61,9 @@ never DLLs from forums, file-sharing sites or other games' folders.
 
 `vkb_dlss.dll`, `vkb_nrd.dll` and `vkb_sl.dll` are small wrappers written for this project. They are built from the sources in
 `native/` of this repository (`native/dlss_bridge/build.bat`, `native/nrd_bridge/build.bat`, `native/sl_bridge/build.bat`) with
-Visual Studio Build Tools and the matching vendor SDK. `vkb_dlss.dll` statically contains NVIDIA's NGX library, so it
-**cannot be redistributed**; every user who wants DLSS builds it. This is a real hurdle in the alpha. See `docs/BUILDING.md`
+Visual Studio Build Tools and the matching vendor SDK. These wrappers are **not supplied in current player packages**;
+users who need them currently build them from source. Static linking alone is not a blanket redistribution ban:
+packaging requires review of the exact SDK terms and Bedray's licensing obligations. See [the licence review](NATIVES_LICENSES.md) and `docs/BUILDING.md`
 and `native/*/build.bat` (the scripts read the SDK locations from environment variables).
 
 ### Exact file lists

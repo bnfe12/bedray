@@ -126,8 +126,9 @@ See [distribution paths and build options](https://github.com/bnfe12/bedray/blob
 Vendor wrappers are optional. With the matching renderer distribution, ray tracing and path tracing with accumulation
 and the built-in upscalers (Bilinear, FSR 1, NIS) can run without them. The release JAR can supply XeSS and FSR 3.1 separately.
 The settings page reports missing vendor libraries for DLSS, NRD and frame generation.
-The wrappers are built from source by you (they link vendor SDKs whose licences we do not redistribute); the released jars never
-contain them.
+Current player packages omit the SDK wrappers, so users who need them build them from source.
+See [Native library licences and delivery](NATIVES_LICENSES.md) for the per-component distribution policy;
+this is not a blanket claim that SDK-linked wrappers can never be redistributed.
 
 ## 6. Native wrappers (optional)
 

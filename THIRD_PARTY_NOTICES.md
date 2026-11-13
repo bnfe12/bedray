@@ -53,8 +53,11 @@ The following are not in the repository or release jars. Download them from the 
 | Library | Vendor | Licence |
 |---|---|---|
 | `nvngx_dlss.dll`, `nvngx_dlssd.dll`, `nvngx_dlssg.dll` (DLSS Super Resolution, Ray Reconstruction, Frame Generation) | NVIDIA | NVIDIA RTX SDKs licence (DLSS SDK) |
-| Streamline (`sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.reflex.dll`, `sl.pcl.dll`) | NVIDIA | NVIDIA RTX SDKs licence / Streamline licence |
+| Streamline (`sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.reflex.dll`, `sl.pcl.dll`) | NVIDIA | Streamline core is MIT; review the exact plugin set, included NGX material and separate third-party terms. See `docs/NATIVES_LICENSES.md`. |
 | NVIDIA Real-Time Denoisers (`NRD.dll`, built from the NRD sources) | NVIDIA | NVIDIA RTX SDKs licence |
 
-Our own wrappers `vkb_dlss.dll`, `vkb_nrd.dll` and `vkb_sl.dll` are built from the sources in `native/`. `vkb_dlss.dll`
-statically links NVIDIA's `nvsdk_ngx_s.lib`, so it is not redistributed either: you build it yourself with the NVIDIA SDK.
+Our own wrappers `vkb_dlss.dll`, `vkb_nrd.dll` and `vkb_sl.dll` are built from the sources in `native/` and are not included in
+current player packages. `vkb_dlss.dll` statically links NVIDIA's `nvsdk_ngx_s.lib`; distribution of that object code requires
+review of the SDK's application-distribution terms and compatibility with Bedray's licensing obligations.
+Static linking alone does not establish a blanket prohibition. The per-component review and delivery plan are in
+[Native library licences](docs/NATIVES_LICENSES.md).
