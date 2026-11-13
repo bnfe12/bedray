@@ -53,6 +53,7 @@ docs/VITRAIL_STUDY.md
 docs/patches/*.patch
 ROADMAP.md
 docs/images/*.png
+docs/images/legacy/*.png
 
 # original shaderpack source examples
 examples/iris-color-post/**

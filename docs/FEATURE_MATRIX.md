@@ -1,25 +1,43 @@
 # Feature matrix: current source and historical release evidence
 
-## Current main integration (2026-10-26)
+## Current `main` (0.2.0-alpha source, 2026-11-13)
 
-The 0.1.1-alpha.13 source combines the development branches listed in [DEVELOPMENT_BRANCHES](DEVELOPMENT_BRANCHES.md).
-**No build, shader compilation, tests, game session or FPS measurement was run for this integration.** Historical evidence
-below does not transfer to the combined source. All current changes remain experimental and unreleased.
+`main` is the Slang AOT renderer with the native GPU scene (see [BRANCH_LAYOUT](BRANCH_LAYOUT.md)); the previous GLSL renderer is history only.
+Rows cite the document or run that holds the evidence. **L4 means a measured live run on one NVIDIA GeForce RTX 5060 Ti 8 GiB, driver NVIDIA 621.14,
+Windows, 1920x1080 native, fixed-seed autotest world; nothing here is L5 (owner-confirmed) unless stated.** Features not listed keep the status they have
+in the historical tables below only where those tables say they belong to the Slang pass; rows that name the deleted GLSL pass do not transfer.
 
-| Area | Implemented source | Current integration evidence / limits |
-|---|---|---|
-| Hardware RT | ReSTIR history limits, spatial reuse, pixel shadows, weather capture, GPU geometry dequantization and barriers | Source integration only; runtime and performance unmeasured |
-| Transparent interfaces | RT camera/secondary segments use one query with nearest 16 layers sorted; PT reuses 16-entry batches within its 24-interface budget | Source change only; bounded sorting/storage cost unmeasured; unresolved RT transmission suppressed |
-| Water / glass | Realistic water Snell/medium approximation; vanilla textured sheet; glass thin tint/Fresnel filter | Full glass volume transport remains absent; water caustics are approximate |
-| Optical material profiles | Per-texture IOR, authored slab thickness, reference RGB/distance and diffuse coating; clear centres remain dielectric candidates | 31 distinct immutable profiles plus legacy; no closed-volume glass tracer; [format and limits](TRANSPARENT_MATERIALS.md) |
-| Transparency cost controls | Independent direct/secondary colored-shadow switches, conservative section-local shared full-block face removal | Newly captured sections only for face filtering; existing Sodium culling can leave zero extra removals |
-| Transparency counters | Opt-in delayed GPU query/candidate/layer/budget counts and CPU glass-face totals in F3 | Atomics add overhead; counts are not timings or a measured FPS benefit |
-| Software Voxel | Streamed loaded sections, bounded residency, light invalidation and water entry/exit segments | Separate Compute provider nested in player JAR; incomplete coverage preserves raster |
-| Iris | Opt-in post subset, world/frame guides and custom RT hooks | General pack support incomplete; see [IRIS_VULKAN](IRIS_VULKAN.md) |
-| Shader / pipeline caches | Local SPIR-V warmup with an atomic compiler-profile snapshot, shared driver pipeline cache | Local caching; no Microsoft Advanced Shader Delivery service integration |
-| DXGI | Optional compatibility policy for Minecraft's own presentation path | Requires a game version with Mojang's DXGI implementation; project still targets 26.3 |
+| Area | Status | Level | Evidence / measured result |
+|---|---|---|---|
+| Slang AOT pipeline, shared pipeline cache, native GPU scene core (ABI 3) | BETA | L4 (bench stand) | all runs of the [GI stack report](measurements/GI_STACK_REPORT.md); Windows native CI (`.github/workflows/native-windows.yml`) covers DLSS resource contracts without a GPU |
+| BLAS compaction | BETA | L4 | RD16 about 1747 MiB reserved; RD32 about 3607 MiB fits 4096 MiB, ray tracing stable (`measurements/compaction_*`) |
+| ReSTIR PT (`path_restir_pt`, Enhanced) | EXPERIMENTAL | L4 | proven running; +24.7 % `gpu_rt`, +569 MiB versus PT off; quality is a feature, not a speed-up |
+| Ray-generation PT execution | EXPERIMENTAL | L4 | -7.8 % `gpu_rt` versus the compute path |
+| Shader execution reordering (SER) | EXPERIMENTAL, opt-in, keep OFF | L4 | steady-state A/B: 2.14x slower trace pass (+114 % `gpu_rt`, -42 % FPS) |
+| Opacity micromaps | NOT_IMPLEMENTED (deferred) | L0 / design | no measured terrain win; [design note](ai-agent-addenda/13-omm-feasibility-design.md) |
+| Partitioned PTLAS | NOT_IMPLEMENTED (deferred); regional in-place TLAS update present | L2 | TLAS-inclusive `world` span captured; isolated `tlas_ms` needs a native ABI split ([design](ai-agent-addenda/14-ptlas-feasibility-design.md)) |
+| NRD REBLUR denoiser | EXPERIMENTAL | L4 | runs in game; -18.4 % `gpu_rt` versus DLSS RR at native 1080p |
+| NRD ReLAX | EXPERIMENTAL | L2 | selectable and in the bench; A/B numbers not captured ([disposition](ai-agent-addenda/16-nrd-tuning-disposition.md)) |
+| DLSS Ray Reconstruction | EXPERIMENTAL | L4 (runs); preset D/E/F L2 | preset hint is additive and default off; A/B capture pending; RR sharpness is not wired (the NVIDIA API call is a no-op) |
+| Settings auto-policy and texture style presets | BETA | L4 | `gi_settings_l4` result PASS; the `gi_execution_status` row and `dlss_rr_preset` row are L2, live read-back pending |
+| Radiance Cascades | EXPERIMENTAL, opt-in | L2 | native finite-window field with temporal reuse; typed trace split into modules; no live acceptance recorded |
+| Glass: Fresnel on thin panes, ambient through glass, reflection guides through transmitted panes, tinted glass | EXPERIMENTAL | L2 | source fixes of 2026-11-12/13, live effect not recorded; a see-through-triangle report is localized to distant stair shading ([A/B notes](VERIFICATION_LOG.md)) |
+| Nether and End bioluminescence | EXPERIMENTAL | L2 | selective materials; no live capture found in the documents |
+| Torch glow and auto-exposure fix | EXPERIMENTAL | L2 | `RtExposure`, emitter and surface shaders; live effect not recorded in the documents |
+| Iris post host | EXPERIMENTAL | source-only per its document | see [IRIS_VULKAN](IRIS_VULKAN.md) |
+| Iris pack-level raster forward host | EXPERIMENTAL, source-integrated | L2 | merged in PR #84; acceptance (real pack visible in a screenshot, honest log) is defined in the [design](superpowers/specs/2026-11-12-iris-raster-core-design.md) and is **not recorded as done** |
+| Voxel provider (nested `bedray_compute`) | EXPERIMENTAL | see document | streamed loaded sections, bounded residency; levels and open items in [COMPUTE](COMPUTE.md) |
+| Sodium NeoForge 0.9.2 ... 0.9.3-beta.5 | BETA | L0 contract, L1 compile | seven official builds, sha512-locked in `tools/sodium-matrix.json`; no in-game run per version; the Bedray page not appearing in one owner instance is accepted and unexplained |
+| Transparent interfaces, optical profiles, cost controls and counters | EXPERIMENTAL | L2 | unchanged contract, see [TRANSPARENT_MATERIALS](TRANSPARENT_MATERIALS.md); cost unmeasured |
+| Shader / pipeline caches, DXGI policy | EXPERIMENTAL | L2 | local caches only; DXGI needs a game version with Mojang's implementation |
 
-## Historical evidence: 0.1.0-alpha.1
+Owner-gated or GPU-gated and **not** claimed: L5 sign-off for every row, before/after screenshots, preset and denoiser A/B numbers, native
+1080p/60 FPS (an unmeasured target, see [NATIVE_1080P_60_AUDIT](NATIVE_1080P_60_AUDIT.md)). The full list of open obligations per technology is in
+[STACK_IMPLEMENTATION_PLAN](STACK_IMPLEMENTATION_PLAN.md); how to reproduce every number: [L5_REPRO](measurements/L5_REPRO.md).
+
+## Historical evidence: 0.1.0-alpha.1 (previous GLSL renderer)
+
+The tables below describe the published pre-release. Rows that name the GLSL pass, the Java-side renderer or GLSL-era autotests do not apply to current `main`; use the current table above.
 
 **Bedray is an alpha. Nothing below is marked STABLE.** The statuses are based on the code and on the developer's own test runs.
 Tests were made only on **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, driver 617.42**, mostly with NeoForge. Other GPUs and
