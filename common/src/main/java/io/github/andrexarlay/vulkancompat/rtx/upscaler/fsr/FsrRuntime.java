@@ -115,7 +115,7 @@ public final class FsrRuntime {
     }
 
     private static volatile List<FfxNative.ProviderVersion> availableVersions = List.of();
-    private static VulkanDevice probedDevice;
+    private static volatile VulkanDevice probedDevice;
 
     /** Snapshot for UI; settings construction never loads AMD libraries or runs a native query. */
     public static List<FfxNative.ProviderVersion> availableVersions() {
@@ -123,7 +123,7 @@ public final class FsrRuntime {
     }
 
     /** Runs once per device, outside settings callbacks, before any world upscaler is requested. */
-    public static synchronized void probeProviders() {
+    public static void probeProviders() {
         if (probedDevice != null) return;
         VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
         if (device == null) return;
