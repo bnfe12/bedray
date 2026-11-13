@@ -1,5 +1,7 @@
 package io.github.andrexarlay.vulkancompat.rtx.framegen;
 
+import io.github.andrexarlay.vulkanbridge.core.NativeBundle;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -51,11 +53,11 @@ public final class FrameGenEarly {
         for (String key : new String[] {"net.neoforged.gameDir", "fabric.gameDir", "minecraft.gameDir"}) {
             String dir = System.getProperty(key);
             if (dir != null && !dir.isBlank()) {
-                candidates.add(Paths.get(dir, DEFAULT_DIR).toAbsolutePath().normalize());
+                candidates.add(NativeBundle.streamlineDirectory(Paths.get(dir)).toAbsolutePath().normalize());
                 candidates.add(Paths.get(dir, LEGACY_DIR).toAbsolutePath().normalize());
             }
         }
-        candidates.add(Paths.get(DEFAULT_DIR).toAbsolutePath().normalize());
+        candidates.add(NativeBundle.streamlineDirectory(Path.of("")).toAbsolutePath().normalize());
         String env = System.getenv("VKRTX_SL_DIR");
         if (env != null && !env.isBlank()) {
             candidates.add(Paths.get(env).toAbsolutePath().normalize());
@@ -79,7 +81,7 @@ public final class FrameGenEarly {
         if (Files.isRegularFile(inDir)) {
             return inDir;
         }
-        return Paths.get(DEFAULT_DIR).toAbsolutePath().normalize().resolve(SHIM);
+        return NativeBundle.streamlineDirectory(Path.of("")).toAbsolutePath().normalize().resolve(SHIM);
     }
 
     /** Names of required files that are missing (empty = complete). */
@@ -130,6 +132,10 @@ public final class FrameGenEarly {
             if (pf != null) {
                 FrameGenSettings.setProvider(pf);
             }
+        }
+        if (m != FrameGenSettings.Mode.OFF) {
+            Path gameDir = findConfigFile().getParent().getParent();
+            NativeBundle.extractEarlyStreamline(gameDir);
         }
         FrameGenProvider.resolveAtStartup(m == FrameGenSettings.Mode.OFF, missingFiles().isEmpty());
         if (m == FrameGenSettings.Mode.OFF) {

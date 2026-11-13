@@ -22,8 +22,11 @@ Development alpha.13 includes Bedray Compute inside that Bedray JAR. Remove an o
 `bedray-compute-*.jar` when updating to this distribution; the loader discovers the included provider
 as `bedray_compute`. The `-host-only.jar` artifact is intended for developers, not this installation.
 
-Copy the **matching `bedray_core.dll`** from the same build to `bedray/natives/` inside the instance's game folder.
-The renderer DLL contains the native GPU scene and is required for ray tracing and path tracing.
+The Windows x64 `-all-natives.jar` contains the matching renderer core, Compute provider and optional runtime DLLs. Drop the JAR
+for your loader into `mods`. Bedray verifies and extracts its DLLs on first launch. For a clean upgrade from a manually installed
+build, use a separate instance or move the old `bedray/natives/` directory to a backup before launching.
+
+If you use the source-build JAR, copy the matching `bedray_core.dll` into `bedray/natives/` for ray tracing and path tracing.
 See the [Windows distribution instructions](https://github.com/bnfe12/bedray/blob/main/native/bedray_core/DISTRIBUTION.md) to build this pair from source.
 
 Do not install the NeoForge and the Fabric jar together. Start the game once. If everything is right, **Options, Video Settings**
@@ -39,7 +42,8 @@ The matching core and loader JAR supply ray tracing and path tracing with accumu
 Release jars include the unmodified AMD FidelityFX Vulkan runtime and Intel XeSS runtime with their license notices. Bedray extracts
 them into `bedray/natives/` on first start. The source repository and ordinary developer builds do not include these binaries.
 
-NVIDIA libraries and native wrappers are **not included**. You download or build them as described below, follow the vendor's
+The `-all-natives.jar` supplies the NVIDIA libraries and wrappers listed below with their SDK notices under
+`META-INF/licenses/natives/`. With a regular source-build JAR, obtain the files as described below, follow the vendor's
 license, and copy them into your instance's **game folder** (the folder that contains `mods`, `config`,
 `logs`; in many launchers it is `<instance>/minecraft`). Create the folders if they do not exist. Only official vendor downloads;
 never DLLs from forums, file-sharing sites or other games' folders.
@@ -55,13 +59,12 @@ never DLLs from forums, file-sharing sites or other games' folders.
 
 (`bedray/natives/` is the shared folder for native libraries, relative to the game folder; its name can be changed with `-Dbedray.nativesRoot=<name>`. Folders of earlier test builds are still read, read-only, so existing instances keep working; move the files to `bedray/natives/` when convenient.)
 
-### Files you must build yourself
+### Building wrappers for a source-build JAR
 
 `vkb_dlss.dll`, `vkb_nrd.dll` and `vkb_sl.dll` are small wrappers written for this project. They are built from the sources in
 `native/` of this repository (`native/dlss_bridge/build.bat`, `native/nrd_bridge/build.bat`, `native/sl_bridge/build.bat`) with
-Visual Studio Build Tools and the matching vendor SDK. `vkb_dlss.dll` statically contains NVIDIA's NGX library, so it
-**cannot be redistributed**; every user who wants DLSS builds it. This is a real hurdle in the alpha. See `docs/BUILDING.md`
-and `native/*/build.bat` (the scripts read the SDK locations from environment variables).
+Visual Studio Build Tools and the matching vendor SDK. `vkb_dlss.dll` statically links NGX and is subject to the accompanying
+NVIDIA RTX SDK terms. See [Building Bedray](BUILDING.md) for the wrapper sources and single-JAR packaging instructions.
 
 ### Exact file lists
 

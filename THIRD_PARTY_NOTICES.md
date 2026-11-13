@@ -45,16 +45,18 @@ Their license files are stored in each JAR under `META-INF/licenses/natives/<dll
 * LabPBR material standard (https://shaderlabs.org/wiki/LabPBR_Material_Standard): the `_s` / `_n` decoding follows the public
   specification.
 
-## Vendor SDKs and libraries not shipped
+## Optional NVIDIA runtime in the Windows single-JAR distribution
 
-The following are not in the repository or release jars. Download them from the vendor and follow the vendor's license
-(see `docs/INSTALL.md`).
+The `-all-natives.jar` includes the following Windows runtime components with their SDK terms in
+`META-INF/licenses/natives/NVIDIA/`. The NVIDIA components remain subject to those terms. The source repository carries
+Bedray's integration sources. See [installation](docs/INSTALL.md) for the standard and single-JAR distributions.
 
 | Library | Vendor | Licence |
 |---|---|---|
 | `nvngx_dlss.dll`, `nvngx_dlssd.dll`, `nvngx_dlssg.dll` (DLSS Super Resolution, Ray Reconstruction, Frame Generation) | NVIDIA | NVIDIA RTX SDKs licence (DLSS SDK) |
+| `nvngx_dlssnr.dll` (experimental DLSS 5 Neural Rendering) | NVIDIA RTX Remix | NVIDIA RTX SDKs licence (RTX Remix SDK overlay) |
 | Streamline (`sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.reflex.dll`, `sl.pcl.dll`) | NVIDIA | NVIDIA RTX SDKs licence / Streamline licence |
 | NVIDIA Real-Time Denoisers (`NRD.dll`, built from the NRD sources) | NVIDIA | NVIDIA RTX SDKs licence |
 
-Our own wrappers `vkb_dlss.dll`, `vkb_nrd.dll` and `vkb_sl.dll` are built from the sources in `native/`. `vkb_dlss.dll`
-statically links NVIDIA's `nvsdk_ngx_s.lib`, so it is not redistributed either: you build it yourself with the NVIDIA SDK.
+The wrappers `vkb_dlss.dll`, `vkb_nrd.dll` and `vkb_sl.dll` are built from the sources in `native/`. `vkb_dlss.dll`
+statically links NVIDIA's `nvsdk_ngx_s.lib` and the NVIDIA RTX SDK terms apply to that component.
