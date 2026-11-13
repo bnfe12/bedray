@@ -21,12 +21,12 @@ class RtSlangGlassPassTest {
     @Test
     void thePaneTransmitsAlongTheViewRay() throws IOException {
         String bsdf = Files.readString(BSDF).replace("\r\n", "\n");
-        int pane = bsdf.indexOf("    if (transmit) {\n        float3 tint = pow(");
+        int pane = bsdf.indexOf("    if (transmit) {\n        float3 tint = materialGlassTint(");
         assertTrue(pane > 0, "the pane has its own pass-through branch");
         String branch = bsdf.substring(pane, bsdf.indexOf("return result;", pane));
         assertTrue(branch.contains("result.direction = -V;"), "straight on, not scattered");
         assertTrue(branch.contains("result.delta = true;"), "a delta lobe: MIS and NEE must not weigh it as diffuse");
-        assertTrue(branch.contains("float3(max(material.alpha, 0.0) * transmission));"),
+        assertTrue(branch.contains("materialGlassTint(material.albedo, material.alpha, transmission);"),
             "tinted by the authored thickness, like the shadow filter");
         assertFalse(bsdf.contains("float3 lobeNormal = transmit ? -N : N;"), "no cosine lobe through a pane");
     }

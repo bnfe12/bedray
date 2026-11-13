@@ -743,9 +743,9 @@ public class ShimTestRunner {
     private static void assertDefaultDeviceRequirements(java.util.List<io.github.andrexarlay.vulkanbridge.api.DeviceRequirement> requirements) {
         var ids = requirements.stream().map(io.github.andrexarlay.vulkanbridge.api.DeviceRequirement::id)
             .collect(java.util.stream.Collectors.toSet());
-        assertEquals(java.util.Set.of("Bedray Native Memory Budget", "Hardware Ray Tracing"), ids,
-            "default registration contains the independent memory and RT groups");
-        assertEquals(2, requirements.size(), "one registration per independent group");
+        assertEquals(java.util.Set.of("Bedray Native Memory Budget", "Bedray Ray Generation", "Hardware Ray Tracing"), ids,
+            "default registration contains the independent memory, ray generation and RT groups");
+        assertEquals(3, requirements.size(), "one registration per independent group");
         var memory = requirements.stream().filter(r -> r.id().equals("Bedray Native Memory Budget")).findFirst().orElseThrow();
         assertTrue(memory.optional(), "lack of memory-budget telemetry cannot reject a device");
         assertTrue(memory.features().isEmpty(), "memory telemetry does not require RT features");

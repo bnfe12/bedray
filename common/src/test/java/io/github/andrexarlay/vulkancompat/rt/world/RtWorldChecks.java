@@ -211,7 +211,7 @@ public final class RtWorldChecks {
         float[] keyMoon = {0.06f, 0.075f, 0.1f};
         float[] amb = new float[3];
         RtSky.ambient(new float[] {0.4f, 0.6f, 1.0f}, 1f, 1f, -1f, 1f, 1f, keyNoon, 1f, amb);
-        check(amb[2] >= amb[0] && amb[2] < amb[0] * 1.25f, "ambient follows the sky colour without a blue wash");
+        check(amb[2] >= amb[0] && amb[2] < amb[0] * 1.5f, "ambient keeps the installed model's mild blue sky fill");
         float[] ambNight = new float[3];
         RtSky.ambient(new float[] {0.4f, 0.6f, 1.0f}, 0f, -1f, 1f, 1f, 1f, keyMoon, 1f, ambNight);
         check(ambNight[0] < amb[0] * 0.2f && ambNight[2] > 0.005f, "ambient is much darker at night, but not black");

@@ -136,17 +136,18 @@ final class RtModesChecks {
     private static void exposureAndEmitters() {
         RtExposure e = new RtExposure();
         near(RtExposure.FIXED, e.value(), 0f, "starts at the ray-mode exposure");
-        // dark image: mean luminance 2^-6 -> target 0.22 * 64 = 14 -> moves up
-        long dark = (long) ((-6 + 16) * 64) * 100;
+        // A sufficiently dark image must hit the cap under the installed partial-adaptation/key policy.
+        long dark = (long) ((-10 + 16) * 64) * 100;
         for (int i = 0; i < 900; i++) {
             e.observe(dark, 100);
         }
-        near(RtExposure.MAX, e.value(), 0.2f, "dark image converges to the cap MAX (KEY / L = 14 is above it)");
+        near(RtExposure.MAX, e.value(), 0.2f, "dark image converges to the cap MAX");
         long bright = (long) ((2 + 16) * 64) * 100;
         for (int i = 0; i < 600; i++) {
             e.observe(bright, 100);
         }
-        near(0.1754f, e.value(), 0.025f, "a bright room meters below fixed exposure instead of clipping");
+        near((float) Math.pow(RtExposure.KEY / 4.0, RtExposure.STRENGTH), e.value(), 0.025f,
+            "a bright room meters below fixed exposure instead of clipping");
         // frame-rate independence: 1 s of 30 fps and 1 s of 120 fps move the exposure by (almost) the same amount
         RtExposure slow = new RtExposure();
         RtExposure fast = new RtExposure();

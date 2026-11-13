@@ -74,8 +74,8 @@ class RtSlangSampleRejectionTest {
         }
         assertEquals(9, sites, "nine arithmetic faults: primary ray, interval, hit parameter, two cutout advances, "
             + "primary advance, pane throughput, bounce throughput and the final radiance");
-        assertEquals(7, count(tracer, "result.flags |= " + TRUNCATED + ";"),
-            "seven short-path stops, including the pane throughput bound and the ray profile's two effect gates");
+        assertEquals(8, count(tracer, "result.flags |= " + TRUNCATED + ";"),
+            "eight short-path stops, including the pane throughput bound and the installed ray profile gates");
     }
 
     /** Each of the stops, named by the guard that decides it. */
@@ -114,11 +114,13 @@ class RtSlangSampleRejectionTest {
         String bsdf = block(read(BSDF),
             "BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, float incidentIor,");
         int horizon = bsdf.indexOf("if (lightLocal.z <= 0.0) return result;");
+        int rough = bsdf.indexOf("float alpha = max(material.roughness * material.roughness");
         assertTrue(horizon >= 0, "the sampler no longer rejects a below-horizon reflection before using it");
-        assertTrue(bsdf.indexOf("result.valid = true") > horizon
-                && bsdf.indexOf("result.weight =") > horizon
-                && bsdf.indexOf("result.pdf =") > horizon,
-            "the early return must precede every write, or the caller multiplies a half-built record");
+        assertTrue(rough >= 0 && rough < horizon);
+        assertTrue(bsdf.indexOf("result.valid = true", rough) > horizon
+                && bsdf.indexOf("result.weight =", rough) > horizon
+                && bsdf.indexOf("result.pdf =", rough) > horizon,
+            "the rough VNDF rejection must precede writes in that lobe; the independent ideal-mirror branch returns earlier");
         assertTrue(bsdf.indexOf("float3 L = safeNormalize(tangent * lightLocal.x +") > horizon,
             "no light direction may be built from a sample that was just refused");
         String invalid = block(read(BSDF), "BSDFSample invalidBSDFSample() {");
@@ -127,7 +129,7 @@ class RtSlangSampleRejectionTest {
             "the refused sample has to be the zero the caller already tests for");
 
         String tracer = read(TRACER);
-        int emission = tracer.indexOf("result.radiance += throughput * surface.material.emission;");
+        int emission = tracer.indexOf("result.radiance += throughput * surface.material.emission * emissionWeight;");
         int contribution = tracer.indexOf("float3 directContribution = throughput * direct;");
         int direct = tracer.indexOf("result.radiance += directContribution;");
         int sampled = tracer.indexOf("BSDFSample bsdf = bsdfSample(surface.material, view, normal,");

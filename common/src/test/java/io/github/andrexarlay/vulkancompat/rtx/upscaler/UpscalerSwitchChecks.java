@@ -296,11 +296,12 @@ public final class UpscalerSwitchChecks {
         check(steps.get(1).backend() == UpscalerBackend.XESS && steps.get(1).mode() == UpscalerMode.QUALITY, "step 1 XESS:QUALITY");
         check(steps.get(4).backend() == UpscalerBackend.DLSS && steps.get(4).mode() == UpscalerMode.PERFORMANCE, "step 4 DLSS:PERFORMANCE");
         check(UpscalerSwitchScenario.parseSteps("xess").get(0).mode() == UpscalerMode.QUALITY, "missing mode = default mode");
-        List<UpscalerSwitchScenario.Step> fsr = UpscalerSwitchScenario.parseSteps("FSR,FSR:PERFORMANCE:2,FSR:NATIVE_AA:3.1");
+        List<UpscalerSwitchScenario.Step> fsr = UpscalerSwitchScenario.parseSteps("FSR,FSR:PERFORMANCE:2,FSR:NATIVE_AA:3.1,FSR:QUALITY:4");
         check(fsr.get(0).mode() == UpscalerMode.QUALITY && fsr.get(0).fsrVersion() == FsrVersion.AUTO, "FSR default step");
         check(fsr.get(1).mode() == UpscalerMode.PERFORMANCE && fsr.get(1).fsrVersion() == FsrVersion.FSR_2, "FSR:PERFORMANCE:2");
         check(fsr.get(2).fsrVersion() == FsrVersion.FSR_3_1, "FSR:NATIVE_AA:3.1");
-        for (String bad : new String[] {"FSR:ULTRA_QUALITY", "FSR:QUALITY:4", "XESS:QUALITY:2", "XESS:DLAA", "BILINEAR:QUALITY", "NOPE", ""}) {
+        check(fsr.get(3).fsrVersion() == FsrVersion.FSR_4, "FSR:QUALITY:4");
+        for (String bad : new String[] {"FSR:ULTRA_QUALITY", "FSR:QUALITY:invalid", "XESS:QUALITY:2", "XESS:DLAA", "BILINEAR:QUALITY", "NOPE", ""}) {
             boolean threw = false;
             try {
                 UpscalerSwitchScenario.parseSteps(bad);
