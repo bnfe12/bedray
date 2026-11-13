@@ -14,6 +14,7 @@ import org.lwjgl.vulkan.VK11;
 import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkFormatProperties2;
 import org.lwjgl.vulkan.VkFormatProperties3;
+import org.lwjgl.vulkan.VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -127,11 +128,15 @@ public final class FsrDeviceRequirements {
             () -> Boolean.TRUE);
     }
 
-    private static DeviceRequirement modernImages() {
-        return new DeviceRequirement("VKB FSR SDK 2.4 images", Set.of(), List.of(
-            FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageExtendedFormats"),
-            FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageWriteWithoutFormat")
-        ), 0, true, () -> Boolean.TRUE);
+    private static final String COMPUTE_DERIVATIVES = "VK_KHR_compute_shader_derivatives";
+    private static final List<FeatureRequest> MODERN_FEATURES = List.of(
+        FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageExtendedFormats"),
+        FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageWriteWithoutFormat"),
+        FeatureRequest.of(VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR.class, "computeDerivativeGroupLinear"));
+
+    private static DeviceRequirement modernBase() {
+        return new DeviceRequirement("VKB FSR SDK 2.4", Set.of(COMPUTE_DERIVATIVES), MODERN_FEATURES,
+            0, true, () -> Boolean.TRUE);
     }
 
     static boolean supportsSdk(VulkanDevice device, boolean modern) {
@@ -141,7 +146,7 @@ public final class FsrDeviceRequirements {
         }
         if (!((Object) device instanceof MixinVulkanDeviceFeaturesAccessor access)) return false;
         var enabled = access.vkb$enabledFeatures();
-        if (enabled == null || !modernImages().features().stream().allMatch(required ->
+        if (enabled == null || !enabled.extensions().contains(COMPUTE_DERIVATIVES) || !MODERN_FEATURES.stream().allMatch(required ->
             enabled.features().stream().anyMatch(actual -> required.field().equals(actual.name())))) return false;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var physical = device.vkDevice().getPhysicalDevice();
@@ -185,7 +190,7 @@ public final class FsrDeviceRequirements {
             modern.usable() ? modern : FsrLibrary.library());
         modernRegistered = modern.usable() && UpscalerPreregistration.isRegistered(UpscalerBackend.FSR);
         if (modernRegistered) {
-            registry.register(modernImages());
+            registry.register(modernBase());
             registerMl(registry);
         }
     }
