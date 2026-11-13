@@ -1,23 +1,26 @@
-# Contributing
+# Contributing to Bedray
 
-Thanks for helping. Bedray is an alpha, so the most useful contributions are **test reports** and **clear bug reports**.
+Bedray is an early alpha. Reproducible bug reports, GPU tests and focused fixes are especially useful.
 
-## Testing and bug reports
+## Report a problem or test your GPU
 
-* Read `docs/TESTING.md` and use the issue forms ("Bug report", "GPU test report").
-* Only an NVIDIA GeForce RTX 5060 Ti has been tested. AMD Radeon (RDNA 2+) and Intel Arc reports are especially wanted.
-* Remove personal paths and names from logs before sharing them.
+Use the [issue forms](https://github.com/bnfe12/bedray/issues/new/choose).
+Include your exact build, Minecraft and loader versions, GPU, driver and steps to reproduce.
+For visual problems, add a screenshot and the relevant settings. AMD Radeon and Intel Arc reports help expand coverage.
 
-## Code changes
+Review logs and diagnostics before sharing them: remove personal paths, account names, server addresses and credentials.
+See the [testing guide](docs/TESTING.md) and [privacy policy](PRIVACY.md).
+Report security vulnerabilities through the [security policy](SECURITY.md).
 
-1. Open an issue first for anything larger than a small fix, so we can agree on the direction.
-2. Build as described in `docs/BUILDING.md` and run `gradlew :common:runShimTests`. The tests check Java-level logic only; they
-   are **not** evidence that a visual feature works in the game.
-3. State what you verified: the log line or screenshot that shows the feature working. "It compiles" is not enough for graphics
-   changes. Changes to presentation, resolution or matrices need before/after screenshots.
-4. Do not add binaries (DLLs, jars, SDK files) to the repository. Vendor SDKs and their headers are not redistributed here.
-5. Keep user-facing text honest: a feature that is not implemented must be hidden or labelled "not implemented", and
-   `docs/FEATURE_MATRIX.md` must match.
-6. Files are UTF-8 without BOM.
+## Propose a change
 
-By contributing you agree that your contribution is licensed under LGPL-3.0-or-later.
+1. Discuss larger changes in an issue before starting implementation.
+2. Follow the [build guide](docs/BUILDING.md), create a focused branch and open a pull request against `main`.
+3. Explain the problem, the resulting behavior and what you verified. Run the relevant checks;
+   Java changes normally include `gradlew :common:runShimTests`.
+4. Rendering changes need evidence from a real run. State the build and settings, include a log or screenshot,
+   and distinguish source checks from in-game validation. Update [feature status](docs/FEATURE_MATRIX.md) when it changes.
+5. Keep binaries, vendor SDK files, credentials, personal paths and internal working notes out of commits.
+   Source and documentation files use UTF-8 without BOM.
+
+By contributing, you agree that your contribution is licensed under LGPL-3.0-or-later.

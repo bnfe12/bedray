@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest an improvement to Bedray
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/bnfe12/bedray/blob/main/ROADMAP.md) and existing issues first.
+        Keep screenshots and attachments free of personal information.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to improve?
+      description: Describe the situation and why it matters when using Bedray.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested behavior
+      description: Explain your idea. Examples or images are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or extra context

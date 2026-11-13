@@ -23,9 +23,12 @@ gradle/**
 
 # issue templates
 .github/ISSUE_TEMPLATE/*
+.github/PULL_REQUEST_TEMPLATE.md
 
 # user documentation (explicit list: new files are NOT exported until they are added here)
 docs/INSTALL.md
+docs/README.md
+docs/BRAND.md
 docs/INSTALL_NATIVES_WITH_AI.md
 docs/USER_GUIDE.md
 docs/SETTINGS_AUDIT.md
@@ -53,6 +56,9 @@ docs/VITRAIL_STUDY.md
 docs/patches/*.patch
 ROADMAP.md
 docs/images/*.png
+docs/images/bedray-logo.svg
+docs/images/bedray-banner.svg
+docs/images/bedray-banner.gif
 docs/images/legacy/*.png
 
 # original shaderpack source examples
@@ -78,6 +84,7 @@ scripts/**
 # export tooling
 tools/PUBLIC_EXPORT_ALLOWLIST.txt
 tools/make_preview_assets.py
+tools/make_brand_assets.py
 tools/public_scan.ps1
 tools/test-world-snapshots.sh
 tools/tests/*.java
