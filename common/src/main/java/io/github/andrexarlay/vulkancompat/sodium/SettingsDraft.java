@@ -3,6 +3,10 @@ package io.github.andrexarlay.vulkancompat.sodium;
 import io.github.andrexarlay.vulkancompat.rt.world.RtAtmosphereSettings;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMode;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrRuntime;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrVersion;
 import net.caffeinemc.mods.sodium.client.config.structure.Config;
 import net.caffeinemc.mods.sodium.client.config.structure.EnumOption;
 import net.caffeinemc.mods.sodium.client.config.structure.IntegerOption;
@@ -120,7 +124,7 @@ final class SettingsDraft {
     private void applySelectedProfile() {
         // Mirror the provider's actual compatibility rule in the pending model too, so render scale
         // is visible before Apply when switching away from a temporal hardware upscaler.
-        if (voxel()) stage("upscaler_backend", io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend.BILINEAR);
+        if (voxel()) stage("upscaler_backend", UpscalerChoice.BILINEAR);
         String path = voxel() ? "voxel_quality_profile" : "path_quality_profile";
         entries.stream().filter(e -> e.path().equals(path)).findFirst().ifPresent(e -> choose(e, (Enum<?>)e.option().getValidatedValue()));
     }
@@ -197,8 +201,16 @@ final class SettingsDraft {
             };
             return new RuntimeStatus(badge, Component.literal(io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.statusLine()));
         }
-        if (entry.path().equals("upscaler_backend") || entry.path().equals("dlss_mode") || entry.path().equals("xess_mode") || entry.path().startsWith("fsr_")) {
-            var backend = config.readEnumOption(id("upscaler_backend"), io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend.class);
+        if (entry.path().equals("upscaler_backend") || entry.path().equals("dlss_mode") || entry.path().equals("dlss_sr_preset") || entry.path().equals("xess_mode") || entry.path().startsWith("fsr_")) {
+            var choice = config.readEnumOption(id("upscaler_backend"), UpscalerChoice.class);
+            var backend = choice.backend();
+            if (entry.path().equals("dlss_sr_preset")) {
+                var dlss = io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime.nativeLib();
+                if (dlss != null && !dlss.supportsSrPresets()) {
+                    return new RuntimeStatus(Badge.REQUIRES_RESTART,
+                        Component.translatable("bedray.settings.dlss_sr_wrapper_update"));
+                }
+            }
             var availability = io.github.andrexarlay.vulkancompat.rtx.config.UpscalerSelection.status(backend, VulkanRtxConfig.gameDir());
             Badge badge = switch (availability) {
                 case AVAILABLE -> io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration.requiresRestart(backend) ? Badge.REQUIRES_RESTART : Badge.AVAILABLE;
@@ -206,7 +218,14 @@ final class SettingsDraft {
                 case LIBRARY_MISSING -> Badge.MISSING_RUNTIME;
                 case UNSUPPORTED_GPU -> Badge.UNSUPPORTED_HARDWARE;
             };
-            return new RuntimeStatus(badge, Component.translatable("bedray.settings.requested_runtime", backend.name(), VulkanRtxConfig.activeBackend.name()));
+            var active = TemporalUpscaler.active();
+            String activeLabel = active == null ? UpscalerBackend.BILINEAR.name() : active.name();
+            if (active == UpscalerBackend.FSR) activeLabel = "FSR " + FsrRuntime.activeProvider();
+            if (backend == UpscalerBackend.FSR && FsrRuntime.failureReason() != null
+                && choice == UpscalerChoice.of(VulkanRtxConfig.activeBackend, VulkanRtxConfig.fsrVersion)) {
+                return new RuntimeStatus(Badge.FAILED_INITIALIZATION, Component.literal(FsrRuntime.failureReason()));
+            }
+            return new RuntimeStatus(badge, Component.translatable("bedray.settings.requested_runtime", choice.name(), activeLabel));
         }
         if (!entry.option().isEnabled()) return new RuntimeStatus(Badge.INACTIVE, Component.translatable("bedray.settings.inactive"));
         if (voxel()) {
@@ -254,7 +273,19 @@ final class SettingsDraft {
         values.putAll(rawValues);
         Map<String, String> known = parse(PresetStore.snapshot());
         int applied = 0;
+        // Stage the renderer before validating the combined upscaler choice and its quality controls.
+        var renderer = entries.stream().filter(row -> row.path().equals("renderer")).findFirst().orElse(null);
+        if (renderer != null && values.containsKey("renderer")) {
+            try {
+                setParsed(renderer, values.get("renderer"));
+                applied++;
+            } catch (IllegalArgumentException invalid) {
+                // Keep the current draft renderer when the preset contains an unknown value.
+            }
+        }
+        applied += stageUpscaler(values);
         for (var item : values.entrySet()) {
+            if (Set.of("renderer", "active_backend", "fsr_version").contains(item.getKey())) continue;
             if (PRESET_SKIPPED.contains(item.getKey()) || !known.containsKey(item.getKey())) continue;
             Entry e = entries.stream().filter(row -> !SESSION.contains(row.path()) && key(row.path()).equals(item.getKey())).findFirst().orElse(null);
             if (e == null) {
@@ -281,12 +312,45 @@ final class SettingsDraft {
         return applied;
     }
 
+    private int stageUpscaler(Map<String, String> values) {
+        String backendValue = values.get("active_backend");
+        String versionValue = values.get("fsr_version");
+        if (backendValue == null && versionValue == null) return 0;
+        try {
+            var current = config.readEnumOption(id("upscaler_backend"), UpscalerChoice.class);
+            var backend = backendValue == null ? current.backend()
+                : UpscalerBackend.valueOf(unquote(backendValue).toUpperCase(Locale.ROOT));
+            var version = versionValue == null ? VulkanRtxConfig.fsrVersion : FsrVersion.parse(unquote(versionValue));
+            var choice = UpscalerChoice.of(backend, version);
+            var option = (EnumOption<?>) config.getOption(id("upscaler_backend"));
+            if (!isAllowed(option, choice)) {
+                if (backend != UpscalerBackend.FSR || !isAllowed(option, UpscalerChoice.FSR_AUTO)) return 0;
+                choice = UpscalerChoice.FSR_AUTO;
+            }
+            if (backend != UpscalerBackend.FSR && versionValue != null) {
+                imported.put("fsr_version", "\"" + version.name() + "\"");
+            }
+            stage("upscaler_backend", choice);
+            return (backendValue == null ? 0 : 1) + (versionValue == null ? 0 : 1);
+        } catch (IllegalArgumentException invalid) {
+            return 0;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean isAllowed(EnumOption<?> option, UpscalerChoice choice) {
+        return ((EnumOption<UpscalerChoice>) option).isValueAllowed(choice);
+    }
+
     String snapshot() {
         Map<String, String> values = parse(PresetStore.snapshot());
         values.putAll(imported);
         for (Entry e : entries) {
             if (SESSION.contains(e.path())) continue;
             String key = key(e.path());
+            if (e.option().getValidatedValue() instanceof UpscalerChoice choice && choice.version() != null) {
+                values.put("fsr_version", "\"" + choice.version().name() + "\"");
+            }
             if (values.containsKey(key)) values.put(key, persistedValue(e));
         }
         StringBuilder text = new StringBuilder("# Bedray settings preset (values only)\n");
@@ -335,7 +399,6 @@ final class SettingsDraft {
             if (!io.github.andrexarlay.vulkancompat.rtx.config.UpscalerModes.isOffered(io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend.FSR1, mode)) return null;
             return "\"" + mode.name() + "\"";
         }
-        if (key.equals("fsr_version")) return "\"" + io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrVersion.valueOf(value.toUpperCase(Locale.ROOT)).name() + "\"";
         if (existing.equalsIgnoreCase("true") || existing.equalsIgnoreCase("false")) {
             if (!value.equalsIgnoreCase("true") && !value.equalsIgnoreCase("false")) return null;
             return value.toLowerCase(Locale.ROOT);
@@ -392,6 +455,7 @@ final class SettingsDraft {
 
     private static String persistedValue(Entry e) {
         Object value = e.option().getValidatedValue();
+        if (value instanceof UpscalerChoice choice) return "\"" + choice.backend().name() + "\"";
         if (value instanceof RtMode mode) return "\"" + mode.logName() + "\"";
         if (value instanceof VulkanSodiumConfig.WaterStyle style) return style == VulkanSodiumConfig.WaterStyle.VANILLA ? "0" : "1";
         if (value instanceof RtAtmosphereSettings.GodRays mode) return mode.ordinal() + ".0";

@@ -18,6 +18,9 @@ final class FsrProviders {
     private static final Map<Path, FfxNative> LIBRARIES = new HashMap<>();
     private static final Map<FfxNative, List<FfxNative.ProviderVersion>> VERSIONS = new HashMap<>();
     private static VulkanDevice queriedDevice;
+    private static boolean modernSupported;
+    private static boolean legacySupported;
+    private static boolean mlDeviceEnabled;
 
     private static final List<FsrVersion> ANALYTICAL = List.of(FsrVersion.FSR_3_1, FsrVersion.FSR_2);
 
@@ -76,15 +79,20 @@ final class FsrProviders {
         if (queriedDevice != device) {
             queriedDevice = device;
             VERSIONS.clear();
+            modernSupported = FsrDeviceRequirements.supportsSdk(device, true);
+            legacySupported = FsrDeviceRequirements.supportsSdk(device, false);
+            mlDeviceEnabled = modernSupported && FsrDeviceRequirements.mlDeviceEnabled(device);
+            LOGGER.info("[VKB-FSR] device_support sdk_2_4={} sdk_1_1_4={} ml_features={}",
+                modernSupported, legacySupported, mlDeviceEnabled);
         }
         var handles = handles(device);
         if (handles.getDeviceProcAddr() == 0) return List.of();
         List<Sdk> results = new ArrayList<>();
         var modern = FsrLibrary.modernLibrary();
-        if (FsrDeviceRequirements.modernRegistered() && modern.usable()) {
-            discover(results, modern, handles, FsrDeviceRequirements.mlDeviceEnabled(device));
+        if (modernSupported && FsrDeviceRequirements.modernRegistered() && modern.usable()) {
+            discover(results, modern, handles, mlDeviceEnabled);
         }
-        if (includeLegacy) {
+        if (includeLegacy && legacySupported) {
             discover(results, FsrLibrary.library(), handles, false);
         }
         return results;

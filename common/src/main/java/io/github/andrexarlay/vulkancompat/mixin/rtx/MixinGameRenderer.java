@@ -78,6 +78,7 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
     @Inject(method = "render()V", at = @At("HEAD"))
     private void onRenderBegin(CallbackInfo ci) {
         if (VulkanBridge.isVulkan()) {
+            io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrRuntime.probeProviders();
             PerfMonitor.frameBegin();
             io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.beginFrame(this.minecraft.level);
             io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.onFrameBegin(this.minecraft.level);

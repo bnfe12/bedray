@@ -8,6 +8,12 @@ import io.github.andrexarlay.vulkancompat.mixin.rt.MixinVulkanDeviceFeaturesAcce
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VK11;
+import org.lwjgl.vulkan.VK13;
+import org.lwjgl.vulkan.VkFormatProperties2;
+import org.lwjgl.vulkan.VkFormatProperties3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -121,6 +127,35 @@ public final class FsrDeviceRequirements {
             () -> Boolean.TRUE);
     }
 
+    private static DeviceRequirement modernImages() {
+        return new DeviceRequirement("VKB FSR SDK 2.4 images", Set.of(), List.of(
+            FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageExtendedFormats"),
+            FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageWriteWithoutFormat")
+        ), 0, true, () -> Boolean.TRUE);
+    }
+
+    static boolean supportsSdk(VulkanDevice device, boolean modern) {
+        if (!modern) {
+            var extensions = device.getDeviceInfo().underlyingExtensions();
+            return BASE_EXTENSIONS.stream().allMatch(ext -> extensions.contains(ext + " (D)"));
+        }
+        if (!((Object) device instanceof MixinVulkanDeviceFeaturesAccessor access)) return false;
+        var enabled = access.vkb$enabledFeatures();
+        if (enabled == null || !modernImages().features().stream().allMatch(required ->
+            enabled.features().stream().anyMatch(actual -> required.field().equals(actual.name())))) return false;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var physical = device.vkDevice().getPhysicalDevice();
+            var typed = VkFormatProperties3.calloc(stack).sType$Default();
+            var format = VkFormatProperties2.calloc(stack).sType$Default().pNext(typed);
+            VK11.vkGetPhysicalDeviceFormatProperties2(physical, VK10.VK_FORMAT_R16G16B16A16_UNORM, format);
+            long required = VK13.VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT | VK13.VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT;
+            long actual = typed.optimalTilingFeatures();
+            LOGGER.info("[VKB-FSR] sdk=2.4 format=R16G16B16A16_UNORM required=0x{} available=0x{}",
+                Long.toHexString(required), Long.toHexString(actual));
+            return (actual & required) == required;
+        }
+    }
+
     public static DeviceRequirement fp16() {
         return new DeviceRequirement(
             ID_FP16,
@@ -149,7 +184,10 @@ public final class FsrDeviceRequirements {
         register(registry, FsrConfig.requestedRequest() != null, UpscalerPreregistration.enabled(),
             modern.usable() ? modern : FsrLibrary.library());
         modernRegistered = modern.usable() && UpscalerPreregistration.isRegistered(UpscalerBackend.FSR);
-        if (modernRegistered) registerMl(registry);
+        if (modernRegistered) {
+            registry.register(modernImages());
+            registerMl(registry);
+        }
     }
 
     /** Decision with explicit inputs (tests). */

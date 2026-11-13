@@ -105,6 +105,7 @@ final class BedraySettingsActions {
         VulkanRtxConfig.syncUpscalerTypeWithPreset();
         VulkanRtxConfig.xessMode = UpscalerModes.defaultMode(UpscalerBackend.XESS);
         VulkanRtxConfig.dlssMode = UpscalerModes.defaultMode(UpscalerBackend.DLSS);
+        VulkanRtxConfig.dlssSrPreset = io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssSrPreset.AUTO;
         VulkanRtxConfig.fsrMode = UpscalerModes.defaultMode(UpscalerBackend.FSR);
         VulkanRtxConfig.fsrVersion = FsrVersion.AUTO;
         VulkanRtxConfig.fsrSharpness = 0.0f;

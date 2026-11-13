@@ -15,7 +15,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.Set;
 
 /**
  * Lifecycle of the AMD FidelityFX (ffx-api, Vulkan backend) upscaler context. Same state machine as XessRuntime / DlssRuntime
@@ -115,10 +114,23 @@ public final class FsrRuntime {
         return failureReason;
     }
 
-    /** Inspect providers without replacing the library that owns a live or retiring context. */
-    public static synchronized List<FfxNative.ProviderVersion> availableVersions() {
+    private static volatile List<FfxNative.ProviderVersion> availableVersions = List.of();
+    private static VulkanDevice probedDevice;
+
+    /** Snapshot for UI; settings construction never loads AMD libraries or runs a native query. */
+    public static List<FfxNative.ProviderVersion> availableVersions() {
+        return availableVersions;
+    }
+
+    /** Runs once per device, outside settings callbacks, before any world upscaler is requested. */
+    public static synchronized void probeProviders() {
+        if (probedDevice != null) return;
         VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
-        return device == null ? List.of() : FsrProviders.available(device);
+        if (device == null) return;
+        long started = System.nanoTime();
+        availableVersions = FsrProviders.available(device);
+        probedDevice = device;
+        LOGGER.info("[VKB-FSR] provider_snapshot available={} ms={}", availableVersions, (System.nanoTime() - started) / 1_000_000);
     }
 
     public static synchronized void onFrameBegin(int winW, int winH) {
@@ -210,28 +222,15 @@ public final class FsrRuntime {
             fail("device_features", "not_registered (FSR FeatureSets were not added at device creation: restart with the library installed)");
             return;
         }
-        // ffxCreateContext calls vkGetBufferMemoryRequirements2KHR through vkGetDeviceProcAddr (NULL without the extension
-        // enabled on the device: access violation at pc=0). Refuse instead of crashing (FsrDeviceRequirements).
-        Set<String> underlying = info.underlyingExtensions();
-        List<String> missing = new java.util.ArrayList<>();
-        for (String ext : FsrDeviceRequirements.BASE_EXTENSIONS) {
-            if (!underlying.contains(ext + " (D)")) {
-                missing.add(ext);
-            }
-        }
-        LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=required_device_ext {} enabled={}", FsrDeviceRequirements.BASE_EXTENSIONS, missing.isEmpty());
-        if (!missing.isEmpty()) {
-            fail("required_device_ext", "missing=" + missing + " (the optional FeatureSet '" + FsrDeviceRequirements.ID + "' was not enabled)");
-            return;
-        }
         FfxNative.VulkanHandles handles = FsrProviders.handles(device);
         if (handles.getDeviceProcAddr() == 0L) {
             throw new FsrException("device", "vkGetDeviceProcAddr is unavailable", null);
         }
+        availableVersions = FsrProviders.available(device);
         var candidates = FsrProviders.candidates(device, request.version());
         if (candidates.isEmpty()) {
             throw new FsrException("version", "requested=" + request.version()
-                + " available=" + FsrProviders.available(device), null);
+                + " available=" + availableVersions, null);
         }
         FsrException lastFailure = null;
         for (var candidate : candidates) {

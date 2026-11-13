@@ -77,7 +77,7 @@ for the public release policy.
 * **DLSS 5 Neural Rendering:** The experimental Windows Vulkan path uses a locally built NR-capable wrapper and the signed NVIDIA
   model. Follow the [DLSS 5 guide](experiments/dlss5.md) for file verification and launch settings.
 * **FSR 4:** import `amd_fidelityfx_loader_vk.dll` and `amd_fidelityfx_upscaler_vk.dll` from `Kits/FidelityFX/signedbin/` in AMD FSR SDK 2.4.0.
-  Bedray checks both hashes before loading the pair. Restart the game and select **FSR (AMD)** and **Auto** under **FSR Version**.
+  Bedray checks both hashes before loading the pair. Restart the game and select **FSR · Auto** under **Upscaler**.
   The ML provider requires a supported AMD Radeon GPU and Adrenalin 26.10.1 or later. Other Vulkan GPUs can use the analytical providers.
   Check the active provider in F3 or search the game log for `fsr=context_created`.
 * **FSR 3.1 / 2.x:** SDK 2.4 supplies FSR 3.1.6 and 2.3.4. The signed `PrebuiltSignedDLL/amd_fidelityfx_vk.dll` from SDK 1.1.4 is also supported

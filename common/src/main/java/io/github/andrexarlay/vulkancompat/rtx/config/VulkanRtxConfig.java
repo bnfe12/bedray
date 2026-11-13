@@ -6,6 +6,7 @@ import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerSwitch;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssSrPreset;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrVersion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -247,6 +248,7 @@ public final class VulkanRtxConfig {
     public static UpscalerMode xessMode = UpscalerModes.defaultMode(UpscalerBackend.XESS);
     /** DLSS quality mode (persisted as {@code dlss_mode}); must be a member of {@code UpscalerModes.modesFor(DLSS)}. */
     public static UpscalerMode dlssMode = UpscalerModes.defaultMode(UpscalerBackend.DLSS);
+    public static DlssSrPreset dlssSrPreset = DlssSrPreset.AUTO;
     /** FSR quality mode (persisted as {@code fsr_mode}); must be a member of {@code UpscalerModes.modesFor(FSR)}. */
     public static UpscalerMode fsrMode = UpscalerModes.defaultMode(UpscalerBackend.FSR);
     /** FSR provider version (persisted as {@code fsr_version}): AUTO, FSR_4, FSR_3_1 or FSR_2. */
@@ -557,6 +559,8 @@ public final class VulkanRtxConfig {
                         LOGGER.warn("xess_mode '{}' is not offered by XeSS, keeping {}", val, xessMode);
                     }
                 }
+                case "dlss_sr_preset" -> dlssSrPreset =
+                    DlssSrPreset.valueOf(val.toUpperCase(java.util.Locale.ROOT));
                 case "dlss_mode" -> {
                     UpscalerMode parsed = UpscalerMode.valueOf(val.toUpperCase());
                     if (UpscalerModes.isOffered(UpscalerBackend.DLSS, parsed)) {
@@ -816,6 +820,7 @@ public final class VulkanRtxConfig {
             writer.write("xess_mode = \"" + xessMode.name() + "\"\n");
             writer.write("# DLSS mode: DLAA, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE (the render size is asked from NGX)\n");
             writer.write("dlss_mode = \"" + dlssMode.name() + "\"\n");
+            writer.write("dlss_sr_preset = \"" + dlssSrPreset.name() + "\"\n");
             writer.write("# FSR mode: NATIVE_AA, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE (the render size is asked from the FidelityFX DLL)\n");
             writer.write("fsr_mode = \"" + fsrMode.name() + "\"\n");
             writer.write("# FSR version: AUTO, FSR_4, FSR_3_1 or FSR_2. FSR_4 requires the AMD FSR SDK 2.4 Vulkan DLLs and a compatible AMD GPU.\n");
