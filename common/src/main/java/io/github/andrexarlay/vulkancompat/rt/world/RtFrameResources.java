@@ -18,8 +18,8 @@ final class RtFrameResources implements AutoCloseable {
 
     private final Allocator allocator;
     private final Set<Long> recordings = new LinkedHashSet<>();
-    private final RtMemory.Img[] abandoned = new RtMemory.Img[4];
-    private RtMemory.Img output, depth, composite, resolvedDepth;
+    private final RtMemory.Img[] abandoned = new RtMemory.Img[5];
+    private RtMemory.Img output, depth, composite, resolvedDepth, localLum;
     private RtMemory.Buf motion;
     private RtMemory.Buf abandonedMotion;
     private boolean initialized;
@@ -43,6 +43,9 @@ final class RtFrameResources implements AutoCloseable {
     RtMemory.Img output() { return output; }
     RtMemory.Img depth() { return depth; }
     RtMemory.Img composite() { return composite; }
+    /** Block-mean log luminance of the presented HDR, one texel per LOCAL_TONEMAP_BLOCK pixels (RtLocalTonemap). */
+    RtMemory.Img localLum() { return localLum; }
+    static final int LOCAL_TONEMAP_BLOCK = 16;
     RtMemory.Img displayDepth() { return resolvedDepth != null ? resolvedDepth : depth; }
     RtMemory.Buf motion() { return motion; }
     boolean initializationPending() { return initializer != 0; }
@@ -70,7 +73,7 @@ final class RtFrameResources implements AutoCloseable {
         if (!needsOutput(w, h, displayW, displayH, resolveDepth)) return;
         requireUnreferenced("replace_output");
         collectAbandoned();
-        RtMemory.Img[] next = new RtMemory.Img[4];
+        RtMemory.Img[] next = new RtMemory.Img[5];
         try {
             next[0] = allocator.image("rt_output", w, h, VK10.VK_FORMAT_R8G8B8A8_UNORM,
                 VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
@@ -80,6 +83,9 @@ final class RtFrameResources implements AutoCloseable {
                 VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
             if (resolveDepth) next[3] = allocator.image("rt_display_depth", displayW, displayH,
                 VK10.VK_FORMAT_R32_SFLOAT, VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
+            next[4] = allocator.image("rt_local_lum", (displayW + LOCAL_TONEMAP_BLOCK - 1) / LOCAL_TONEMAP_BLOCK,
+                (displayH + LOCAL_TONEMAP_BLOCK - 1) / LOCAL_TONEMAP_BLOCK, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                VK10.VK_IMAGE_USAGE_STORAGE_BIT);
             destroyOutputs();
         } catch (RuntimeException | Error failure) {
             // Reserve every rollback owner before cleanup can itself fail or allocate an exception.
@@ -91,7 +97,7 @@ final class RtFrameResources implements AutoCloseable {
             }
             throw failure;
         }
-        output = next[0]; depth = next[1]; composite = next[2]; resolvedDepth = next[3];
+        output = next[0]; depth = next[1]; composite = next[2]; resolvedDepth = next[3]; localLum = next[4];
         initialized = false;
         initializer = 0;
         generation++;
@@ -130,6 +136,7 @@ final class RtFrameResources implements AutoCloseable {
             transition.accept(depth);
             transition.accept(composite);
             if (resolvedDepth != null) transition.accept(resolvedDepth);
+            if (localLum != null) transition.accept(localLum);
             initialized = true;
         }
     }
@@ -180,6 +187,7 @@ final class RtFrameResources implements AutoCloseable {
         if (depth != null) { allocator.destroy(depth); depth = null; }
         if (composite != null) { allocator.destroy(composite); composite = null; }
         if (resolvedDepth != null) { allocator.destroy(resolvedDepth); resolvedDepth = null; }
+        if (localLum != null) { allocator.destroy(localLum); localLum = null; }
         initialized = false;
         initializer = 0;
     }

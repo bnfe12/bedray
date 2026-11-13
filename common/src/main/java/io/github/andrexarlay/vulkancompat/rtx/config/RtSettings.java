@@ -30,6 +30,13 @@ public final class RtSettings {
     public enum PathDenoiser { OFF, NRD, DLSS_RR }
 
     /**
+     * Player-selectable tone curve of the path display pass. The ordinal is the shader mode index of
+     * {@code tonemap_curve.slang} / {@code RtTonemap.applyMode} (0 = the shipped peak-channel curve); the host packs it
+     * into spare bits of the display flags, so the choice reaches the live native core without an ABI change.
+     */
+    public enum Tonemapper { PEAK, ACES, PBR_NEUTRAL, GT, AGX }
+
+    /**
      * Frame-rate budget of the adaptive quality of the Path Tracing pass. The pass measures its own GPU time and lowers rays
      * per pixel first, then the path length, until it fits; the spp and bounces the player set are the ceiling, so it never
      * renders better than those values. The budget is a share ({@link #BUDGET_SHARE}) of one frame of that rate: the world
@@ -214,8 +221,14 @@ public final class RtSettings {
     public static DlssRrParams.Preset dlssRrPreset = DlssRrParams.Preset.DEFAULT;
     /** Path tracing water caustics simulation focusing sunlight and light under water. */
     public static boolean caustics = false;
-    /** Vibrant Visuals style: rich grass and water tones, high color contrast, soft bloom and cinematic ACES. */
+    /** Vibrant Visuals grade: richer saturation and higher colour contrast on the display image (postVibrant). The built-in Vibrant preset pairs it with the ACES tone curve. */
     public static boolean vibrantVisuals = false;
+    /** Tone curve of the path display pass (PEAK = the shipped curve). See {@link Tonemapper}. */
+    public static Tonemapper tonemapper = Tonemapper.PEAK;
+    /** Post-cinema vignette: darkens the corners of the tone-mapped image (display pass, both RT modes). */
+    public static boolean vignette = false;
+    /** Post-cinema film grain: animated midtone noise on the tone-mapped image (display pass, both RT modes). */
+    public static boolean filmGrain = false;
     /** Particles (smoke, flames, sparks, bubbles, block breaking...) are drawn into the ray traced image (RtParticleLayer). */
     public static boolean rtParticles = true;
     /** Rain and snow columns are drawn into the ray traced image too (RtWeatherLayer, on the particle layer of RtParticleLayer). */
@@ -247,6 +260,8 @@ public final class RtSettings {
     private static final PathDenoiser DENOISER_OVR;
     /** {@code -Dvkrtx.rt.dlss_rr_preset=} value of this session; null when the config owns it. */
     private static final DlssRrParams.Preset DLSS_RR_PRESET_OVR;
+    /** {@code -Dvkrtx.rt.tonemapper=} value of this session; null when the config owns it. */
+    private static final Tonemapper TONEMAPPER_OVR;
     /** {@code -Dvkrtx.rt.adaptive_quality=} value of this session; null when the config owns it (it is never written out). */
     private static final AdaptiveQuality ADAPTIVE_OVR;
 
@@ -285,6 +300,8 @@ public final class RtSettings {
         bool("path_caustics", () -> caustics, v -> caustics = v);
         bool("caustics", () -> caustics, v -> caustics = v);
         bool("vibrant_visuals", () -> vibrantVisuals, v -> vibrantVisuals = v);
+        bool("vignette", () -> vignette, v -> vignette = v);
+        bool("film_grain", () -> filmGrain, v -> filmGrain = v);
         bool("rt_particles", () -> rtParticles, v -> rtParticles = v);
         bool("rt_weather", () -> rtWeather, v -> rtWeather = v);
         bool("auto_normals", () -> autoNormals, v -> autoNormals = v);
@@ -389,6 +406,16 @@ public final class RtSettings {
             }
         }
         DLSS_RR_PRESET_OVR = rrPresetOvr;
+        String tm = System.getProperty("vkrtx.rt.tonemapper");
+        Tonemapper tmOvr = null;
+        if (tm != null) {
+            try {
+                tmOvr = Tonemapper.valueOf(tm.trim().toUpperCase(Locale.ROOT).replace('-', '_'));
+            } catch (IllegalArgumentException e) {
+                LOGGER.error("[VKB-RT] invalid -Dvkrtx.rt.tonemapper={} (peak|aces|pbr_neutral|gt|agx), ignored", tm);
+            }
+        }
+        TONEMAPPER_OVR = tmOvr;
         String aq = System.getProperty("vkrtx.rt.adaptive_quality");
         AdaptiveQuality aqOvr = null;
         if (aq != null) {
@@ -403,9 +430,10 @@ public final class RtSettings {
         applyPreset(Preset.MEDIUM);
         writeAlphaPathDefaults();
         pathPreset = PathPreset.CUSTOM;
-        if (!INT_OVR.isEmpty() || !BOOL_OVR.isEmpty() || DENOISER_OVR != null || ADAPTIVE_OVR != null) {
-            LOGGER.info("[VKB-RT] settings overrides (session only): {} {} {} adaptive_quality={}", INT_OVR, BOOL_OVR,
-                DENOISER_OVR == null ? "" : "path_denoiser=" + DENOISER_OVR, ADAPTIVE_OVR == null ? "from config" : ADAPTIVE_OVR);
+        if (!INT_OVR.isEmpty() || !BOOL_OVR.isEmpty() || DENOISER_OVR != null || ADAPTIVE_OVR != null || TONEMAPPER_OVR != null) {
+            LOGGER.info("[VKB-RT] settings overrides (session only): {} {} {} adaptive_quality={} tonemapper={}", INT_OVR, BOOL_OVR,
+                DENOISER_OVR == null ? "" : "path_denoiser=" + DENOISER_OVR, ADAPTIVE_OVR == null ? "from config" : ADAPTIVE_OVR,
+                TONEMAPPER_OVR == null ? "from config" : TONEMAPPER_OVR);
         }
     }
 
@@ -479,6 +507,8 @@ public final class RtSettings {
     public static int exposureEvTenths() { return i("path_exposure_ev"); }
     public static boolean caustics() { return b("path_caustics") || b("caustics"); }
     public static boolean vibrantVisuals() { return b("vibrant_visuals"); }
+    public static boolean vignette() { return b("vignette"); }
+    public static boolean filmGrain() { return b("film_grain"); }
     public static boolean particles() { return b("rt_particles"); }
     /**
      * Weather (rain / snow columns) rides on the particle layer of {@code RtParticleLayer} and its composite, so it is only ever on
@@ -500,6 +530,8 @@ public final class RtSettings {
     public static PathDenoiser denoiser() { return DENOISER_OVR != null ? DENOISER_OVR : pathDenoiser; }
     /** DLSS-RR render preset hint; a {@code -Dvkrtx.rt.dlss_rr_preset=} override wins for this session. */
     public static DlssRrParams.Preset dlssRrPreset() { return DLSS_RR_PRESET_OVR != null ? DLSS_RR_PRESET_OVR : dlssRrPreset; }
+    /** Tone curve of the path display pass (session override, else the configured value). */
+    public static Tonemapper tonemapper() { return TONEMAPPER_OVR != null ? TONEMAPPER_OVR : tonemapper; }
     /** GPU budget of the ray tracing pass in milliseconds, 0 when adaptive quality is off. */
     public static double adaptiveBudgetMs() {
         AdaptiveQuality q = ADAPTIVE_OVR != null ? ADAPTIVE_OVR : adaptiveQuality;
@@ -729,7 +761,7 @@ public final class RtSettings {
     public static final java.util.Set<String> ADVANCED_KEYS = java.util.Set.of("rays_shadows", "rays_soft_shadows", "rays_pixel_shadows", "rays_reflections",
         "rays_ao", "rays_gi", "rays_emissive", "rays_accumulate", "rt_distance_auto", "auto_normals", "path_accumulate",
         "path_auto_exposure", "rt_fog", "volumetric_fog_enabled", "path_caustics", "caustics", "vibrant_visuals",
-        "waving_foliage");
+        "vignette", "film_grain", "waving_foliage");
 
     /**
      * Resets one level of the settings page to the values of the current presets (Ray Tracing: MEDIUM when Custom; Path
@@ -843,6 +875,14 @@ public final class RtSettings {
                     dlssRrPreset = DlssRrParams.Preset.valueOf(val.trim().toUpperCase(Locale.ROOT));
                 } catch (IllegalArgumentException e) {
                     LOGGER.warn("Invalid dlss_rr_preset '{}' (use default|d|e|f), keeping {}", val, dlssRrPreset);
+                }
+                return true;
+            }
+            case "tonemapper" -> {
+                try {
+                    tonemapper = Tonemapper.valueOf(val.trim().toUpperCase(Locale.ROOT).replace('-', '_'));
+                } catch (IllegalArgumentException e) {
+                    LOGGER.warn("Invalid tonemapper '{}' (use peak|aces|pbr_neutral|gt|agx), keeping {}", val, tonemapper);
                 }
                 return true;
             }
@@ -965,6 +1005,9 @@ public final class RtSettings {
         w.write("waving_foliage_strength = " + wavingFoliageStrength + "\n");
         w.write("# Vibrant Visuals (Mojang vibrant palette)\n");
         w.write("vibrant_visuals = " + vibrantVisuals + "\n");
+        w.write("# Post-cinema display looks (tone-mapped image, both RT modes)\n");
+        w.write("vignette = " + vignette + "\n");
+        w.write("film_grain = " + filmGrain + "\n");
         for (Map.Entry<String, BoolSetting> e : BOOLS.entrySet()) {
             if (e.getKey().startsWith("rays_")) {
                 w.write(e.getKey() + " = " + e.getValue().get().getAsBoolean() + "\n");
@@ -993,6 +1036,8 @@ public final class RtSettings {
         }
         w.write("# OFF, NRD or DLSS_RR (DLSS_RR uses NVIDIA DLSS Ray Reconstruction)\n");
         w.write("path_denoiser = \"" + pathDenoiser.name() + "\"\n");
+        w.write("# Tone curve of the path display: PEAK, ACES, PBR_NEUTRAL, GT or AGX\n");
+        w.write("tonemapper = \"" + tonemapper.name() + "\"\n");
         w.write("# Adaptive quality: OFF, FPS30, FPS45, FPS60, FPS90 or FPS120 - the RT pass lowers rays per pixel, then bounces,\n");
         w.write("# below the values above to fit 70% of a frame of that rate (never above them)\n");
         w.write("adaptive_quality = \"" + (adaptiveQuality != null ? adaptiveQuality.name() : "OFF") + "\"\n");

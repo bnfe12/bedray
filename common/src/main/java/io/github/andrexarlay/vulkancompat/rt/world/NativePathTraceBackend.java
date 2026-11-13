@@ -5,6 +5,7 @@ import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangProgram;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangTracePrograms;
+import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -73,7 +74,9 @@ final class NativePathTraceBackend implements PathTraceBackend {
             & ~(RtPathTraceSlangPass.PT_HISTORY | RtPathTraceSlangPass.PT_PARITY)) : frame.dispatch();
         pass.render(new BedrayPathTraceNative.FrameInput(frame.command().address(), frame.views(), frame.constants(),
             dispatch, frame.emitters(), RtPathTraceSlangPass.Reservoirs.NONE, frame.entities(), frame.stats(),
-            flags, frame.accumFrames(), 0, RtSlangPathPass.MAX_RADIANCE, RtSlangPathPass.REPROJECTION_TOLERANCE));
+            flags, frame.accumFrames(), RtSlangPathPass.tonemapperBits(RtSettings.tonemapper()) | RtSlangPathPass.postCinemaBits()
+                | RtSlangPathPass.vibrantBit(),
+            RtSlangPathPass.MAX_RADIANCE, RtSlangPathPass.REPROJECTION_TOLERANCE));
         boolean pt = (flags & BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_PT) != 0
             && (dispatch.flags() & RtPathTraceSlangPass.OPTION_RESTIR_PT) != 0;
         ptState = !pt ? "off" : (flags & BedrayCoreLayouts.PATH_TRACE_FRAME_PT_SPATIAL) != 0 ? "native+spatial" : "native";

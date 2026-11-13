@@ -15,15 +15,15 @@ class RtFrameResourcesTest {
         assertEquals(16, resources.composite().width);
         assertEquals(16, resources.displayDepth().width);
         assertNotSame(resources.depth(), resources.displayDepth());
-        assertEquals(4, allocator.images.size());
+        assertEquals(5, allocator.images.size());
         var transitions = new AtomicInteger();
         resources.prepare(31, image -> transitions.incrementAndGet());
-        assertEquals(4, transitions.get());
+        assertEquals(5, transitions.get());
         assertThrows(IllegalStateException.class, () -> resources.ensureOutput(8, 4));
         resources.releaseRecording(31);
         resources.ensureOutput(8, 4);
         assertSame(resources.depth(), resources.displayDepth());
-        assertEquals(3, allocator.images.size());
+        assertEquals(4, allocator.images.size());
         resources.close();
         assertTrue(allocator.images.isEmpty());
     }
@@ -36,7 +36,7 @@ class RtFrameResourcesTest {
         allocator.failImageCall = allocator.imageCalls + 4;
         assertThrows(OutOfMemoryError.class, () -> resources.ensureOutput(8, 4, 16, 8));
         assertSame(before, resources.output());
-        assertEquals(3, allocator.images.size());
+        assertEquals(4, allocator.images.size());
         resources.close();
     }
     static final class Allocator implements RtFrameResources.Allocator {
@@ -72,11 +72,11 @@ class RtFrameResourcesTest {
         var resources = new RtFrameResources(allocator);
         resources.ensureOutput(64, 32);
         resources.ensureMotion(64, 32);
-        assertEquals(3, allocator.images.size());
+        assertEquals(4, allocator.images.size());
         assertEquals(1, allocator.buffers.size());
         resources.ensureOutput(64, 32);
         resources.ensureMotion(32, 16);
-        assertEquals(3, allocator.imageCalls);
+        assertEquals(4, allocator.imageCalls);
         assertEquals(1, allocator.motionCalls);
         resources.close(); resources.close();
         assertTrue(allocator.images.isEmpty());
@@ -91,11 +91,11 @@ class RtFrameResourcesTest {
         allocator.failImageCall = allocator.imageCalls + 2;
         assertThrows(OutOfMemoryError.class, () -> resources.ensureOutput(16, 16));
         assertSame(output, resources.output()); assertSame(depth, resources.depth()); assertSame(composite, resources.composite());
-        assertEquals(3, allocator.images.size());
+        assertEquals(4, allocator.images.size());
         allocator.failImageCall = 0;
         resources.ensureOutput(16, 16);
         assertNotSame(output, resources.output());
-        assertEquals(3, allocator.images.size());
+        assertEquals(4, allocator.images.size());
         resources.close();
         assertTrue(allocator.images.isEmpty());
     }
@@ -110,7 +110,7 @@ class RtFrameResourcesTest {
         var failure = assertThrows(OutOfMemoryError.class, () -> resources.ensureOutput(16, 16));
         assertEquals("injected image allocation", failure.getMessage());
         assertEquals(2, failure.getSuppressed().length);
-        assertEquals(5, allocator.images.size());
+        assertEquals(6, allocator.images.size());
         assertThrows(IllegalStateException.class, resources::close);
         allocator.failedDestroy.clear();
         resources.close();
@@ -122,7 +122,7 @@ class RtFrameResourcesTest {
         resources.ensureOutput(8, 8);
         var transitions = new AtomicInteger();
         resources.prepare(17, image -> transitions.incrementAndGet());
-        assertEquals(3, transitions.get());
+        assertEquals(4, transitions.get());
         assertThrows(IllegalStateException.class, () -> resources.prepare(29, image -> fail("initializer unproven")));
         assertThrows(IllegalStateException.class, () -> resources.ensureOutput(16, 16));
         resources.releaseRecording(17);
@@ -141,7 +141,7 @@ class RtFrameResourcesTest {
         }));
         resources.discardRecording(17);
         resources.prepare(29, image -> calls.incrementAndGet());
-        assertEquals(5, calls.get());
+        assertEquals(6, calls.get());
         resources.releaseRecording(29);
         resources.close();
     }

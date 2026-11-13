@@ -90,6 +90,7 @@ public final class LookScenario implements AutotestScenario {
     /** Scene of the step that started the current pan, null when not panning. */
     private String panScene;
     private boolean listening;
+    private boolean bedrockImported;
     private int bx;
     private int by;
     private int bz;
@@ -153,6 +154,20 @@ public final class LookScenario implements AutotestScenario {
         if (!listening) {
             listening = true;
             Platforms.get().registerPostFrameHook(HookPriority.LOW, () -> applyAim(ctx));
+        }
+        if (Boolean.getBoolean("bedray.autotest.importBedrockRtx") && !bedrockImported) {
+            // Settings-button path of the Bedrock RTX importer, exercised before the scenes: convert, enable, reload.
+            bedrockImported = true;
+            io.github.andrexarlay.vulkancompat.rt.material.bedrock.BedrockRtxPackImporter.importAllAsync();
+            ctx.log("scenario", name(), "event", "bedrock_import_started");
+            ScenarioTime.waitUntil(ctx, () -> !io.github.andrexarlay.vulkancompat.rt.material.bedrock.BedrockRtxPackImporter.isRunning(), 180.0,
+                () -> ctx.waitFrames(900, () -> {
+                    ctx.log("scenario", name(), "event", "bedrock_import_done",
+                        "packs", String.join("|", ctx.minecraft().getResourcePackRepository().getSelectedIds()));
+                    run(ctx);
+                }),
+                () -> ctx.fail("rt_look: Bedrock RTX import did not finish within 180 s", null));
+            return;
         }
         List<String> cmds = buildCommands();
         server.execute(() -> {
