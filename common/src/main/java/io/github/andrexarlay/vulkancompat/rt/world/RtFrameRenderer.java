@@ -38,11 +38,9 @@ import net.minecraft.world.level.dimension.DimensionType;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VKCapabilitiesDevice;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkBufferMemoryBarrier;
 import org.lwjgl.vulkan.VkImageCopy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,18 +61,11 @@ import java.util.Locale;
  */
 public final class RtFrameRenderer {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
-    private static final int STATS_SLOTS = 3;
     // GPU spans of the RT command buffer, logged by RtGpuTimer (-Dvkrtx.rt.gpuTimers=false disables it)
     private static final int SPAN_WORLD = 0;
     private static final int SPAN_RAYS = 1;
     private static final int SPAN_DENOISE = 2;
     private static final int SPAN_ATMO = 3;
-    /**
-     * Per-frame slot layout is {@link RtStatsLayout} (offsets shared with buffer StatsBuf in rt_common.glsl and verified
-     * against the GLSL declaration by RtStatsLayoutTest); this renderer writes hits/samples/camera/emitter/exposure fields,
-     * RtSkyState the sky block, RtFogState the fog block.
-     */
-    private static final int STATS_STRIDE = RtStatsLayout.SLOT_STRIDE;
     /** Rebuilt sections closer than this (squared section distance, ~2 sections) reset the path tracing accumulation. */
     static final long SCENE_CHANGE_RADIUS_SQ = 8;
 
@@ -87,14 +78,14 @@ public final class RtFrameRenderer {
         @Override public int lastRadiusY() { return lastRadiusY; }
         @Override public RtGpuTimer gpuTimer() { return gpuTimer; }
         @Override public long passFrames() { return passFrames; }
-        @Override public double lastHitPct() { return lastHitPct; }
-        @Override public double lastRejectedPct() { return lastRejectedPct; }
-        @Override public RtStatsMetering.Breakdown lastRejectSplit() { return lastRejectSplit; }
-        @Override public double lastHistPct() { return lastHistPct; }
-        @Override public double lastLeafPct() { return lastLeafPct; }
+        @Override public double lastHitPct() { return RtFrameStatsTracker.lastHitPct(); }
+        @Override public double lastRejectedPct() { return RtFrameStatsTracker.lastRejectedPct(); }
+        @Override public RtStatsMetering.Breakdown lastRejectSplit() { return RtFrameStatsTracker.lastRejectSplit(); }
+        @Override public double lastHistPct() { return RtFrameStatsTracker.lastHistPct(); }
+        @Override public double lastLeafPct() { return RtFrameStatsTracker.lastLeafPct(); }
         @Override public RtTraceTelemetry lastTraceTelemetry() { return lastTraceTelemetry; }
-        @Override public RtFrameRenderer.StatsMetadata lastStatsMetadata() { return lastStatsMetadata; }
-        @Override public long lastStatsTrustedPixels() { return lastStatsTrustedPixels; }
+        @Override public RtFrameStatsTracker.StatsMetadata lastStatsMetadata() { return RtFrameStatsTracker.lastStatsMetadata(); }
+        @Override public long lastStatsTrustedPixels() { return RtFrameStatsTracker.lastStatsTrustedPixels(); }
     });
 
     private static RtWorld world;
@@ -112,15 +103,8 @@ public final class RtFrameRenderer {
     private static double prevCamZ;
     private static boolean havePrevCamera;
     private static int lastRadiusY;
-    private static final RtExposure exposure = new RtExposure();
-    private static long lastExposureNanos;
     private static volatile RtFrameParams lastParams;
     private static volatile RtMode lastPassMode;
-    /** Last per-frame statistics of {@link RtWorld#update} (F3 / PerfMonitor), null before the first RT frame. */
-    private static volatile RtWorld.FrameStats lastStats;
-    private static long blasBuiltTotal = 0;
-
-    private static RtMemory.Buf statsBuf;
     /** GPU timestamp spans of the RT frame; on by default, disabled with -Dvkrtx.rt.gpuTimers=false. */
     private static RtGpuTimer gpuTimer;
     /** God rays, bloom and sun glare post passes (Bedray atmosphere), run on the final image after the denoiser. */
@@ -142,27 +126,12 @@ public final class RtFrameRenderer {
     private static final RtFogState fogState = new RtFogState();
     /** Per-pixel entity motion of rt_path for the DLSS-RR motion vectors (vec4 per pixel). */
     private static RtFrameResources frameResources;
-    record StatsMetadata(boolean accumulated, boolean transparency, float day, long sequence,
-                         long recordedNanos, int width, int height, int frameIndex) {}
-    private static RecordingReadbackSlots<StatsMetadata> statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
-    private static long lastStatsSequence = -1;
-    private static long dispatchCounter = 0;
     private static long passFrames = 0;
     private static RtTraceTelemetry lastTraceTelemetry;
-    private static StatsMetadata lastStatsMetadata;
-    private static long lastStatsTrustedPixels;
-    private static double lastHitPct = -1.0;
-    /** Share of the metered pixels the tracer refused; -1 until a counter slot carries a measurement. */
-    private static double lastRejectedPct = -1.0;
-    /** The trace's split of the frame's bad endings, or null while no slot carried a measurement this host agrees with. */
-    private static RtStatsMetering.Breakdown lastRejectSplit;
-    /** Share of the hit pixels whose key light reached them through a leaf card (1-in-16 mask, like hist_pct). */
-    private static double lastLeafPct = -1.0;
-    private static volatile String lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
 
     public static String transparencyTelemetry() {
         var settings = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.transparencyStats();
-        return (settings ? lastTransparency : "[RT-TRANSPARENCY] counters=OFF")
+        return (settings ? RtFrameStatsTracker.lastTransparency() : "[RT-TRANSPARENCY] counters=OFF")
             + " glass_faces_examined=" + io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.examinedFaces()
             + " glass_faces_removed=" + io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.removedFaces()
             + " optical_palette_profiles=" + (materials == null ? 0 : materials.opticalProfileCount());
@@ -268,7 +237,7 @@ public final class RtFrameRenderer {
 
     public static String getHermeticTelemetry() {
         var entityStatus = getEntityInstanceStatus();
-        String worldStatus = world == null ? "UNAVAILABLE" : (lastStats == null ? "INITIALIZING" : "READY");
+        String worldStatus = world == null ? "UNAVAILABLE" : (RtFrameStatsTracker.lastStats() == null ? "INITIALIZING" : "READY");
         return String.format(Locale.ROOT,
             "[RT-HERMETIC] worldInstance=%s entityInstance=%s finalSource=%s reflectionMask=0x%02X shadowMask=0x%02X",
             worldStatus,
@@ -281,16 +250,13 @@ public final class RtFrameRenderer {
     private RtFrameRenderer() {
     }
 
-    private static volatile float lastExposureValue = 1.1f;
-    private static volatile double lastAvgLum;
-
     /** Auto exposure of the last readback (autotest telemetry): value (EV multiplier) and the log average scene luminance before exposure. */
     public static float lastExposure() {
-        return lastExposureValue;
+        return RtFrameStatsTracker.lastExposureValue();
     }
 
     public static double lastAverageLuminance() {
-        return lastAvgLum;
+        return RtFrameStatsTracker.lastAvgLum();
     }
 
     /** Light list of the last frame for the autotest log: used / in range / total emitters (RtEmitters). */
@@ -303,7 +269,7 @@ public final class RtFrameRenderer {
 
     /** Statistics of the last RT frame (null before the first one or after a shutdown). */
     public static RtWorld.FrameStats lastStats() {
-        return lastStats;
+        return RtFrameStatsTracker.lastStats();
     }
 
     /** Last trace accepted for submission, or null before the first accepted trace. */
@@ -313,7 +279,7 @@ public final class RtFrameRenderer {
 
     /** BLAS built since the game started (monotonic, for a per-second rate). */
     public static long blasBuiltTotal() {
-        return blasBuiltTotal;
+        return RtFrameStatsTracker.blasBuiltTotal();
     }
 
     /** Active depth view from DLSS-RR or RT output depth, fallback for velocity reproject. */
@@ -418,14 +384,12 @@ public final class RtFrameRenderer {
 
     private static final boolean LOW_DISC = !"off".equalsIgnoreCase(System.getProperty("vkrtx.rt.lowDisc", "on"));
 
-    private static volatile double lastHistPct = -1.0;
-
     /**
      * Temporal accumulation (both RT modes): percent of the counted hit pixels of a recent frame (2 frames old) whose
      * reprojected history passed the distance/normal test; -1 before the first readback.
      */
     public static double lastHistoryAcceptedPct() {
-        return lastHistPct;
+        return RtFrameStatsTracker.lastHistPct();
     }
 
     /** True while the RT world (BLAS/TLAS, pipeline) exists. */
@@ -447,10 +411,8 @@ public final class RtFrameRenderer {
         if (dlssRrDenoiser != null) {
             dlssRrDenoiser.resetHistory();
         }
-        exposure.reset();
+        RtFrameStatsTracker.resetHistoryShares();
         atmosphere.resetHistory();
-        lastHistPct = -1.0;
-        lastLeafPct = -1.0;
         lastTracedNs = 0L;   // the gap before the next traced frame describes the old setup, not a slow one
         RtAdaptiveQuality.reset();
     }
@@ -546,8 +508,8 @@ public final class RtFrameRenderer {
                     emitters = null;
                 }
                 // Completed readbacks describe the retired scene. Keep them out of the new exposure history.
-                for (var lease : statsReadbacks.ready()) statsReadbacks.consume(lease);
-                lastStats = null;
+                RtFrameStatsTracker.drainReady();
+                RtFrameStatsTracker.clearLastStats();
                 LOGGER.info("[VKB-RT] native_scene_recreated reason=discarded_recording");
             }
             havePrevCamera = false;
@@ -685,11 +647,11 @@ public final class RtFrameRenderer {
             resetHistory();
             renderLog.resetPassLog();
         }
-        consumeCompletedStats();
-        if (!statsReadbacks.hasFreeSlot()) {
+        RtFrameStatsTracker.consumeCompletedStats();
+        if (!RtFrameStatsTracker.hasFreeSlot()) {
             drainHostSubmissions(device, "stats_slots_drain");
-            consumeCompletedStats();
-            if (!statsReadbacks.hasFreeSlot()) throw new RtFailure("stats_slots", "completion proof unavailable; stats slots retained");
+            RtFrameStatsTracker.consumeCompletedStats();
+            if (!RtFrameStatsTracker.hasFreeSlot()) throw new RtFailure("stats_slots", "completion proof unavailable; stats slots retained");
         }
         if (target != null && target.width > 0 && target.height > 0
             && camera.projectionMatrix != null && camera.viewRotationMatrix != null) {
@@ -700,7 +662,7 @@ public final class RtFrameRenderer {
         RtEmitters recordingEmitters = emitters;
         VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-        var statsOwner = statsReadbacks;
+        var statsOwner = RtFrameStatsTracker.readbacks();
         var statsLease = statsOwner.reserve(cmd.address());
         if (statsLease == null) throw new RtFailure("stats_slots", "stats reservation unavailable");
         RtWorld recordingWorld = world;
@@ -758,8 +720,7 @@ public final class RtFrameRenderer {
             if (gpuTimer != null) {
                 gpuTimer.stamp(cmd, SPAN_WORLD, true);
             }
-            lastStats = stats;
-            blasBuiltTotal += stats.builtThisFrame();
+            RtFrameStatsTracker.recordWorldStats(stats);
             if (recordingWorld.tlasHandle() != 0L && camera.projectionMatrix != null
                 && camera.viewRotationMatrix != null && target != null) {
                 recordPrimaryRays(cmd, vulkanDevice, camera, target, levelState,
@@ -812,80 +773,9 @@ public final class RtFrameRenderer {
         renderLog.logWindow(stats, target);
     }
 
-    /** Only completed, still-leased slots may be read; sequence orders results, never proves completion. */
-    private static void consumeCompletedStats() {
-        var ready = statsReadbacks.ready().stream()
-            .sorted(java.util.Comparator.comparingLong(lease -> lease.metadata().sequence())).toList();
-        for (var lease : ready) {
-            var metadata = lease.metadata();
-            if (metadata.sequence() > lastStatsSequence) {
-                long base = statsBuf.mapped + (long) lease.slot() * STATS_STRIDE;
-                int hits = MemoryUtil.memGetInt(base + RtStatsLayout.HITS);
-                int samples = MemoryUtil.memGetInt(base + RtStatsLayout.SAMPLES);
-                lastStatsMetadata = metadata;
-                lastStatsTrustedPixels = Integer.toUnsignedLong(samples);
-                lastHitPct = RtStatsMetering.hitPct(metadata.width(), metadata.height(), metadata.frameIndex(), hits, samples);
-                // The counter pass only adds the samples it trusts, so this slot's own extent and rotation say how
-                // many pixels it weighed: the difference is the share the tracer refused, which no other word carries.
-                lastRejectedPct = RtStatsMetering.rejectedPct(metadata.width(), metadata.height(),
-                    metadata.frameIndex(), samples);
-                // The trace pass's own words: why pixels were refused, how many paths ran short, how many shadow walks
-                // gave up. The metered word must equal this mask's count, or the native stand-in left it zero: n/a.
-                lastRejectSplit = RtStatsMetering.breakdown(metadata.width(), metadata.height(),
-                    metadata.frameIndex(), MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS),
-                    MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS + 4),
-                    MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS + 8),
-                    MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS + 12));
-                lastTransparency = metadata.transparency() ? String.format(Locale.ROOT,
-                    "[RT-TRANSPARENCY] counters=READBACK queries=%d candidates=%d layers=%d overflows=%d direct_shadow_queries=%d indirect_shadow_queries=%d",
-                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_QUERIES)),
-                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_CANDIDATES)),
-                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_LAYERS)),
-                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_OVERFLOWS)),
-                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_DIRECT_SHADOWS)),
-                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_INDIRECT_SHADOWS)))
-                    : "[RT-TRANSPARENCY] counters=WAITING";
-                lastHistPct = -1.0;
-                lastLeafPct = -1.0;
-                if (lastHitPct >= 0.0 && hits > 0) {
-                    // Without the accumulating variant histAccepted is never incremented, and the share used to print as a
-                    // plausible 0% ("history rejected every pixel") in exactly the sessions that have no history at all.
-                    lastHistPct = RtAccumulation.acceptedPct(MemoryUtil.memGetInt(base + RtStatsLayout.HIST_ACCEPTED), hits,
-                        metadata.accumulated());
-                    // leafBacklit is the one head counter with no writer. The legacy transparency pass counted the
-                    // sun-through-a-leaf hits behind its own 1-in-16 mask and the statistics pass keeps no count of it,
-                    // so a zero here is the absence of a measurement, not a share of 0%: -1 is what the F3 line prints
-                    // as n/a.
-                    int leafBacklit = MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT);
-                    lastLeafPct = leafBacklit > 0 && leafBacklit <= hits ? 100.0 * leafBacklit / hits : -1.0;
-                }
-                if (samples > 0) {
-                    exposure.setMax(RtSkyState.maxExposure(metadata.day()));
-                    long expNow = metadata.recordedNanos();
-                    exposure.observe(Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.LUM_LOG_SUM)), samples,
-                        lastExposureNanos == 0L ? 1.0f / 60.0f : (float) ((expNow - lastExposureNanos) / 1.0e9));
-                    lastExposureNanos = expNow;
-                    lastExposureValue = exposure.value();
-                    long sumLog = Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.LUM_LOG_SUM));
-                    lastAvgLum = sumLog == 0L ? 0.0 : Math.pow(2.0, sumLog / 64.0 / samples - 16.0);
-                }
-                lastStatsSequence = metadata.sequence();
-            }
-            statsReadbacks.consume(lease);
-        }
-    }
-
     /** GPU writes become visible to coherent mapped host memory after this recording completes. */
     private static void recordStatsHostVisibility(VkCommandBuffer cmd, int slot) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            var barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
-                .srcAccessMask(VK10.VK_ACCESS_SHADER_WRITE_BIT | VK10.VK_ACCESS_TRANSFER_WRITE_BIT)
-                .dstAccessMask(VK10.VK_ACCESS_HOST_READ_BIT)
-                .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
-                .buffer(statsBuf.handle).offset((long) slot * STATS_STRIDE).size(STATS_STRIDE);
-            VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK10.VK_PIPELINE_STAGE_HOST_BIT,
-                0, null, barrier, null);
-        }
+        RtFrameStatsTracker.recordStatsHostVisibility(cmd, slot);
     }
 
     private static RtMemory.Img frameOutput() { return frameResources != null ? frameResources.output() : null; }
@@ -948,14 +838,14 @@ public final class RtFrameRenderer {
     /** Output image, dispatch and (debug view only) the copy into the engine colour image, inside the open command buffer. */
     private static void recordPrimaryRays(VkCommandBuffer cmd, VulkanDevice vulkanDevice, CameraRenderState camera,
                                          RenderTarget target, LevelRenderState levelState, boolean sceneChanged,
-                                         RecordingReadbackSlots.Lease<StatsMetadata> statsLease, Retirement[] denoiserProof) {
+                                         RecordingReadbackSlots.Lease<RtFrameStatsTracker.StatsMetadata> statsLease, Retirement[] denoiserProof) {
         VkDevice device = vulkanDevice.vkDevice();
         SkyRenderState sky = levelState.skyRenderState;
         frameProjection = BOB_PROJECTION ? io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager.levelProjectionOr(camera.projectionMatrix) : camera.projectionMatrix;
         org.joml.Vector3f bobOrigin = BOB_PROJECTION
             ? io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager.levelCameraOriginOr(null)
             : new org.joml.Vector3f();
-        if (BOB_PROJECTION && (dispatchCounter % 30) == 0 && frameProjection != camera.projectionMatrix) {
+        if (BOB_PROJECTION && (RtFrameStatsTracker.dispatchCounter() % 30) == 0 && frameProjection != camera.projectionMatrix) {
             float md = 0f;
             for (int c = 0; c < 4; c++) {
                 for (int r = 0; r < 4; r++) {
@@ -969,11 +859,8 @@ public final class RtFrameRenderer {
         int h = WorldTargetManager.traceHeight(target.height);
         if (frameOutput() == null || frameOutput().width != w || frameOutput().height != h)
             throw new RtFailure("frame_resources", "output generation was not prepared before recording");
-        if (statsBuf == null) {
-            statsBuf = world.memory().createBuffer("rt_stats", (long) STATS_SLOTS * STATS_STRIDE,
-                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
-                    | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
-        }
+        RtMemory.Buf statsBuf = RtFrameStatsTracker.ensureStatsBuffer(world);
+        RtExposure exposure = RtFrameStatsTracker.exposure();
         frameResources.prepare(cmd.address(), image -> VkBarriers.transition(cmd, image.image,
             VK10.VK_IMAGE_ASPECT_COLOR_BIT, VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL));
         AbstractTexture atlasTexture = Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
@@ -1028,7 +915,7 @@ public final class RtFrameRenderer {
             materials.normalView(), 0L, gbViews, frameDepth() != null ? frameDepth().view : 0L, lightmapView, motionHandle));
 
         int writeSlot = statsLease.slot();
-        long writeOffset = (long) writeSlot * STATS_STRIDE;
+        long writeOffset = (long) writeSlot * RtFrameStatsTracker.STRIDE;
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset, 16, 0);
         // leafBacklit sits far past the four head counters, so the 16-byte fill above does not reach it: without its own
         // zeroing the slot would keep the count of the frame that used it three slots ago.
@@ -1084,7 +971,7 @@ public final class RtFrameRenderer {
         params.statsOffset = writeOffset;
         params.flipY = RtConfig.FLIP_Y;
         params.tonemap = RtConfig.TONEMAP_ACES;
-        params.frame = (int) dispatchCounter;
+        params.frame = (int) RtFrameStatsTracker.dispatchCounter();
         params.rtRadiusXz = lastRadiusXz;
         params.cameraX = camera.pos.x;
         params.cameraY = camera.pos.y;
@@ -1162,7 +1049,7 @@ public final class RtFrameRenderer {
             prevCamZ = camera.pos.z;
             havePrevCamera = true;
         }
-        prevViewProj.get(RtStatsLayout.PREV_VIEW_PROJ, MemoryUtil.memByteBuffer(hdr, STATS_STRIDE));
+        prevViewProj.get(RtStatsLayout.PREV_VIEW_PROJ, MemoryUtil.memByteBuffer(hdr, RtFrameStatsTracker.STRIDE));
         float dx = (float) (camera.pos.x - prevCamX);
         float dy = (float) (camera.pos.y - prevCamY);
         float dz = (float) (camera.pos.z - prevCamZ);
@@ -1239,7 +1126,7 @@ public final class RtFrameRenderer {
         prevCamY = camera.pos.y;
         prevCamZ = camera.pos.z;
         lastParams = params;
-        RtSkyDisplayLayout.write(MemoryUtil.memByteBuffer(hdr, STATS_STRIDE), params.skyColor,
+        RtSkyDisplayLayout.write(MemoryUtil.memByteBuffer(hdr, RtFrameStatsTracker.STRIDE), params.skyColor,
             params.key.day, params.tonemap, skyTextures.wordCount());
         renderLog.logSkyDisplay(pass, skyTextures);
         lastPassMode = pass.mode();
@@ -1253,11 +1140,11 @@ public final class RtFrameRenderer {
         if (gpuTimer != null) {
             gpuTimer.stamp(cmd, SPAN_RAYS, true);
         }
-        statsReadbacks.written(statsLease, new StatsMetadata(
+        RtFrameStatsTracker.readbacks().written(statsLease, new RtFrameStatsTracker.StatsMetadata(
             (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.accumCount > 0,
-            (params.flags & RtFrameParams.FLAG_TRANSPARENCY_STATS) != 0, params.key.day, dispatchCounter,
+            (params.flags & RtFrameParams.FLAG_TRANSPARENCY_STATS) != 0, params.key.day, RtFrameStatsTracker.dispatchCounter(),
             System.nanoTime(), w, h, params.frame));
-        dispatchCounter++;
+        RtFrameStatsTracker.advanceDispatch();
         VkBarriers.fullMemoryBarrier(cmd);
         if (probePrev != null && frameDepth() != null) {
             io.github.andrexarlay.vulkancompat.rt.denoise.StabilityProbe.record(cmd, world.memory(), frameDepth().image, w, h,
@@ -1875,10 +1762,7 @@ public final class RtFrameRenderer {
                 frameResources.close();
                 frameResources = null;
             }
-            if (statsBuf != null) {
-                w.memory().destroy(statsBuf);
-                statsBuf = null;
-            }
+            RtFrameStatsTracker.destroyStatsBuffer(w.memory());
             if (skyTextures != null) {
                 skyTextures.destroy();
                 skyTextures = null;
@@ -1892,18 +1776,14 @@ public final class RtFrameRenderer {
             return;
         }
         teardownPending = false;
-        lastStats = null;
+        RtFrameStatsTracker.clearLastStats();
         renderLog.resetAfterShutdown();
         rebuildPassNext = false;
         dropDlssRrDenoiserNext = false;
         lastPassMode = null;
         dropDenoiserNext = false;
-        statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
-        lastStatsSequence = -1;
+        RtFrameStatsTracker.resetAfterShutdown();
         lastTraceTelemetry = null;
-        lastStatsMetadata = null;
-        lastStatsTrustedPixels = 0L;
-        lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
 
     }
 }

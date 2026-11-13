@@ -37,7 +37,7 @@ final class RtRenderLog {
         double lastHistPct();
         double lastLeafPct();
         RtTraceTelemetry lastTraceTelemetry();
-        RtFrameRenderer.StatsMetadata lastStatsMetadata();
+        RtFrameStatsTracker.StatsMetadata lastStatsMetadata();
         long lastStatsTrustedPixels();
     }
 
@@ -132,7 +132,7 @@ final class RtRenderLog {
         double lastHistPct = context.lastHistPct();
         double lastLeafPct = context.lastLeafPct();
         RtTraceTelemetry lastTraceTelemetry = context.lastTraceTelemetry();
-        RtFrameRenderer.StatsMetadata lastStatsMetadata = context.lastStatsMetadata();
+        RtFrameStatsTracker.StatsMetadata lastStatsMetadata = context.lastStatsMetadata();
         long lastStatsTrustedPixels = context.lastStatsTrustedPixels();
         builtInWindow += s.builtThisFrame();
         buildMsInWindow += s.buildMs();
@@ -166,7 +166,7 @@ final class RtRenderLog {
             int userBounces = RtSettings.bounces();
             double budget = RtSettings.adaptiveBudgetMs();
             RtTraceTelemetry submitted = lastTraceTelemetry;
-            RtFrameRenderer.StatsMetadata metered = lastStatsMetadata;
+            RtFrameStatsTracker.StatsMetadata metered = lastStatsMetadata;
             LOGGER.info(String.format(Locale.ROOT,
                 "[VKB-RT] rt_pass ok frames=%d trace=%s output=%s trace_pixels=%d output_pixels=%d primary_samples=%d stats_trace=%s stats_sequence=%d stats_frame=%d stats_metered_pixels=%d stats_trusted_pixels=%d hit_pct=%s reject_pct=%s invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f record_wall_ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
                 passFrames, submitted == null ? "n/a" : submitted.traceExtent(), submitted == null ? "n/a" : submitted.outputExtent(),
