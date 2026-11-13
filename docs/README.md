@@ -1,6 +1,6 @@
 # Documentation index
 
-Current state is `main` = unreleased `0.2.0-alpha` (Slang renderer, native core). Start with the [project README](../README.md).
+Current state is `main` = unreleased `0.2.0-alpha` (Slang renderer, native core). Start with the [project README](https://github.com/bnfe12/bedray#readme).
 
 ## Use it
 [INSTALL](INSTALL.md) | [INSTALL_NATIVES_WITH_AI](INSTALL_NATIVES_WITH_AI.md) | [USER_GUIDE](USER_GUIDE.md) | [SETTINGS_REFERENCE](SETTINGS_REFERENCE.md) |
@@ -25,4 +25,4 @@ Current state is `main` = unreleased `0.2.0-alpha` (Slang renderer, native core)
 ## Contribute and release
 [BUILDING](BUILDING.md) | [TESTING](TESTING.md) | [BRANCH_LAYOUT](BRANCH_LAYOUT.md) | [DEVELOPMENT_BRANCHES](DEVELOPMENT_BRANCHES.md) | [RELEASE_CHECKLIST](RELEASE_CHECKLIST.md) |
 [ADDON_SETTINGS_API](ADDON_SETTINGS_API.md) |
-[../ROADMAP](../ROADMAP.md) | [../CHANGELOG](../CHANGELOG.md) | [../CONTRIBUTING](../CONTRIBUTING.md) | [../SECURITY](../SECURITY.md) | [../PRIVACY](../PRIVACY.md)
+[Roadmap](https://github.com/bnfe12/bedray/blob/main/ROADMAP.md) | [Changelog](https://github.com/bnfe12/bedray/blob/main/CHANGELOG.md) | [Contributing](https://github.com/bnfe12/bedray/blob/main/CONTRIBUTING.md) | [Security](https://github.com/bnfe12/bedray/blob/main/SECURITY.md) | [Privacy](https://github.com/bnfe12/bedray/blob/main/PRIVACY.md)

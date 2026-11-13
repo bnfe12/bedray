@@ -112,7 +112,7 @@ the build remains native-free. Verify the JAR contents and compare both DLL hash
 Set `SLANG_DIR` to the Slang SDK directory and run `gradlew fabricBedrayDistribution` or
 `gradlew neoforgeBedrayDistribution`.
 The distribution pairs the loader JAR and the matching `bedray_core.dll`, which exports the native GPU scene ABI.
-See [distribution paths and build options](../native/bedray_core/DISTRIBUTION.md).
+See [distribution paths and build options](https://github.com/bnfe12/bedray/blob/main/native/bedray_core/DISTRIBUTION.md).
 
 ### Continuous integration and compatibility checks
 

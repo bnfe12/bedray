@@ -24,7 +24,7 @@ as `bedray_compute`. The `-host-only.jar` artifact is intended for developers, n
 
 Copy the **matching `bedray_core.dll`** from the same build to `bedray/natives/` inside the instance's game folder.
 The renderer DLL contains the native GPU scene and is required for ray tracing and path tracing.
-See the [Windows distribution instructions](../native/bedray_core/DISTRIBUTION.md) to build this pair from source.
+See the [Windows distribution instructions](https://github.com/bnfe12/bedray/blob/main/native/bedray_core/DISTRIBUTION.md) to build this pair from source.
 
 Do not install the NeoForge and the Fabric jar together. Start the game once. If everything is right, **Options, Video Settings**
 shows the pages **Bedray ALPHA: Upscaling, Ray Tracing, Advanced and Experimental**, and the F3 screen has "Bedray" sections (overview, load, quality, libraries; two more can be enabled in the F3+F6 screen).

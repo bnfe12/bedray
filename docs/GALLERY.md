@@ -38,4 +38,4 @@ Water currently uses a thin-surface approximation. Refraction and volumetric dep
 
 ## Important alpha note
 
-The images come from a single test GPU and do not demonstrate cross-vendor compatibility, stable performance, or that every optional denoiser/upscaler/frame-generation feature was enabled. See the [roadmap](../ROADMAP.md) for acceptance gates before those features can be considered complete.
+The images come from a single test GPU. The [roadmap](https://github.com/bnfe12/bedray/blob/main/ROADMAP.md) lists the visual, compatibility and performance checks for each feature.

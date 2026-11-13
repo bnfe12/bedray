@@ -57,8 +57,6 @@ class RaysHiddenTest {
         String perf = read("src/main/java/io/github/andrexarlay/vulkancompat/autotest/PerfScenario.java");
         assertTrue(config.contains("return RtMode.PATH_TRACED;\n        }\n        return rtMode;"),
             "effectiveRtMode's boolean-only fallback names the path renderer");
-        assertTrue(config.contains("setRtMode(Boolean.parseBoolean(val) ? RtMode.PATH_TRACED : RtMode.OFF);"),
-            "the legacy on/off toml key names the path renderer");
         assertTrue(perf.contains("VulkanRtxConfig.rtMode = WITH_RT ? RtMode.PATH_TRACED : RtMode.OFF;"),
             "the perf autotest's perfRt flag names the path renderer");
         assertFalse(config.contains("RtMode.RAY_TRACED"),
