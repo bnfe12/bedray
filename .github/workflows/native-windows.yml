@@ -208,9 +208,11 @@ jobs:
           $env:BEDRAY_LAUNCHER_LIBRARIES = Join-Path $env:RUNNER_TEMP 'bedray-launcher-libraries'
           $env:SLANGC = (Resolve-Path -LiteralPath 'deps/slang/bin/slangc.exe').Path
           ./source/.github/scripts/loader-ci.ps1 -SourceRoot source -LauncherLibraries $env:BEDRAY_LAUNCHER_LIBRARIES
+          $coreLibrary = (Resolve-Path -LiteralPath 'evidence/build/bedray_core/Release/bedray_core.dll').Path
           Push-Location -LiteralPath source
           try {
-            & ./gradlew.bat --no-daemon --console=plain :core:test :common:test :common:runShimTests :fabric:combinedJar :neoforge:combinedJar
+            & ./gradlew.bat --no-daemon --console=plain "-PbedrayCoreLibrary=$coreLibrary" "-Dbedray.slangc=$env:SLANGC" `
+              :core:test :common:test :common:runShimTests :fabric:combinedJar :neoforge:combinedJar
             if ($LASTEXITCODE -ne 0) { throw "Gradle checks failed (exit $LASTEXITCODE)" }
           } finally {
             Pop-Location
