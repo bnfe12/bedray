@@ -17,17 +17,20 @@ Sodium add-on with a dedicated Bedray settings screen opened from Video Settings
 
 Bedray is **unofficial**. It is not affiliated with, endorsed by or sponsored by Mojang, Microsoft, NVIDIA, AMD or Intel.
 
-## Screenshots
+## Screenshots (legacy)
 
-![Volumetric light shafts through a forest canopy](docs/images/god-rays-forest.png)
+> **Legacy captures.** These images come from early `0.1.0-alpha.x` builds of the previous (GLSL) renderer and are kept only as
+> history. They do **not** show the current `main` renderer; they will be replaced by new captures made with a denoiser enabled.
 
-![Path tracing at sunset](docs/images/path-tracing-sunset.png)
+![Volumetric light shafts through a forest canopy (legacy)](docs/images/legacy/god-rays-forest.png)
 
-![Emissive blocks add warm local light](docs/images/path-tracing-sunset-lights.png)
+![Path tracing at sunset (legacy)](docs/images/legacy/path-tracing-sunset.png)
 
-![Experimental water surface at sunset](docs/images/path-tracing-water-sunset.png)
+![Emissive blocks add warm local light (legacy)](docs/images/legacy/path-tracing-sunset-lights.png)
 
-*Early alpha captures from one NVIDIA GeForce RTX 5060 Ti 8 GB system; they are not a quality or performance guarantee.* More images, modes and caveats: [docs/GALLERY.md](docs/GALLERY.md).
+![Experimental water surface at sunset (legacy)](docs/images/legacy/path-tracing-water-sunset.png)
+
+*Early alpha captures from one NVIDIA GeForce RTX 5060 Ti 8 GB system; they are not a quality or performance guarantee.* All legacy images: [docs/GALLERY.md](docs/GALLERY.md).
 
 ## What it does
 

@@ -46,4 +46,4 @@ Log evidence: the latest Testbed run reaches `world_ready`, but FG was off and F
 - [x] Release description: ALPHA warning, requirements, SHA-256 of both jars, known issues, link to `docs/INSTALL.md`,
       "tested only on RTX 5060 Ti", call for AMD / Intel testers
 - [x] Issue forms are present (Bug report, GPU test report); `.github/ISSUE_TEMPLATE/config.yml` points to `bnfe12/bedray`
-- [ ] Screenshots from `docs/images/` added to the README (list in the private notes)
+- [ ] Screenshots (new, non-legacy) from `docs/images/` added to the README (list in the private notes)
