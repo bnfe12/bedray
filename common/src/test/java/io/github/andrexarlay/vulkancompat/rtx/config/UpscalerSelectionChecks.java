@@ -23,23 +23,6 @@ public final class UpscalerSelectionChecks {
         statusAndFallback();
         configRoundTripAndRejection();
         earlyReadFromToml();
-        settingsFileMigration();
-    }
-
-    /** The old config/vulkan_rtx.toml is copied to config/bedray.toml once; an existing bedray.toml is never overwritten. */
-    private static void settingsFileMigration() throws Exception {
-        Path dir = Files.createTempDirectory("bedray_migrate");
-        Path legacy = dir.resolve(ConfigFiles.LEGACY_NAME);
-        Path current = dir.resolve(ConfigFiles.NAME);
-        Files.writeString(legacy, "active_backend = \"XESS\"\n", StandardCharsets.UTF_8);
-        check(!Files.exists(current), "no new settings file before migration");
-        ConfigFiles.resolve(current);
-        check(Files.isRegularFile(current), "legacy settings copied to bedray.toml");
-        check(Files.isRegularFile(legacy), "legacy settings file left in place");
-        check(Files.readString(current, StandardCharsets.UTF_8).contains("XESS"), "migrated content equals the old file");
-        Files.writeString(legacy, "active_backend = \"DLSS\"\n", StandardCharsets.UTF_8);
-        ConfigFiles.resolve(current);
-        check(Files.readString(current, StandardCharsets.UTF_8).contains("XESS"), "existing bedray.toml is not overwritten");
     }
 
     private static void check(boolean cond, String msg) {

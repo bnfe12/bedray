@@ -11,11 +11,10 @@ import java.util.Optional;
  * @param status     status; paths are present only when {@code status.usable()}
  * @param files      file name (as in the descriptor) to absolute path, only for usable libraries
  * @param versions   file name to PE file version {@code a.b.c.d}; a file without a version resource has no entry
- * @param legacy     true if any file came from the legacy {@code vulkan_rtx/natives} directory
  */
 @Experimental
 public record LibraryResolution(LibraryDescriptor descriptor, LibraryStatus status, Map<String, Path> files,
-                                Map<String, String> versions, boolean legacy) {
+                                Map<String, String> versions) {
     public LibraryResolution {
         files = status.usable() ? Map.copyOf(files) : Map.of();
         versions = status.usable() ? Map.copyOf(versions) : Map.of();

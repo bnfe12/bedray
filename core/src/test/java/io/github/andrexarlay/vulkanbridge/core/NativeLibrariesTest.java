@@ -91,7 +91,6 @@ class NativeLibrariesTest {
         LibraryResolution r = libs.resolve("xess");
         assertTrue(r.usable());
         assertEquals("2.1.0.5", r.versions().get("libxess.dll"));
-        assertFalse(r.legacy());
         assertEquals(1, events.size());
         assertEquals(LibraryEvent.Type.INSTALLED, events.get(0).type());
     }
@@ -245,25 +244,6 @@ class NativeLibrariesTest {
     }
 
     @Test
-    void legacyDirectoryIsReadButNeverWritten() throws IOException {
-        Path legacy = game.resolve("vulkan_rtx").resolve("natives");
-        Files.createDirectories(legacy);
-        Files.write(legacy.resolve("libxess.dll"), PeFixtures.x64("1.0.0.0"));
-        LibraryResolution r = libs.resolve("xess");
-        assertTrue(r.usable());
-        assertTrue(r.legacy());
-        assertEquals(legacy.resolve("libxess.dll").toAbsolutePath().normalize(), r.primary().orElseThrow());
-        // a fresh install goes to the new directory and wins
-        libs.install("xess", file("libxess.dll", PeFixtures.x64("9.0.0.0")));
-        LibraryResolution r2 = libs.resolve("xess");
-        assertFalse(r2.legacy());
-        assertEquals("9.0.0.0", r2.versions().get("libxess.dll"));
-        // remove deletes only the bridge copy
-        assertEquals(1, libs.remove("xess").size());
-        assertTrue(Files.exists(legacy.resolve("libxess.dll")));
-    }
-
-    @Test
     void verifiedOnlyWhenHashIsKnown() throws Exception {
         byte[] bytes = PeFixtures.x64("1.0.0.0");
         LibraryDescriptor d = new LibraryDescriptor("pinned", "Pinned", "T", List.of("pinned.dll"), List.of(), "T", "https://example.invalid",
@@ -371,7 +351,7 @@ class NativeLibrariesTest {
 
     @Test
     void rejectedResolutionCarriesNoPaths() {
-        LibraryResolution r = new LibraryResolution(LibraryDescriptor.XESS, LibraryStatus.rejected("x"), Map.of("libxess.dll", game), Map.of(), false);
+        LibraryResolution r = new LibraryResolution(LibraryDescriptor.XESS, LibraryStatus.rejected("x"), Map.of("libxess.dll", game), Map.of());
         assertTrue(r.files().isEmpty());
     }
 

@@ -22,7 +22,7 @@ import java.nio.file.Files;
  * <p>
  * Options persisted: {@code active_backend} (BILINEAR or XESS; STUB / unavailable values are rejected on load),
  * {@code xess_mode},
- * {@code quality_preset} (3D render target scale), {@code custom_scale} and {@code enable_hardware_ray_tracing}.
+ * {@code quality_preset} (3D render target scale), {@code custom_scale}.
  * {@code upscaler_type} is derived from the preset ({@link #syncUpscalerTypeWithPreset()}), not persisted.
  */
 public final class VulkanRtxConfig {
@@ -282,15 +282,13 @@ public final class VulkanRtxConfig {
     public static int resourcePackResolution = 16;
     /**
      * Master switch of the hardware world ray/path tracing renderer: true when the hardware renderer is selected and {@link #rtMode} is not OFF (kept as a field because
-     * WorldTargetManager and the PoC engine read it). Written by {@link #setRtMode}; legacy value of the old toml key
-     * {@code enable_hardware_ray_tracing}.
+     * WorldTargetManager and the PoC engine read it). Written by {@link #setRtMode}.
      */
     public static boolean enableHardwareRayTracing = false;
     /** Effective mode of this session (the {@code -Dvkrtx.rt.mode} override, else the persisted one). */
     public static RtMode rtMode = RtMode.OFF;
     /** The mode written to the toml file: a session override from {@code -Dvkrtx.rt.mode} is never persisted. */
     private static RtMode rtModePersisted = RtMode.OFF;
-    private static boolean rtModeSeenInFile = false;
 
     /**
      * Hidden switch for the not yet public "Ray Tracing (Fast)" mode ({@code rays}, plus the partial modes ao/direct): toml key
@@ -703,27 +701,16 @@ public final class VulkanRtxConfig {
                         LOGGER.warn("Unknown rt_mode '{}' (use off|rays|path), using off", val);
                         parsed = RtMode.OFF;
                     }
-                    rtModeSeenInFile = true;
                     setRtMode(parsed);
                 }
                 case "experimental_rays" -> experimentalRays = Boolean.parseBoolean(val);
                 case "ui_expert" -> uiExpert = Boolean.parseBoolean(val);
-                case "enable_hardware_ray_tracing" -> {
-                    // Legacy key of the single on/off toggle, only read by a file that has no rt_mode. It said "trace", not
-                    // "with which renderer", and path tracing is the fuller of the two profiles the Slang pass runs, so the
-                    // file gets the path profile rather than the ray-effects one it never named.
-                    if (!rtModeSeenInFile) {
-                        setRtMode(Boolean.parseBoolean(val) ? RtMode.PATH_TRACED : RtMode.OFF);
-                    }
-                }
                 // RT mode settings; false = a key of an older config file that no longer exists (ignored on purpose)
                 default -> {
                     if (key.startsWith("atm_")) {
                         // light and atmosphere options (light shafts, bloom, glare, haze); a -Dvkrtx.rt.<name> of the session wins
                         String prop = "vkrtx.rt." + key.substring(4).replace('_', '.');
-                        // the old default bloom strength (0.8) was far too visible: a file that still holds it takes the new default
-                        boolean oldBloomDefault = key.equals("atm_bloom_strength") && Math.abs(Double.parseDouble(val) - 0.8) < 1.0e-6;
-                        if (System.getProperty(prop) == null && !oldBloomDefault) {
+                        if (System.getProperty(prop) == null) {
                             io.github.andrexarlay.vulkancompat.rt.world.RtAtmosphereSettings.set(key.substring(4), Double.parseDouble(val));
                         }
                     } else {
@@ -756,7 +743,6 @@ public final class VulkanRtxConfig {
     }
 
     public static void load() {
-        rtModeSeenInFile = false;
         RtSettings.presetSeen = false;
         RtSettings.pathPresetSeen = false;
         RtSettings.skipPresetValues = false;
@@ -873,8 +859,6 @@ public final class VulkanRtxConfig {
             writer.write("rt_mode = \"" + rtModePersisted.logName() + "\"\n");
             writer.write("# Hidden in this release: Ray Tracing (Fast) is in development. true unlocks rt_mode = \"rays\" and its settings.\n");
             writer.write("experimental_rays = " + experimentalRays + "\n");
-            writer.write("# Legacy key kept for older versions (ignored when rt_mode is present)\n");
-            writer.write("enable_hardware_ray_tracing = " + rtModePersisted.isActive() + "\n");
             writer.write("# Light and atmosphere: light shafts (atm_godrays 0=off 1=post 2=inline), bloom, sun glare, haze\n");
             for (var o : io.github.andrexarlay.vulkancompat.rt.world.RtAtmosphereSettings.options()) {
                 writer.write("atm_" + o.key() + " = " + io.github.andrexarlay.vulkancompat.rt.world.RtAtmosphereSettings.get(o.key()) + "\n");

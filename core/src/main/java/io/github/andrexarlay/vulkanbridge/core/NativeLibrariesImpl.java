@@ -49,8 +49,6 @@ public final class NativeLibrariesImpl implements NativeLibraries {
     /** System property that overrides the folder name under the game directory (default {@value #DEFAULT_ROOT}). */
     public static final String ROOT_PROPERTY = "bedray.nativesRoot";
     public static final String DEFAULT_ROOT = "bedray";
-    /** Folder names of earlier test builds, searched read-only after the primary folder so that existing instances keep working. */
-    public static final List<String> LEGACY_ROOTS = List.of("vulkan_rtx", "vulkan_" + "bridge"); // second name: the separate library of pre-0.1 test builds
     public static final String NATIVES_LEAF = "natives";
     /** A DLL smaller than this cannot be a real vendor library (rejects empty and placeholder files). */
     static final long MIN_FILE_BYTES = 1024;
@@ -91,32 +89,6 @@ public final class NativeLibrariesImpl implements NativeLibraries {
             return DEFAULT_ROOT;
         }
         return v.strip();
-    }
-
-    /** Read-only fallback folders, in search order (never the primary folder itself). */
-    List<Path> legacyDirectories() {
-        Path base = gameDir.get().toAbsolutePath().normalize();
-        Path primary = nativesDirectory();
-        List<Path> out = new ArrayList<>();
-        for (String r : LEGACY_ROOTS) {
-            Path p = base.resolve(r).resolve(NATIVES_LEAF);
-            if (!p.equals(primary)) {
-                out.add(p);
-            }
-        }
-        return out;
-    }
-
-    /** The legacy folders as a status message may name them (no absolute home/profile prefix in a shared log). */
-    private static String shownDirs(List<Path> dirs) {
-        StringBuilder sb = new StringBuilder();
-        for (Path d : dirs) {
-            if (!sb.isEmpty()) {
-                sb.append(", ");
-            }
-            sb.append(LogPaths.show(d));
-        }
-        return sb.toString();
     }
 
     // ---- registry
@@ -168,30 +140,16 @@ public final class NativeLibrariesImpl implements NativeLibraries {
     public LibraryResolution resolve(String id) {
         LibraryDescriptor d = descriptor(id);
         Path primary = nativesDirectory();
-        List<Path> legacyDirs = legacyDirectories();
-        Path legacyHit = null;
 
         Map<String, Path> found = new LinkedHashMap<>();
         Map<String, String> versions = new LinkedHashMap<>();
         List<String> missing = new ArrayList<>();
         List<String> notes = new ArrayList<>();
-        boolean legacyUsed = false;
         boolean allKnownHashes = true;
 
         for (String file : d.allFiles()) {
             boolean required = d.requiredFiles().contains(file);
             Path p = locate(primary, file);
-            boolean fromLegacy = false;
-            if (p == null) {
-                for (Path dir : legacyDirs) {
-                    p = locate(dir, file);
-                    if (p != null) {
-                        fromLegacy = true;
-                        legacyHit = dir;
-                        break;
-                    }
-                }
-            }
             if (p == null) {
                 if (required) {
                     missing.add(file);
@@ -201,10 +159,9 @@ public final class NativeLibrariesImpl implements NativeLibraries {
             FileCheck check = checkFile(d, file, p);
             if (check.rejection != null) {
                 LibraryStatus st = LibraryStatus.rejected(file + " (" + LogPaths.show(p) + "): " + check.rejection);
-                return new LibraryResolution(d, st, Map.of(), Map.of(), false);
+                return new LibraryResolution(d, st, Map.of(), Map.of());
             }
             found.put(file, p);
-            legacyUsed |= fromLegacy;
             if (check.version != null) {
                 versions.put(file, check.version);
             }
@@ -215,13 +172,12 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                     + ", signature " + (check.signed ? "present (not validated)" : "absent"));
         }
         if (!missing.isEmpty()) {
-            LibraryStatus st = LibraryStatus.missing("missing " + missing + " in " + LogPaths.show(primary)
-                + " (also searched " + shownDirs(legacyDirs) + ")");
-            return new LibraryResolution(d, st, Map.of(), Map.of(), false);
+            LibraryStatus st = LibraryStatus.missing("missing " + missing + " in " + LogPaths.show(primary));
+            return new LibraryResolution(d, st, Map.of(), Map.of());
         }
-        String detail = String.join("; ", notes) + (legacyUsed ? "; loaded from the legacy directory " + LogPaths.show(legacyHit) : "");
+        String detail = String.join("; ", notes);
         LibraryStatus st = allKnownHashes ? LibraryStatus.verified(detail) : LibraryStatus.presentUnverified(detail);
-        return new LibraryResolution(d, st, found, versions, legacyUsed);
+        return new LibraryResolution(d, st, found, versions);
     }
 
     private record FileCheck(String rejection, String sha256, String version, boolean signed) {
