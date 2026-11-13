@@ -15,15 +15,22 @@ applicable notices. Publication of a public release is a separate step governed 
 | `bedray_core.dll` | Bedray source and project licence | Distribute with its matching JAR and corresponding source; it is not a vendor runtime. |
 | `amd_fidelityfx_vk.dll` | FidelityFX SDK 1.1.4, [MIT licence](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/v1.1.4/LICENSE.txt) | May be bundled by the existing opt-in build, with the pinned binary and licence. Preserve attribution. |
 | `libxess.dll` | XeSS SDK 3.0.2, [Intel Simplified Software License](https://github.com/intel/xess/blob/v3.0.2/LICENSE.txt) | May be bundled unmodified under the existing build policy. Include its licence and third-party notices; do not imply Intel endorsement. |
+| New AMD FSR 2.4 loader/effect DLLs | [Runtime licence](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/v2.4.0/Kits/FidelityFX/docs/license.md) | The reviewed terms permit binary distribution with notices and prohibit reverse engineering. This differs from the older 1.1.4 component's MIT licence. Bedray integration and exact-artifact review are still pending. |
+| `libxess_fg.dll`, `libxell.dll`, `libxess_dx11.dll` | XeSS SDK 3.0.2, [Intel licence](https://github.com/intel/xess/blob/v3.0.2/LICENSE.txt) | The unmodified-binary terms also require notices. These files are not approved by the existing single-file `libxess.dll` hash pin, and their presence does not establish a Vulkan FG integration. |
 | DLSS / NGX runtimes | DLSS 310.9.16, revision `9981c6350dc58c0ce21f024fd65e31e851c31689`, [RTX SDK terms](https://github.com/NVIDIA/DLSS/blob/9981c6350dc58c0ce21f024fd65e31e851c31689/LICENSE.txt) | Official user download and local import. Bedray has not approved redistribution in player packages. |
 | NRD runtime | NRD 4.18.0, revision `8f12a22fc90e6a3c7f5da4c9c3103633c842963a`, [RTX SDK terms](https://github.com/NVIDIA-RTX/NRD/blob/8f12a22fc90e6a3c7f5da4c9c3103633c842963a/LICENSE.txt) | Local build/import. The same per-release distribution review is needed before bundling. |
 | Streamline | 2.14.1, revision `2122257e0fce486f91b385aa63b9a09b0a34b363`, [core licence](https://github.com/NVIDIA-RTX/Streamline/blob/2122257e0fce486f91b385aa63b9a09b0a34b363/license.txt) | Core code is MIT, with separate terms for some components. Review the exact runtime set, including its [NGX licence](https://github.com/NVIDIA-RTX/Streamline/blob/2122257e0fce486f91b385aa63b9a09b0a34b363/external/ngx-sdk/license.txt) and [third-party notices](https://github.com/NVIDIA-RTX/Streamline/blob/2122257e0fce486f91b385aa63b9a09b0a34b363/3rd-party-licenses.md). The whole SDK archive is not treated as one MIT component. |
-| Bedray SDK wrappers | `native/` and the licences of linked SDK material | Not included in current player packages. Review the build inputs and resulting object code before distributing a wrapper. |
+| Bedray SDK wrappers | `native/` and the licences of linked SDK material | Ordinary source-build JARs omit them; the opt-in single-JAR tool can embed a matching local set. Review the build inputs and resulting object code before public redistribution. |
+| NRC and its CUDA dependencies | [NRC licence](https://github.com/NVIDIA-RTX/NRC/blob/7de30e4eb2a1a27118eb9a6acf5f715d757240c0/License.md) and [CUDA terms](https://docs.nvidia.com/cuda/eula/index.html) | Not integrated or approved for bundling in Bedray. Review both the NRC component and the exact CUDA/compilation dependencies; one licence check is not sufficient for the whole set. |
 | Partner or restricted SDK files | The agreement accompanying the exact SDK | Local setup only unless that agreement expressly permits the intended distribution. Public download availability does not grant rights to a different SDK. |
 
 The AMD and Intel bundle is controlled by [`gradle/loader-module.gradle`](https://github.com/bnfe12/bedray/blob/main/gradle/loader-module.gradle).
 It checks SHA-256 for both DLLs and their licence files, and also checks Intel's third-party notice file.
 Default developer builds omit the binaries. No vendor binaries are added by this change.
+
+The newer local single-JAR tool pins Streamline **2.14.16** as an input, while the manual review above records **2.14.1**.
+Its notices and artifact manifest must be checked for that exact package before a public release.
+The [DLL reference](DLL_REFERENCE.md) covers current files, newer SDK files, dependencies and existing catalogue placeholders.
 
 ## What the NVIDIA review must establish
 

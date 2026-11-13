@@ -818,7 +818,7 @@ public final class VulkanRtxConfig {
             writer.write("dlss_mode = \"" + dlssMode.name() + "\"\n");
             writer.write("# FSR mode: NATIVE_AA, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE (the render size is asked from the FidelityFX DLL)\n");
             writer.write("fsr_mode = \"" + fsrMode.name() + "\"\n");
-            writer.write("# FSR version: AUTO (newest provider in the DLL), FSR_3_1 or FSR_2. FSR 4 has no Vulkan build from AMD.\n");
+            writer.write("# FSR version: AUTO (newest provider in the loaded 1.1.4 DLL), FSR_3_1 or FSR_2. AMD FSR SDK 2.4 adds Vulkan FSR 4; Bedray has not integrated that API.\n");
             writer.write("fsr_version = \"" + fsrVersion.name() + "\"\n");
             writer.write("# FSR RCAS sharpening 0.0 (off) .. 1.0\n");
             writer.write("fsr_sharpness = " + fsrSharpness + "\n");

@@ -75,7 +75,7 @@ AMD Radeon and Intel Arc test reports are welcome.
 | I want to… | Read |
 | :--- | :--- |
 | Install and set up Bedray | [Installation](docs/INSTALL.md) · [User guide](docs/USER_GUIDE.md) |
-| Adjust the image | [Settings](docs/SETTINGS_REFERENCE.md) · [Upscalers](docs/UPSCALERS.md) |
+| Adjust the image | [GPU recommendations](docs/GPU_GUIDE.md) · [Settings](docs/SETTINGS_REFERENCE.md) · [Technologies](docs/TECHNOLOGIES.md) |
 | Fix a problem | [Troubleshooting](docs/TROUBLESHOOTING.md) · [Known issues](docs/KNOWN_ISSUES.md) · [FAQ](docs/FAQ.md) |
 | Follow development | [Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md) · [Feature status](docs/FEATURE_MATRIX.md) |
 | Explore experimental features | [DLSS 5 setup and validation limits](docs/experiments/dlss5.md) |

@@ -29,6 +29,9 @@ gradle/**
 docs/INSTALL.md
 docs/RUNTIME_LIBRARIES.md
 docs/NATIVES_LICENSES.md
+docs/DLL_REFERENCE.md
+docs/TECHNOLOGIES.md
+docs/GPU_GUIDE.md
 docs/index.html
 docs/site.css
 docs/_config.yml

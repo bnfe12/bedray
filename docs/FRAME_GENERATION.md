@@ -1,6 +1,10 @@
 # Frame generation and Reflex
 
-> **Status: BETA, tested only on an NVIDIA GeForce RTX 5060 Ti (8 GB).** The developer reports 2x / 3x / 4x frame generation and
+For Intel XeSS Frame Generation / XeLL, newer AMD FSR frame generation and their current API limits, see
+[technology support](TECHNOLOGIES.md) and [GPU recommendations](GPU_GUIDE.md). The [DLL reference](DLL_REFERENCE.md)
+lists the files individually; downloading them does not add an unimplemented frame-generation path.
+
+> **Earlier developer report, on one NVIDIA GeForce RTX 5060 Ti (8 GB).** The developer reported 2x / 3x / 4x frame generation and
 > Reflex working on that card (the status line shows "Active" only when the presented frame rate really is the multiplier times the
 > rendered one for 30 consecutive frames). The repository does not contain a recorded benchmark, and no other GPU has been tried.
 > Please report your results ([TESTING.md](TESTING.md)).
@@ -59,23 +63,17 @@ Not tested on any GPU other than the developer's NVIDIA card.
 
 ## AMD FSR 3 frame generation
 
-> **Status: BETA. Tested only on an NVIDIA GeForce RTX 5060 Ti (forced with `framegen_provider = "AMD"`). Not tested on AMD or Intel
-> hardware. AMD and Intel testers wanted, please report ([TESTING.md](TESTING.md)).**
+Bedray contains AMD frame-generation source and configuration paths. The new renderer/presentation integration has no accepted
+live frame-generation result recorded in this guide. Earlier BETA descriptions do not establish that this path works in your build.
 
-FSR 3 frame generation (FidelityFX SDK v1.1.4, ffx-api) runs on compute shaders and works on any Vulkan GPU in principle. It produces one
-generated frame per rendered frame (**2x only**) and does not use Reflex (that is NVIDIA only).
+The current FSR upscaler uses FidelityFX SDK 1.1.4. Its DLL being installed does not prove that frame generation is available:
+the required SDK entrypoints, presentation integration and runtime checks must also succeed. The newer AMD FSR SDK 2.4 has a separate
+loader/effect API with Vulkan frame generation; that path still requires Bedray integration.
 
-* **Method** (Video Settings, Bedray, Frame Generation group): Auto / NVIDIA DLSS-G / AMD FSR 3. Auto uses DLSS-G when the NVIDIA driver and the
-  Streamline files are present, otherwise FSR 3. Config key `framegen_provider` (`AUTO`, `NVIDIA`, `AMD`) in `config/bedray.toml`, JVM property
-  `-Dvkrtx.framegen.provider=amd`. Both methods replace the swapchain, so changing the method needs a **game restart**; once FSR 3 is the
-  method of the session, Off and 2x switch live. If frame generation is Off at startup, selecting it needs a restart too.
-* **Files**: only `amd_fidelityfx_vk.dll` of the official FidelityFX SDK v1.1.4 (the same file as FSR upscaling), in `bedray/natives/fsr/`
-  (the old flat `bedray/natives/` and `vulkan_rtx/natives/` are still read). It is not included in the repository or the jar.
-* **Requirements**: a temporal upscaler selected (FSR, DLSS or XeSS), because frame generation needs depth and motion vectors; a GPU whose
-  graphics queue family has at least 3 queues (the mod asks the driver for two more queues at device creation: the interpolation swapchain
-  needs a present queue and an image acquire queue besides the game queue; NVIDIA reports 16, some AMD GPUs report 1 and then the status says
-  `no_spare_queue`).
-* **Status line** says Active only when the real swapchain presented about twice as many frames as were rendered (`getLastPresentCountFFXAPI`
-  vs. rendered frames over 30 frame windows). Otherwise: `Not generating`, `Inactive` with the reason, `Failed`, `Restart required`.
-* It switches off in menus and while loading; the UI is kept clean by passing the HUD-less picture to FSR 3.
-* How it works and the contract with the SDK: [framegen/FSR3_FINDINGS.md](framegen/FSR3_FINDINGS.md).
+See [technology support](TECHNOLOGIES.md), [the exact DLL reference](DLL_REFERENCE.md) and [feature evidence](FEATURE_MATRIX.md).
+
+## Intel XeSS Frame Generation and XeLL
+
+Intel provides XeSS-FG and XeLL in SDK 3.0.2 as `libxess_fg.dll` and `libxell.dll`. The reviewed public integration uses DirectX 12,
+and XeSS-FG requires XeLL. Bedray's Vulkan renderer does not implement that path. Its catalogue slots do not establish support.
+See [Intel's integration requirements](https://github.com/intel/xess/blob/v3.0.2/doc/xess_fg_developer_guide_english.md).

@@ -8,9 +8,8 @@ import java.util.Optional;
  * The FSR upscaler version the user wants. The ffx-api picks a provider per create call; {@code ffxOverrideVersion} with an
  * id from {@code ffxQueryDescGetVersions} forces one (ffx_api.h l.85-101, ffx_api.cpp GetVersionOverride). The Vulkan DLL of
  * FidelityFX SDK v1.1.4 contains two upscaler providers (ffx_provider.cpp l.43-53: FSR3Upscale first, then FSR2), whose
- * names are their version strings ("3.1.x", "2.x.y"). FSR 4 is not offered: on Vulkan the ffx-api has no driver-side
- * (external) providers (backends.cpp GetDevice returns nullptr for the VK backend, and GetExternalProviders only queries
- * the AMD D3D12 driver extension), and AMD's FSR 4 is published only as a DX12 upscaler DLL.
+ * names are their version strings ("3.1.x", "2.x.y"). This older Vulkan API does not offer FSR 4 providers.
+ * AMD FSR SDK 2.4 supplies Vulkan FSR 4 through a separate loader/effect API; that API is not integrated here.
  * <p>
  * {@link #AUTO}: no override, the API default (the newest internal provider, FSR 3.1.x for v1.1.4).
  */
