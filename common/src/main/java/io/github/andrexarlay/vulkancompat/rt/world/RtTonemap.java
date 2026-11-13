@@ -120,15 +120,15 @@ public final class RtTonemap {
     /**
      * Player-selectable tone curve (settings: {@code tonemapper}). Mode 0 is the peak-channel curve of {@link #apply};
      * the others are standard scene-linear -> display mappings. The RT display pass writes the result straight to the
-     * RGBA8 output with no separate gamma stage, so every mode returns a final display value 0..1: ACES, GT and PBR
-     * Neutral are filmic curves that already output display-referred colour, while AgX outputs display-linear and so
-     * carries its own sRGB EOTF here. Mirror of {@code tonemap_curve.slang} {@code tonemapColorMode}; keep them in sync.
+     * UNORM RGBA8 output with no separate encoding stage. ACES, GT and PBR Neutral produce display-linear Rec.709 and
+     * need one sRGB encoding. AgX first decodes its 2.2 reference display signal, then uses the same sRGB encoding.
+     * The custom peak curve already returns encoded colour. Mirror of {@code tonemap_curve.slang} {@code tonemapColorMode}.
      */
     public static float[] applyMode(float r, float g, float b, int mode) {
         return switch (mode) {
-            case 1 -> aces(r, g, b);
-            case 2 -> pbrNeutral(r, g, b);
-            case 3 -> granTurismo(r, g, b);
+            case 1 -> encodeSrgb(aces(r, g, b));
+            case 2 -> encodeSrgb(pbrNeutral(r, g, b));
+            case 3 -> encodeSrgb(granTurismo(r, g, b));
             case 4 -> agx(r, g, b);
             default -> apply(r, g, b);
         };
@@ -231,6 +231,10 @@ public final class RtTonemap {
         return c <= 0.0031308f ? c * 12.92f : 1.055f * (float) Math.pow(c, 1f / 2.4f) - 0.055f;
     }
 
+    private static float[] encodeSrgb(float[] c) {
+        return new float[] {srgbChannel(c[0]), srgbChannel(c[1]), srgbChannel(c[2])};
+    }
+
     private static float[] agx(float r, float g, float b) {
         float[] v = matMul(AGX_INSET, sanitize(r), sanitize(g), sanitize(b));
         float range = AGX_MAX_EV - AGX_MIN_EV;
@@ -240,7 +244,8 @@ public final class RtTonemap {
             v[i] = agxContrast((ev - AGX_MIN_EV) / range);
         }
         v = matMul(AGX_OUTSET, v[0], v[1], v[2]);
-        return new float[] {clamp01(srgbChannel(v[0])), clamp01(srgbChannel(v[1])), clamp01(srgbChannel(v[2]))};
+        for (int i = 0; i < 3; i++) v[i] = (float) Math.pow(clamp01(v[i]), 2.2);
+        return encodeSrgb(v);
     }
 
     private static float clamp01(float v) {
