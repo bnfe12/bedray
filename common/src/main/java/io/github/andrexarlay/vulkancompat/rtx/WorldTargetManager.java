@@ -88,23 +88,6 @@ public final class WorldTargetManager {
     /** XeSS output image (window size, RGBA8, STORAGE) that is copied into the full-size main target before the GUI. */
     private static TextureTarget xessOutput;
 
-    // Temporal camera & projection tracking
-    private static Matrix4f currProjMatrix;
-    private static Matrix4f prevProjMatrix;
-    private static Matrix4f currViewRotationMatrix;
-    private static Matrix4f prevViewRotationMatrix;
-    private static Vec3 currCameraPos;
-    private static Vec3 prevCameraPos;
-
-    /** A/B diagnostic: {@code -Dvkrtx.velocity.legacyRtDepth=true} reads the RT depth as hardware depth (pre-fix behaviour). */
-    private static final boolean RT_DEPTH_LEGACY = Boolean.getBoolean("vkrtx.velocity.legacyRtDepth");
-    private static final Matrix4f invViewProj = new Matrix4f();
-    private static final Matrix4f prevViewProj = new Matrix4f();
-
-    private static boolean resetHistory = true;
-    /** True only when {@link #computeMatrices()} accepted this frame's camera; history advances only then. */
-    private static boolean cameraMatricesValidThisFrame = false;
-    private static long lastDegenerateCameraLogNanos = 0L;
     private static boolean inWorldPhase = false;
     /**
      * The hand is drawn into the low-resolution world target without motion vectors and with a depth buffer of its own,
@@ -200,13 +183,8 @@ public final class WorldTargetManager {
 
     /** Copy of the last unjittered world projection (null before the first world frame). Read by FSR for near/far/fov. */
     public static Matrix4f currentProjection() {
-        return currProjMatrix == null ? null : new Matrix4f(currProjMatrix);
+        return WorldCameraHistory.currentProjection();
     }
-
-    private static final Matrix4f levelProjection = new Matrix4f();
-    private static final org.joml.Vector3f levelCameraOrigin = new org.joml.Vector3f();
-    private static boolean haveLevelProjection;
-    private static final boolean BOB_PROJECTION = !"off".equalsIgnoreCase(System.getProperty("vkrtx.rt.bobProjection", "on"));
 
     /**
      * Records the projection matrix the engine really uses for the world this frame (unjittered) and derives the
@@ -216,95 +194,62 @@ public final class WorldTargetManager {
      * {@code CameraRenderState.projectionMatrix}. Called for every Vulkan frame, also when no render-scale phase is active.
      */
     public static boolean noteLevelProjection(Matrix4f projMatrix, Matrix4f baseProjection, Matrix4f viewRotation) {
-        // renderLevel also passes the hand (hud3d) projection through ProjectionMatrixBuffer.getBuffer later in the frame
-        // (decompiled GameRenderer line 726): only the first call after beginLevelProjectionFrame() is the world's one
-        if (projMatrix != null && awaitingLevelProjection) {
-            awaitingLevelProjection = false;
-            levelProjection.set(projMatrix);
-            io.github.andrexarlay.vulkancompat.rt.world.CameraBobPose.originOffset(
-                projMatrix, baseProjection, viewRotation, levelCameraOrigin);
-            haveLevelProjection = true;
-            return true;
-        }
-        return false;
+        return WorldLevelProjection.note(projMatrix, baseProjection, viewRotation);
     }
 
     /** Arms {@link #noteLevelProjection}: called before {@code renderLevel} of every Vulkan frame. */
     public static void beginLevelProjectionFrame() {
-        haveLevelProjection = false;
-        levelCameraOrigin.zero();
-        awaitingLevelProjection = true;
+        WorldLevelProjection.beginFrame();
     }
-
-    private static boolean awaitingLevelProjection;
 
     /** True only after the world projection hook has run in the current renderLevel invocation. */
     public static boolean hasCurrentLevelProjection() {
-        return haveLevelProjection;
+        return WorldLevelProjection.hasCurrent();
     }
 
     /** The current frame's full, unjittered world projection including bobbing, or {@code fallback}. */
     public static Matrix4f levelProjectionOr(Matrix4f fallback) {
-        return BOB_PROJECTION && haveLevelProjection ? new Matrix4f(levelProjection) : fallback;
+        return WorldLevelProjection.projectionOr(fallback);
     }
 
     /** Exact raster projection, irrespective of the optional RT/compute bob approximation setting. */
     public static Matrix4f currentLevelProjection() {
-        return haveLevelProjection ? new Matrix4f(levelProjection) : null;
+        return WorldLevelProjection.currentProjection();
     }
 
     /** Effective origin of the exact raster camera, independent of hardware RT diagnostic settings. */
     public static org.joml.Vector3f currentLevelCameraOrigin() {
-        return haveLevelProjection ? new org.joml.Vector3f(levelCameraOrigin) : null;
+        return WorldLevelProjection.currentCameraOrigin();
     }
 
     /** Camera origin offset caused by the view-bob transform, in coordinates relative to the base camera. */
     public static org.joml.Vector3f levelCameraOriginOr(org.joml.Vector3f fallback) {
-        return BOB_PROJECTION && haveLevelProjection ? new org.joml.Vector3f(levelCameraOrigin)
-            : (fallback != null ? new org.joml.Vector3f(fallback) : new org.joml.Vector3f());
+        return WorldLevelProjection.cameraOriginOr(fallback);
     }
 
     public static boolean bobProjectionEnabled() {
-        return BOB_PROJECTION;
+        return WorldLevelProjection.bobEnabled();
     }
 
     /**
      * Updates current projection matrix (unjittered) from ProjectionMatrixBuffer.
      */
     public static void setCurrentProjectionMatrix(Matrix4f projMatrix) {
-        if (projMatrix != null) {
-            if (currProjMatrix == null) {
-                currProjMatrix = new Matrix4f(projMatrix);
-            } else {
-                currProjMatrix.set(projMatrix);
-            }
-        }
+        WorldCameraHistory.setCurrentProjectionMatrix(projMatrix);
     }
 
     /**
      * Updates current camera state (view rotation matrix and camera world position).
      */
     public static void setCameraState(Matrix4f viewRotationMatrix, Vec3 pos) {
-        if (viewRotationMatrix != null) {
-            if (currViewRotationMatrix == null) {
-                currViewRotationMatrix = new Matrix4f(viewRotationMatrix);
-            } else {
-                currViewRotationMatrix.set(viewRotationMatrix);
-            }
-        }
-        if (pos != null) {
-            if (prevCameraPos != null && pos.distanceToSqr(prevCameraPos) > 64.0 * 64.0) {
-                resetHistory = true;
-            }
-            currCameraPos = pos;
-        }
+        WorldCameraHistory.setCameraState(viewRotationMatrix, pos);
     }
 
     /**
      * Alias for {@link #setCameraState(Matrix4f, Vec3)}.
      */
     public static void setCameraView(Matrix4f viewRotationMatrix, Vec3 pos) {
-        setCameraState(viewRotationMatrix, pos);
+        WorldCameraHistory.setCameraView(viewRotationMatrix, pos);
     }
 
     /**
@@ -318,50 +263,12 @@ public final class WorldTargetManager {
      * @return false when this frame's camera cannot produce a finite inverse view-projection
      */
     public static boolean computeMatrices() {
-        cameraMatricesValidThisFrame = false;
-        if (currCameraPos != null && !isFinite(currCameraPos)) {
-            resetHistory = true;
-            logDegenerateCamera("camera_position=" + currCameraPos);
-            return false;
-        }
-        CameraMatrixGuard.Update update = CameraMatrixGuard.update(
-            currProjMatrix, currViewRotationMatrix, prevProjMatrix, prevViewRotationMatrix,
-            resetHistory, invViewProj, prevViewProj);
-        if (!update.usable()) {
-            resetHistory = true;
-            Matrix4f combined = currProjMatrix != null && currViewRotationMatrix != null
-                ? new Matrix4f(currProjMatrix).mul(currViewRotationMatrix) : null;
-            logDegenerateCamera(CameraMatrixGuard.describe(currProjMatrix, currViewRotationMatrix, combined));
-            return false;
-        }
-        if (update.resetHistory()) {
-            resetHistory = true;
-        }
-        cameraMatricesValidThisFrame = true;
-        return true;
-    }
-
-    private static void logDegenerateCamera(String detail) {
-        long now = System.nanoTime();
-        if (now - lastDegenerateCameraLogNanos < 1_000_000_000L) {
-            return;
-        }
-        lastDegenerateCameraLogNanos = now;
-        LOGGER.warn("[VKB-AUTOTEST] camera_matrices=degenerate {} (temporal frame skipped, history reset, upscaler kept)",
-            detail);
-    }
-
-    private static boolean isFinite(Vec3 value) {
-        return Double.isFinite(value.x) && Double.isFinite(value.y) && Double.isFinite(value.z);
+        return WorldCameraHistory.computeMatrices();
     }
 
     /** Camera translation since the last submitted temporal frame; zero whenever the history was reset. */
     private static Vec3 cameraDelta() {
-        if (currCameraPos == null || prevCameraPos == null || resetHistory
-            || !isFinite(currCameraPos) || !isFinite(prevCameraPos)) {
-            return Vec3.ZERO;
-        }
-        return currCameraPos.subtract(prevCameraPos);
+        return WorldCameraHistory.cameraDelta();
     }
 
     /**
@@ -400,7 +307,7 @@ public final class WorldTargetManager {
         ensureTargets(resolutionPlan.worldWidth(), resolutionPlan.worldHeight());
         if (!resolutionPlan.equals(lastLoggedResolutionPlan)) {
             lastLoggedResolutionPlan = resolutionPlan;
-            resetHistory = true;
+            WorldCameraHistory.markReset();
             LOGGER.info("[VKB-RESOLVE] rr_output={} trace={}x{} raster={}x{} output={}x{} framegen_off={}",
                 resolutionPlan.rayReconstructionOutput(), targetW, targetH, resolutionPlan.worldWidth(),
                 resolutionPlan.worldHeight(), winW, winH,
@@ -413,7 +320,7 @@ public final class WorldTargetManager {
             lastRtEnabled = rtNow;
             if (!first) {
                 // RT toggle only changes the execution policy; the target object is kept. Drop the RT binding and history.
-                resetHistory = true;
+                WorldCameraHistory.markReset();
                 logSkyIdentity("rt_toggle rt=" + rtNow);
             }
         }
@@ -435,7 +342,7 @@ public final class WorldTargetManager {
         if (CameraJitterManager.temporalConsumerActive()) {
             if (TemporalUpscaler.initEpoch() != lastXessEpoch) {
                 lastXessEpoch = TemporalUpscaler.initEpoch();
-                resetHistory = true;
+                WorldCameraHistory.markReset();
             }
             CameraJitterManager.advanceFrame(targetW, targetH,
                 CameraJitterManager.phaseCountFor(TemporalUpscaler.isActive() ? TemporalUpscaler.scale() : 1.0));
@@ -540,29 +447,7 @@ public final class WorldTargetManager {
     }
 
     private static void advanceFrameHistory() {
-        // A skipped or degenerate frame must not become the previous frame: the next submitted temporal frame has to
-        // reproject against the last camera that actually produced motion vectors.
-        if (cameraMatricesValidThisFrame) {
-            if (currProjMatrix != null) {
-                if (prevProjMatrix == null) {
-                    prevProjMatrix = new Matrix4f(currProjMatrix);
-                } else {
-                    prevProjMatrix.set(currProjMatrix);
-                }
-            }
-            if (currViewRotationMatrix != null) {
-                if (prevViewRotationMatrix == null) {
-                    prevViewRotationMatrix = new Matrix4f(currViewRotationMatrix);
-                } else {
-                    prevViewRotationMatrix.set(currViewRotationMatrix);
-                }
-            }
-            if (currCameraPos != null && isFinite(currCameraPos)) {
-                prevCameraPos = currCameraPos;
-            }
-            resetHistory = false;
-        }
-        cameraMatricesValidThisFrame = false;
+        WorldCameraHistory.advanceFrameHistory();
     }
 
     /**
@@ -586,7 +471,7 @@ public final class WorldTargetManager {
                 storageUsageFormat = null;
             }
             worldTargetHasStorage = true;
-            resetHistory = true;
+            WorldCameraHistory.markReset();
             logSkyIdentity("create");
         } else if (worldTarget.width != w || worldTarget.height != h) {
             drainBorrowedWorldTargetRecordings();
@@ -601,7 +486,7 @@ public final class WorldTargetManager {
                 || worldTarget.getColorTextureView() == null) {
                 throw new IllegalStateException("world target lost its colour view after in-place resize to " + w + "x" + h);
             }
-            resetHistory = true; // XeSS/DLSS history of the old resolution is invalid (FrameContext reset=true)
+            WorldCameraHistory.markReset(); // XeSS/DLSS history of the old resolution is invalid (FrameContext reset=true)
             logSkyIdentity("resize " + w + "x" + h);
         }
 
@@ -629,10 +514,10 @@ public final class WorldTargetManager {
         }
         if (depthCopy == null) {
             depthCopy = new TextureTarget("vkb_world_depth_copy", w, h, null, GpuFormat.D32_FLOAT);
-            resetHistory = true;
+            WorldCameraHistory.markReset();
         } else if (depthCopy.width != w || depthCopy.height != h) {
             depthCopy.resize(w, h);
-            resetHistory = true;
+            WorldCameraHistory.markReset();
         }
         if (motionVectorsTarget == null || motionVectorsTarget.width != w || motionVectorsTarget.height != h) {
             storageUsageFormat = GpuFormat.RG16_FLOAT;
@@ -645,7 +530,7 @@ public final class WorldTargetManager {
             } finally {
                 storageUsageFormat = null;
             }
-            resetHistory = true;
+            WorldCameraHistory.markReset();
         }
     }
 
@@ -693,7 +578,7 @@ public final class WorldTargetManager {
         } finally {
             storageUsageFormat = null;
         }
-        resetHistory = true;
+        WorldCameraHistory.markReset();
     }
 
     private static boolean xessSmokeLogged = false;
@@ -815,21 +700,21 @@ public final class WorldTargetManager {
         final int fmtDepth = com.mojang.renderpearl.backend.vulkan.VulkanConst.toVk(GpuFormat.D32_FLOAT);
         final int fmtMv = com.mojang.renderpearl.backend.vulkan.VulkanConst.toVk(GpuFormat.RG16_FLOAT);
 
-        final boolean reset = resetHistory;
+        final boolean reset = WorldCameraHistory.resetHistory();
         // A denoiser-resolved image is already back on the pixel grid: it must reach DLSS-SR with zero jitter.
         final float srJitterX = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterX());
         final float srJitterY = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterY());
         boolean ok = recordVelocityCommands(vulkanDevice, cmd -> {
             VkBarriers.fullMemoryBarrier(cmd);
             // Motion vectors must match the exact same hardware Reversed-Z depth buffer (rasterDepthView) passed to the upscaler
-            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
+            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, WorldCameraHistory.invViewProj(), WorldCameraHistory.prevViewProj(), camDelta);
             VkBarriers.fullMemoryBarrier(cmd);
             if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
                 && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
                 io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.record(cmd,
                     io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory(),
                     io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthImage(), mvImg, 0L, inW, inH,
-                    invViewProj, prevViewProj, camDelta, resetHistory,
+                    WorldCameraHistory.invViewProj(), WorldCameraHistory.prevViewProj(), camDelta, WorldCameraHistory.resetHistory(),
                     io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthConvention() == VelocityPipeline.DEPTH_RAY_DISTANCE);
                 VkBarriers.fullMemoryBarrier(cmd);
             }
@@ -911,14 +796,14 @@ public final class WorldTargetManager {
 
         recordVelocityCommands(vulkanDevice, cmd -> {
             VkBarriers.fullMemoryBarrier(cmd);
-            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
+            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, WorldCameraHistory.invViewProj(), WorldCameraHistory.prevViewProj(), camDelta);
             VkBarriers.fullMemoryBarrier(cmd);
             if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
                 && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
                 io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.record(cmd,
                     io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory(),
                     io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthImage(), mvImg, 0L, inW, inH,
-                    invViewProj, prevViewProj, camDelta, resetHistory,
+                    WorldCameraHistory.invViewProj(), WorldCameraHistory.prevViewProj(), camDelta, WorldCameraHistory.resetHistory(),
                     io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthConvention() == VelocityPipeline.DEPTH_RAY_DISTANCE);
                 VkBarriers.fullMemoryBarrier(cmd);
             }
@@ -1093,7 +978,7 @@ public final class WorldTargetManager {
             savedMainRenderTarget = null;
             savedHud3DTarget = null;
             CameraJitterManager.reset();
-            resetHistory = true;
+            WorldCameraHistory.markReset();
         }
 
         // The published world target is NOT destroyed when scaling/RT/upscaler turns off: SkyRenderer and the frame graph
@@ -1201,21 +1086,8 @@ public final class WorldTargetManager {
         lastRtEnabled = null;
         lastLoggedSkyTargetId = -1;
         CameraJitterManager.reset();
-        haveLevelProjection = false;
-        awaitingLevelProjection = false;
-        levelProjection.identity();
-        levelCameraOrigin.zero();
-        resetHistory = true;
-        cameraMatricesValidThisFrame = false;
-        lastDegenerateCameraLogNanos = 0L;
-        invViewProj.identity();
-        prevViewProj.identity();
-        currProjMatrix = null;
-        prevProjMatrix = null;
-        currViewRotationMatrix = null;
-        prevViewRotationMatrix = null;
-        currCameraPos = null;
-        prevCameraPos = null;
+        WorldLevelProjection.reset();
+        WorldCameraHistory.reset();
         lastLogW = -1;
         lastLogH = -1;
         lastLogWinW = -1;
@@ -1348,46 +1220,46 @@ public final class WorldTargetManager {
     }
 
     public static Matrix4f getCurrProjMatrix() {
-        return currProjMatrix;
+        return WorldCameraHistory.currProjMatrix();
     }
 
     public static Matrix4f getPrevProjMatrix() {
-        return prevProjMatrix;
+        return WorldCameraHistory.prevProjMatrix();
     }
 
     public static Matrix4f getCurrViewRotationMatrix() {
-        return currViewRotationMatrix;
+        return WorldCameraHistory.currViewRotationMatrix();
     }
 
     public static Matrix4f getPrevViewRotationMatrix() {
-        return prevViewRotationMatrix;
+        return WorldCameraHistory.prevViewRotationMatrix();
     }
 
     public static Vec3 getCurrCameraPos() {
-        return currCameraPos;
+        return WorldCameraHistory.currCameraPos();
     }
 
     public static Vec3 getPrevCameraPos() {
-        return prevCameraPos;
+        return WorldCameraHistory.prevCameraPos();
     }
 
     public static Matrix4f getInvViewProj() {
-        return invViewProj;
+        return WorldCameraHistory.invViewProj();
     }
 
     public static Matrix4f getPrevViewProj() {
-        return prevViewProj;
+        return WorldCameraHistory.prevViewProj();
     }
 
     public static boolean isResetHistory() {
-        return resetHistory;
+        return WorldCameraHistory.resetHistory();
     }
 
     public static void setResetHistory(boolean reset) {
-        resetHistory = reset;
+        WorldCameraHistory.setResetHistory(reset);
     }
 
     public static void requestResetHistory() {
-        resetHistory = true;
+        WorldCameraHistory.markReset();
     }
 }
