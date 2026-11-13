@@ -17,7 +17,7 @@ public final class SlangTracePrograms {
 
     public static Optional<SlangProgram> select(SlangRuntime runtime, String base) {
         boolean ser = Boolean.getBoolean(RtRayPipelineDeviceRequirements.SER_PROPERTY);
-        boolean raygen = Boolean.getBoolean(RtRayPipelineDeviceRequirements.RAYGEN_PROPERTY);
+        boolean raygen = RtRayPipelineDeviceRequirements.raygenRequested();
         boolean reorder = ser && runtime.supportsInvocationReordering();
         int enabled = runtime.capabilities().flags();
         for (String name : candidates(base, enabled, raygen, ser, reorder)) {
@@ -25,8 +25,8 @@ public final class SlangTracePrograms {
             try {
                 Optional<SlangProgram> program = runtime.program(name);
                 if (program.isPresent()) {
-                    LOGGER.info("[VKB-RAYGEN] pass={} stage={} ser_requested={} reordering_hint={} enabled=0x{}",
-                        name, program.get().manifest().stage(), ser, reorder ? "reorder" : "unavailable",
+                    LOGGER.info("[VKB-RAYGEN] pass={} stage={} raygen_requested={} ser_requested={} reordering_hint={} enabled=0x{}",
+                        name, program.get().manifest().stage(), raygen, ser, reorder ? "reorder" : "unavailable",
                         Integer.toHexString(enabled));
                     return program;
                 }

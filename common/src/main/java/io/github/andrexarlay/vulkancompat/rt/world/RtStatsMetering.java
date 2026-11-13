@@ -7,6 +7,7 @@ package io.github.andrexarlay.vulkancompat.rt.world;
  * {@code PATH_TRACE_FLAG_INVALID_SAMPLE} the frame otherwise never reports.
  */
 final class RtStatsMetering {
+    static final int TILE_SIZE = 4;
     /** One tile in this many is metered; the shader's own rate, pinned against its source by the test. */
     static final int TILES_PER_SAMPLE = 16;
 
@@ -18,19 +19,23 @@ final class RtStatsMetering {
         if (width <= 0 || height <= 0) {
             return 0L;
         }
-        long tilesPerRow = (width + 3L) >> 2;
-        long tilesPerColumn = (height + 3L) >> 2;
+        long tilesPerRow = tiles(width);
+        long tilesPerColumn = tiles(height);
         // The shader adds an unsigned word; 2^32 is divisible by 16, so the signed rotation lands on the same tiles.
         long rotation = Integer.toUnsignedLong(frameIndex);
         long metered = 0L;
         for (long ty = 0; ty < tilesPerColumn; ty++) {
-            long rowPixels = Math.min(4L, height - ty * 4L);
+            long rowPixels = Math.min(TILE_SIZE, height - ty * TILE_SIZE);
             long first = Math.floorMod(-(ty * tilesPerRow + rotation), TILES_PER_SAMPLE);
             for (long tx = first; tx < tilesPerRow; tx += TILES_PER_SAMPLE) {
-                metered += rowPixels * Math.min(4L, width - tx * 4L);
+                metered += rowPixels * Math.min(TILE_SIZE, width - tx * TILE_SIZE);
             }
         }
         return metered;
+    }
+
+    static int tiles(int extent) {
+        return 1 + (extent - 1) / TILE_SIZE;
     }
 
     /** The F3 split of a frame, each share in percent of the metered pixels. */

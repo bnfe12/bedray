@@ -22,8 +22,6 @@ public final class RtFrameParams {
     public static final int FLAG_GI = 1 << 9;
     /** Generated normal maps (sprites without LabPBR _n), strength in the frame slot. */
     public static final int FLAG_AUTO_NORMALS = 1 << 10;
-    /** DLSS-RR: feed flat voxel geometric normals (ng) instead of perturbed shading normals (ns). */
-    public static final int FLAG_GEOMETRIC_NORMALS = 1 << 11;
     /** Volumetric fog and atmospheric haze. */
     public static final int FLAG_VOLUMETRIC_FOG = 1 << 12;
     /** Water style: 1 = Realistic (wave normals, caustics, refraction), 0 = Vanilla (classic clear). */

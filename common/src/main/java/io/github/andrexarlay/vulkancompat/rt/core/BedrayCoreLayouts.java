@@ -107,6 +107,7 @@ public final class BedrayCoreLayouts {
     public static final int PATH_TRACE_FEATURE_NATIVE_PT = 1 << 7;
     public static final int PATH_TRACE_FEATURE_STATS_SLOT = 1 << 8;
     public static final int PATH_TRACE_FEATURE_NATIVE_SCENE_ONLY = 1 << 9;
+    public static final int PATH_TRACE_FEATURE_COMPACT_RR_PACK = 1 << 10;
 
     /** {@code BEDRAY_PATH_DISPLAY_*} bits; the pass adds the ones it derives itself. */
     public static final int PATH_DISPLAY_ACCUMULATE = 1 << 0;
@@ -523,6 +524,8 @@ public final class BedrayCoreLayouts {
     public static final long PTP_ENTITY_STATE = PT_PATH.byteOffset(groupElement("entity_state"));
 
     public static final long PTD_ABI_VERSION = PT_DESC.byteOffset(groupElement("abi_version"));
+    public static final long PTD_FLAGS = PT_DESC.byteOffset(groupElement("flags"));
+    public static final int PATH_TRACE_CONFIG_TILE_STATS = 1;
     private static final long PTD_RETIRED_TRACE_SLOT = PT_DESC.byteOffset(groupElement("retired_trace_slot"));
     public static final long PTD_PROGRAM_SPATIAL = PT_DESC.byteOffset(groupElement("program_spatial"));
     public static final long PTD_PROGRAM_DISPLAY = PT_DESC.byteOffset(groupElement("program_display"));

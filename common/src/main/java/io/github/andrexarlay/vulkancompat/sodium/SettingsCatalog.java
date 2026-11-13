@@ -363,10 +363,6 @@ public final class SettingsCatalog {
             "Sunlight focused by the water surface into moving bright patterns on the ground under water.",
             "", "Path Tracing only.", Scene.WATER, 0.5f, 0.75f, "path_caustics", List.of(
                 onOff(false, () -> RtSettings.caustics = false), onOff(true, () -> RtSettings.caustics = true)), null);
-        putNoImage("dlss_rr_geometric_normals", Tier.ADVANCED, "Sharp Block Edges (Ray Reconstruction)",
-            "Gives DLSS Ray Reconstruction the flat block-face directions, which keeps block edges crisp. Off feeds smoothed directions.",
-            "", "Only with Path Tracing and DLSS Ray Reconstruction.",
-            "Needs the DLSS Ray Reconstruction library; it is not available on every machine, so no screenshot is shipped.");
         putNoImage("dlss_rr_preset", Tier.ADVANCED, "Ray Reconstruction Preset",
             "Selects the DLSS Ray Reconstruction model: Default leaves NVIDIA's choice untouched; D and E are transformer models (E adds depth-of-field guidance); F is the RR2 model. Additive and opt-in until measured on this GPU.",
             "", "Only with Path Tracing and DLSS Ray Reconstruction.",

@@ -704,10 +704,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         pt.addOption(boolOpt(builder, "path_caustics", true, v -> RtSettings.caustics = v, () -> RtSettings.caustics,
             pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
         Identifier denId = id("path_denoiser");
-        pt.addOption(boolOpt(builder, "dlss_rr_geometric_normals", true, v -> RtSettings.dlssRrGeometricNormals = v,
-            () -> RtSettings.dlssRrGeometricNormals,
-            s -> anyRt.apply(s) && s.readEnumOption(denId, RtSettings.PathDenoiser.class) == RtSettings.PathDenoiser.DLSS_RR,
-            rtDependencies(modeId, denId), Mark.NONE, OptionImpact.LOW, true, st));
         // Additive DLSS-RR render preset hint (D/E/F). DEFAULT leaves the NGX parameter untouched; opt-in until measured.
         EnumOptionBuilder<DlssRrParams.Preset> rrPreset = builder.createEnumOption(id("dlss_rr_preset"), DlssRrParams.Preset.class);
         rrPreset.setName(nameOf("dlss_rr_preset")).setTooltip(v -> tipOf("dlss_rr_preset")).setDefaultValue(DlssRrParams.Preset.DEFAULT)
@@ -1150,7 +1146,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         RtSettings.fogInScattering = 1.0f;
         RtSettings.rtFogInScattering = 100;
         RtSettings.fogDistanceScale = 1.0f;
-        RtSettings.dlssRrGeometricNormals = true;
         RtConfig.setDebugView("");
         for (RtAtmosphereSettings.Option o : RtAtmosphereSettings.options()) {
             RtAtmosphereSettings.set(o.key(), o.def());

@@ -41,9 +41,10 @@ public final class NativesManagerScreen extends Screen {
         final boolean invalid;
         final boolean upcoming;
         final boolean upcomingPresent;
+        final boolean partnerSdk;
 
         LibInfo(String name, String fileName, String desc, boolean installed, boolean bundled, boolean invalid,
-                boolean upcoming, boolean upcomingPresent) {
+                boolean upcoming, boolean upcomingPresent, boolean partnerSdk) {
             this.name = name;
             this.fileName = fileName;
             this.desc = desc;
@@ -52,6 +53,7 @@ public final class NativesManagerScreen extends Screen {
             this.invalid = invalid;
             this.upcoming = upcoming;
             this.upcomingPresent = upcomingPresent;
+            this.partnerSdk = partnerSdk;
         }
     }
 
@@ -97,8 +99,11 @@ public final class NativesManagerScreen extends Screen {
             boolean bundled = false;
             boolean isUpcomingGroup = false;
             boolean anyUpcomingPresent = false;
+            boolean partnerSdk = false;
             for (NativeScanner.SlotState ss : gs.slots()) {
-                if (ss.slot().kind() == NativeCatalog.Kind.UPCOMING) {
+                NativeCatalog.Kind kind = ss.slot().kind();
+                partnerSdk |= kind == NativeCatalog.Kind.PARTNER_SDK;
+                if (kind == NativeCatalog.Kind.UPCOMING || kind == NativeCatalog.Kind.PARTNER_SDK) {
                     isUpcomingGroup = true;
                     if (ss.state() == NativeScanner.State.FOUND) {
                         anyUpcomingPresent = true;
@@ -113,12 +118,13 @@ public final class NativesManagerScreen extends Screen {
             libraries.add(new LibInfo(
                 g.title(),
                 fileLabel,
-                g.purpose(),
+                partnerSdk ? tr("bedray.natives.partner_sdk_required", "NVIDIA partner SDK required").getString() : g.purpose(),
                 gs.complete(),
                 bundled,
                 gs.anyInvalid(),
                 isUpcomingGroup,
-                anyUpcomingPresent
+                anyUpcomingPresent,
+                partnerSdk
             ));
         }
     }
@@ -246,6 +252,11 @@ public final class NativesManagerScreen extends Screen {
             if (lib.invalid) {
                 badgeText = tr("bedray.natives.invalid_badge", "[ INVALID ]");
                 badgeColor = 0xFFFF5555;
+            } else if (lib.partnerSdk) {
+                badgeText = lib.upcomingPresent
+                    ? tr("bedray.natives.partner_file_found", "[ FILE FOUND ]")
+                    : tr("bedray.natives.partner_sdk", "[ PARTNER SDK ]");
+                badgeColor = 0xFFFFFF55;
             } else if (lib.upcoming) {
                 if (lib.upcomingPresent) {
                     badgeText = tr("bedray.natives.ready_roadmap", "[ FILE READY / IN ROADMAP ]");
@@ -268,8 +279,15 @@ public final class NativesManagerScreen extends Screen {
             g.text(font, badgeText, x + w - bw - 4, ry, badgeColor);
 
             // Description / filename
-            String sub = lib.fileName + "  *  " + lib.desc;
+            String sub = lib.partnerSdk ? lib.desc + "  *  " + lib.fileName : lib.fileName + "  *  " + lib.desc;
             g.text(font, font.plainSubstrByWidth(sub, w - 8), x + 4, ry + 11, lib.upcoming ? 0xFF88AA99 : 0xFF888888);
+            if (lib.partnerSdk && mouseX >= x && mouseX < x + w
+                    && mouseY >= Math.max(ry, startY) && mouseY < Math.min(ry + rowH, listBottom)) {
+                g.setComponentTooltipForNextFrame(font, List.of(
+                    tr("bedray.natives.partner_sdk_required", "NVIDIA partner SDK required"),
+                    tr("bedray.natives.partner_file_detection", "Local files are checked for diagnostics only."),
+                    Component.literal(lib.fileName)), mouseX, mouseY);
+            }
         }
 
         // Status message

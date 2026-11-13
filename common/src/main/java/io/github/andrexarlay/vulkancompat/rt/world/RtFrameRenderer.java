@@ -300,6 +300,11 @@ public final class RtFrameRenderer {
         return lastStats;
     }
 
+    /** Last trace accepted for submission, or null before the first accepted trace. */
+    public static RtTraceTelemetry lastTraceTelemetry() {
+        return lastTraceTelemetry;
+    }
+
     /** BLAS built since the game started (monotonic, for a per-second rate). */
     public static long blasBuiltTotal() {
         return blasBuiltTotal;
@@ -503,12 +508,40 @@ public final class RtFrameRenderer {
         try {
             frame(camera, target, levelState);
         } catch (RtDenoiserFrameDiscard discarded) {
-            if (discarded.getSuppressed().length != 0) fail("rr_discard", "retirement_failed", discarded);
-            else LOGGER.warn("[VKB-RT] frame_skipped reason=rr_recording_discarded recovery=next_frame_preflight");
+            recoverDiscardedDenoiserFrame(discarded);
         } catch (RtFailure f) {
             fail(f.stage(), f.result(), f.getCause() != null ? f.getCause() : f);
         } catch (RuntimeException | LinkageError e) {
             fail("frame", e.getClass().getSimpleName() + ": " + LogPaths.show(e.getMessage()), e);
+        }
+    }
+
+    private static void recoverDiscardedDenoiserFrame(RtDenoiserFrameDiscard discarded) {
+        if (discarded.getSuppressed().length != 0) {
+            fail("rr_discard", "retirement_failed", discarded);
+            return;
+        }
+        try {
+            if (world != null && world.needsSceneRebuild()) {
+                drainHostSubmissions(world.memory().device(), "scene_discard_recovery_drain");
+                if (recordingCompletion.pendingCount() != 0)
+                    throw new IllegalStateException("scene recovery still has outstanding recording tickets");
+                world.rebuildSceneAfterHostDrain(pathSlangRuntime);
+                if (emitters != null) {
+                    emitters.destroy();
+                    emitters = null;
+                }
+                // Completed readbacks describe the retired scene. Keep them out of the new exposure history.
+                for (var lease : statsReadbacks.ready()) statsReadbacks.consume(lease);
+                lastStats = null;
+                LOGGER.info("[VKB-RT] native_scene_recreated reason=discarded_recording");
+            }
+            havePrevCamera = false;
+            resetHistory();
+            WorldTargetManager.requestResetHistory();
+            LOGGER.warn("[VKB-RT] frame_skipped reason=rr_recording_discarded recovery=next_frame_preflight");
+        } catch (RuntimeException | LinkageError recovery) {
+            fail("scene_discard_recovery", recovery.getMessage(), recovery);
         }
     }
 
@@ -1260,7 +1293,7 @@ public final class RtFrameRenderer {
                     if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure)
                         throw nativeFailure; // partial coarse recording requires whole-command discard
                     if (e instanceof io.github.andrexarlay.vulkancompat.rt.denoise.RrFeatureCreationRetry) {
-                        LOGGER.warn("[DLSS-RR] creation_retry whole_recording=discarded next_frame=quality_fallback reason={}", e.getMessage());
+                        LOGGER.warn("[DLSS-RR] creation_retry whole_recording=discarded next_frame=quality_fallback reason={}", LogPaths.show(e.getMessage()));
                         throw new RtDenoiserFrameDiscard("DLSS-RR creation retry requires a fresh recording", e);
                     }
                     denoiserRuntimeFailure = "dlss_rr_record: " + LogPaths.show(e.getMessage());

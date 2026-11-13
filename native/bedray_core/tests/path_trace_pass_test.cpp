@@ -402,11 +402,13 @@ struct Fixture {
     std::set<std::uint64_t> attempted;
 
     explicit Fixture(std::uint64_t scene_program = kTraceSceneProgram,
-        std::uint64_t spatial_program = kSpatialProgram, std::uint64_t stats_program = kStatsProgram) {
+        std::uint64_t spatial_program = kSpatialProgram, std::uint64_t stats_program = kStatsProgram,
+        std::uint32_t config_flags = 0) {
         reset_all();
         BedrayError error{};
-        const BedrayStatus status = pass.configure(&core, make_device_fns(),
-            make_config(scene_program, spatial_program, stats_program), &error);
+        auto config = make_config(scene_program, spatial_program, stats_program);
+        config.flags = config_flags;
+        const BedrayStatus status = pass.configure(&core, make_device_fns(), config, &error);
         g_error = error;
         if (status != BEDRAY_OK) {
             std::fprintf(stderr, "FAIL fixture configure: %d (%s)\n",
@@ -1445,6 +1447,22 @@ void test_statistics_dispatch_follows_display() {
 // The statistics program must be free until the host calls for it: the same
 // frame on a pass that holds the program and on a pass that does not records
 // the same two dispatches, barriers, images and buffers.
+void test_statistics_tile_grid_covers_odd_extents() {
+    Fixture fixture(kTraceSceneProgram, kSpatialProgram, kStatsProgram, BEDRAY_PATH_TRACE_CONFIG_TILE_STATS);
+    auto frame = valid_frame(0x1603);
+    frame.camera.width = 65;
+    frame.camera.height = 33;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK_STATUS(fixture.stats(frame.command_buffer, kStatsBuffer, 0, 16, frame.frame_index), BEDRAY_OK);
+    CHECK(fake::render_calls.size() == 3);
+    if (fake::render_calls.size() == 3) {
+        const auto& display = fake::render_calls[1];
+        const auto& stats = fake::render_calls[2];
+        CHECK(display.group_x == 9 && display.group_y == 5);
+        CHECK(stats.group_x == 3 && stats.group_y == 2 && stats.group_z == 1);
+    }
+}
+
 void test_statistics_program_costs_nothing_until_called() {
     // Each half gets its own scope: a second Fixture in the same one would reset
     // the fake driver while the first pass still owns resources to tear down.
@@ -1994,6 +2012,7 @@ int main() {
     test_real_guide_outputs();
     test_real_nrd_motion_output();
     test_statistics_dispatch_follows_display();
+    test_statistics_tile_grid_covers_odd_extents();
     test_statistics_program_costs_nothing_until_called();
     test_statistics_stage_reads_its_own_recording();
     test_statistics_stage_groups_follow_the_extent();

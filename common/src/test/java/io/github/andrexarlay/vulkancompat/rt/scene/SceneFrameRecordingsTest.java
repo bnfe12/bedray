@@ -137,6 +137,35 @@ class SceneFrameRecordingsTest {
         assertFalse(bridge.contains("recordingFrames"), "one token map is the frame lifetime authority");
     }
 
+    @Test void discardedDenoiserRecordingRebuildsTheSceneOnlyAfterRetirement() throws Exception {
+        Path worldRoot = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world");
+        String bridge = body(Files.readString(worldRoot.resolve("NativeSceneBridge.java")), "boolean discardRecording(");
+        assertTrue(bridge.contains("if (!recordings.release(\"discard_frame\""));
+        assertTrue(bridge.contains("return false;"));
+
+        String world = Files.readString(worldRoot.resolve("RtWorld.java"));
+        assertTrue(body(world, "public void discardRecording(")
+            .contains("if (scene.discardRecording(commandBuffer)) sceneDiscarded = true;"));
+        String rebuild = body(world, "void rebuildSceneAfterHostDrain(");
+        int close = rebuild.indexOf("scene.close();");
+        int create = rebuild.indexOf("scene = NativeSceneBridge.create(runtime);");
+        int recapture = rebuild.indexOf("captures = new NativeSectionCapture(");
+        assertTrue(close >= 0 && close < create && create < recapture);
+        assertTrue(recapture < rebuild.indexOf("sceneDiscarded = false;"));
+
+        String renderer = Files.readString(worldRoot.resolve("RtFrameRenderer.java"));
+        assertTrue(body(renderer, "catch (RtDenoiserFrameDiscard discarded)")
+            .contains("recoverDiscardedDenoiserFrame(discarded);"));
+        String recovery = body(renderer, "private static void recoverDiscardedDenoiserFrame(");
+        int cleanupGuard = recovery.indexOf("discarded.getSuppressed().length != 0");
+        int drain = recovery.indexOf("drainHostSubmissions(");
+        int pendingGuard = recovery.indexOf("recordingCompletion.pendingCount() != 0");
+        int recreate = recovery.indexOf("world.rebuildSceneAfterHostDrain(");
+        assertTrue(cleanupGuard >= 0 && cleanupGuard < drain && drain < pendingGuard && pendingGuard < recreate);
+        assertTrue(recreate < recovery.indexOf("emitters.destroy();"));
+        assertTrue(recreate < recovery.indexOf("resetHistory();"));
+    }
+
     private static String body(String source, String marker) {
         int start = source.indexOf(marker);
         assertTrue(start >= 0, marker);

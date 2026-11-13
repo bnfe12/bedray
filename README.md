@@ -127,8 +127,8 @@ needed); XeSS (Intel library needed); Path Tracing with the NRD denoiser. The ex
 ## What is not included
 
 * General Iris / "Dirt RT" shaderpack compatibility. The implemented opt-in post subset has explicit unsupported features.
-* DLSS 5 / neural rendering: **not implemented**. The settings page shows a disabled line.
-* AMD FSR frame generation, FSR 4 (not available on Vulkan).
+* DLSS 5 Neural Rendering requires the NVIDIA partner SDK. The Natives Manager reports local file presence for diagnostics.
+* AMD FSR frame generation and [FSR 4 on Vulkan](https://gpuopen.com/amd-fsr-sdk/) are not integrated in Bedray.
 * Complete particle transport in reflections and shadows; physical closed-volume refraction through glass.
 * Linux and macOS.
 

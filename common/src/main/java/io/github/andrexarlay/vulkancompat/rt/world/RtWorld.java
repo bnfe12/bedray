@@ -14,7 +14,7 @@ import java.util.function.Consumer;
 /** Render-thread coordinator for CPU mesh captures and the native GPU scene. */
 public final class RtWorld {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
-    private static final long CAPACITY_LOG_INTERVAL_NANOS = 5_000_000_000L;
+    private static final long LIMIT_LOG_INTERVAL_NANOS = 5_000_000_000L;
     public static final int FOLIAGE_NONE = 0;
     public static final int FOLIAGE_CARD = 1;
     public static final int FOLIAGE_CUBE = 2;
@@ -41,8 +41,9 @@ public final class RtWorld {
     public static volatile String lastEntityTelemetry = "none";
 
     private final RtMemory mem;
-    private final NativeSceneBridge scene;
-    private final NativeSectionCapture captures;
+    private NativeSceneBridge scene;
+    private NativeSectionCapture captures;
+    private boolean sceneDiscarded;
     private long frameIndex;
     private long nearestBuiltSq = Long.MAX_VALUE;
     private BlockLookup blockLookup;
@@ -51,6 +52,8 @@ public final class RtWorld {
     private long vegetationSections;
     private boolean atCapacity;
     private long lastCapacityLogNanos;
+    private boolean oversizedSectionLogged;
+    private long lastOversizedLogNanos;
 
     public RtWorld(VkDevice device, SlangRuntime runtime) {
         mem = new RtMemory(device);
@@ -85,6 +88,7 @@ public final class RtWorld {
 
     /** Records native scene builds into the current host command buffer. */
     public FrameStats update(VkCommandBuffer cmd, double camX, double camY, double camZ, int radiusXz, int radiusY) {
+        if (sceneDiscarded) throw new IllegalStateException("discarded native scene must be rebuilt before recording");
         long tUpdate = RtTimings.start();
         long frame = ++frameIndex;
         var entities = RtEntityGeometryManager.INSTANCE;
@@ -96,6 +100,7 @@ public final class RtWorld {
             RtConfig.BLAS_PER_FRAME, CAPTURE_BUDGET_NANOS);
         if (capture.rescanned()) RtTimings.countRescan();
         logCapacity(capture.omittedByCapacity());
+        logOversizedSections(capture);
         nearestBuiltSq = capture.nearestSq();
         long prepared = System.nanoTime();
         scene.prepareFrame(cmd.address(), frame, camX, camY, camZ);
@@ -113,12 +118,23 @@ public final class RtWorld {
         boolean limited = omitted > 0;
         if (!limited && !atCapacity) return;
         long now = System.nanoTime();
-        if (limited != atCapacity || now - lastCapacityLogNanos >= CAPACITY_LOG_INTERVAL_NANOS) {
+        if (limited != atCapacity || now - lastCapacityLogNanos >= LIMIT_LOG_INTERVAL_NANOS) {
             LOGGER.info("[VKB-RT] scene_capacity sections_max={} omitted_candidates={} reserved_entity_slots={}",
                 NativeSceneBridge.MAX_SECTIONS, omitted, RtConfig.MAX_INSTANCES - NativeSceneBridge.MAX_SECTIONS);
             lastCapacityLogNanos = now;
         }
         atCapacity = limited;
+    }
+
+    private void logOversizedSections(NativeSectionCapture.Result capture) {
+        if (capture.oversizedSections() == 0) return;
+        long now = System.nanoTime();
+        if (oversizedSectionLogged && now - lastOversizedLogNanos < LIMIT_LOG_INTERVAL_NANOS) return;
+        LOGGER.warn("[VKB-RT] scene_section_limit skipped_captures={} max_quads={} largest_quads={} section_key=0x{}",
+            capture.oversizedSections(), BedraySceneGeometry.MAX_SECTION_QUADS, capture.largestOversizedQuads(),
+            Long.toHexString(capture.largestOversizedSection()));
+        oversizedSectionLogged = true;
+        lastOversizedLogNanos = now;
     }
 
     private int[] quadFlags(DecodedSection section) {
@@ -182,8 +198,23 @@ public final class RtWorld {
 
     /** Called only when the host abandons an unsubmitted command. */
     public void discardRecording(long commandBuffer) {
-        scene.discardRecording(commandBuffer);
+        if (scene.discardRecording(commandBuffer)) sceneDiscarded = true;
         RtEntityGeometryManager.INSTANCE.releaseRecording(mem, commandBuffer);
+    }
+
+    boolean needsSceneRebuild() {
+        return sceneDiscarded;
+    }
+
+    /** Replays live Sodium captures after all consumers of the discarded scene have retired. */
+    void rebuildSceneAfterHostDrain(SlangRuntime runtime) {
+        if (!sceneDiscarded) return;
+        scene.close();
+        captures.clear();
+        scene = NativeSceneBridge.create(runtime);
+        captures = new NativeSectionCapture(SectionGeometryRegistry.INSTANCE, scene, this::quadFlags);
+        nearestBuiltSq = Long.MAX_VALUE;
+        sceneDiscarded = false;
     }
 
     /** The caller has drained host submissions and excluded future resubmission. */

@@ -9,7 +9,6 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
-#include <map>
 #include <memory>
 #include <new>
 #include <set>
@@ -187,10 +186,6 @@ struct PreparePlan {
 
     std::vector<InstanceEntry> instances;
     std::vector<BedraySceneSectionRecord> section_records;
-    /* section id -> slot in the append-ordered section table. The TLAS
-       instanceCustomIndex of a section is exactly this slot, so the table and
-       the instances must be generated from one map. */
-    std::map<uint64_t, uint32_t> section_slots;
 
     uint64_t upload_bytes = 0;
     uint64_t blas_rebuilds = 0;
@@ -791,29 +786,19 @@ bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
     return true;
 }
 
-GeometryResource* job_geometry(const PreparePlan& plan, bool is_section, uint64_t id, GeometryResource* committed) {
-    for (const GeometryJob& job : plan.jobs) {
-        if (job.is_section == is_section && job.id == id && job.created) {
-            return job.created.get();
-        }
-    }
-    return committed;
-}
-
 struct GeometryRef {
     uint64_t blas_address = 0;
     VkAccelerationStructureKHR blas_handle = VK_NULL_HANDLE;
+    uint64_t vertex_address = 0;
 };
 
 /* A refit job keeps the previous acceleration structure and only replaces the
    vertex/index buffer, so instances must reference the previous BLAS. */
-GeometryRef job_blas(const PreparePlan& plan, bool is_section, uint64_t id, const GeometryResource* committed) {
+GeometryRef planned_geometry(const PreparePlan& plan, bool is_section, uint64_t id, const GeometryResource* committed) {
     for (const GeometryJob& job : plan.jobs) {
         if (job.is_section == is_section && job.id == id && job.created) {
-            if (job.refit) {
-                return { job.previous->blas.address, job.previous->blas.handle };
-            }
-            return { job.created->blas.address, job.created->blas.handle };
+            const auto& blas = job.refit ? job.previous->blas : job.created->blas;
+            return { blas.address, blas.handle, job.created->vertex_address };
         }
     }
     if (is_section) {
@@ -824,33 +809,54 @@ GeometryRef job_blas(const PreparePlan& plan, bool is_section, uint64_t id, cons
         }
     }
     if (committed != nullptr) {
-        return { committed->blas.address, committed->blas.handle };
+        return { committed->blas.address, committed->blas.handle, committed->vertex_address };
     }
     return {};
 }
 
-void plan_section_slots(Scene& scene, PreparePlan& plan) {
-    plan.section_slots.clear();
-    uint32_t slot = 0;
-    for (auto& [id, section] : scene.sections) {
-        if (job_geometry(plan, true, id, section.geometry.get()) == nullptr) {
-            continue;
-        }
-        plan.section_slots.emplace(id, slot++);
+BedraySceneSectionRecord section_record(const Section& section, uint64_t vertex_address) {
+    const auto& origin = effective_origin(section);
+    const PendingMesh* mesh = section.has_pending ? &section.pending : nullptr;
+    const uint64_t vertex_count = mesh ? mesh->vertex_count : section.vertex_count;
+    const uint32_t geometry_count = mesh ? mesh->geometry_count : section.geometry_count;
+    const auto& quad_start = mesh ? mesh->quad_start : section.quad_start;
+    const uint32_t pass_bits = mesh ? mesh->pass_bits : section.pass_bits;
+
+    BedraySceneSectionRecord record{};
+    std::copy(origin.begin(), origin.end(), record.origin);
+    record.origin[3] = static_cast<int32_t>(section_identity(section.id));
+    record.meta[0] = static_cast<uint32_t>(
+        std::min<uint64_t>(vertex_count, std::numeric_limits<uint32_t>::max()));
+    record.meta[1] = geometry_count;
+    record.meta[2] = mesh ? mesh->flags : section.flags;
+    record.vertex_address = vertex_address;
+    const uint64_t quads = vertex_count / 4;
+    for (uint32_t g = 0; g < geometry_count && g < BEDRAY_SCENE_MAX_SECTION_GEOMETRIES; ++g) {
+        const uint32_t start = quad_start[g];
+        const uint32_t next = g + 1 < geometry_count ? quad_start[g + 1]
+            : static_cast<uint32_t>(std::min<uint64_t>(quads, 0xFFFFu));
+        const uint32_t count = next > start ? next - start : 0;
+        const uint32_t pass = (pass_bits >> (2u * g)) & 0x3u;
+        record.ranges[g].first_quad = start;
+        record.ranges[g].quad_count_pass = (count & 0xFFFFu) | (pass << 16u);
     }
+    return record;
 }
 
-void plan_instances(Scene& scene, PreparePlan& plan) {
-    plan.instances.clear();
+void plan_instances(const Scene& scene, PreparePlan& plan) {
+    const bool section_job = std::any_of(plan.jobs.begin(), plan.jobs.end(),
+        [](const GeometryJob& job) { return job.is_section; });
+    plan.section_table_rebuild = scene.section_table_dirty || section_job;
+    if (plan.section_table_rebuild) {
+        plan.section_records.reserve(scene.sections.size());
+    }
     plan.instances.reserve(scene.sections.size() + scene.entities.size());
 
-    for (auto& [id, section] : scene.sections) {
-        const GeometryRef geometry = job_blas(plan, true, id, section.geometry.get());
+    // Section IDs are ordered by the scene map. Append records and instances
+    // together so the same order is used even when reusing the committed table.
+    for (const auto& [id, section] : scene.sections) {
+        const GeometryRef geometry = planned_geometry(plan, true, id, section.geometry.get());
         if (geometry.blas_handle == VK_NULL_HANDLE) {
-            continue;
-        }
-        const auto slot = plan.section_slots.find(id);
-        if (slot == plan.section_slots.end()) {
             continue;
         }
         InstanceEntry instance{};
@@ -859,14 +865,17 @@ void plan_instances(Scene& scene, PreparePlan& plan) {
             : identity_transform();
         instance.blas_address = geometry.blas_address;
         instance.blas_handle = geometry.blas_handle;
-        instance.custom_index = slot->second;
-        instance.mask = 0xFF;
+        instance.custom_index = static_cast<uint32_t>(plan.instances.size());
+        instance.mask = BEDRAY_SCENE_TERRAIN_INSTANCE_MASK;
         plan.instances.push_back(instance);
+        if (plan.section_table_rebuild) {
+            plan.section_records.push_back(section_record(section, geometry.vertex_address));
+        }
     }
 
     uint32_t entity_index = 0;
-    for (auto& [id, entity] : scene.entities) {
-        const GeometryRef geometry = job_blas(plan, false, id, entity.geometry.get());
+    for (const auto& [id, entity] : scene.entities) {
+        const GeometryRef geometry = planned_geometry(plan, false, id, entity.geometry.get());
         if (geometry.blas_handle == VK_NULL_HANDLE) {
             continue;
         }
@@ -878,60 +887,6 @@ void plan_instances(Scene& scene, PreparePlan& plan) {
         instance.mask = effective_mask(entity);
         entity_index++;
         plan.instances.push_back(instance);
-    }
-}
-
-void plan_section_records(Scene& scene, PreparePlan& plan) {
-    plan.section_records.clear();
-    const bool section_job = std::any_of(plan.jobs.begin(), plan.jobs.end(),
-        [](const GeometryJob& job) { return job.is_section; });
-    plan.section_table_rebuild = scene.section_table_dirty || section_job;
-    if (!plan.section_table_rebuild) {
-        return;
-    }
-    plan.section_records.reserve(plan.section_slots.size());
-    /* Iterating the slot map keeps the record order (and therefore every
-       record's index) equal to the TLAS custom index of its section. */
-    for (const auto& [id, slot] : plan.section_slots) {
-        (void)slot;
-        auto it = scene.sections.find(id);
-        if (it == scene.sections.end()) {
-            continue;
-        }
-        Section& section = it->second;
-        GeometryResource* geometry = job_geometry(plan, true, id, section.geometry.get());
-        if (geometry == nullptr) {
-            continue;
-        }
-        BedraySceneSectionRecord record{};
-        record.origin[0] = section.has_pending ? section.pending.origin[0] : section.origin[0];
-        record.origin[1] = section.has_pending ? section.pending.origin[1] : section.origin[1];
-        record.origin[2] = section.has_pending ? section.pending.origin[2] : section.origin[2];
-        record.origin[3] = static_cast<int32_t>(section_identity(section.id));
-        const uint64_t vertex_count = section.has_pending
-            ? section.pending.vertex_count : section.vertex_count;
-        const uint32_t geometry_count = section.has_pending
-            ? section.pending.geometry_count : section.geometry_count;
-        record.meta[0] = static_cast<uint32_t>(
-            std::min<uint64_t>(vertex_count, std::numeric_limits<uint32_t>::max()));
-        record.meta[1] = geometry_count;
-        record.meta[2] = section.has_pending ? section.pending.flags : section.flags;
-        record.meta[3] = 0;
-        record.vertex_address = geometry->vertex_address;
-        const uint64_t quads = vertex_count / 4;
-        for (uint32_t g = 0; g < geometry_count && g < BEDRAY_SCENE_MAX_SECTION_GEOMETRIES; ++g) {
-            const uint32_t start = section.has_pending
-                ? section.pending.quad_start[g] : section.quad_start[g];
-            const uint32_t next = (g + 1 < geometry_count)
-                ? (section.has_pending ? section.pending.quad_start[g + 1] : section.quad_start[g + 1])
-                : static_cast<uint32_t>(std::min<uint64_t>(quads, 0xFFFFu));
-            const uint32_t count = next > start ? next - start : 0;
-            const uint32_t pass = (section.has_pending ? section.pending.pass_bits : section.pass_bits)
-                >> (2u * g) & 0x3u;
-            record.ranges[g].first_quad = start;
-            record.ranges[g].quad_count_pass = (count & 0xFFFFu) | ((pass & 0x3u) << 16u);
-        }
-        plan.section_records.push_back(record);
     }
 }
 
@@ -2199,9 +2154,7 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
         if (impl.membership_changed) {
             tlas_changed = true;
         }
-        plan_section_slots(impl, plan);
         plan_instances(impl, plan);
-        plan_section_records(impl, plan);
         if (!plan_uploads(impl, plan, err)) {
             cleanup_plan(impl, plan);
             return err->status;

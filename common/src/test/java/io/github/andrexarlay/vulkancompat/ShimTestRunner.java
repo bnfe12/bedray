@@ -3,6 +3,7 @@ package io.github.andrexarlay.vulkancompat;
 import io.github.andrexarlay.vulkancompat.rtx.VulkanRtxManager;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
+import io.github.andrexarlay.vulkancompat.rtx.raytracing.RtRayPipelineDeviceRequirements;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.HaltonJitter;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerLibraryLoader;
@@ -725,13 +726,17 @@ public class ShimTestRunner {
     private static void assertDefaultDeviceRequirements(java.util.List<io.github.andrexarlay.vulkanbridge.api.DeviceRequirement> requirements) {
         var ids = requirements.stream().map(io.github.andrexarlay.vulkanbridge.api.DeviceRequirement::id)
             .collect(java.util.stream.Collectors.toSet());
-        assertEquals(java.util.Set.of("Bedray Native Memory Budget", "Hardware Ray Tracing"), ids,
-            "default registration contains the independent memory and RT groups");
-        assertEquals(2, requirements.size(), "one registration per independent group");
+        assertEquals(java.util.Set.of("Bedray Native Memory Budget", "Hardware Ray Tracing",
+            RtRayPipelineDeviceRequirements.RAYGEN_ID), ids,
+            "default registration includes optional ray generation alongside memory telemetry and ray queries");
+        assertEquals(ids.size(), requirements.size(), "one registration per independent group");
         var memory = requirements.stream().filter(r -> r.id().equals("Bedray Native Memory Budget")).findFirst().orElseThrow();
         assertTrue(memory.optional(), "lack of memory-budget telemetry cannot reject a device");
         assertTrue(memory.features().isEmpty(), "memory telemetry does not require RT features");
         assertEquals(java.util.Set.of("VK_EXT_memory_budget"), memory.deviceExtensions(), "memory telemetry extension");
+        var raygen = requirements.stream().filter(r -> r.id().equals(RtRayPipelineDeviceRequirements.RAYGEN_ID))
+            .findFirst().orElseThrow();
+        assertTrue(raygen.optional(), "lack of ray generation cannot reject a device");
     }
 
     private static void testLateProvidersAndScenarios() {

@@ -8,8 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class SlangTraceProgramsTest {
     private static final int RAY = BedrayCoreLayouts.CAP_RAY_TRACING_PIPELINE;
     private static final int SER = BedrayCoreLayouts.CAP_INVOCATION_REORDER_NV;
-    @Test void noFeatureIsSelectedMerelyBecauseTheDeviceSupportsIt() {
+    @Test void explicitComputePreferenceIgnoresAvailablePipelineFeatures() {
         assertEquals(List.of("path_trace_scene"), SlangTracePrograms.candidates("path_trace_scene", RAY | SER, false, false, true));
+    }
+    @Test void ordinaryRaygenPreferenceUsesComputeIfTheDeviceLacksThePipeline() {
+        assertEquals(List.of("path_trace_scene"), SlangTracePrograms.candidates("path_trace_scene", 0, true, false, false));
+        assertEquals(List.of("path_trace_scene.raygen", "path_trace_scene"),
+            SlangTracePrograms.candidates("path_trace_scene", RAY | SER, true, false, true));
     }
     @Test void serRequestIncludesFallbacksInOrder() {
         assertEquals(List.of("path_trace_scene.ser", "path_trace_scene.raygen", "path_trace_scene"),

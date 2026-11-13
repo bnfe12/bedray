@@ -27,6 +27,8 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * classified while staging the section.
  */
 final class BedraySceneGeometry {
+    /** The native scene packs the total quad count and range starts into 16-bit fields. */
+    static final int MAX_SECTION_QUADS = 0xffff;
     /** Compact vertex flags of {@code GeometryVertex.meta.y}; see {@code contracts/geometry.slang}. */
     static final int VERTEX_FLAG_VEGETATION = 1;
     static final int VERTEX_FLAG_LEAF_CUBE = 2;
@@ -48,6 +50,9 @@ final class BedraySceneGeometry {
     static BedraySceneNative.Section build(DecodedSection d, int[] tagged, Arena arena,
                                            long sectionId, long revision) {
         int quads = d.totalQuads();
+        if (quads > MAX_SECTION_QUADS) {
+            throw new IllegalArgumentException("section " + d.key + " has " + quads + " quads, maximum " + MAX_SECTION_QUADS);
+        }
         int[] passStart = new int[DecodedSection.PASS_COUNT];
         int[] passId = new int[DecodedSection.PASS_COUNT];
         int geometryCount = 0;

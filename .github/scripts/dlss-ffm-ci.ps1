@@ -26,6 +26,8 @@ $classes = Join-Path $EvidenceRoot 'classes'
 New-Item -ItemType Directory -Force -Path $classes | Out-Null
 $base = 'common/src/main/java/io/github/andrexarlay/vulkancompat/'
 $sources = @(
+    'core/src/main/java/io/github/andrexarlay/vulkanbridge/api/Experimental.java',
+    'core/src/main/java/io/github/andrexarlay/vulkanbridge/api/LibraryDescriptor.java',
     'core/src/main/java/io/github/andrexarlay/vulkanbridge/platform/LogPaths.java',
     ($base + 'rtx/config/UpscalerMode.java'),
     ($base + 'rtx/upscaler/dlss/DlssQuality.java'),

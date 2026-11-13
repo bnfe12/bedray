@@ -162,8 +162,13 @@ void main() {
         material, float4(input.direct, 0.0), pc), float3(0.6))
         && relax.diffuse.a == 3.0 && relax.specular.a == 8.0;
     pc.denoiser = 2u;
-    NrdPackedSample rr = nrdPackSample(input, pc);
-    sink[12] = near3(rr.diffuse.rgb, float3(0.6)) && near3(rr.specular.rgb, input.specularAlbedo);
+    NrdPackInput rrInput = input;
+    rrInput.viewZ = abs(input.viewZ);
+    NrdPackPush rrPc = pc;
+    rrPc.denoisingRange = 4.0;
+    NrdPackedSample rr = nrdPackSample(rrInput, rrPc);
+    sink[12] = rrInput.viewZ > rrPc.denoisingRange
+        && near3(rr.diffuse.rgb, float3(0.6)) && near3(rr.specular.rgb, input.specularAlbedo);
     pc.denoiser = 0u;
     sink[13] = near3(nrdComposeColor(float3(100.0), float3(100.0), input.albedo, material,
         float4(0.4, 0.4, 0.4, 1.0), pc), float3(0.4)); // bypass rejects reconstructed neighbor energy

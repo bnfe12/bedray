@@ -1352,7 +1352,8 @@ static void test_first_frame_records_full_pipeline() {
         uint32_t section_word = 0;
         std::memcpy(&section_word, instance_bytes->data() + 48, sizeof(section_word));
         CHECK((section_word & 0xFFFFFFu) == 0);
-        CHECK((section_word >> 24) == 0xFF);
+        CHECK((section_word >> 24) == 0x01u);
+        CHECK(((section_word >> 24) & 0x02u) == 0u);
         uint32_t packed = 0;
         std::memcpy(&packed, instance_bytes->data() + 64 + 48, sizeof(packed));
         CHECK((packed & 0xFFFFFFu) == 0x800000u);
@@ -2232,10 +2233,26 @@ static void test_tlas_custom_indices_follow_table_slots() {
     const int32_t identity20 = read_section_record(resources, 1).origin[3];
     fixture.release(1);
 
+    /* Camera movement rebuilds the instance records against the same table. */
+    CHECK_STATUS(bedray_scene_set_view(fixture.scene, 100.5, 70.25, -3.0, &g_error),
+        BEDRAY_SCENE_OK);
+    const BedraySceneFrameInfo moved = fixture.prepare(2, 0xB21);
+    CHECK((moved.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
+    CHECK(moved.instance_count == 4);
+    CHECK(moved.upload_bytes == 0);
+    const BedraySceneResources reused = fixture.resources();
+    CHECK(reused.section_table_buffer == resources.section_table_buffer);
+    CHECK(read_section_record(reused, 1).origin[3] == identity20);
+    for (uint32_t slot = 0; slot < 3; ++slot) {
+        CHECK(instance_custom_index(reused, slot) == slot);
+    }
+    CHECK(instance_custom_index(reused, 3) == 0x800000u);
+    fixture.release(2);
+
     /* Removing the lowest id compacts the slots: id 20 moves from slot 1 to
        slot 0, keeps its identity hash, and the instances follow the table. */
     CHECK_STATUS(fixture.remove_section(10), BEDRAY_SCENE_OK);
-    const BedraySceneFrameInfo after = fixture.prepare(2, 0xB21);
+    const BedraySceneFrameInfo after = fixture.prepare(3, 0xB22);
     CHECK(after.instance_count == 3);
     const BedraySceneResources compacted = fixture.resources();
     CHECK(compacted.section_table_bytes == 2 * BEDRAY_SCENE_SECTION_RECORD_BYTES);
@@ -2244,7 +2261,7 @@ static void test_tlas_custom_indices_follow_table_slots() {
     CHECK(instance_custom_index(compacted, 0) == 0);
     CHECK(instance_custom_index(compacted, 1) == 1);
     CHECK(instance_custom_index(compacted, 2) == 0x800000u);
-    fixture.release(2);
+    fixture.release(3);
 }
 
 static void test_geometry_vertex_section_stride() {

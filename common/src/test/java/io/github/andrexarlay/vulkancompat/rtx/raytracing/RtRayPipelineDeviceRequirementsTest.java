@@ -5,6 +5,8 @@ import io.github.andrexarlay.vulkanbridge.api.FeatureRequest;
 import io.github.andrexarlay.vulkanbridge.core.DeviceFeatureRegistryImpl;
 import io.github.andrexarlay.vulkanbridge.core.RequirementApplier;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV;
 
 import java.util.Set;
@@ -13,10 +15,32 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 class RtRayPipelineDeviceRequirementsTest {
-    @Test void defaultRunDoesNotRequestEitherExperimentalDeviceGroup() {
-        var registry = new DeviceFeatureRegistryImpl();
-        RtRayPipelineDeviceRequirements.register(registry, false, false);
-        assertTrue(registry.snapshot().isEmpty());
+    @Test
+    @ResourceLock(Resources.SYSTEM_PROPERTIES)
+    void startupDefaultsToOrdinaryRaygenAndSupportsComputeOptOut() {
+        String raygen = RtRayPipelineDeviceRequirements.RAYGEN_PROPERTY;
+        String ser = RtRayPipelineDeviceRequirements.SER_PROPERTY;
+        String oldRaygen = System.clearProperty(raygen);
+        String oldSer = System.clearProperty(ser);
+        try {
+            var defaultRegistry = new DeviceFeatureRegistryImpl();
+            RtRayPipelineDeviceRequirements.register(defaultRegistry);
+            assertEquals(1, defaultRegistry.snapshot().size());
+            assertEquals(RtRayPipelineDeviceRequirements.RAYGEN_ID, defaultRegistry.snapshot().getFirst().id());
+
+            System.setProperty(raygen, "false");
+            var computeRegistry = new DeviceFeatureRegistryImpl();
+            RtRayPipelineDeviceRequirements.register(computeRegistry);
+            assertTrue(computeRegistry.snapshot().isEmpty());
+        } finally {
+            restoreProperty(raygen, oldRaygen);
+            restoreProperty(ser, oldSer);
+        }
+    }
+
+    private static void restoreProperty(String name, String value) {
+        if (value == null) System.clearProperty(name);
+        else System.setProperty(name, value);
     }
 
     @Test void raygenRequestKeepsSerOutOfTheDevice() {

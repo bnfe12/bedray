@@ -208,12 +208,6 @@ public final class RtSettings {
     /** Exposure compensation in tenths of EV (-40..+40, 0 = none). Auto exposure on: added to the adapted value; off: fixed exposure 1.1 * 2^EV. */
     public static int pathExposureEvTenths = 0;
     /**
-     * DLSS Ray Reconstruction: feed flat voxel geometric normals (ng) to DLSS-RR
-     * instead of perturbed texture shading normals (ns) to preserve sharp block edges and avoid neural blurring.
-     * When off, perturbed shading normals (ns) are fed, giving a smooth/curved appearance to voxel corners.
-     */
-    public static boolean dlssRrGeometricNormals = true;
-    /**
      * DLSS Ray Reconstruction render preset hint (NVSDK_NGX_RayReconstruction_Hint_Render_Preset). DEFAULT leaves the NGX
      * parameter untouched (prior behavior); D/E/F select the transformer / RR2 models. Additive and opt-in until measured.
      */
@@ -288,7 +282,6 @@ public final class RtSettings {
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("path_auto_exposure", () -> pathAutoExposure, v -> pathAutoExposure = v);
         integer("path_exposure_ev", () -> pathExposureEvTenths, v -> pathExposureEvTenths = v, -40, 40);
-        bool("dlss_rr_geometric_normals", () -> dlssRrGeometricNormals, v -> dlssRrGeometricNormals = v);
         bool("path_caustics", () -> caustics, v -> caustics = v);
         bool("caustics", () -> caustics, v -> caustics = v);
         bool("vibrant_visuals", () -> vibrantVisuals, v -> vibrantVisuals = v);
@@ -484,7 +477,6 @@ public final class RtSettings {
     public static int pathMaxDistance() { return i("path_distance"); }
     public static boolean autoExposure() { return b("path_auto_exposure"); }
     public static int exposureEvTenths() { return i("path_exposure_ev"); }
-    public static boolean dlssRrGeometricNormals() { return b("dlss_rr_geometric_normals"); }
     public static boolean caustics() { return b("path_caustics") || b("caustics"); }
     public static boolean vibrantVisuals() { return b("vibrant_visuals"); }
     public static boolean particles() { return b("rt_particles"); }
@@ -736,7 +728,7 @@ public final class RtSettings {
     /** Boolean keys shown in the Advanced level (all integer keys belong to Expert). */
     public static final java.util.Set<String> ADVANCED_KEYS = java.util.Set.of("rays_shadows", "rays_soft_shadows", "rays_pixel_shadows", "rays_reflections",
         "rays_ao", "rays_gi", "rays_emissive", "rays_accumulate", "rt_distance_auto", "auto_normals", "path_accumulate",
-        "path_auto_exposure", "dlss_rr_geometric_normals", "rt_fog", "volumetric_fog_enabled", "path_caustics", "caustics", "vibrant_visuals",
+        "path_auto_exposure", "rt_fog", "volumetric_fog_enabled", "path_caustics", "caustics", "vibrant_visuals",
         "waving_foliage");
 
     /**
@@ -1004,8 +996,6 @@ public final class RtSettings {
         w.write("# Adaptive quality: OFF, FPS30, FPS45, FPS60, FPS90 or FPS120 - the RT pass lowers rays per pixel, then bounces,\n");
         w.write("# below the values above to fit 70% of a frame of that rate (never above them)\n");
         w.write("adaptive_quality = \"" + (adaptiveQuality != null ? adaptiveQuality.name() : "OFF") + "\"\n");
-        w.write("# DLSS Ray Reconstruction: flat voxel geometric normals (ng) for sharp block edges (true), or smooth/perturbed (false)\n");
-        w.write("dlss_rr_geometric_normals = " + dlssRrGeometricNormals + "\n");
         w.write("# DLSS Ray Reconstruction render preset: DEFAULT (NGX untouched), D, E or F (transformer / RR2 models; opt-in until measured)\n");
         w.write("dlss_rr_preset = \"" + dlssRrPreset.name() + "\"\n");
     }

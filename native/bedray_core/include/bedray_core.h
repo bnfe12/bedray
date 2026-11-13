@@ -267,6 +267,7 @@ typedef struct BedrayFrameDesc {
 #define BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT     (1u << 8)
 /* Required native scene table and zeroed retired shader slots. ABI 2 layout is unchanged. */
 #define BEDRAY_PATH_TRACE_FEATURE_NATIVE_SCENE_ONLY (1u << 9)
+#define BEDRAY_PATH_TRACE_FEATURE_COMPACT_RR_PACK (1u << 10)
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void);
 
 #define BEDRAY_PATH_DISPLAY_ACCUMULATE     (1u << 0)
@@ -396,6 +397,9 @@ typedef struct BedrayPathTraceFrameDesc {
     float frame_time;
     uint32_t reserved[5];
 } BedrayPathTraceFrameDesc;
+
+/* program_stats maps one invocation to a 4x4 tile. Zero uses the full image grid. */
+#define BEDRAY_PATH_TRACE_CONFIG_TILE_STATS (1u << 0)
 
 typedef struct BedrayPathTraceDesc {
     uint32_t abi_version;

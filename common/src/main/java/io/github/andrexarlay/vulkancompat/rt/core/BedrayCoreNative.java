@@ -543,6 +543,7 @@ public final class BedrayCoreNative implements AutoCloseable {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment desc = a.allocate(BedrayCoreLayouts.PT_DESC);
             desc.set(JAVA_INT, BedrayCoreLayouts.PTD_ABI_VERSION, BedrayCoreLayouts.ABI_VERSION);
+            if (programStats != 0) desc.set(JAVA_INT, BedrayCoreLayouts.PTD_FLAGS, BedrayCoreLayouts.PATH_TRACE_CONFIG_TILE_STATS);
             desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_SPATIAL, programSpatial);
             desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_DISPLAY, programDisplay);
             desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_IMAGE_BUDGET_BYTES, imageBudgetBytes);
@@ -728,6 +729,10 @@ public final class BedrayCoreNative implements AutoCloseable {
         return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_NATIVE_SCENE_ONLY);
     }
 
+    public boolean hasCompactRrPack() {
+        return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_COMPACT_RR_PACK);
+    }
+
     /** Lends the ReSTIR PT spatial program over the native scene. Zero disables the stage. */
     public void configurePathTracePt(long core, long programPtSpatialScene) {
         ensureOpen(); requireHandle(core, "core");
@@ -753,9 +758,12 @@ public final class BedrayCoreNative implements AutoCloseable {
             throw new IllegalArgumentException("a native BedrayPathTraceFrameDesc is required");
         try (Arena arena = Arena.ofConfined()) {
             var error = arena.allocate(BedrayCoreLayouts.ERROR);
+            // Keep the signature-polymorphic downcall's optional arguments typed as MemorySegment.
+            MemorySegment guideAddress = guides == null ? MemorySegment.NULL : guides;
+            MemorySegment motionAddress = motion == null ? MemorySegment.NULL : motion;
+            MemorySegment statsAddress = statsSlot == null ? MemorySegment.NULL : statsSlot;
             check("render_path_trace_ext", (int) renderPathTraceExtHandle.invokeExact(handle(core), frame,
-                guides == null ? MemorySegment.NULL : guides, motion == null ? MemorySegment.NULL : motion,
-                statsSlot == null ? MemorySegment.NULL : statsSlot, error), error);
+                guideAddress, motionAddress, statsAddress, error), error);
         } catch (Throwable failure) { throw rethrow("render_path_trace_ext", failure); }
     }
 

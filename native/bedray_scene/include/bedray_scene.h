@@ -124,6 +124,9 @@ enum {
 
 enum { BEDRAY_SCENE_FEATURE_SAFE_AS_UPDATE = 1u << 0 };
 
+/* Terrain occupies its own bit so entity-only ray queries exclude section instances. */
+enum { BEDRAY_SCENE_TERRAIN_INSTANCE_MASK = 0x01u };
+
 typedef struct BedraySceneError {
     BedraySceneStatus status;
     char message[BEDRAY_SCENE_ERROR_MESSAGE_BYTES];
