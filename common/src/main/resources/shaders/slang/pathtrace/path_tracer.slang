@@ -747,6 +747,12 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             break;
         }
 
+        // Free straight transmissions are still on the camera segment even after its first glass guide was accepted.
+        if (result.depth == 0u && (options.flags & PATH_TRACE_OPTION_WORLD_MOTION) != 0u
+            && materialIsTranslucent(surface.material)) {
+            float alpha = saturate(surface.material.alpha);
+            result.primaryCoverage += (1.0 - result.primaryCoverage) * alpha;
+        }
         // The AO-only continuation asks whether the environment is occluded, not for another reflected or lit
         // vertex. A window filters that test; treating it as an opaque AO hit would blacken the room behind it.
         bool ambientPaneFilter = ambientOnlyPending && surface.material.alphaMode == AlphaMode.Translucent

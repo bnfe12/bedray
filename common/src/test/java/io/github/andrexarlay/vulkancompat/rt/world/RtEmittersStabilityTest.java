@@ -12,6 +12,41 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 public class RtEmittersStabilityTest {
     @Test
+    void brightNeighbourLightDoesNotCancelIntrinsicPlantEmission() {
+        for (int quads : new int[] {1, 4}) {
+            float full = extractedOpenPower(255, quads, 15);
+            assertEquals(RtEmitters.OPEN_SOURCE_POWER_15, full, 1e-5f, "a full-strength lamp retains the cell calibration");
+            float reference = extractedOpenPower(128, quads, 0);
+            for (int emission : new int[] {26, 51, 128}) {
+                float dark = extractedOpenPower(emission, quads, 0);
+                assertEquals(reference * emission / 128f, dark, 1e-5f, "intrinsic power follows the material");
+                assertEquals(dark, extractedOpenPower(emission, quads, 15), 1e-5f,
+                    "neighbouring light must not control a plant's own emitted power");
+            }
+        }
+    }
+
+    private static float extractedOpenPower(int emission, int quads, int level) {
+        float[] position = new float[quads * 12];
+        float[] uv = new float[quads * 8];
+        int[] light = new int[quads * 4];
+        float[] face = {0, 0.2f, 0, 1, 0.2f, 0, 1, 0.2f, 1, 0, 0.2f, 1};
+        float[] texcoord = {0, 0, 1, 0, 1, 1, 0, 1};
+        for (int q = 0; q < quads; q++) {
+            System.arraycopy(face, 0, position, q * 12, 12);
+            System.arraycopy(texcoord, 0, uv, q * 8, 8);
+        }
+        java.util.Arrays.fill(light, level * 16 + 8);
+        int[] material = {LabPbr.pack(230, 10, emission, LabPbr.SOURCE_AUTO)};
+        float[] records = RtEmitters.extractQuads(position, uv, null, light, quads, material, 1, 1, 0,
+            EmissiveTexelIndex.build(material, 1, 1));
+        assertEquals(quads * RtEmitters.FLOATS, records.length);
+        float power = 0f;
+        for (int o = 0; o < records.length; o += RtEmitters.FLOATS) power += records[o + 3] * records[o + 14] * records[o + 7];
+        return power;
+    }
+
+    @Test
     void dimmingAMaterialAlsoDimsItsLight() {
         for (float area : new float[] {0.001f, 0.1f, 1f, 4f}) {
             float mean = 0.2f;
