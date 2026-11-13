@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Bedray is a Vulkan renderer mod for Minecraft Java Edition with ray tracing and path tracing. Install it, tune it, or build an add-on.">
+  <meta name="theme-color" content="#101820">
+  <title>Bedray · Vulkan rendering for Minecraft Java Edition</title>
+  <link rel="icon" href="images/bedray-logo.png" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="masthead wrap">
+    <a class="brand" href="./" aria-label="Bedray home">
+      <img src="images/bedray-logo.png" width="36" height="36" alt="">
+      <span>Bedray</span>
+    </a>
+    <nav aria-label="Main navigation">
+      <a href="#docs">Docs</a>
+      <a href="#status">Status</a>
+      <a href="https://github.com/bnfe12/bedray">GitHub</a>
+      <a href="#russian" lang="ru">По-русски</a>
+    </nav>
+  </header>
+
+  <main id="main" class="wrap">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="platform">Minecraft Java Edition · Vulkan</p>
+        <h1 id="hero-title">Ray tracing for Minecraft</h1>
+        <p class="intro">Bedray adds ray-traced lighting, a path tracer, and temporal upscaling to Minecraft’s native Vulkan renderer.</p>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/bnfe12/bedray/blob/main/docs/INSTALL.md">Install Bedray</a>
+          <a class="button secondary" href="https://github.com/bnfe12/bedray/releases">Browse releases</a>
+        </div>
+        <p class="support">Minecraft 26.3 · Fabric or NeoForge · Windows x64</p>
+      </div>
+      <figure class="hero-image">
+        <img src="images/path-tracing-water-sunset.png" width="1024" height="576" alt="Blocky sunset reflected in path-traced water next to a sandy shoreline">
+        <figcaption>Path tracing · Early alpha capture</figcaption>
+      </figure>
+    </section>
+
+    <section id="status" class="status" aria-labelledby="status-title">
+      <h2 id="status-title">Early alpha</h2>
+      <p>Use a separate game instance. The <a href="https://github.com/bnfe12/bedray/blob/main/docs/FEATURE_MATRIX.md">feature matrix</a> records the evidence for each mode. Live validation of the experimental DLSS 5 Neural Rendering path on RTX hardware is pending.</p>
+    </section>
+
+    <section id="docs" class="docs" aria-labelledby="docs-title">
+      <h2 id="docs-title">Documentation</h2>
+      <div class="docs-grid">
+        <div class="docs-group">
+          <h3>Play and configure</h3>
+          <ul>
+            <li><a href="https://github.com/bnfe12/bedray/blob/main/docs/INSTALL.md">Installation</a></li>
+            <li><a href="https://github.com/bnfe12/bedray/blob/main/docs/SETTINGS_REFERENCE.md">Settings reference</a></li>
+            <li><a href="https://github.com/bnfe12/bedray/blob/main/docs/experiments/dlss5.md">Experimental DLSS 5 setup</a></li>
+            <li><a href="https://github.com/bnfe12/bedray/blob/main/docs/TROUBLESHOOTING.md">Troubleshooting</a></li>
+          </ul>
+        </div>
+        <div class="docs-group">
+          <h3>Build and extend</h3>
+          <ul>
+            <li><a href="https://github.com/bnfe12/bedray/blob/main/docs/BUILDING.md">Build from source</a></li>
+            <li><a href="https://github.com/bnfe12/bedray/blob/main/docs/ADDON_SETTINGS_API.md">Add-on settings API</a></li>
+            <li><a href="https://github.com/bnfe12/bedray/blob/main/docs/FEATURE_MATRIX.md">Feature and test status</a></li>
+            <li><a href="https://github.com/bnfe12/bedray/issues">Report an issue</a></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="russian" class="quickstart" lang="ru" aria-labelledby="russian-title">
+      <h2 id="russian-title">Краткая инструкция</h2>
+      <p>Создайте отдельный экземпляр Minecraft 26.3 с Fabric или NeoForge. Установите Sodium 0.9.x и JAR Bedray для выбранного загрузчика. Для трассировки скопируйте <code>bedray_core.dll</code> из той же сборки в <code>bedray/natives/</code>. Параметры Bedray доступны в настройках графики.</p>
+      <p>Подробные инструкции на английском доступны в разделе <a href="#docs">«Документация»</a>. Bedray находится в ранней альфе. Проверка DLSS 5 в игре на RTX ещё предстоит.</p>
+    </section>
+  </main>
+
+  <footer class="wrap">
+    <p>Bedray is an unofficial Minecraft mod.</p>
+    <a href="https://github.com/bnfe12/bedray/blob/main/docs/GALLERY.md">Screenshot gallery</a>
+  </footer>
+</body>
+</html>
