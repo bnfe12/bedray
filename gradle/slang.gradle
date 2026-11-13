@@ -1,0 +1,26 @@
+// Pinned Slang compiler, build-time only. Canonical release URL, no proxy.
+// Tier 0 uses slangc -emit-spirv-via-glsl -profile spirv_1_0 (Slang's bundled glslang).
+def slangVersion = '2026.22'
+def slangSha256 = 'dd0c4a86bd44cdb7e9cf712af0c8ebf2fff1bba19fa5e3c128ff87384e8ff17b'
+def slangHome = layout.buildDirectory.dir('slang').get().asFile
+def slangcExe = new File(slangHome, 'bin/slangc.exe')
+ext.slangHome = slangHome
+ext.slangc = slangcExe
+
+tasks.register('fetchSlang') {
+    outputs.file(slangcExe)
+    doLast {
+        if (slangcExe.exists()) return
+        slangHome.mkdirs()
+        def zip = new File(slangHome, "slang-${slangVersion}-windows-x86_64.zip")
+        if (!zip.exists()) {
+            def url = "https://github.com/shader-slang/slang/releases/download/v${slangVersion}/slang-${slangVersion}-windows-x86_64.zip"
+            java.net.URI.create(url).toURL().withInputStream { ins -> zip.withOutputStream { out -> out << ins } }
+        }
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        zip.withInputStream { ins -> byte[] buf = new byte[8192]; int n; while ((n = ins.read(buf)) > 0) digest.update(buf, 0, n) }
+        def hash = digest.digest().collect { String.format('%02x', it) }.join()
+        if (hash != slangSha256) throw new GradleException("Slang SHA-256 mismatch: ${hash}")
+        copy { from zipTree(zip); into slangHome }
+    }
+}

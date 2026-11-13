@@ -99,10 +99,16 @@ public final class VoxelComputeBackend implements GraphicsBackend {
                     live ? frame.atlas() : null,live ? frame.raster() : null);
         }
         if (live) {
+            long uploadStart = System.nanoTime();
             var changed = uploads.update(snapshot);
+            pipeline.diagnostics().addUploadPrepNs(System.nanoTime() - uploadStart);
             pipeline.recordWorld(frame.commandBuffer(), frame.targetImage(), snapshot.camera(), uploads, changed,frame.lighting());
         } else pipeline.record(frame.commandBuffer(), frame.targetImage());
         return true;
+    }
+
+    @Override public String frameDiagnostics() {
+        return pipeline == null ? "" : pipeline.frameDiagnostics();
     }
 
     @Override public void close() {

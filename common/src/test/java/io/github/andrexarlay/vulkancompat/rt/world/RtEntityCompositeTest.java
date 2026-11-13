@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * L2 JUnit tests verifying:
- * 1. Screen-space depth composite compute shader (rt_composite.comp) compilation via Shaderc into valid SPIR-V.
+ * 1. Screen-space depth composite compute shader (rt_composite.slang) precompiled Slang SPIR-V validation.
  * 2. Reverse-Z depth unprojection and distance evaluation logic.
  * 3. Foreground entity separation from ray-traced chunk geometry and sky background.
  * 4. Alpha blending support for opaque, translucent, and transparent entities/particles.
@@ -20,14 +20,13 @@ public class RtEntityCompositeTest {
     private static final float EPSILON = 1e-4f;
 
     @Test
-    public void testShadercCompilation() {
-        ByteBuffer spirv = RtShaderCompiler.compileResource(RtCompositePipeline.SHADER_PATH, "rt_composite.comp");
-        assertNotNull(spirv, "Compiled SPIR-V buffer must not be null");
+    public void testPrecompiledSpirv() {
+        ByteBuffer spirv = RtShaderCompiler.loadPrecompiled(RtCompositePipeline.SHADER_PATH);
+        assertNotNull(spirv, "Precompiled SPIR-V buffer must not be null");
         assertTrue(spirv.remaining() > 0, "SPIR-V bytes must not be empty");
-        // Verify standard Vulkan SPIR-V magic number 0x07230203
         assertEquals(0x07230203, spirv.getInt(0), "SPIR-V magic number mismatch");
         assertEquals(80, RtCompositePipeline.PUSH_BYTES, "Push constant size must be exactly 80 bytes");
-        assertEquals("/shaders/rt_composite.comp", RtCompositePipeline.SHADER_PATH);
+        assertEquals("/assets/bedray_rt/shaders/rt_composite_v14.spv", RtCompositePipeline.SHADER_PATH);
     }
 
     @Test

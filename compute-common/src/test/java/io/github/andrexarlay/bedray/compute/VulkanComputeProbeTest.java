@@ -255,6 +255,72 @@ class VulkanComputeProbeTest {
         }
     }
 
+    /** V0 instrumentation on a real device: timestamp ring harvest, debug history counters, residency counters. */
+    @Test void gpuTimersAndDebugCountersReportSteadyState() throws Exception {
+        String previousFlag = System.getProperty("bedray.compute.gpuCounters");
+        System.setProperty("bedray.compute.gpuCounters", "true");
+        GraphicsBackendRegistry.DebugView previousView = GraphicsBackendRegistry.debugView();
+        GraphicsBackendRegistry.setDebugView(GraphicsBackendRegistry.DebugView.SHADED);
+        float[] identity = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+        try {
+            ComputeBaselineScenes.Scene scene = ComputeBaselineScenes.fieldBiomeBorder();
+            CameraSnapshot camera = new CameraSnapshot(scene.camera().x(), scene.camera().y(), scene.camera().z(),
+                ComputeBaselineScenes.inverseProjection(WIDTH, HEIGHT), identity);
+            float[] depth = ComputeBaselineScenes.depthOracle(scene, camera, WIDTH, HEIGHT);
+            try (Probe probe = new Probe(); LitInputs inputs = new LitInputs(probe, depth)) {
+                var atlas = new io.github.andrexarlay.bedray.api.v1.AtlasFrame(1, probe.device.address(), inputs.atlasView,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_FORMAT_R8G8B8A8_UNORM, 16, 16,
+                    io.github.andrexarlay.bedray.api.v1.AtlasFrame.ColorEncoding.SRGB_IN_UNORM);
+                var raster = new io.github.andrexarlay.bedray.api.v1.RasterFrame(probe.device.address(), inputs.colorView,
+                    inputs.depthView, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_D32_SFLOAT, WIDTH, HEIGHT);
+                try (VoxelComputePipeline pipeline = new VoxelComputePipeline(probe.device, WIDTH, HEIGHT,
+                        VK_FORMAT_R8G8B8A8_UNORM, VoxelGrid.builder(48, 48, 48).build(), atlas, raster)) {
+                    assertTrue(pipeline.gpuTimersAvailable(), "Probe device must expose timestamp queries");
+                    assertTrue(pipeline.gpuTimestampPeriodNs() > 0);
+                    VoxelWorldUpload uploads = new VoxelWorldUpload();
+                    WorldSnapshot snapshot = new WorldSnapshot(1, 1, camera, scene.sections());
+                    probe.lighting = scene.lighting();
+                    try {
+                        probe.renderWorld(pipeline, false, camera, uploads, uploads.update(snapshot));
+                        ComputeDiagnostics.Snapshot first = pipeline.diagnostics().snapshotAndReset();
+                        assertEquals(27, first.sections(), "First frame must upload the full resident window");
+                        assertTrue(first.bytes() > 0);
+                        assertEquals(0, first.gpuSamples(), "The first frame cannot harvest a completed sample yet");
+                        for (int frame = 0; frame < 16; frame++)
+                            probe.renderWorld(pipeline, false, camera, uploads, uploads.update(snapshot));
+                        ComputeDiagnostics.Snapshot steady = pipeline.diagnostics().snapshotAndReset();
+                        assertEquals(16, steady.frames());
+                        assertTrue(steady.gpuSamples() >= 12, "Ring harvest must deliver samples: " + steady.gpuSamples());
+                        assertTrue(steady.gpuDispatchNs() > 0 && steady.gpuBlitNs() > 0);
+                        assertEquals(0, steady.sections(), "Steady state must not re-upload resident sections");
+                        assertNotNull(steady.gpuCounters(), "Debug flag must produce GPU history counters");
+                        assertTrue(steady.gpuCounters()[0] > 0, "Static camera must accept history samples");
+                        java.util.Map<String, Long> memory = pipeline.memoryBytes();
+                        assertTrue(memory.get("grid") >= 16L + 48*48*48*4 + VoxelWorldUpload.TINT_BYTES);
+                        assertTrue(memory.get("palette") >= VoxelWorldUpload.PALETTE_BYTES);
+                        assertTrue(memory.get("models") >= VoxelWorldUpload.MODEL_BUFFER_BYTES);
+                        assertTrue(memory.get("frame") >= VoxelComputePipeline.FRAME_BYTES);
+                        assertTrue(memory.get("history") >= 2L * WIDTH * HEIGHT * 16);
+                        assertTrue(memory.get("output") >= (long) WIDTH * HEIGHT * 4);
+                        assertTrue(memory.get("counters") >= 4L * ComputeDiagnostics.GPU_COUNTER_COUNT * Integer.BYTES);
+                        long parts = 0;
+                        for (String key : java.util.List.of("grid", "palette", "models", "frame", "history", "output", "counters"))
+                            parts += memory.get(key);
+                        assertEquals(parts, memory.get("total"));
+                        System.out.printf("[BEDRAY-COMPUTE-PROBE] gpuTimers=true periodNs=%.3f %s%n",
+                            pipeline.gpuTimestampPeriodNs(), ComputeDiagnostics.format(steady));
+                    } finally {
+                        probe.lighting = null;
+                    }
+                }
+            }
+        } finally {
+            GraphicsBackendRegistry.setDebugView(previousView);
+            if (previousFlag == null) System.clearProperty("bedray.compute.gpuCounters");
+            else System.setProperty("bedray.compute.gpuCounters", previousFlag);
+        }
+    }
+
     private record LitScene(List<SectionSnapshot> sections, VoxelGrid occupancy) {}
 
     /** World origin 0: floor y=20 (tinted tops), sunken water pool, back wall, emitter cube, emitting unsupported cell. */
@@ -303,7 +369,7 @@ class VulkanComputeProbeTest {
     }
 
     /** Borrowed-input stand-ins: 16x16 atlas, raster color cleared to blue, raster depth from the oracle. */
-    private static final class LitInputs implements AutoCloseable {
+    static final class LitInputs implements AutoCloseable {
         private final Probe probe;
         long atlas, atlasMemory, atlasView, color, colorMemory, colorView, depthImage, depthMemory, depthView;
         long staging, stagingMemory;
@@ -313,9 +379,9 @@ class VulkanComputeProbeTest {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 long[] a = image(16, 16, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, stack);
                 atlas = a[0]; atlasMemory = a[1]; atlasView = a[2];
-                long[] c = image(WIDTH, HEIGHT, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, stack);
+                long[] c = image(probe.width, probe.height, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, stack);
                 color = c[0]; colorMemory = c[1]; colorView = c[2];
-                long[] d = image(WIDTH, HEIGHT, VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_DEPTH_BIT, stack);
+                long[] d = image(probe.width, probe.height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_DEPTH_BIT, stack);
                 depthImage = d[0]; depthMemory = d[1]; depthView = d[2];
                 LongBuffer handle = stack.mallocLong(1);
                 check(vkCreateBuffer(probe.device, VkBufferCreateInfo.calloc(stack).sType$Default().size(depth.length * 4L)
@@ -354,7 +420,7 @@ class VulkanComputeProbeTest {
                 vkCmdClearColorImage(probe.command, color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blue, range);
                 VkBufferImageCopy.Buffer copy = VkBufferImageCopy.calloc(1, stack);
                 copy.get(0).imageSubresource().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT).layerCount(1);
-                copy.get(0).imageExtent().set(WIDTH, HEIGHT, 1);
+                copy.get(0).imageExtent().set(probe.width, probe.height, 1);
                 vkCmdCopyBufferToImage(probe.command, staging, depthImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copy);
                 for (int i = 0; i < 3; i++) toTransfer.get(i).oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                     .newLayout(VK_IMAGE_LAYOUT_GENERAL).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
@@ -554,6 +620,7 @@ class VulkanComputeProbeTest {
     }
 
     static final class Probe implements AutoCloseable {
+        final int width, height, pixelBytes;
         VkInstance instance;
         VkDevice device;
         VkQueue queue;
@@ -568,6 +635,13 @@ class VulkanComputeProbeTest {
         io.github.andrexarlay.bedray.api.v1.LightingFrame lighting;
 
         Probe() {
+            this(WIDTH, HEIGHT);
+        }
+
+        Probe(int width, int height) {
+            this.width = width;
+            this.height = height;
+            this.pixelBytes = width * height * 4;
             try {
                 create();
             } catch (RuntimeException | Error failure) {
@@ -636,14 +710,14 @@ class VulkanComputeProbeTest {
                         .format(VK_FORMAT_R8G8B8A8_UNORM).mipLevels(1).arrayLayers(1).samples(VK_SAMPLE_COUNT_1_BIT)
                         .tiling(VK_IMAGE_TILING_OPTIMAL).usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
                         .sharingMode(VK_SHARING_MODE_EXCLUSIVE).initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
-                imageInfo.extent().set(WIDTH, HEIGHT, 1);
+                imageInfo.extent().set(width, height, 1);
                 check(vkCreateImage(device, imageInfo, null, handle), "Create target image");
                 target = handle.get(0);
                 VkMemoryRequirements requirements = VkMemoryRequirements.calloc(stack);
                 vkGetImageMemoryRequirements(device, target, requirements);
                 targetMemory = allocate(physical, requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, stack);
                 check(vkBindImageMemory(device, target, targetMemory, 0), "Bind target memory");
-                check(vkCreateBuffer(device, VkBufferCreateInfo.calloc(stack).sType$Default().size(PIXEL_BYTES)
+                check(vkCreateBuffer(device, VkBufferCreateInfo.calloc(stack).sType$Default().size(pixelBytes)
                         .usage(VK_BUFFER_USAGE_TRANSFER_DST_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "Create readback buffer");
                 readback = handle.get(0);
                 vkGetBufferMemoryRequirements(device, readback, requirements);
@@ -705,10 +779,10 @@ class VulkanComputeProbeTest {
                         0, null, null, ready);
                 VkBufferImageCopy.Buffer copy = VkBufferImageCopy.calloc(1, stack);
                 copy.get(0).imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
-                copy.get(0).imageExtent().set(WIDTH, HEIGHT, 1);
+                copy.get(0).imageExtent().set(width, height, 1);
                 vkCmdCopyImageToBuffer(command, target, VK_IMAGE_LAYOUT_GENERAL, readback, copy);
                 VkBufferMemoryBarrier.Buffer host = VkBufferMemoryBarrier.calloc(1, stack);
-                host.get(0).sType$Default().buffer(readback).offset(0).size(PIXEL_BYTES)
+                host.get(0).sType$Default().buffer(readback).offset(0).size(pixelBytes)
                         .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT);
                 vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
@@ -720,10 +794,10 @@ class VulkanComputeProbeTest {
                 check(vkQueueWaitIdle(queue), "Wait for compute probe");
                 targetInitialized = true;
                 PointerBuffer mapped = stack.mallocPointer(1);
-                check(vkMapMemory(device, readbackMemory, 0, PIXEL_BYTES, 0, mapped), "Map probe readback");
+                check(vkMapMemory(device, readbackMemory, 0, pixelBytes, 0, mapped), "Map probe readback");
                 try {
-                    ByteBuffer bytes = MemoryUtil.memByteBuffer(mapped.get(0), PIXEL_BYTES);
-                    byte[] result = new byte[PIXEL_BYTES];
+                    ByteBuffer bytes = MemoryUtil.memByteBuffer(mapped.get(0), pixelBytes);
+                    byte[] result = new byte[pixelBytes];
                     bytes.get(result);
                     return result;
                 } finally {

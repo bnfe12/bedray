@@ -51,6 +51,8 @@ public final class ComputeRenderBridge {
     private static long resourceColorView, resourceDepthView;
     private static LightingFrame currentLighting;
     private static final ComputeWorldCapture worldCapture = new ComputeWorldCapture();
+    private static long captureNsTotal, submitNsTotal, lastTimingLogNs;
+    private static int timedFrames;
 
     private ComputeRenderBridge() {}
 
@@ -124,8 +126,10 @@ public final class ComputeRenderBridge {
                 notePendingCamera("Waiting for block atlas and baked models", camera);
                 return;
             }
+            long captureStart = System.nanoTime();
             var snapshot = worldCapture.capture(camera, atlas, backend.supportsModelGeometry(),
                 backend.supportsCellTint());
+            captureNsTotal += System.nanoTime() - captureStart;
             if (snapshot == null) {
                 notePendingCamera(worldCapture.pendingReason(), camera);
                 return;
@@ -253,9 +257,12 @@ public final class ComputeRenderBridge {
             if (result != VK10.VK_SUCCESS) {
                 throw new IllegalStateException("Compute command buffer end failed: " + result);
             }
+            long submitStart = System.nanoTime();
             encoder.execute(commandBuffer);
+            submitNsTotal += System.nanoTime() - submitStart;
         }
         if (recorded) {
+            noteFrameTiming(backend);
             if (pendingFrameReason != null) {
                 LOGGER.info("[BEDRAY-COMPUTE] frame_inputs_ready target={}x{}", target.width,target.height);
                 pendingFrameReason = null;
@@ -342,6 +349,8 @@ public final class ComputeRenderBridge {
         resourceAtlasGeneration = 0;
         resourceTarget = null;
         resourceColorView = resourceDepthView = 0;
+        captureNsTotal = submitNsTotal = lastTimingLogNs = 0;
+        timedFrames = 0;
         if (owner == null) return true;
         try {
             // execute() queues transient buffers in the host encoder. Flush those before provider.close() waits idle.
@@ -355,6 +364,27 @@ public final class ComputeRenderBridge {
             fail("Cleanup failed; restart the client before retrying: " + error.getMessage(), error);
             return false;
         }
+    }
+
+    /** One [BEDRAY-COMPUTE] frame_timing line per second at most; provider counters join the host CPU times. */
+    private static void noteFrameTiming(GraphicsBackend backend) {
+        timedFrames++;
+        long now = System.nanoTime();
+        if (lastTimingLogNs == 0) {
+            lastTimingLogNs = now;
+            return;
+        }
+        if (now - lastTimingLogNs < 1_000_000_000L) return;
+        lastTimingLogNs = now;
+        LOGGER.info("[BEDRAY-COMPUTE] frame_timing frames={} capture_ms={} submit_ms={} {}",
+            timedFrames, ms(captureNsTotal / (double) timedFrames), ms(submitNsTotal / (double) timedFrames),
+            backend.frameDiagnostics());
+        captureNsTotal = submitNsTotal = 0;
+        timedFrames = 0;
+    }
+
+    private static String ms(double nanos) {
+        return String.format(java.util.Locale.ROOT, "%.3f", nanos * 1.0e-6);
     }
 
     private static void noteIdle(String reason) {

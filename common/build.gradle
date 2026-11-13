@@ -1,4 +1,5 @@
 apply from: rootProject.file('gradle/loader-module.gradle')
+apply from: rootProject.file('gradle/slang.gradle')
 
 // All mod logic lives here (no loader API: see NoLoaderImportsTest). The loader modules only add entry points and descriptors.
 base {
@@ -82,6 +83,123 @@ tasks.register('runShimTests', JavaExec) {
 
 tasks.named('check') {
     dependsOn tasks.named('runShimTests')
+}
+
+// ---- Tier 1 Slang toolchain (host RT). Mirrors compute-common's Tier 0 path; SPIR-V 1.4 direct. ----
+def slangShaderOut = layout.buildDirectory.dir('generated/shaders')
+def slangRtVariants = [
+    [name: 'rt_tier1_probe', src: 'rt_tier1_probe', defines: []],
+    [name: 'fg_prepare', src: 'fg_prepare', defines: []],
+    [name: 'iris_depth', src: 'iris_depth', defines: []],
+    [name: 'rt_particles_composite', src: 'rt_particles_composite', defines: []],
+    [name: 'rt_composite', src: 'rt_composite', defines: []],
+]
+def slangRtBaseArgs = ['-target', 'spirv', '-profile', 'spirv_1_4', '-emit-spirv-directly', '-entry', 'main']
+tasks.register('compileSlangShaders') {
+    dependsOn tasks.named('fetchSlang')
+    inputs.dir('src/main/resources/shaders/slang')
+    // Fingerprint the compiler binary, flags and variant defines so a flag change recompiles
+    // instead of silently reusing a stale .spv (the cache key must cover every compiler input).
+    inputs.file(slangc)
+    inputs.property('slangRtVariants', slangRtVariants)
+    inputs.property('slangRtBaseArgs', slangRtBaseArgs)
+    outputs.dir(slangShaderOut)
+    doLast {
+        def outDir = new File(slangShaderOut.get().asFile, 'assets/bedray_rt/shaders')
+        outDir.mkdirs()
+        slangRtVariants.each { v ->
+            def src = file("src/main/resources/shaders/slang/${v.src}.slang").absolutePath
+            def args = [slangc.absolutePath, src] + slangRtBaseArgs
+            v.defines.each { d -> args << "-D${d}".toString() }
+            args << '-o' << new File(outDir, "${v.name}_v14.spv").absolutePath
+            def proc = new ProcessBuilder(args).redirectErrorStream(true).start()
+            def log = proc.inputStream.text
+            if (proc.waitFor() != 0) throw new GradleException("slangc failed (${v.name}):\n${log}")
+        }
+    }
+}
+sourceSets.main.resources.srcDir(slangShaderOut)
+tasks.named('processResources') { dependsOn tasks.named('compileSlangShaders') }
+
+// Offscreen RT measurement harness (L2). shaderc natives are not on the Maven test classpath;
+// take them from the launcher libraries exactly as runShimTests does.
+def shadercNative = file("${rootProject.lwjgl_libs_dir}/lwjgl-shaderc-natives-windows/${rootProject.lwjgl_natives_version}/lwjgl-shaderc-natives-windows-${rootProject.lwjgl_natives_version}.jar")
+tasks.register('rtProbe', Test) {
+    group = 'verification'
+    description = 'Offscreen Vulkan 1.2 ray-query dispatch + readback (L2, not in-game). Fails if no RT device.'
+    dependsOn tasks.named('testClasses')
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath + files(shadercNative)
+    useJUnitPlatform()
+    filter { includeTestsMatching '*RtBaselineProbeTest' }
+    systemProperty 'bedray.rt.rtProbe', 'true'
+    // LWJGL 3.3.x enumerates driver extensions on its native stack; current drivers exceed 64 KiB.
+    systemProperty 'org.lwjgl.system.stackSize', '256'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    doFirst {
+        if (!shadercNative.isFile()) {
+            throw new GradleException("LWJGL shaderc natives jar not found (set BEDRAY_LAUNCHER_LIBRARIES or lwjgl_libs_dir, see docs/BUILDING.md): " + shadercNative)
+        }
+        systemProperty 'org.lwjgl.system.SharedLibraryExtractPath', new File(temporaryDir, 'lwjgl-natives').absolutePath
+    }
+    testLogging { events 'passed', 'failed'; showStandardStreams = true; exceptionFormat = 'full' }
+}
+
+tasks.register('rtBaseline', JavaExec) {
+    group = 'verification'
+    description = 'V0 RT baseline: three fixed offscreen ray-query scenes -> docs/RT_BASELINE.md (L2, not in-game)'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath + files(shadercNative)
+    mainClass = 'io.github.andrexarlay.vulkancompat.rt.harness.RtBaselineRunner'
+    workingDir = rootProject.projectDir
+    args rootProject.projectDir.absolutePath
+    systemProperty 'org.lwjgl.system.stackSize', '256'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    doFirst {
+        if (!shadercNative.isFile()) {
+            throw new GradleException("LWJGL shaderc natives jar not found (set BEDRAY_LAUNCHER_LIBRARIES or lwjgl_libs_dir, see docs/BUILDING.md): " + shadercNative)
+        }
+        systemProperty 'org.lwjgl.system.SharedLibraryExtractPath', new File(temporaryDir, 'lwjgl-natives').absolutePath
+    }
+}
+
+tasks.register('postProbe', Test) {
+    group = 'verification'
+    description = 'Offscreen plain-compute post-shader harness + A/B (L2, not in-game). Fails if no compute device.'
+    dependsOn tasks.named('testClasses')
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath + files(shadercNative)
+    useJUnitPlatform()
+    workingDir = rootProject.projectDir
+    filter { includeTestsMatching '*PostShaderProbeTest'; includeTestsMatching '*FgPrepareAbTest'; includeTestsMatching '*IrisDepthAbTest'; includeTestsMatching '*ParticlesAbTest'; includeTestsMatching '*CompositeAbTest' }
+    systemProperty 'bedray.rt.postProbe', 'true'
+    systemProperty 'org.lwjgl.system.stackSize', '256'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    doFirst {
+        if (!shadercNative.isFile()) {
+            throw new GradleException("LWJGL shaderc natives jar not found (set BEDRAY_LAUNCHER_LIBRARIES or lwjgl_libs_dir, see docs/BUILDING.md): " + shadercNative)
+        }
+        systemProperty 'org.lwjgl.system.SharedLibraryExtractPath', new File(temporaryDir, 'lwjgl-natives').absolutePath
+    }
+    testLogging { events 'passed', 'failed'; showStandardStreams = true; exceptionFormat = 'full' }
+}
+
+tasks.register('postBaseline', JavaExec) {
+    group = 'verification'
+    description = 'Plain compute post-shader GLSL baseline -> docs/POST_BASELINE.md (L2, not in-game)'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath + files(shadercNative)
+    mainClass = 'io.github.andrexarlay.vulkancompat.rt.harness.PostBaselineRunner'
+    workingDir = rootProject.projectDir
+    args rootProject.projectDir.absolutePath
+    systemProperty 'org.lwjgl.system.stackSize', '256'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    doFirst {
+        if (!shadercNative.isFile()) {
+            throw new GradleException("LWJGL shaderc natives jar not found (set BEDRAY_LAUNCHER_LIBRARIES or lwjgl_libs_dir, see docs/BUILDING.md): " + shadercNative)
+        }
+        systemProperty 'org.lwjgl.system.SharedLibraryExtractPath', new File(temporaryDir, 'lwjgl-natives').absolutePath
+    }
 }
 
 publishing {

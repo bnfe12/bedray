@@ -95,6 +95,21 @@ public final class RtShaderCompiler {
         }
     }
 
+    /**
+     * Loads a build-time-compiled Slang SPIR-V module ({@code :common:compileSlangShaders}) from the jar as a direct
+     * buffer, bypassing runtime shaderc. A missing module is an {@link RtFailure} (no silent fallback, rule 4).
+     */
+    public static ByteBuffer loadPrecompiled(String resourcePath) {
+        try (InputStream in = RtShaderCompiler.class.getResourceAsStream(resourcePath)) {
+            if (in == null) {
+                throw new RtFailure("shader_load", "precompiled SPIR-V not found: " + resourcePath + " (run :common:compileSlangShaders)");
+            }
+            return direct(in.readAllBytes());
+        } catch (IOException e) {
+            throw new RtFailure("shader_load", "cannot read " + resourcePath, e);
+        }
+    }
+
     /** Starts one daemon worker that compiles known Bedray shaders before the player first enables ray tracing. */
     public static void prewarmAsync() {
         if (!Boolean.parseBoolean(System.getProperty("bedray.shaderCache.prewarm", "true"))
@@ -134,10 +149,8 @@ public final class RtShaderCompiler {
             new ShaderVariant("/shaders/rt_bloom.comp", "rt_bloom.comp+down+warmup", "#define BLOOM_STAGE 1" + (char) 10),
             new ShaderVariant("/shaders/rt_bloom.comp", "rt_bloom.comp+up+warmup", "#define BLOOM_STAGE 2" + (char) 10),
             new ShaderVariant("/shaders/rt_bloom.comp", "rt_bloom.comp+apply+warmup", "#define BLOOM_STAGE 3" + (char) 10),
-            new ShaderVariant(RtCompositePipeline.SHADER_PATH, "rt_composite.comp+warmup", ""),
             new ShaderVariant("/shaders/rt_pack_nrd.comp", "rt_pack_nrd.comp+pack+warmup", "#define VKB_PASS_PACK 1" + (char) 10),
-            new ShaderVariant("/shaders/rt_pack_nrd.comp", "rt_pack_nrd.comp+compose+warmup", "#define VKB_PASS_COMPOSE 1" + (char) 10),
-            new ShaderVariant("/shaders/rt_particles_composite.comp", "rt_particles_composite.comp+warmup", "")
+            new ShaderVariant("/shaders/rt_pack_nrd.comp", "rt_pack_nrd.comp+compose+warmup", "#define VKB_PASS_COMPOSE 1" + (char) 10)
         );
     }
 

@@ -775,7 +775,7 @@ public final class FrameGenRuntime {
      * Common constants (guide 7.0 and sl_consts.h). SL matrices are row-major with row vectors; the JOML float array
      * (column-major, column vectors) of M is byte-identical to the row-major array of M transposed, i.e. the row-vector form,
      * so {@code Matrix4f.get} is passed as is. Depth: reverse-Z hardware depth; motion vectors: pixels, previous minus current,
-     * camera + object motion, no jitter, already flipped to the back buffer orientation by fg_prepare.comp.
+     * camera + object motion, no jitter, already flipped to the back buffer orientation by fg_prepare.slang.
      */
     private static long constantsFrame = -1;
 

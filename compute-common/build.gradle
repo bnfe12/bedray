@@ -1,4 +1,5 @@
 apply from: rootProject.file('gradle/loader-module.gradle')
+apply from: rootProject.file('gradle/slang.gradle')
 base { archivesName = 'bedray-compute-common' }
 java { withSourcesJar() }
 sourceSets.test.java.srcDir(rootProject.file('tools/tests'))
@@ -7,9 +8,7 @@ dependencies {
     testImplementation project(':renderer-api')
     testImplementation "org.lwjgl:lwjgl:${rootProject.lwjgl_version}"
     testImplementation "org.lwjgl:lwjgl-vulkan:${rootProject.lwjgl_version}"
-    testImplementation "org.lwjgl:lwjgl-shaderc:${rootProject.lwjgl_version}"
     testRuntimeOnly "org.lwjgl:lwjgl:${rootProject.lwjgl_version}:natives-windows"
-    testRuntimeOnly "org.lwjgl:lwjgl-shaderc:${rootProject.lwjgl_version}:natives-windows"
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
 }
@@ -25,12 +24,59 @@ tasks.withType(Test).configureEach {
         systemProperty 'org.lwjgl.system.SharedLibraryExtractPath', new File(temporaryDir, 'lwjgl-natives').absolutePath
     }
 }
+def slangShaderOut = layout.buildDirectory.dir('generated/shaders')
+def slangVariants = [
+    [name: 'default',       defines: []],
+    [name: 'textured',      defines: ['TEXTURED_CUBES']],
+    [name: 'live',          defines: ['TEXTURED_CUBES', 'RASTER_INPUTS']],
+    [name: 'live_counters', defines: ['TEXTURED_CUBES', 'RASTER_INPUTS', 'GPU_COUNTERS']],
+]
+def slangBaseArgs = ['-target', 'spirv', '-profile', 'spirv_1_0', '-emit-spirv-via-glsl', '-entry', 'main']
+tasks.register('compileSlangShaders') {
+    dependsOn tasks.named('fetchSlang')
+    inputs.file('src/main/resources/assets/bedray_compute/shaders/voxel.slang')
+    // Fingerprint the compiler binary, flags and variant defines so a flag change recompiles
+    // instead of silently reusing a stale .spv (the cache key must cover every compiler input).
+    inputs.file(slangc)
+    inputs.property('slangVariants', slangVariants)
+    inputs.property('slangBaseArgs', slangBaseArgs)
+    outputs.dir(slangShaderOut)
+    doLast {
+        def outDir = new File(slangShaderOut.get().asFile, 'assets/bedray_compute/shaders')
+        outDir.mkdirs()
+        def src = file('src/main/resources/assets/bedray_compute/shaders/voxel.slang').absolutePath
+        slangVariants.each { v ->
+            def args = [slangc.absolutePath, src] + slangBaseArgs
+            v.defines.each { d -> args << "-D${d}".toString() }
+            args << '-o' << new File(outDir, "voxel_${v.name}_v10.spv").absolutePath
+            def proc = new ProcessBuilder(args).redirectErrorStream(true).start()
+            def log = proc.inputStream.text
+            if (proc.waitFor() != 0) throw new GradleException("slangc failed (${v.name}):\n${log}")
+        }
+    }
+}
+sourceSets.main.resources.srcDir(slangShaderOut)
+tasks.named('processResources') { dependsOn tasks.named('compileSlangShaders') }
 tasks.register('worldSnapshotContracts', JavaExec) {
     group = 'verification'
     description = 'Runs the loaded-section snapshot/cache CPU contract suite'
     dependsOn tasks.named('testClasses')
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'WorldSnapshotContractTest'
+}
+tasks.register('computeBaseline', JavaExec) {
+    group = 'verification'
+    description = 'V0 baseline: three fixed offscreen scenes, GPU/CPU timings and counters -> docs/COMPUTE_BASELINE.md (L2, not in-game)'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'io.github.andrexarlay.bedray.compute.ComputeBaselineRunner'
+    workingDir = rootProject.projectDir
+    args rootProject.projectDir.absolutePath
+    systemProperty 'bedray.compute.gpuCounters', 'true'
+    // LWJGL 3.3.x enumerates driver extensions on its native stack; current drivers exceed 64 KiB.
+    systemProperty 'org.lwjgl.system.stackSize', '256'
+    systemProperty 'org.lwjgl.system.SharedLibraryExtractPath', new File(temporaryDir, 'lwjgl-natives').absolutePath
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
 }
 tasks.register('vulkanProbe', Test) {
     group = 'verification'

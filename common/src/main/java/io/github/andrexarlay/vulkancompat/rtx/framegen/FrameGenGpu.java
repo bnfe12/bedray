@@ -3,7 +3,6 @@ package io.github.andrexarlay.vulkancompat.rtx.framegen;
 import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.util.shaderc.Shaderc;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkComputePipelineCreateInfo;
@@ -33,7 +32,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
-import java.nio.charset.StandardCharsets;
 
 /**
  * GPU side of the frame generation inputs, all plain Vulkan on the engine device (the engine keeps its own images in
@@ -42,7 +40,7 @@ import java.nio.charset.StandardCharsets;
  * <li>a ring of {@link #SETS} sets {hudless colour (window size, back buffer format), flipped depth (R32F), flipped motion
  *     vectors (RG16F)}; a ring because Streamline reads the tagged images asynchronously after {@code vkQueuePresentKHR}
  *     (ProgrammingGuideDLSS_G.md 5.2: tags valid until present), while the next frame already writes the next set;</li>
- * <li>the compute pass {@code fg_prepare.comp} (flip of depth and motion vectors, see the shader header) and a
+ * <li>the compute pass {@code fg_prepare.slang} (flip of depth and motion vectors, see the shader header) and a
  *     {@code vkCmdBlitImage} that copies the engine main target (world without GUI) vertically flipped into the hudless image.</li>
  * </ul>
  * Render thread only.
@@ -224,35 +222,20 @@ public final class FrameGenGpu implements AutoCloseable {
     }
 
     private static ByteBuffer compile() {
-        String glsl;
-        try (InputStream in = FrameGenGpu.class.getResourceAsStream("/shaders/fg_prepare.comp")) {
+        // Slang Tier 1 port (Stage 2.1a): load the build-time precompiled SPIR-V instead of runtime shaderc.
+        // The GLSL fg_prepare.comp was removed after the byte-identical A/B passed (docs/POST_BASELINE.md).
+        String path = "/assets/bedray_rt/shaders/fg_prepare_v14.spv";
+        try (InputStream in = FrameGenGpu.class.getResourceAsStream(path)) {
             if (in == null) {
-                throw new IllegalStateException("resource /shaders/fg_prepare.comp not found");
+                throw new IllegalStateException("precompiled SPIR-V not found: " + path + " (run :common:compileSlangShaders)");
             }
-            glsl = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            byte[] bytes = in.readAllBytes();
+            ByteBuffer direct = BufferUtils.createByteBuffer(bytes.length);
+            direct.put(bytes);
+            direct.flip();
+            return direct;
         } catch (IOException e) {
-            throw new IllegalStateException("cannot read fg_prepare.comp", e);
-        }
-        long compiler = Shaderc.shaderc_compiler_initialize();
-        long options = Shaderc.shaderc_compile_options_initialize();
-        try {
-            Shaderc.shaderc_compile_options_set_target_env(options, Shaderc.shaderc_target_env_vulkan, Shaderc.shaderc_env_version_vulkan_1_2);
-            long result = Shaderc.shaderc_compile_into_spv(compiler, glsl, Shaderc.shaderc_compute_shader, "fg_prepare.comp", "main", options);
-            try {
-                if (Shaderc.shaderc_result_get_compilation_status(result) != Shaderc.shaderc_compilation_status_success) {
-                    throw new IllegalStateException("fg_prepare.comp: " + Shaderc.shaderc_result_get_error_message(result));
-                }
-                ByteBuffer bytes = Shaderc.shaderc_result_get_bytes(result);
-                ByteBuffer direct = BufferUtils.createByteBuffer(bytes.remaining());
-                direct.put(bytes);
-                direct.flip();
-                return direct;
-            } finally {
-                Shaderc.shaderc_result_release(result);
-            }
-        } finally {
-            Shaderc.shaderc_compile_options_release(options);
-            Shaderc.shaderc_compiler_release(compiler);
+            throw new IllegalStateException("cannot read " + path, e);
         }
     }
 

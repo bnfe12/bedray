@@ -85,6 +85,14 @@ class GraphicsBackendRegistryTest {
         assertEquals(0, accepted.closeCalls, "Only the host render thread may close provider GPU resources");
     }
 
+    /** API minor 6 adds frameDiagnostics as a default method: older providers compile and run unchanged. */
+    @Test
+    void frameDiagnosticsIsAnAdditiveMinorSixDefault() {
+        assertEquals(6, GraphicsBackendRegistry.API_MINOR_VERSION);
+        assertEquals(6, GraphicsBackendRegistry.apiMinorVersion());
+        assertEquals("", new Backend("test:legacy").frameDiagnostics());
+    }
+
     private static void assertDoesNotClaimActive() {
         assertFalse(GraphicsBackendRegistry.status().toUpperCase(Locale.ROOT).contains("ACTIVE"));
     }

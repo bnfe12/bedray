@@ -1,12 +1,26 @@
 package io.github.andrexarlay.bedray.compute;
 
 import org.junit.jupiter.api.Test;
+import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ComputeShaderTest {
-    @Test void compilesForVulkan10WithoutRayTracingCapabilities() {
-        var spirv = ComputeShaderCompiler.compile(VoxelComputePipeline.shaderSource(), "voxel.comp").order(ByteOrder.LITTLE_ENDIAN);
+    @Test void defaultVariantIsVulkan10Core() {
+        assertCoreCapabilitiesOnly(VoxelComputePipeline.precompiledSpirv(false, false, false));
+    }
+
+    @Test void liveCountersVariantIsVulkan10Core() {
+        assertCoreCapabilitiesOnly(VoxelComputePipeline.precompiledSpirv(true, true, true));
+    }
+
+    @Test void allUsedVariantsAreVulkan10Core() {
+        assertCoreCapabilitiesOnly(VoxelComputePipeline.precompiledSpirv(true, false, false));
+        assertCoreCapabilitiesOnly(VoxelComputePipeline.precompiledSpirv(true, true, false));
+    }
+
+    private static void assertCoreCapabilitiesOnly(ByteBuffer compiled) {
+        var spirv = compiled.order(ByteOrder.LITTLE_ENDIAN);
         assertEquals(0x07230203, spirv.getInt(0));
         assertEquals(0x00010000, spirv.getInt(4));
         for (int word = 5; word < spirv.remaining()/4;) {

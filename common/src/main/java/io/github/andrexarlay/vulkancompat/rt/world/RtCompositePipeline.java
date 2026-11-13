@@ -26,7 +26,7 @@ import java.nio.LongBuffer;
  * from the engine render target over the ray-traced world (rt_output).
  */
 public final class RtCompositePipeline {
-    public static final String SHADER_PATH = "/shaders/rt_composite.comp";
+    public static final String SHADER_PATH = "/assets/bedray_rt/shaders/rt_composite_v14.spv";
     public static final int PUSH_BYTES = 80; // mat4 (64) + uvec2 (8) + float (4) + float (4)
 
     private final VkDevice device;
@@ -49,7 +49,7 @@ public final class RtCompositePipeline {
 
     public RtCompositePipeline(VkDevice device) {
         this.device = device;
-        ByteBuffer spirv = RtShaderCompiler.compileResource(SHADER_PATH, "rt_composite.comp");
+        ByteBuffer spirv = RtShaderCompiler.loadPrecompiled(SHADER_PATH);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             // Nearest sampler for pixel-accurate depth & color fetches
             VkSamplerCreateInfo samplerInfo = VkSamplerCreateInfo.calloc(stack).sType$Default()

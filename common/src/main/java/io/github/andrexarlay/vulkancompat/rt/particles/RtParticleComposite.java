@@ -24,12 +24,12 @@ import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
 /**
- * Compute pipeline of {@code rt_particles_composite.comp}: the game's particle layer (sampled, GENERAL layout) over the ray traced
+ * Compute pipeline of {@code rt_particles_composite.slang}: the game's particle layer (sampled, GENERAL layout) over the ray traced
  * image (storage, in place). One descriptor set; it is rewritten (after a device idle) only when one of the two views changes
  * (resize, RT output re-created), never per frame.
  */
 final class RtParticleComposite {
-    static final String SHADER_PATH = "/shaders/rt_particles_composite.comp";
+    static final String SHADER_PATH = "/assets/bedray_rt/shaders/rt_particles_composite_v14.spv";
     private static final int PUSH_BYTES = 16; // uvec2 size, float strength, float pad
 
     private final VkDevice device;
@@ -45,7 +45,7 @@ final class RtParticleComposite {
 
     RtParticleComposite(VkDevice device) {
         this.device = device;
-        ByteBuffer spirv = RtShaderCompiler.compileResource(SHADER_PATH, "rt_particles_composite.comp");
+        ByteBuffer spirv = RtShaderCompiler.loadPrecompiled(SHADER_PATH);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
             VkSamplerCreateInfo samplerInfo = VkSamplerCreateInfo.calloc(stack).sType$Default()

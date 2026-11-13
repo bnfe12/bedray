@@ -11,6 +11,11 @@ public interface GraphicsBackend extends AutoCloseable {
     /** CPU-side scene diagnostics; never a presentation/compatibility claim. */
     default String sceneDetail() { return "No scene diagnostics"; }
 
+    /** Optional provider timing/counter summary (API minor 6) for the host's rate-limited frame log.
+     * Called on the render thread at most once per second; the provider may reset its window per call.
+     * Empty when the provider has nothing to report. Never a presentation/compatibility claim. */
+    default String frameDiagnostics() { return ""; }
+
     /** Older providers remain synthetic-only rather than being mislabeled as live-world renderers. */
     default boolean supportsSceneMode(GraphicsBackendRegistry.SceneMode mode) {
         return mode == GraphicsBackendRegistry.SceneMode.SYNTHETIC;

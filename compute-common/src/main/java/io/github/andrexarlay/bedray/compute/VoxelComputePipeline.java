@@ -9,6 +9,7 @@ import io.github.andrexarlay.bedray.api.v1.AtlasFrame;
 import io.github.andrexarlay.bedray.api.v1.CubeSectionMaterials;
 import io.github.andrexarlay.bedray.api.v1.SectionModelGeometry;
 import io.github.andrexarlay.bedray.api.v1.LightingFrame;
+import io.github.andrexarlay.bedray.api.v1.ModelQuad;
 import io.github.andrexarlay.bedray.api.v1.RasterFrame;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import java.nio.ByteOrder;
@@ -20,7 +21,6 @@ import org.lwjgl.vulkan.*;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
-import java.nio.charset.StandardCharsets;
 
 import static org.lwjgl.vulkan.VK10.*;
 
@@ -40,6 +40,16 @@ public final class VoxelComputePipeline implements AutoCloseable {
     private ByteBuffer tileScratch;
     private long gridBytes;
     private final TemporalHistory history = new TemporalHistory();
+    private final ComputeDiagnostics diagnostics = new ComputeDiagnostics();
+    private ComputeGpuTimer gpuTimer;
+    private long gpuFrame;
+    private final long[] gpuSample = new long[3];
+    private boolean gpuCounters;
+    private long countersBuffer, countersMemory;
+    private final boolean[] countersWritten = new boolean[ComputeGpuTimer.RING];
+    private final long[] counterDeltas = new long[ComputeDiagnostics.GPU_COUNTER_COUNT];
+    private long lastAllocBytes, gridAllocBytes, paletteAllocBytes, modelAllocBytes, lightingAllocBytes,
+        outputAllocBytes, historyAllocBytes, countersAllocBytes;
 
     /** Frame SSBO (binding 5): LightingFrame, previous view-projection, previous camera and eye,
      * frame info (emitter count, history valid, history cap, motion), then the bounded emitter list. */
@@ -95,12 +105,18 @@ public final class VoxelComputePipeline implements AutoCloseable {
             || format == VK_FORMAT_R8G8B8A8_SRGB || format == VK_FORMAT_B8G8R8A8_SRGB;
     }
 
-    public static String shaderSource() {
-        try (var stream = VoxelComputePipeline.class.getResourceAsStream("/assets/bedray_compute/shaders/voxel.comp")) {
-            if (stream == null) throw new IllegalStateException("Missing voxel.comp");
-            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+    /** Build-time-compiled Slang SPIR-V (Vulkan 1.0 core); replaces runtime shaderc in the voxel path. */
+    static ByteBuffer precompiledSpirv(boolean texturedCubes, boolean rasterInputs, boolean gpuCounters) {
+        String variant = !texturedCubes ? "default" : !rasterInputs ? "textured" : gpuCounters ? "live_counters" : "live";
+        String path = "/assets/bedray_compute/shaders/voxel_" + variant + "_v10.spv";
+        try (var stream = VoxelComputePipeline.class.getResourceAsStream(path)) {
+            if (stream == null) throw new IllegalStateException("Missing precompiled SPIR-V: " + path);
+            byte[] bytes = stream.readAllBytes();
+            ByteBuffer copy = org.lwjgl.BufferUtils.createByteBuffer(bytes.length);
+            copy.put(bytes).flip();
+            return copy.order(ByteOrder.LITTLE_ENDIAN);
         } catch (IOException failure) {
-            throw new IllegalStateException("Cannot read voxel.comp", failure);
+            throw new IllegalStateException("Cannot read " + path, failure);
         }
     }
 
@@ -147,6 +163,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
             VkMemoryRequirements requirements = VkMemoryRequirements.calloc(stack);
             vkGetBufferMemoryRequirements(device, gridBuffer, requirements);
             gridMemory = allocate(requirements, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stack);
+            gridAllocBytes = lastAllocBytes;
             check(vkBindBufferMemory(device, gridBuffer, gridMemory, 0), "bind grid memory");
             var pointer = stack.mallocPointer(1);
             check(vkMapMemory(device, gridMemory, 0, gridBytes, 0, pointer), "map grid memory");
@@ -163,14 +180,15 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 paletteBuffer = handle.get(0);
                 vkGetBufferMemoryRequirements(device, paletteBuffer, requirements);
                 paletteMemory = allocate(requirements, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stack);
+                paletteAllocBytes = lastAllocBytes;
                 check(vkBindBufferMemory(device, paletteBuffer, paletteMemory, 0), "bind cube palette memory");
                 check(vkMapMemory(device, paletteMemory, 0, VoxelWorldUpload.PALETTE_BYTES, 0, pointer), "map cube palette memory");
                 try { MemoryUtil.memSet(pointer.get(0), 0, VoxelWorldUpload.PALETTE_BYTES); }
                 finally { vkUnmapMemory(device, paletteMemory); }
                 long[] model = createStorage(VoxelWorldUpload.MODEL_BUFFER_BYTES,stack);
-                modelBuffer = model[0]; modelMemory = model[1];
+                modelBuffer = model[0]; modelMemory = model[1]; modelAllocBytes = lastAllocBytes;
                 long[] light = createStorage(FRAME_BYTES,stack);
-                lightingBuffer = light[0]; lightingMemory = light[1];
+                lightingBuffer = light[0]; lightingMemory = light[1]; lightingAllocBytes = lastAllocBytes;
                 check(vkCreateSampler(device, VkSamplerCreateInfo.calloc(stack).sType$Default()
                         .magFilter(VK_FILTER_NEAREST).minFilter(VK_FILTER_NEAREST)
                         .mipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST)
@@ -190,6 +208,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
             image = handle.get(0);
             vkGetImageMemoryRequirements(device, image, requirements);
             imageMemory = allocate(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, stack);
+            outputAllocBytes = lastAllocBytes;
             check(vkBindImageMemory(device, image, imageMemory, 0), "bind output memory");
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack).sType$Default().image(image)
                     .viewType(VK_IMAGE_VIEW_TYPE_2D).format(VK_FORMAT_R8G8B8A8_UNORM);
@@ -202,19 +221,35 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 historyImage[i] = handle.get(0);
                 vkGetImageMemoryRequirements(device, historyImage[i], requirements);
                 historyMemory[i] = allocate(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, stack);
+                historyAllocBytes += lastAllocBytes;
                 check(vkBindImageMemory(device, historyImage[i], historyMemory[i], 0), "bind history memory");
                 viewInfo.image(historyImage[i]).format(HISTORY_FORMAT);
                 check(vkCreateImageView(device, viewInfo, null, handle), "create history view");
                 historyView[i] = handle.get(0);
             }
 
-            String source = shaderSource();
-            if (atlas != null) source = source.replace("#version 450", "#version 450\n#define TEXTURED_CUBES 1");
-            if (raster != null) source = source.replace("#version 450", "#version 450\n#define RASTER_INPUTS 1");
-            ByteBuffer spirv = ComputeShaderCompiler.compile(source, "bedray_compute/voxel.comp");
+            // Debug-only GPU history counters (-Dbedray.compute.gpuCounters=true); the default path
+            // compiles the unchanged shader and allocates nothing extra.
+            gpuCounters = raster != null && Boolean.getBoolean("bedray.compute.gpuCounters");
+            if (gpuCounters) {
+                check(vkCreateBuffer(device, VkBufferCreateInfo.calloc(stack).sType$Default()
+                        .size((long) ComputeGpuTimer.RING * ComputeDiagnostics.GPU_COUNTER_COUNT * Integer.BYTES)
+                        .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
+                        .sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "create gpu counter buffer");
+                countersBuffer = handle.get(0);
+                vkGetBufferMemoryRequirements(device, countersBuffer, requirements);
+                countersMemory = allocate(requirements, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stack);
+                countersAllocBytes = lastAllocBytes;
+                check(vkBindBufferMemory(device, countersBuffer, countersMemory, 0), "bind gpu counter memory");
+                check(vkMapMemory(device, countersMemory, 0, VK_WHOLE_SIZE, 0, pointer), "map gpu counter memory");
+                try { MemoryUtil.memSet(pointer.get(0), 0, ComputeGpuTimer.RING * ComputeDiagnostics.GPU_COUNTER_COUNT * Integer.BYTES); }
+                finally { vkUnmapMemory(device, countersMemory); }
+            }
+
+            ByteBuffer spirv = precompiledSpirv(atlas != null, raster != null, gpuCounters);
             check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(spirv), null, handle), "create shader");
             shader = handle.get(0);
-            int bindingCount = atlas == null ? 2 : raster == null ? 6 : 10;
+            int bindingCount = (atlas == null ? 2 : raster == null ? 6 : 10) + (gpuCounters ? 1 : 0);
             VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(bindingCount, stack);
             bindings.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
             bindings.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
@@ -228,6 +263,8 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 if (raster != null) for (int binding = 8; binding < 10; binding++)
                     bindings.get(binding).binding(binding).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
             }
+            if (gpuCounters) bindings.get(bindingCount - 1).binding(10).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
             check(vkCreateDescriptorSetLayout(device, VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings), null, handle), "create descriptor layout");
             setLayout = handle.get(0);
             VkPushConstantRange.Buffer push = VkPushConstantRange.calloc(1, stack);
@@ -242,7 +279,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
             pipeline = handle.get(0);
             VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(atlas == null ? 2 : 3, stack);
             sizes.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(raster == null ? 1 : 3);
-            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(atlas == null ? 1 : 4);
+            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount((atlas == null ? 1 : 4) + (gpuCounters ? 1 : 0));
             if (atlas != null) sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(raster == null ? 1 : 3);
             check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(sizes), null, handle), "create descriptor pool");
             pool = handle.get(0);
@@ -289,7 +326,14 @@ public final class VoxelComputePipeline implements AutoCloseable {
                     }
                 }
             }
+            if (gpuCounters) {
+                VkDescriptorBufferInfo.Buffer countersInfo = VkDescriptorBufferInfo.calloc(1, stack);
+                countersInfo.get(0).buffer(countersBuffer).offset(0).range(VK_WHOLE_SIZE);
+                writes.get(bindingCount - 1).sType$Default().dstSet(descriptorSet).dstBinding(10).descriptorCount(1)
+                    .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(countersInfo);
+            }
             vkUpdateDescriptorSets(device, writes, null);
+            gpuTimer = new ComputeGpuTimer(device);
         }
     }
 
@@ -329,6 +373,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 LongBuffer handle = stack.mallocLong(1);
                 check(vkAllocateMemory(device, VkMemoryAllocateInfo.calloc(stack).sType$Default()
                         .allocationSize(requirements.size()).memoryTypeIndex(i), null, handle), "allocate memory");
+                lastAllocBytes = requirements.size();
                 return handle.get(0);
             }
         }
@@ -367,6 +412,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
     private void record(VkCommandBuffer command, long target, boolean hitIds, CameraSnapshot camera,
                         VoxelWorldUpload origin, List<VoxelWorldUpload.Tile> updates, LightingFrame lighting) {
+        long cpuStart = System.nanoTime();
         if (camera != null && !liveCapacity) throw new IllegalArgumentException("Live traversal requires a 48 cubed tile buffer");
         if (atlas != null) {
             for (var tile : updates) {
@@ -382,12 +428,37 @@ public final class VoxelComputePipeline implements AutoCloseable {
         // Reprojection inputs are computed before recording; a singular previous matrix only disables history.
         if (raster != null) history.prepare(camera, origin, !updates.isEmpty(),
             GraphicsBackendRegistry.debugView() == GraphicsBackendRegistry.DebugView.SHADED);
+        int counterSlot = (int) (gpuFrame % ComputeGpuTimer.RING);
+        if (gpuTimer != null) {
+            // Both harvests read the slot written RING frames ago; the host keeps fewer frames in flight.
+            if (gpuCounters) harvestCounters(counterSlot);
+            gpuTimer.beginFrame(command);
+            if (gpuTimer.takeSample(gpuSample)) diagnostics.addGpuSample(gpuSample[0], gpuSample[1], gpuSample[2]);
+            gpuTimer.stamp(command, ComputeGpuTimer.MARK_FRAME_START);
+            if (gpuCounters) {
+                try (MemoryStack stack = MemoryStack.stackPush()) {
+                    vkCmdFillBuffer(command, countersBuffer,
+                        (long) counterSlot * ComputeDiagnostics.GPU_COUNTER_COUNT * Integer.BYTES,
+                        ComputeDiagnostics.GPU_COUNTER_COUNT * Integer.BYTES, 0);
+                    VkBufferMemoryBarrier.Buffer fill = VkBufferMemoryBarrier.calloc(1, stack);
+                    fill.get(0).sType$Default().buffer(countersBuffer).offset(0).size(VK_WHOLE_SIZE)
+                        .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                        .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+                    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        0, null, fill, null);
+                }
+                countersWritten[counterSlot] = true;
+            }
+            gpuFrame++;
+        }
         if (!updates.isEmpty() || atlas != null) {
             // vkCmdUpdateBuffer copies bytes into the command buffer immediately. No persistent mapped
             // staging range is overwritten while an earlier frame might still be reading it.
             if (tileScratch == null) tileScratch = MemoryUtil.memAlloc(atlas == null
                 ? VoxelWorldUpload.TILE_BYTES : SectionModelGeometry.SECTION_QUAD_BYTES).order(ByteOrder.LITTLE_ENDIAN);
             ByteBuffer upload = tileScratch;
+            long upSections = 0, upCubes = 0, upModels = 0, upQuads = 0, upBytes = 0;
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(atlas == null ? 1 : 4,stack);
                 barrier.get(0).sType$Default().buffer(gridBuffer).offset(0).size(VK_WHOLE_SIZE)
@@ -417,7 +488,18 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 for (var tile : updates) {
                     upload.clear(); tile.writeTo(upload); upload.flip();
                     vkCmdUpdateBuffer(command,gridBuffer,tile.offset(),upload);
+                    var section = tile.section();
+                    upBytes += VoxelWorldUpload.TILE_BYTES;
+                    if (section != null) {
+                        upSections++;
+                        upCubes += section.opaqueCount();
+                        upModels += section.modelCount();
+                        if (section.models() != null) upQuads += section.models().quadCount();
+                    }
                     if (atlas != null) {
+                        upBytes += CubeSectionMaterials.SECTION_BYTES + VoxelWorldUpload.TILE_BYTES
+                            + SectionModelGeometry.SECTION_HEADER_BYTES
+                            + (section == null || section.models() == null ? 0L : (long) section.models().quadCount() * ModelQuad.BYTES);
                         upload.clear(); tile.writeMaterialsTo(upload); upload.flip();
                         vkCmdUpdateBuffer(command,paletteBuffer,tile.materialOffset(),upload);
                         upload.clear(); tile.writeTintsTo(upload); upload.flip();
@@ -443,18 +525,22 @@ public final class VoxelComputePipeline implements AutoCloseable {
                     history.writeFrame(upload, emitters == null ? 0 : emitters.count());
                     upload.flip();
                     vkCmdUpdateBuffer(command,lightingBuffer,0,upload);
+                    upBytes += FRAME_HEADER_BYTES;
                     boolean emittersChanged = origin != null && origin.consumeEmittersChanged();
                     if (emitters != null && (emittersChanged || !initialized)) {
                         upload.clear(); emitters.writeTo(upload); upload.flip();
                         vkCmdUpdateBuffer(command,lightingBuffer,FRAME_HEADER_BYTES,upload);
+                        upBytes += VoxelEmitters.BYTES;
                     }
                 }
                 for (int i = 0; i < barrier.capacity(); i++)
                     barrier.get(i).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
                 vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     0,null,barrier,null);
+                diagnostics.addUpload(upSections, upCubes, upModels, upQuads, upBytes);
             }
         }
+        if (gpuTimer != null) gpuTimer.stamp(command, ComputeGpuTimer.MARK_UPLOAD_END);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             if (raster != null) {
                 // Inputs stay GENERAL. Host color/depth writes must finish before sampled reads;
@@ -502,8 +588,10 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 | (raster != null && history.parity() ? 32 : 0));
             push.putInt(84,io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry.debugView().ordinal());
             push.putInt(88,(int) history.frameCounter());
+            push.putInt(92, gpuCounters ? counterSlot * ComputeDiagnostics.GPU_COUNTER_COUNT : 0);
             vkCmdPushConstants(command, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             vkCmdDispatch(command, (width + 7) / 8, (height + 7) / 8, 1);
+            if (gpuTimer != null) gpuTimer.stamp(command, ComputeGpuTimer.MARK_DISPATCH_END);
             b.oldLayout(VK_IMAGE_LAYOUT_GENERAL).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
             vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, barrier);
             VkImageMemoryBarrier.Buffer targetBarrier = VkImageMemoryBarrier.calloc(1, stack);
@@ -523,6 +611,50 @@ public final class VoxelComputePipeline implements AutoCloseable {
             initialized = true;
             if (raster != null) history.recorded();
         }
+        if (gpuTimer != null) gpuTimer.stamp(command, ComputeGpuTimer.MARK_BLIT_END);
+        VoxelEmitters emitters = origin == null ? null : origin.emitters();
+        diagnostics.setScene(emitters == null ? 0 : emitters.count(), emitters == null ? 0 : emitters.found(), historyStatus());
+        diagnostics.addRecordNs(System.nanoTime() - cpuStart);
+        diagnostics.frame();
+    }
+
+    private void harvestCounters(int slot) {
+        if (!countersWritten[slot]) return;
+        countersWritten[slot] = false;
+        int bytes = ComputeDiagnostics.GPU_COUNTER_COUNT * Integer.BYTES;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var pointer = stack.mallocPointer(1);
+            check(vkMapMemory(device, countersMemory, (long) slot * bytes, bytes, 0, pointer), "map gpu counters");
+            try {
+                ByteBuffer values = MemoryUtil.memByteBuffer(pointer.get(0), bytes).order(ByteOrder.LITTLE_ENDIAN);
+                for (int i = 0; i < counterDeltas.length; i++) counterDeltas[i] = Integer.toUnsignedLong(values.getInt(i * 4));
+            } finally { vkUnmapMemory(device, countersMemory); }
+        }
+        diagnostics.addGpuCounters(counterDeltas);
+    }
+
+    /** Per-frame CPU/GPU timings and counters; the host polls the summary at most once per second. */
+    public ComputeDiagnostics diagnostics() { return diagnostics; }
+
+    public String frameDiagnostics() { return diagnostics.summarizeAndReset(); }
+
+    public boolean gpuTimersAvailable() { return gpuTimer != null && gpuTimer.available(); }
+
+    public float gpuTimestampPeriodNs() { return gpuTimer == null ? 0 : gpuTimer.timestampPeriodNs(); }
+
+    /** Actual VkMemoryRequirements sizes of provider-owned allocations, in bytes. */
+    public java.util.Map<String, Long> memoryBytes() {
+        java.util.Map<String, Long> sizes = new java.util.LinkedHashMap<>();
+        sizes.put("grid", gridAllocBytes);
+        sizes.put("palette", paletteAllocBytes);
+        sizes.put("models", modelAllocBytes);
+        sizes.put("frame", lightingAllocBytes);
+        sizes.put("history", historyAllocBytes);
+        sizes.put("output", outputAllocBytes);
+        sizes.put("counters", countersAllocBytes);
+        sizes.put("total", gridAllocBytes + paletteAllocBytes + modelAllocBytes + lightingAllocBytes
+            + historyAllocBytes + outputAllocBytes + countersAllocBytes);
+        return sizes;
     }
 
     /** Drops accumulated history, e.g. on a new world session; the next frame starts from one sample. */
@@ -538,6 +670,10 @@ public final class VoxelComputePipeline implements AutoCloseable {
     }
 
     private void destroy() {
+        if (gpuTimer != null) { gpuTimer.close(); gpuTimer = null; }
+        if (countersBuffer != 0) vkDestroyBuffer(device, countersBuffer, null);
+        if (countersMemory != 0) vkFreeMemory(device, countersMemory, null);
+        countersBuffer = countersMemory = 0;
         if (pool != 0) vkDestroyDescriptorPool(device, pool, null);
         if (sampler != 0) vkDestroySampler(device, sampler, null);
         if (pipeline != 0) vkDestroyPipeline(device, pipeline, null);

@@ -9,6 +9,52 @@ No RT extensions, acceleration structures, ray queries, device addresses, Int64,
 vendor DLLs are required by the Compute provider. In-game use still requires Minecraft 26.3's Vulkan
 backend baseline and the provider's queue/format/descriptor checks. This is not an arbitrary-GPU claim.
 
+## V0 baseline and frame diagnostics
+
+Measured cost comes before any shader change: every shader edit requires a baseline and an A/B
+comparison against [COMPUTE_BASELINE.md](COMPUTE_BASELINE.md). The baseline is produced by one command:
+
+```text
+gradlew :compute-common:computeBaseline
+```
+
+It renders three fixed offscreen scenes (open field with a biome border, dark emitter room, cave below
+Y=-48) at 1280x720 with a fixed camera and lighting, discards 30 warmup frames and measures 120 frames
+per scene. GPU upload/dispatch/blit regions use Vulkan timestamp queries harvested four frames late
+(no steady-state `vkDeviceWaitIdle`; CPU-only fallback when timestamps are unavailable). CPU preparation
+and record times, upload counters (sections/cubes/models/quads/bytes), emitter counts and temporal-history
+state are always collected. GPU history counters (accepted/distance/normal/empty/bounds/invalid/NaN/low)
+are debug-only behind `-Dbedray.compute.gpuCounters=true` and add one storage buffer binding.
+
+In game, the host logs `[BEDRAY-COMPUTE] frame_timing` at most once per second with capture/submit means
+and the provider summary. The provider reaches the host through the additive renderer-api minor 6
+`GraphicsBackend.frameDiagnostics()` default; older providers report nothing and keep working. Offscreen
+baseline numbers are L2 evidence, not in-game (L4) performance claims.
+
+## Slang shader toolchain (subproject 1)
+
+The voxel shader is authored in Slang
+(`compute-common/src/main/resources/assets/bedray_compute/shaders/voxel.slang`), the single source of
+truth. The former runtime-GLSL path (`voxel.comp` + `ComputeShaderCompiler`) is removed; there is no
+runtime shaderc in the voxel path. `compileSlangShaders` compiles four variants (`default`, `textured`,
+`live`, `live_counters`) at build time with the pinned compiler `slangc v2026.22` (SHA-256
+`dd0c4a86bd44cdb7e9cf712af0c8ebf2fff1bba19fa5e3c128ff87384e8ff17b`, canonical GitHub release, no proxy)
+using `-target spirv -profile spirv_1_0 -emit-spirv-via-glsl -entry main`. The `.spv` are packaged as
+resources and loaded by `VoxelComputePipeline.precompiledSpirv`. The task fingerprints the compiler
+binary, flags and variant defines, so a flag change recompiles instead of reusing a stale `.spv`.
+
+Tier 0 is Vulkan 1.0 core: SPIR-V version `0x00010000`, capabilities ⊆ {Shader=1, ImageQuery=50}, zero
+device extensions (audited by `ComputeShaderTest`). The uploaded ABI is unchanged: bindings 0–10, std430
+offsets, ModelQuad 96 B, push constant 112 B, entry `main`, local_size 8×8. Matrices keep multiply order
+(GLSL `M*v` → Slang `mul(M,v)`): Slang emits row_major uniforms over the host's column-major bytes.
+
+A/B against the V0 GLSL baseline (measure-before-shader): cave is byte-exact; field differs on 8 pixels
+and darkroom on 1 pixel, every delta exactly 1 LSB. This is irreducible compiler FP-contraction noise
+(V0's shaderc performance opt fuses multiply-add into FMA; Slang's bundled glslang does not), not a port
+difference — a wrong matrix convention or algorithm would produce large structured deltas. The Slang
+output is deterministic across 14 consecutive baseline runs. The V0 reference hashes are retained in the
+pilot plan; the baseline was not regenerated to hide a delta. Evidence remains L2 offscreen, not in-game (L4).
+
 ## Alpha.11 integration and optical limits
 
 The host integrates the newer hardware-renderer fixes for degenerate geometry/camera directions,
@@ -290,7 +336,7 @@ gradlew :renderer-api:compileJava :common:compileJava :compute-common:compileJav
 
 Build separate candidates with `:neoforge:jar :fabric:jar :compute-neoforge:jar :compute-fabric:jar`.
 Historical unit/offscreen probe commands remain available in the Gradle modules, but a previous result
-is not evidence for a later revision. A Vulkan1.0 GLSL compile does not dispatch on GPU or run Minecraft.
+is not evidence for a later revision. A Vulkan1.0 SPIR-V compile does not dispatch on GPU or run Minecraft.
 Native libraries/dependencies used by local build tools are not published as product binaries.
 
 The earlier alpha.4 live run failed on a nonfinite inverse projection. Readiness/retry and current-frame
