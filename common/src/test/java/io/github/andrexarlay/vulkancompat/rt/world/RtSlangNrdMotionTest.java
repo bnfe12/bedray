@@ -28,6 +28,7 @@ class RtSlangNrdMotionTest {
     private static final String PASS = SHADERS + "/passes/path_trace_scene.slang";
     private static final String RC_PASS = SHADERS + "/passes/rc_path_trace_scene.slang";
     private static final String HOST_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java";
+    private static final String MANIFEST_VALIDATION = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathManifestValidation.java";
     private static final String HOST_FRAME = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java";
     private static final String BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String RENDERER = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java";
@@ -104,7 +105,7 @@ class RtSlangNrdMotionTest {
         String record = read(HOST_PASS);
         assertTrue(record.contains("new Expected(\"outMotionBuffer\", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),"),
             "the manifest must declare the binding as a storage buffer");
-        assertTrue(record.contains("requireElementBytes(manifest, \"outMotionBuffer\", MOTION_ELEMENT_BYTES);"),
+        assertTrue(read(MANIFEST_VALIDATION).contains("requireElementBytes(manifest, \"outMotionBuffer\", MOTION_ELEMENT_BYTES);"),
             "a shader whose vec4 is not 16 bytes would index past the bound range");
         assertTrue(record.contains("motionDummy = zeroedBuffer(MOTION_ELEMENT_BYTES);"),
             "a zero element keeps the descriptor complete when the layout is not NRD");
