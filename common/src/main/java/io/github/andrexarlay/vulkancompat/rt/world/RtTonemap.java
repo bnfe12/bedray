@@ -12,6 +12,9 @@ public final class RtTonemap {
     public static final float CON = 0.20f;
     public static final float PIVOT = 0.25f;
     public static final float INV_MAX = 0.985f;
+    public static final float WHITE_START = 11.0f;
+    public static final float WHITE_FULL = 60.0f;
+    public static final float WHITE_MAX = 0.65f;
     private static final float LR = 0.2126f;
     private static final float LG = 0.7152f;
     private static final float LB = 0.0722f;
