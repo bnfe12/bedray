@@ -96,7 +96,9 @@ public final class FsrChecks {
             "prefix match is exact (3.0 / 4.x are not 3.1)");
         check(FsrVersion.parse("3.1") == FsrVersion.FSR_3_1 && FsrVersion.parse("2") == FsrVersion.FSR_2
             && FsrVersion.parse("auto") == FsrVersion.AUTO, "parse");
-        check(throwsIae(() -> FsrVersion.parse("4")), "FSR 4 is not a Vulkan option");
+        check(FsrVersion.parse("4") == FsrVersion.FSR_4 && !FsrVersion.FSR_4.isAvailableIn(both), "FSR 4 requires an eligible provider");
+        var v4 = new FfxNative.ProviderVersion(0x1001002L, "AMD FSR Upscaling 4.1.2 *");
+        check(FsrVersion.FSR_4.pick(List.of(v31, v4, v2)).orElseThrow() == v4, "driver provider is recognized");
         check(new FsrRequest(FsrQuality.QUALITY, FsrVersion.AUTO).equals(new FsrRequest(FsrQuality.QUALITY, FsrVersion.AUTO)), "request equality");
         check(!new FsrRequest(FsrQuality.QUALITY, FsrVersion.AUTO).equals(new FsrRequest(FsrQuality.QUALITY, FsrVersion.FSR_2)), "version is part of it");
     }

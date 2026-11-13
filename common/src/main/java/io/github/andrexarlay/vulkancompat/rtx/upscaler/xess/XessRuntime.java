@@ -49,6 +49,7 @@ public final class XessRuntime {
 
     private static State state = State.IDLE;
     private static XessNative nativeLib;
+    private static volatile String installedVersion;
     private static MemorySegment context;
     private static VulkanDevice contextDevice;
     private static XessQuality activeMode;
@@ -112,6 +113,11 @@ public final class XessRuntime {
 
     public static synchronized XessNative nativeLib() {
         return nativeLib;
+    }
+
+    /** Version reported by the loaded Vulkan runtime, if queried. */
+    public static String installedVersion() {
+        return installedVersion;
     }
 
     public static synchronized MemorySegment context() {
@@ -234,8 +240,8 @@ public final class XessRuntime {
                 return;
             }
         }
-        String version = nativeLib.getVersionString();
-        LOGGER.info("[VKB-AUTOTEST] xess=lib_loaded version={}", version);
+        if (installedVersion == null) installedVersion = nativeLib.getVersionString();
+        LOGGER.info("[VKB-AUTOTEST] xess=lib_loaded version={}", installedVersion);
 
         // Instance requirements (X0 probe; needs no handles). The engine instance is already created: it cannot be changed here.
         XessNative.NameList instExt = nativeLib.getRequiredInstanceExtensions();

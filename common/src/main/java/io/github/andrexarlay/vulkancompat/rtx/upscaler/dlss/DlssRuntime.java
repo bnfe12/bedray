@@ -89,6 +89,7 @@ public final class DlssRuntime {
     /** Custom render percent of the READY setup / of the last attempt / of the setup being created (0 = NGX's size of the mode). */
     private static int activeCustom;
     private static int attemptedCustom;
+    private static DlssSrPreset featurePreset = DlssSrPreset.AUTO;
     private static int pendingCustom;
     /** PerfQuality value the feature is created with: activeMode, or for CUSTOM the mode whose NGX range holds the custom size. */
     private static DlssQuality featureMode;
@@ -181,6 +182,15 @@ public final class DlssRuntime {
             LOGGER.warn("[VKB-DLSS] retirement_deferred stage=frame_preflight frame={} state={} feature=0x{} retained=true reason={}",
                 frameCounter, state, Long.toHexString(feature.handle()), LogPaths.show(failure.toString()));
             return;
+        }
+        // A model switch only replaces SR. The NGX session and independent RR/FG owners stay alive.
+        if (state == State.READY && feature.usable() && featurePreset != requestedPreset()) {
+            try {
+                releaseFeature();
+            } catch (RuntimeException failure) {
+                LOGGER.warn("[VKB-DLSS] stage=sr_model_change retirement_deferred reason={}", LogPaths.show(failure.toString()));
+                return;
+            }
         }
         if (state == State.READY && winW > 0 && winH > 0 && (winW != outputWidth || winH != outputHeight)) {
             resize(winW, winH);
@@ -579,6 +589,11 @@ public final class DlssRuntime {
             frameCounter, activeInput, outputWidth, outputHeight, initEpoch);
     }
 
+    private static DlssSrPreset requestedPreset() {
+        return nativeLib != null && nativeLib.supportsSrPresets()
+            ? io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.dlssSrPreset : DlssSrPreset.AUTO;
+    }
+
     /** Makes sure a feature exists for the active size; records its creation into {@code commandBuffer}. */
     public static synchronized boolean ensureFeature(long commandBuffer) {
         if (feature.retiring()) return false; // Retry only at frame head, preserving READY metadata for RR.
@@ -592,8 +607,13 @@ public final class DlssRuntime {
         }
         long[] out = new long[1];
         long t0 = System.nanoTime();
+        DlssSrPreset preset = requestedPreset();
+        var configured = io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.dlssSrPreset;
+        if (configured != preset) {
+            LOGGER.warn("[VKB-DLSS] SR model {} requires an updated wrapper; using {}", configured, preset);
+        }
         DlssNative.Status st = nativeLib.createFeature(commandBuffer, activeInput.x(), activeInput.y(), outputWidth, outputHeight,
-            featureMode != null ? featureMode : activeMode, FEATURE_FLAGS, out);
+            featureMode != null ? featureMode : activeMode, FEATURE_FLAGS, preset, out);
         feature.adopt(out[0], st.ok());
         if (!st.ok()) {
             // Preserve an SDK-returned partial feature for retirement after this CB is discarded or fenced.
@@ -601,8 +621,9 @@ public final class DlssRuntime {
             return false;
         }
         featureEpoch = initEpoch;
-        LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] dlss=feature_created mode={} render={} output={}x{} flags=0x{} ms={}",
-            activeMode, activeInput, outputWidth, outputHeight, Integer.toHexString(FEATURE_FLAGS), (System.nanoTime() - t0) / 1_000_000L);
+        featurePreset = preset;
+        LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] dlss=feature_created mode={} sr_model_hint={} render={} output={}x{} flags=0x{} ms={}",
+            activeMode, preset, activeInput, outputWidth, outputHeight, Integer.toHexString(FEATURE_FLAGS), (System.nanoTime() - t0) / 1_000_000L);
         return true;
     }
 

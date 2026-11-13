@@ -263,10 +263,18 @@ API int32_t vkb_dlss_query_optimal_settings(int32_t qualityMode, uint32_t outWid
 
 // ---- Super Resolution ------------------------------------------------------------------------------------------------------
 
-API int32_t vkb_dlss_create_feature(uint64_t, const VkbDlssCreateInfo* info, uint64_t* outFeature) {
+API int32_t vkb_dlss_create_feature(uint64_t cmd, const VkbDlssCreateInfo* info, uint64_t* outFeature) {
+    return vkb_dlss_create_feature_with_preset(cmd, info, 0, outFeature);
+}
+
+API int32_t vkb_dlss_create_feature_with_preset(uint64_t cmd, const VkbDlssCreateInfo* info, int32_t preset, uint64_t* outFeature) {
     SLDL_TRY
     if (outFeature) *outFeature = 0;
-    if (!info || !outFeature) return VKB_DLSS_ERR_INVALID_ARG;
+    if (!info || !outFeature || info->struct_size != sizeof(VkbDlssCreateInfo)
+        || (preset != 0 && (preset < 10 || preset > 13))) {
+        t_err = "invalid SR feature descriptor or model preset";
+        return VKB_DLSS_ERR_INVALID_ARG;
+    }
     if (!g_inited) { t_err = "Streamline is not initialised"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
     if (!resolve()) { t_err = "sl.dlss functions not available"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
     if (g_sr.valid) { t_err = "SR owner already exists"; return VKB_DLSS_ERR_INVALID_ARG; }
@@ -276,6 +284,8 @@ API int32_t vkb_dlss_create_feature(uint64_t, const VkbDlssCreateInfo* info, uin
     o.outputHeight = info->output_height;
     o.colorBuffersHDR = (info->flags & VKB_DLSS_FLAG_IS_HDR) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     o.useAutoExposure = (info->flags & VKB_DLSS_FLAG_AUTO_EXPOSURE) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    const auto model = static_cast<sl::DLSSPreset>(preset);
+    o.dlaaPreset = o.qualityPreset = o.balancedPreset = o.performancePreset = o.ultraPerformancePreset = o.ultraQualityPreset = model;
     g_sr.valid = true;
     g_sr.retiring = true;
     *outFeature = 1; // Retain even a partially applied options call.

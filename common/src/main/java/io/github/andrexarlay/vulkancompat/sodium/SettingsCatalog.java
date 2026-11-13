@@ -244,7 +244,10 @@ public final class SettingsCatalog {
                 p("dlss", "DLSS Quality", () -> upscale(UpscalerBackend.DLSS, UpscalerMode.QUALITY)),
                 p("fsr", "FSR Quality", () -> upscale(UpscalerBackend.FSR, UpscalerMode.QUALITY)),
                 p("xess", "XeSS Quality", () -> upscale(UpscalerBackend.XESS, UpscalerMode.QUALITY))),
-            v -> v instanceof Enum<?> e ? e.name().toLowerCase(Locale.ROOT) : String.valueOf(v));
+            v -> v instanceof UpscalerChoice choice ? choice.backend().name().toLowerCase(Locale.ROOT) : String.valueOf(v));
+        putNoImage("dlss_sr_preset", Tier.ESSENTIAL, "DLSS Super Resolution Model",
+            "Select a model hint for DLSS Super Resolution and DLAA. Auto follows NVIDIA's recommendation for the selected quality mode.",
+            "", "DLSS and a current Bedray wrapper.", "The model is applied when the next DLSS feature is created.");
         List<Preview> modes = List.of(
             p("native", "Native (100%)", () -> upscale(previewUpscaler, nativeMode(previewUpscaler))),
             p("quality", "Quality", () -> upscale(previewUpscaler, UpscalerMode.QUALITY)),
@@ -531,8 +534,6 @@ public final class SettingsCatalog {
         putNoImage("texture_lod_bias_offset", Tier.ADVANCED, "Texture Sharpness Offset",
             "Extra mipmap bias; negative values make textures sharper (-0.2 to -0.5 suits pixel art). The automatic bias for upscalers is always on.",
             "", "", "A sub-pixel sharpness bias is not visible in a downscaled screenshot.");
-        putNoImage("fsr_version", Tier.EXPERT, "FSR Version", "Which FSR inside the AMD library is used. Auto picks the newest (3.1).", "", "FSR only.",
-            "Version choice, no visual preview.");
         putNoImage("atm_godrays_range", Tier.EXPERT, "Light Shaft Range", "Distance in blocks the beams are computed over.", "", "", "A range value.");
         putNoImage("atm_bloom_threshold", Tier.EXPERT, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "", "", "Shares the Bloom screenshots.");
         putNoImage("atm_bloom_scatter", Tier.EXPERT, "Bloom Spread", "Balance between a tight and a wide glow.", "", "", "Shares the Bloom screenshots.");

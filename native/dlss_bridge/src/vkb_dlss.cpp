@@ -529,10 +529,24 @@ VKB_DLSS_API int32_t vkb_dlss_query_optimal_settings(int32_t mode, uint32_t w, u
 // feature
 // ============================================================================================
 VKB_DLSS_API int32_t vkb_dlss_create_feature(uint64_t cmd, const VkbDlssCreateInfo* info, uint64_t* outFeature) {
+    return vkb_dlss_create_feature_with_preset(cmd, info, 0, outFeature);
+}
+
+VKB_DLSS_API int32_t vkb_dlss_create_feature_with_preset(uint64_t cmd, const VkbDlssCreateInfo* info, int32_t preset, uint64_t* outFeature) {
     API_TRY
     if (outFeature) *outFeature = 0;
     if (!cmd || !info || !outFeature || info->struct_size != sizeof(VkbDlssCreateInfo))
         return fail(VKB_DLSS_ERR_INVALID_ARG, "null cmd/info/outFeature or wrong struct_size");
+    static constexpr const char* presetKeys[] = {
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance,
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance,
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced,
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality,
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA,
+    };
+    static_assert(sizeof(presetKeys) / sizeof(*presetKeys) == VKB_DLSS_MODE_COUNT);
+    if (preset != 0 && (preset < 10 || preset > 13)) return fail(VKB_DLSS_ERR_INVALID_ARG, "unsupported SR model preset");
     NVSDK_NGX_PerfQuality_Value pq;
     if (!toPerfQuality(info->quality_mode, pq)) return fail(VKB_DLSS_ERR_INVALID_ARG, "bad quality mode");
     State& s = st();
@@ -561,6 +575,7 @@ VKB_DLSS_API int32_t vkb_dlss_create_feature(uint64_t cmd, const VkbDlssCreateIn
     NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_AllocateParameters(&f->params);
     if (NVSDK_NGX_FAILED(r)) return failNgx("NVSDK_NGX_VULKAN_AllocateParameters", r);
     if (!f->params) return fail(VKB_DLSS_ERR_NGX, "AllocateParameters returned null");
+    if (preset != 0) NVSDK_NGX_Parameter_SetI(f->params, presetKeys[info->quality_mode], preset);
     r = NGX_VULKAN_CREATE_DLSS_EXT1(s.device, reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(cmd)), 1, 1,
                                     &f->handle, f->params, &cp);
     if (NVSDK_NGX_FAILED(r)) {

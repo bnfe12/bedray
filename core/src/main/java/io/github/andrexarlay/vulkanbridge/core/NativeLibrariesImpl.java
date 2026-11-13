@@ -162,8 +162,12 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                 return new LibraryResolution(d, st, Map.of(), Map.of());
             }
             found.put(file, p);
-            if (check.version != null) {
-                versions.put(file, check.version);
+            String version = check.version;
+            if (version == null && d.id().equals(LibraryDescriptor.XESS.id()) && NativeCatalog.SHA_XESS.equals(check.sha256)) {
+                version = NativeCatalog.XESS_VULKAN_VERSION;
+            }
+            if (version != null) {
+                versions.put(file, version);
             }
             boolean known = d.knownSha256().getOrDefault(file.toLowerCase(Locale.ROOT), Set.of()).contains(check.sha256);
             allKnownHashes &= known;

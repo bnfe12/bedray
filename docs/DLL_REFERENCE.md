@@ -46,8 +46,8 @@ The current FidelityFX 1.1.4 DLL is not interchangeable with this loader/effect 
 
 | File | Vendor purpose | Bedray use today |
 | :--- | :--- | :--- |
-| `amd_fidelityfx_loader_vk.dll` | Vulkan API loader. | Pending newer-API integration. |
-| `amd_fidelityfx_upscaler_vk.dll` | Vulkan upscaling effect, including supported FSR 4.1.2 hardware paths. | Pending integration. |
+| `amd_fidelityfx_loader_vk.dll` | Vulkan API loader. | Install alongside the signed upscaler in the native directory. |
+| `amd_fidelityfx_upscaler_vk.dll` | Vulkan upscaling effect, including FSR 4.1.2, 3.1.6 and 2.3.4. | Install with the SDK 2.4 loader or use a local single-JAR build that includes the pair. |
 | `amd_fidelityfx_framegeneration_vk.dll` | Vulkan frame-generation effect. | Pending integration. |
 | `amd_fidelityfx_loader_dx12.dll` | DirectX 12 API loader. | Not used by Bedray's native Vulkan integration. |
 | `amd_fidelityfx_upscaler_dx12.dll` | DirectX 12 upscaling effect. | Not used by that integration. |

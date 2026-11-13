@@ -70,6 +70,11 @@ public final class RtDeviceRequirements {
 
     public static void registerSlangPath(DeviceFeatureRegistry registry) {
         registry.register(slangPathRequirement());
+        // Raster temporal reconstruction also runs the live velocity pass.
+        registry.register(new DeviceRequirement("Bedray temporal velocity", Set.of(), List.of(
+            FeatureRequest.core(FeatureRequest.VK12, "bufferDeviceAddress"),
+            FeatureRequest.core(FeatureRequest.VK10, "shaderInt64")
+        ), 0, true, null));
         // Independent optional feature: the primary trace does not require it.
         registry.register(new DeviceRequirement("VKB Slang image formats", Set.of(),
             List.of(FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageExtendedFormats")),

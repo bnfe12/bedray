@@ -6,12 +6,12 @@ package io.github.andrexarlay.vulkancompat.rtx.upscaler;
  * {@link #BILINEAR} (stretch of the scaled 3D target by a linear blit), {@link #XESS} (xessVKExecute, needs
  * libxess.dll) and {@link #DLSS} (NGX evaluate through vkb_dlss.dll, needs the libraries resolved by Bedray Core's
  * {@code NativeLibraries} and an NVIDIA RTX GPU) and {@link #FSR} (ffxDispatch through the official AMD FidelityFX
- * Vulkan DLL {@code amd_fidelityfx_vk.dll} resolved by Bedray Core, FSR 3.1.x / 2.x upscaler; FSR Frame Generation is STUB)
+ * Vulkan libraries resolved by Bedray Core, providing FSR 4, 3.1 and 2 upscaling)
  * are implemented.
  */
 public enum UpscalerBackend {
     BILINEAR("Bilinear (Built-in)", "bedray.backend.bilinear"),
-    // FSR upscaler: FsrBackend/FsrRuntime through the official ffx-api Vulkan DLL (FidelityFX SDK v1.1.4); switches live.
+    // FSR upscaler: FsrBackend/FsrRuntime through the official ffx-api Vulkan libraries; switches live.
     FSR("FSR (AMD)", "bedray.backend.fsr"),
     // DLSS Super Resolution: real NGX dispatch (DlssBackend/DlssRuntime through our vkb_dlss.dll); needs nvngx_dlss.dll +
     // vkb_dlss.dll from Bedray Core's NativeLibraries and an NVIDIA RTX GPU; switches live (UpscalerPreregistration). Frame Generation / Ray Reconstruction: STUB.
