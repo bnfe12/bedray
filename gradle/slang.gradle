@@ -520,5 +520,6 @@ def compileSlang = tasks.register('compileSlang') {
     }
 }
 
-sourceSets.main.resources.srcDir(generatedRoot)
+// Carry the producer into every consumer of resources, including the Java plugin's sourcesJar task.
+sourceSets.main.resources.srcDir(files(generatedRoot).builtBy(tasks.named('compileSlang')))
 tasks.named('processResources') { dependsOn(compileSlang) }
