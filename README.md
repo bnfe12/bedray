@@ -66,7 +66,8 @@ These requirements describe the **development version**. For a download, use its
 3. Open **Options → Video Settings → Bedray Settings** to configure the renderer.
 
 **[Full installation guide →](docs/INSTALL.md)** Optional vendor features need compatible libraries;
-see the guide before enabling them. Hardware validation is currently limited to NVIDIA RTX on Windows.
+use the **[runtime library downloads](docs/RUNTIME_LIBRARIES.md)** page to find official sources and import instructions.
+Hardware validation is currently limited to NVIDIA RTX on Windows.
 AMD Radeon and Intel Arc test reports are welcome.
 
 ## Find your way

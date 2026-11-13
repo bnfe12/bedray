@@ -27,6 +27,13 @@ gradle/**
 
 # user documentation (explicit list: new files are NOT exported until they are added here)
 docs/INSTALL.md
+docs/RUNTIME_LIBRARIES.md
+docs/NATIVES_LICENSES.md
+docs/index.html
+docs/site.css
+docs/_config.yml
+docs/_layouts/*.html
+docs/experiments/dlss5.md
 docs/README.md
 docs/BRAND.md
 docs/INSTALL_NATIVES_WITH_AI.md
