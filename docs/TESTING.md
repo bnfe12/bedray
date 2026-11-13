@@ -1,6 +1,10 @@
 # Help us test
 
-Bedray 0.1.0-alpha.1 was developed and checked on **one** system: **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, NVIDIA driver 617.42**.
+> Current `main` (0.2.0-alpha) has no published build; testers use a build they made themselves ([BUILDING](BUILDING.md)) or a jar from a maintainer.
+> Developer evidence is recorded per change in [VERIFICATION_LOG](VERIFICATION_LOG.md); reproducing the measured numbers: [L5_REPRO](measurements/L5_REPRO.md).
+> Judge image quality only with a denoiser on (NRD or DLSS RR); frames with raw path tracing show noise nobody plays with.
+
+Bedray was developed and checked on **one** system: **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, NVIDIA driver 617.42**.
 Other graphics cards have not been checked. Any report helps, whether the result is good or bad.
 
 We want: bug reports, crashes, visual problems, test results, `latest.log`, screenshots and FPS numbers.

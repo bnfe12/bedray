@@ -114,6 +114,13 @@ Set `SLANG_DIR` to the Slang SDK directory and run `gradlew fabricBedrayDistribu
 The distribution pairs the loader JAR and the matching `bedray_core.dll`, which exports the native GPU scene ABI.
 See [distribution paths and build options](../native/bedray_core/DISTRIBUTION.md).
 
+### Continuous integration and compatibility checks
+
+* `.github/workflows/native-windows.yml` runs on pull requests and pushes to `main`: it builds the DLSS resource wrappers against pinned Vulkan-Headers and
+  exercises the Java bindings against fault and production DLLs. It has no GPU, so it is not game evidence.
+* `python tools/sodium_compat_check.py --jars-dir <folder>` verifies the sha512 of each official Sodium NeoForge 26.3 build against `tools/sodium-matrix.json`
+  and compares the contract classes with `javap`; run Gradle with `-PsodiumJar=<version>` for the per-version compile.
+
 ## 5. Building without the native wrappers
 
 Vendor wrappers are optional. With the matching renderer distribution, ray tracing and path tracing with accumulation

@@ -1,7 +1,7 @@
 # Known issues
 
-Current `main` is the unreleased 2026-10-26 source integration. No build, tests, shader compilation or game session was run
-for it. The platform evidence below belongs to earlier alpha builds; see [FEATURE_MATRIX](FEATURE_MATRIX.md).
+Current `main` is the unreleased `0.2.0-alpha` source (Slang renderer, native core). The published pre-release `0.1.0-alpha.1` is the
+older GLSL renderer; observations below that name the GLSL pass describe that build. Per-feature evidence: [FEATURE_MATRIX](FEATURE_MATRIX.md).
 
 Bedray is an alpha. **Tested only on an NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, driver 617.42.** Everything below may differ, or
 more may be wrong, on other GPUs, drivers and systems (AMD Radeon and Intel Arc have not been checked at all).
@@ -15,7 +15,7 @@ more may be wrong, on other GPUs, drivers and systems (AMD Radeon and Intel Arc 
 
 ## Image
 
-* Path Tracing is **EXPERIMENTAL**. "Ray Tracing (Fast)" is in development and hidden in this release (`experimental_rays` in bedray.toml unlocks it for developers; unsupported). Expect noise, flicker, ghosting while moving, and wrong lighting in some places.
+* Path Tracing is **EXPERIMENTAL**. No owner-confirmed (L5) frame exists for the current Slang renderer yet. "Ray Tracing (Fast)" is in development and hidden in this release (`experimental_rays` in bedray.toml unlocks it for developers; unsupported). Expect noise, flicker, ghosting while moving, and wrong lighting in some places.
 * Diffuse reflection keeps the view-angle Fresnel factor `1 - F(N·V)` for parity with the owner-tuned legacy GLSL. It is not strictly Helmholtz-reciprocal; an L-dependent factor is deferred until a matching-build GPU A/B can show the visual delta.
 * Redstone dust can show a blocky gray fringe from alpha coverage in the traced image; the fix is not yet confirmed in a final live run.
 * Reflections stay noisy with the NRD denoiser (no specular denoiser input yet).
@@ -45,6 +45,17 @@ more may be wrong, on other GPUs, drivers and systems (AMD Radeon and Intel Arc 
 * Native scene residency depends on the renderer's GPU memory budget and incremental section loading.
 * Changing render scale or upscaler during play was exercised by automatic tests only for part of the combinations. If you see
   corruption after a switch, restart the game and report it.
+
+## Renderer (current `main`)
+
+* Shader execution reordering (SER) is wired but measured 2.14x slower on the trace pass; keep it off. OMM and partitioned PTLAS are deferred.
+* ReSTIR PT costs about +25 % GPU time and +569 MiB; it is a quality option, not a speed-up. Render distance 32 needs the compacted acceleration-structure budget (about 3.6 GiB).
+* DLSS RR sharpness has no effect (the vendor call is a no-op). RR render preset D/E/F and NRD ReLAX have no A/B numbers yet.
+* A report of a see-through triangle at distant stairs is localized (not fixed): [notes](VERIFICATION_LOG.md).
+* The Bedray page did not appear in one owner instance with the Sodium version matrix change; it is unexplained and accepted for now. Sodium builds 0.9.2 to 0.9.3-beta.5 are only compile/contract checked.
+* The pack-level Iris raster host is merged without a recorded in-game acceptance run.
+* Native 1080p/60 FPS on the test machine is a target, not a measured result.
+* A full `:common:test` run at an earlier base recorded 19 pre-existing failures (Slang shader contracts, a denoiser lifetime test, motion-vector stability and a settings preview); the current count is not re-measured here.
 
 ## Features
 

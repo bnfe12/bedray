@@ -1,109 +1,32 @@
-# Development branches and main integration
+# Development branches and `main`
 
-The canonical source repository for current renderer work is [Bedray](https://github.com/bnfe12/bedray).
-Keep unfinished work in branches of this repository rather than creating another repository or a copy
-of the same renderer. Local linked Git worktrees share the repository history and are not independent forks.
+The canonical repository is [bnfe12/bedray](https://github.com/bnfe12/bedray). There is one long-lived branch, `main`
+(see [BRANCH_LAYOUT](BRANCH_LAYOUT.md)): the Slang AOT renderer with the native GPU scene. The old Java/GLSL renderer is
+history at commit `9c985fa4c56894e9370e7ef8d6120d63b345ad26`, an ancestor of `main`. Other repositories that once carried
+the renderer (`vulkan-rtx`, `vulkan-rtx-bridge` and their release repositories) were deleted on 2026-11-13 and must not be used as a source.
 
-| Workstream | Responsibility | Current scope |
+## Working rules
+
+* One task, one short-lived branch: `feat/<topic>-<date>`, `fix/<topic>-<date>` or `docs/<topic>-<date>`, cut from `origin/main`.
+* Land it with a pull request into `main`. The native Windows CI (`.github/workflows/native-windows.yml`) runs for pull requests and pushes to `main`.
+* Local linked Git worktrees share history; they are not forks. Do not create another copy of the renderer in another repository.
+* Evidence goes to [VERIFICATION_LOG](VERIFICATION_LOG.md) (what was run, at which level) and, for measurements, to `docs/measurements/`.
+* Delete a branch after its pull request is merged; the old `codex/*`, `vrtx/*` and `restir-orig` lines are history and not a base for new work.
+
+## Workstreams in `main`
+
+| Workstream | Responsibility | State |
 |---|---|---|
-| `main` | Shared source baseline | Unreleased consolidation; current integration has no build or runtime evidence |
-| Software voxel traversal | Software traversal/companion API and integration | Bounded textured baked models, cutouts, world lighting and raster preservation; Iris through `086b98a` integrated in one frame loop; physical GI/reflections remain open |
-| Iris Vulkan compatibility | Iris GLSL compatibility/post layer | Fullscreen post, options/profiles, typed camera/depth, current-frame MRT, startup wiring, ray-tracing pack compile/pipeline (no trace) and an opt-in custom ray-query stage; general shaderpack compatibility pending |
-| Vulkan cache and DXGI presentation | Shared local caches and optional presentation policy | Included, with the LWJGL cache fixes and atomic compiler-profile capture; Iris has a separate compiler frontend |
+| Slang renderer and native core | Typed passes, native scene, memory, frame graph, pipeline cache | Merged; GPU measurements in [GI_STACK_REPORT](measurements/GI_STACK_REPORT.md) |
+| GI / performance stack | ReSTIR PT, raygen and SER execution, BLAS compaction, PTLAS, denoisers | Merged; open items are GPU- or owner-gated |
+| Transparency and materials | Glass, water, optical profiles, Nether/End materials, exposure fixes | Merged; live acceptance pending |
+| Iris compatibility | Post host and pack-level raster forward host | Merged (PR #84); in-game acceptance not recorded |
+| Voxel / Compute | Software voxel provider nested in the player jar | Merged; see [COMPUTE](COMPUTE.md) |
+| Sodium compatibility | Config API entrypoint, version matrix 0.9.2 to 0.9.3-beta.5 | Merged; contract and compile level |
+| Modularisation | Extraction of single-purpose classes from the large renderer classes | Ongoing (PR #86, #88) |
 
-## Main source checkpoint: 2026-10-26
+## Consolidation record: 2026-11-13
 
-The owner requested consolidating the development branches into `main` without running tests. This source checkpoint is
-unreleased 0.1.1-alpha.13. **No build, shader compilation, automated tests, GPU dispatch, game session or benchmark was run
-for this integration.** Previous build records, screenshots and alpha.1 release artifacts do not validate the combined tree.
-Source integration does not establish visual correctness, performance, general shaderpack compatibility or vendor support.
-
-Iris and cache/DXGI are already ancestors of the newer renderer branches. Their draft PRs against the old main baseline
-did not represent independent missing implementations. The software-voxel and voxel-engine refs are identical.
-The independent leaves are ReSTIR/barriers, the latest Voxel follow-up, unified ReSTIR and the RT-port Iris scenario.
-Their histories are retained by the consolidation; older branches remain available as historical checkpoints.
-
-| Source branch at integration | Source commit |
-|---|---|
-| `main` before integration | `dcdb822c18da632634561c03480ef87c4f987094` |
-| `codex/iris-vulkan` | `086b98aaa771574393df0932abbff981ddc7ffc1` |
-| `codex/software-voxel-tracing` | `42c369a1896da46435d8f5eb9bfdcbce0494b56e` |
-| `codex/voxel-engine-20261025` | `42c369a1896da46435d8f5eb9bfdcbce0494b56e` |
-| `codex/voxel-settings-integration-20261025` | `b618c3d70aebd853b47d816d912e2e71572030f8` |
-| `codex/vulkan-cache-dxgi-present` | `7a993707a90ff12bf582b9658b59746c43a27836` |
-| `feat/iris-host-bsl-20261025` | `1f632d851da4beac17cf129ae3a72c66a7db30ba` |
-| `feat/iris-rt-shader-host-20261024` | `2a719db2dad5febcf0c2438adeddf36cc0dd64eb` |
-| `feat/restir-barriers-20261025` | `b3b3ab6c98ef048c95d37b4c6502e0a1ff2eef4d` |
-| `feat/voxel-visual-pass-20261024` | `7fa149674852ad9356aad7aaaf5d82e58f12972b` |
-| `integration/unified-20261025` | `5a44675967baa3bbc3a1028f7782aedf5c922e46` |
-| `port/rt-updates-20261024` | `d0f10de0840b563918476727dbe3d04e69199c35` |
-
-Two conflicts concerned the same ReSTIR history clamp and its existing source assertion. Resolution retains the newer
-shared `RESTIR_M_CAP` / `RESTIR_TEMPORAL_RATIO_CAP` implementation and its safer denominator, preserving the cap of 8.
-The Voxel light-invalidation/water-segment follow-up and the Iris scenario are included.
-
-Additional integration fixes:
-
-* Camera and secondary interface walks retain one TLAS query per straight segment and collect the nearest 16 compact
-  interface candidates. They complete the query, determine the nearest terminal, and fold only preceding interfaces in
-  distance order. Realistic water terminates the camera segment before its Snell bend. Unresolved deeper transmission
-  is suppressed instead of leaking sky. Bounded sorting/storage has not been profiled.
-* Path Tracing also reuses sorted 16-entry hit batches through thin interfaces, while preserving its existing 24-interface
-  limit, first-visible G-buffer, per-layer medium integration and reflection rules. Snell bends and shaded bounces discard
-  the batch; deeper stacks gather another bounded batch rather than restarting traversal for every pane face.
-* Background shader warmup and foreground compilation use one immutable extension/target profile for source, cache key
-  and shaderc. A null shaderc options handle fails before native use.
-* Water diagnostics and docs distinguish Snell/medium approximation, straight thin glass and approximate colored shadows.
-
-The current source is the shared baseline. Local packaging and live-game acceptance remain separate future work.
-
-## Transparent-material follow-up (2026-10-26)
-
-The RTX Remix comparison follow-up adds the remaining material/cost-control work to the shared baseline:
-
-* Resource packs can attach validated `.bedray.json` optical data to an atlas sprite. A 1536-byte immutable palette and
-  the existing material source byte supply IOR, authored thickness, RGB transmittance/reference distance and diffuse share.
-  Low source flags remain unchanged; capacity is 31 distinct profiles plus legacy. Old in-flight profile records are not rewritten.
-* Clear glass centres are dielectric candidates. Optical sprites remain unresolved by opacity micromaps so hardware alpha
-  classification cannot drop their interfaces. Water boundaries and the approximate sun beam use custom IOR/absorption.
-* Direct and secondary colored-shadow policies have independent persisted switches, with scoped visibility state for
-  reflection/GI shading. Camera transparency is independent of those switches.
-* A conservative CPU filter removes only proven matching internal unit glass-block boundaries within one section, preserving
-  decoded/raw vertex data and pass ranges. Sodium's existing face culling remains the first stage.
-* Optional GPU counters use appended frame-slot fields with matching Java/GLSL layout and delayed unsigned readback. Their
-  slot activation is recorded so previously disabled frames show WAITING. CPU face totals are reported separately.
-
-No builds, shader compilation, tests, game sessions or benchmarks were run for this follow-up, as requested. The material
-model is an authored slab approximation, not a general closed-volume glass or caustics solver. See
-[TRANSPARENT_MATERIALS](TRANSPARENT_MATERIALS.md) for the exact format, defaults, settings and limitations.
-
-## Later ReSTIR/barriers checkpoint (2026-10-26)
-
-The final remote refresh found 15 additional commits on `feat/restir-barriers-20261025`, advancing it from `b3b3ab6` to
-`1ae65809d8199c7b802198fd8ab4ea9fa3ec5f54`. Their history is merged after the transparent-material follow-up (#6).
-The three shared shader files merge both the optical transport and finite-input/AO changes; no implementation is replaced
-by an older branch snapshot. The new changes cover entity capture/retirement, temporal/denoiser finite values, native loader
-and C++ exception handling, backend/bridge teardown, log-path redaction, weather celestial visibility and bloom/AO costs.
-
-Integration review also corrects the partially allocated entity-ring retire queue: a non-null generation record owns the
-possibly null buffer slots, rather than inserting null elements into `ArrayDeque`. Missing ring allocations are retried.
-Source/diff review only; no build, shader compilation, tests, GPU session or benchmark was run for this checkpoint.
-
-All branches are protected against force-push and deletion. The default branch requires pull requests
-with resolved review conversations. No bypass actors are configured; ordinary commits to development
-branches remain available. Deliberate branch retirement requires an explicit rules change.
-
-The combined implementation preserves one host/device/queue/target/config owner. The world renderer records
-one color result; Iris is a subsequent optional post stage. A depth-reading post pack requires depth
-guides matching that exact color producer. Shared mixin/UI hooks must be reconciled once on merge.
-Companion algorithms stay behind the versioned API instead of importing private host implementation.
-
-Consumers of borrowed host target views require retirement before those views are destroyed or
-replaced. A next-frame extent/view comparison cannot by itself establish that ordering. Shared target
-cleanup submits queued references and retires dependent descriptors in the target pre-close hook;
-a failed retirement stops ordinary replacement. This ordering covers depth-reading Iris passes and
-raster/depth composition in Compute; live reload/resize acceptance is still required.
-
-Do not merge historical development repositories wholesale over the public baseline: review their unique
-changes first and record the source commit when selectively porting useful work. Repository archival and
-branch deletion are separate maintenance decisions; preserve a private SHA inventory before cleanup.
+PR #87 consolidated the development branches into `main`; PR #84, #85 and #86 brought in the Iris raster host, the GI stack and the
+adaptation of older branch work to the new tree. Older lines were merged or recorded as "keep new-main tree" where they targeted the removed GLSL
+renderer. Consolidation by itself proves nothing about image quality or speed: see the [feature matrix](FEATURE_MATRIX.md).
