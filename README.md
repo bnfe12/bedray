@@ -17,7 +17,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/bnfe12/bedray/releases"><strong>Downloads</strong></a> &nbsp; / &nbsp;
+  <a href="https://bnfe12.github.io/bedray/DOWNLOADS.html"><strong>DLL downloads</strong></a> &nbsp; / &nbsp;
+  <a href="https://github.com/bnfe12/bedray/releases">Mod releases</a> &nbsp; / &nbsp;
   <a href="docs/INSTALL.md">Installation</a> &nbsp; / &nbsp;
   <a href="https://bnfe12.github.io/bedray/">Documentation</a> &nbsp; / &nbsp;
   <a href="ROADMAP.md">Roadmap</a> &nbsp; / &nbsp;
@@ -66,7 +67,7 @@ These requirements describe the **development version**. For a download, use its
 3. Open **Options → Video Settings → Bedray Settings** to configure the renderer.
 
 **[Full installation guide →](docs/INSTALL.md)** Optional vendor features need compatible libraries;
-use the **[runtime library downloads](docs/RUNTIME_LIBRARIES.md)** page to find official sources and import instructions.
+use **[DLL downloads](https://bnfe12.github.io/bedray/DOWNLOADS.html)** to choose a feature and get its official files directly.
 Hardware validation is currently limited to NVIDIA RTX on Windows.
 AMD Radeon and Intel Arc test reports are welcome.
 

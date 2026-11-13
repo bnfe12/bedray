@@ -30,6 +30,9 @@ docs/INSTALL.md
 docs/RUNTIME_LIBRARIES.md
 docs/NATIVES_LICENSES.md
 docs/DLL_REFERENCE.md
+docs/DOWNLOADS.html
+docs/downloads.css
+docs/downloads.js
 docs/TECHNOLOGIES.md
 docs/GPU_GUIDE.md
 docs/index.html
