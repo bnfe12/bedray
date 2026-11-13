@@ -33,10 +33,10 @@ const features = {
   },
   fsr: {
     title: "FSR 3.1 / 2.x upscaling", status: "Vulkan · reviewed runtime",
-    description: "Get the exact FidelityFX 1.1.4 Vulkan DLL used by the current integration. It is about 9 MB; the full SDK is optional.",
+    description: "Get the FidelityFX 1.1.4 Vulkan DLL for FSR 2/3.1 and the existing AMD frame generation path.",
     actions: [["Download amd_fidelityfx_vk.dll", "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v1.1.4/PrebuiltSignedDLL/amd_fidelityfx_vk.dll"], ["SDK ZIP with notices", "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip"]],
     files: ["amd_fidelityfx_vk.dll → bedray/natives/"],
-    note: "Often already included in a reviewed Bedray package. This is the current FSR 2/3.1 runtime, not the newer FSR 4 loader/effect set.",
+    note: "This runtime also serves as an upscaling fallback for GPUs that cannot use AMD FSR SDK 2.4.",
     licenses: [["AMD MIT licence", "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/v1.1.4/LICENSE.txt"]],
   },
   xess: {
@@ -70,10 +70,11 @@ const features = {
     note: "An upscaler does not add missing hardware ray-tracing capabilities.", licenses: [],
   },
   fsr4: {
-    title: "FSR 4 upscaling", status: "Not integrated in Bedray", pending: true,
-    description: "AMD FSR SDK 2.4 provides FSR 4.1.2 on Vulkan. Bedray still needs the new loader/effect integration; copying these files into the current build will not enable it.",
-    actions: [["View AMD SDK requirements", amdSdk]],
-    files: ["amd_fidelityfx_loader_vk.dll", "amd_fidelityfx_upscaler_vk.dll"], note: "Developer reference only. Use FSR 3.1 or another integrated scaler in the current build.",
+    title: "FSR 4 / 3.1 / 2.x upscaling", status: "Vulkan В· experimental in Bedray 0.2.0-alpha",
+    description: "Get AMD FSR SDK 2.4 and import both signed Vulkan DLLs from Kits/FidelityFX/signedbin/. The SDK supplies FSR 4.1.2, 3.1.6 and 2.3.4.",
+    actions: [["Download AMD FSR SDK 2.4", "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v2.4.0"], ["View AMD GPU and driver requirements", amdSdk]],
+    files: ["amd_fidelityfx_loader_vk.dll в†’ bedray/natives/", "amd_fidelityfx_upscaler_vk.dll в†’ bedray/natives/"],
+    note: "Restart after importing. Select FSR Auto to let Bedray choose a compatible provider, or select a version listed for your GPU in the Upscaler menu.",
     licenses: [["New AMD runtime licence", "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/v2.4.0/Kits/FidelityFX/docs/license.md"]],
   },
   xessfg: {

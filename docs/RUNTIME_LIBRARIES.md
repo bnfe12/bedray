@@ -25,7 +25,7 @@ Check the release contents before downloading another copy.
 | **NRD denoising** | [NRD 4.18.0 sources](https://github.com/NVIDIA-RTX/NRD/tree/8f12a22fc90e6a3c7f5da4c9c3103633c842963a) | Build `NRD.dll` with SPIR-V support and the matching `vkb_nrd.dll`; see [building](BUILDING.md). This link is source code, not a ready DLL download. |
 | **Experimental DLSS 5** | [Experimental setup](experiments/dlss5.md) | Separate SDK and wrapper requirements. Public DLSS files are not a substitute for any restricted SDK access required by your build. |
 
-For **FSR 4, XeSS Frame Generation / XeLL, AMD Ray Regeneration and NVIDIA NRC**, check
+For **XeSS Frame Generation / XeLL, AMD Ray Regeneration and NVIDIA NRC**, check
 [technology support](TECHNOLOGIES.md) before downloading. Their SDK files are listed individually in the
 [DLL reference](DLL_REFERENCE.md); most of these paths still need Bedray integration, and some vendor APIs are DirectX 12 only.
 

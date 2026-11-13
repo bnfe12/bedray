@@ -13,7 +13,7 @@ resolution. Choose it under **Video Settings, Bedray ALPHA: Upscaling, Upscaler*
 | FSR 1 (built-in) | nothing | any | spatial (one frame), AMD EASU + optional RCAS | EXPERIMENTAL |
 | NIS (built-in) | nothing | any | spatial, NVIDIA Image Scaling | EXPERIMENTAL |
 | FSR 4.1.2 (AMD) | signed AMD FSR SDK 2.4 Vulkan loader and upscaler | supported AMD Radeon GPU and Adrenalin 26.10.1+ | temporal ML | EXPERIMENTAL |
-| FSR 3.1 / 2.x (AMD) | official `amd_fidelityfx_vk.dll` | any Vulkan GPU in theory; only tested on NVIDIA | temporal | BETA |
+| FSR 3.1 / 2.x (AMD) | AMD FSR SDK 2.4 pair or official `amd_fidelityfx_vk.dll` | Vulkan GPU with the features required by the selected SDK | temporal | BETA |
 | XeSS (Intel) | `libxess.dll` | any in theory; only tested on NVIDIA | temporal | BETA |
 | DLSS Super Resolution (NVIDIA) | `nvngx_dlss.dll` + `vkb_dlss.dll` | NVIDIA RTX | temporal | BETA |
 | DLSS Ray Reconstruction (denoiser) | `nvngx_dlssd.dll` and the DLSS files | NVIDIA RTX | AI denoiser for Path Tracing | EXPERIMENTAL |
@@ -53,4 +53,4 @@ extensions that backend needs (for example the library appeared after the game s
 * Frame generation is separate: [FRAME_GENERATION.md](FRAME_GENERATION.md). With it on, DLSS runs through Streamline plugins (see that page).
 * [DLSS 5 Neural Rendering](experiments/dlss5.md) is an opt-in pass after direct DLSS Super Resolution or DLAA in the raster renderer.
 
-DLSS Super Resolution exposes Auto and the NVIDIA model hints J, K, L and M with updated Bedray wrappers. Ray Reconstruction has its own presets. XeSS shows the installed DLL version and offers the quality modes exposed by its Vulkan SDK. Temporal upscaling works with raster rendering and with compatible RT modes.
+DLSS Super Resolution exposes Auto and the NVIDIA model hints J, K, L and M with updated Bedray wrappers. Ray Reconstruction has its own presets. XeSS offers the quality modes exposed by its Vulkan SDK and shows the runtime version when known. The bundled XeSS SDK 3.0.2 DLL reports Vulkan runtime 2.0.2. Temporal upscaling works with raster rendering and with compatible RT modes.

@@ -29,7 +29,6 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrLibrary;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.spatial.SpatialUpscaler;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessNative;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessRuntime;
 import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
@@ -106,8 +105,6 @@ public final class F3Sections {
     private static long lastBlasNs;
     private static double blasPerSec;
     private static String deviceText;
-    private static String xessVersion;
-    private static Object xessVersionOwner;
     private static FrameGenRuntime.Availability fgAvailability = FrameGenRuntime.Availability.NO_BINARIES;
     private static long fgAvailabilityNs;
 
@@ -687,7 +684,7 @@ public final class F3Sections {
         b = sb().append("XeSS ");
         boolean xess = UpscalerLibraryLoader.isBackendAvailable(UpscalerBackend.XESS);
         b.append(xess ? OK : OFF).append(xess ? "found" : "missing").append(R);
-        String xv = xessVersionText();
+        String xv = XessRuntime.installedVersion();
         if (xv != null) {
             b.append(' ').append(VAL).append(xv).append(R);
         }
@@ -723,24 +720,6 @@ public final class F3Sections {
             deviceText = "GPU: " + info.name() + " | " + info.backendName() + " | drv " + info.driverInfo();
         }
         return deviceText;
-    }
-
-    /** XeSS version from {@code xessGetVersion}, read once per loaded library; null while the library is not loaded. */
-    private static String xessVersionText() {
-        XessNative lib = XessRuntime.nativeLib();
-        if (lib == null) {
-            return null;
-        }
-        if (xessVersionOwner != lib) {
-            xessVersionOwner = lib;
-            try {
-                xessVersion = lib.getVersionString();
-            } catch (RuntimeException e) {
-                LOGGER.warn("[VKB-F3] xessGetVersion failed", e);
-                xessVersion = "version ?";
-            }
-        }
-        return xessVersion;
     }
 
     // ------------------------------------------------------------------------------------------------------------ timing

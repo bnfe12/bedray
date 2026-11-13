@@ -19,6 +19,10 @@ public final class DlssResourceContractProbe {
         try (DlssNative sr = DlssNative.load(library); Arena control = Arena.ofConfined()) {
             require(sr.supportsSafeResourceRetirement(), "resource contract v1 missing");
             if (args[1].startsWith("production")) {
+                require(sr.supportsSrPresets(), "Super Resolution model export missing");
+                long[] owner = {42};
+                var status = sr.createFeature(0, 64, 48, 128, 96, DlssQuality.QUALITY, 0, DlssSrPreset.K, owner);
+                require(!status.ok() && owner[0] == 0, "SR model create without a command buffer produced an owner");
                 DlssNrNative.verifyLayouts();
                 require(sr.neuralRendering() == null, "public wrapper unexpectedly enables Neural Rendering");
                 if (args[1].equals("production-ngx")) {

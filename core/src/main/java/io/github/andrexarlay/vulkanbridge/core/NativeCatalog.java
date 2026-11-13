@@ -114,6 +114,8 @@ public final class NativeCatalog {
     public static final String SHA_FSR = "a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78";
     /** XeSS SDK 3.0.2 bin/libxess.dll, 77 795 704 bytes, Intel Simplified Software License. */
     public static final String SHA_XESS = "251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7";
+    /** xessGetVersion from the SDK 3.0.2 Vulkan DLL above, which has no PE version resource. */
+    static final String XESS_VULKAN_VERSION = "2.0.2";
     public static final String URL_FSR = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4";
     public static final String URL_XESS = "https://github.com/intel/xess/releases";
     public static final String URL_DLSS = "https://github.com/NVIDIA/DLSS";

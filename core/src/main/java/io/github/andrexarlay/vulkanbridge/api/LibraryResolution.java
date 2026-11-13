@@ -10,7 +10,7 @@ import java.util.Optional;
  * @param descriptor the library
  * @param status     status; paths are present only when {@code status.usable()}
  * @param files      file name (as in the descriptor) to absolute path, only for usable libraries
- * @param versions   file name to PE file version {@code a.b.c.d}; a file without a version resource has no entry
+ * @param versions   file name to file version from PE metadata or the known runtime fingerprint; absent when unknown
  */
 @Experimental
 public record LibraryResolution(LibraryDescriptor descriptor, LibraryStatus status, Map<String, Path> files,
