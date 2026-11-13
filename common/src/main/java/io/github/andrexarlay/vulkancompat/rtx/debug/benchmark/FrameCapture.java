@@ -11,10 +11,14 @@ public final class FrameCapture {
     public static final int NATIVE_REQUIRED = WORLD | PATH_RECORDED | NATIVE_RESOLUTION | UPSCALER_OFF
         | FRAMEGEN_OFF | SCREEN_CLOSED | FOCUSED;
 
-    public record Config(long warmupNs, long durationNs, int maxFrames, long drainNs) {
+    public record Config(long warmupNs, long durationNs, int maxFrames, long drainNs, int warmupFlags) {
+        public Config(long warmupNs, long durationNs, int maxFrames, long drainNs) {
+            this(warmupNs, durationNs, maxFrames, drainNs, WORLD | PATH_RECORDED | SCREEN_CLOSED | FOCUSED);
+        }
         public Config {
             if (warmupNs < 0 || warmupNs > 300_000_000_000L || durationNs <= 0 || durationNs > 300_000_000_000L
-                || maxFrames < 1 || maxFrames > 120_000 || drainNs <= 0 || drainNs > 30_000_000_000L)
+                || maxFrames < 1 || maxFrames > 120_000 || drainNs <= 0 || drainNs > 30_000_000_000L
+                || (warmupFlags & WORLD) == 0 || (warmupFlags & ~NATIVE_REQUIRED) != 0)
                 throw new IllegalArgumentException("invalid bounded frame capture configuration");
         }
     }
@@ -89,7 +93,7 @@ public final class FrameCapture {
             return;
         }
         frameOpen = false;
-        int warmFlags = WORLD | PATH_RECORDED | SCREEN_CLOSED | FOCUSED;
+        int warmFlags = config.warmupFlags();
         if (phase == Phase.WAITING || phase == Phase.WARMUP) {
             if ((state.flags & warmFlags) != warmFlags) {
                 phase = Phase.WAITING;

@@ -54,6 +54,8 @@ public final class DiagnosticsScrubber {
     private static final Pattern SECRET_TOKEN = Pattern.compile(
         "(?i)((?<![\\p{L}\\p{N}])(?:access[_\\-]?token|session[_\\-]?(?:id|token)|auth[_\\-]?token|token|api[_\\-]?key)[\"']?\\h*[=:]\\h*)(?:[\"'][^\\r\\n]*|[^\\s\"']+)");
     private static final Pattern BEARER = Pattern.compile("(?i)\\b(Bearer\\h+)[A-Za-z0-9._~+/=\\-]+");
+    private static final Pattern SECRET_ARGUMENT = Pattern.compile(
+        "(?i)(--(?:accessToken|access-token|session|password|token)\\s+)(\\S+)");
 
     private final List<Pattern> literals;
 
@@ -105,6 +107,7 @@ public final class DiagnosticsScrubber {
         s = SECRET_TEXT.matcher(s).replaceAll("$1" + REDACTED);
         s = SECRET_TOKEN.matcher(s).replaceAll("$1" + REDACTED);
         s = BEARER.matcher(s).replaceAll("$1" + REDACTED);
+        s = SECRET_ARGUMENT.matcher(s).replaceAll("$1" + REDACTED);
         // paths first: a path may contain the account name, the nick or a UUID
         s = replacePaths(WIN_PATH, s);
         s = replacePaths(UNC_PATH, s);

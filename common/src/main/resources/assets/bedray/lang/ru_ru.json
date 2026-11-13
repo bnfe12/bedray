@@ -555,5 +555,6 @@
   "bedray.natives.downloads": "Скачать DLL",
   "bedray.natives.downloads.tip": "Официальные загрузки DLL и инструкция установки в браузере",
   "bedray.natives.downloads.opened": "Страница открыта. Перетащите скачанный ZIP или DLL сюда и перезапустите игру.",
-  "bedray.natives.downloads.failed": "Откройте раздел скачивания DLL на странице Bedray."
+  "bedray.natives.downloads.failed": "Откройте раздел скачивания DLL на странице Bedray.",
+  "bedray.settings.share_test": "Подготовить отчёт для GitHub"
 }

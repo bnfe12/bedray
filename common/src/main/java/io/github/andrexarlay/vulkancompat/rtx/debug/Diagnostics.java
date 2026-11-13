@@ -164,7 +164,7 @@ public final class Diagnostics {
         }
     }
 
-    private static DiagnosticsScrubber scrubber(Path gameDir) {
+    static DiagnosticsScrubber scrubber(Path gameDir) {
         String nick = null;
         String uuid = null;
         try {
@@ -195,6 +195,8 @@ public final class Diagnostics {
         List<String> l = new ArrayList<>();
         String bedray = Diagnostics.class.getPackage() == null ? null : Diagnostics.class.getPackage().getImplementationVersion();
         l.add("Bedray: " + (bedray == null ? "unknown (no manifest version)" : bedray));
+        var identity = io.github.andrexarlay.vulkancompat.BuildIdentity.current();
+        l.add("Build: " + identity.display() + ", commit=" + identity.commit() + ", dirty=" + identity.dirty());
         LoaderAccess la = Platforms.get();
         l.add("Loader: " + la.loaderName() + " " + la.loaderVersion() + (la.isDevEnvironment() ? " (dev environment)" : ""));
         l.add("Minecraft: " + net.minecraft.SharedConstants.getCurrentVersion().name());
@@ -203,7 +205,7 @@ public final class Diagnostics {
         l.add("Java: " + System.getProperty("java.version") + " (" + System.getProperty("java.vendor") + ")");
         List<String> jvm = new ArrayList<>();
         for (String a : ManagementFactory.getRuntimeMXBean().getInputArguments()) {
-            if (a.startsWith("-Dvkrtx") || a.startsWith("-Dvkbridge") || a.startsWith("-Xmx") || a.startsWith("-Xms")
+            if (a.startsWith("-Dvkrtx") || a.startsWith("-Dvkbridge") || a.startsWith("-Dbedray") || a.startsWith("-Xmx") || a.startsWith("-Xms")
                 || a.startsWith("-XX:+Use") || a.startsWith("-XX:-Use")) {
                 jvm.add(a);
             }

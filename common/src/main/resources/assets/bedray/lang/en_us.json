@@ -482,5 +482,6 @@
   "bedray.natives.downloads": "Download DLLs",
   "bedray.natives.downloads.tip": "Official DLL downloads and import instructions in your browser",
   "bedray.natives.downloads.opened": "Download page opened. Drop the downloaded ZIP or DLL here, then restart.",
-  "bedray.natives.downloads.failed": "Open DLL downloads from the Bedray project page."
+  "bedray.natives.downloads.failed": "Open DLL downloads from the Bedray project page.",
+  "bedray.settings.share_test": "Prepare GitHub test report"
 }
