@@ -22,8 +22,8 @@ import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerSwitch;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssSrPreset;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.rr.DlssRrParams;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FfxNative;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrVersion;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessRuntime;
@@ -444,6 +444,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         GROUP_IDS.put("main_upscaling", curGroup);
         addUpscalerBackend(builder, up, backendId, gameDir, st);
         addQualityModes(builder, up, backendId, gameDir, st);
+        addDlssModel(builder, up, backendId, st);
         up.addOption(track("frame_generation_provider", FrameGenOptions.provider(builder, st)));
         up.addOption(track("frame_generation_mode", FrameGenOptions.mode(builder, st)));
         page.addOptionGroup(up);
@@ -482,25 +483,43 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     }
 
     private void addUpscalerBackend(ConfigBuilder builder, OptionGroupBuilder group, Identifier backendId, Path gameDir, StorageEventHandler st) {
-        EnumOptionBuilder<UpscalerBackend> backendOpt = builder.createEnumOption(backendId, UpscalerBackend.class);
-        EnumSet<UpscalerBackend> allowed = EnumSet.of(UpscalerBackend.BILINEAR, UpscalerBackend.FSR, UpscalerBackend.DLSS, UpscalerBackend.XESS);
+        EnumOptionBuilder<UpscalerChoice> backendOpt = builder.createEnumOption(backendId, UpscalerChoice.class);
+        EnumSet<UpscalerChoice> allowed = EnumSet.of(UpscalerChoice.BILINEAR, UpscalerChoice.FSR_AUTO, UpscalerChoice.DLSS, UpscalerChoice.XESS);
         if (SettingsCatalog.expertUi()) {
-            allowed = EnumSet.allOf(UpscalerBackend.class);
+            allowed.add(UpscalerChoice.FSR1);
+            allowed.add(UpscalerChoice.NIS);
         }
-        allowed.add(VulkanRtxConfig.activeBackend);   // a stored built-in spatial upscaler stays selectable
-        Set<UpscalerBackend> hardwareBackends = Set.copyOf(allowed);
+        var providers = FsrRuntime.availableVersions();
+        for (UpscalerChoice choice : UpscalerChoice.values()) {
+            if (choice.version() != null && choice.version().isAvailableIn(providers)) allowed.add(choice);
+        }
+        allowed.add(UpscalerChoice.of(VulkanRtxConfig.activeBackend, VulkanRtxConfig.fsrVersion));
+        Set<UpscalerChoice> hardwareBackends = EnumSet.copyOf(allowed);
+        Map<UpscalerBackend, UpscalerSelection.Status> statuses = new java.util.EnumMap<>(UpscalerBackend.class);
+        for (UpscalerBackend backend : UpscalerBackend.values()) statuses.put(backend, UpscalerSelection.status(backend, gameDir));
+        Map<UpscalerBackend, String> runtimeVersions = UpscalerSettingsVersions.installedVersions();
         backendOpt.setName(nameOf("upscaler_backend"))
-            .setTooltip(val -> Component.empty().append(backendTooltip(val, UpscalerSelection.status(val, gameDir))).append("\n").append(tipOf("upscaler_backend")))
-            .setDefaultValue(UpscalerBackend.BILINEAR)
-            .setAllowedValuesProvider(state -> hardwareRenderer(state) ? hardwareBackends : EnumSet.of(UpscalerBackend.BILINEAR), id("renderer"))
-            .setElementNameProvider(val -> backendName(val, UpscalerSelection.status(val, gameDir), UpscalerPreregistration.requiresRestart(val)))
+            .setTooltip(val -> Component.empty().append(backendTooltip(val.backend(), statuses.get(val.backend()))).append("\n").append(tipOf("upscaler_backend")))
+            .setDefaultValue(UpscalerChoice.BILINEAR)
+            .setAllowedValuesProvider(state -> hardwareRenderer(state) ? hardwareBackends : EnumSet.of(UpscalerChoice.BILINEAR), id("renderer"))
+            .setElementNameProvider(val -> {
+                var backend = val.backend();
+                boolean restart = UpscalerPreregistration.requiresRestart(backend);
+                if (val.version() == null) {
+                    return backendName(backend, statuses.get(backend), restart, runtimeVersions.get(backend));
+                }
+                if (val.version() == FsrVersion.AUTO) {
+                    return backendName(backend, statuses.get(backend), restart, tr("bedray.fsr_version.auto", "Auto").getString());
+                }
+                Component label = tr("bedray.fsr_version." + val.name().toLowerCase(Locale.ROOT), val.version().displayName());
+                return val.version().pick(providers).map(provider -> label.copy().append(" · ").append(provider.name())).orElseGet(() ->
+                    label.copy().append(" · ").append(tr("bedray.settings.status.unsupported_hardware", "Unavailable")));
+            })
             .setBinding(val -> {
-                UpscalerBackend before = VulkanRtxConfig.activeBackend;
-                UpscalerSwitch.Outcome outcome = VulkanRtxConfig.applyUpscaler(val, null, null, "ui_backend");
-                LOGGER.info("[VKB-AUTOTEST] ui_upscaler selected={} active={} status={} changed={} outcome={}",
-                    val, VulkanRtxConfig.activeBackend, UpscalerSelection.status(val, gameDir), before != VulkanRtxConfig.activeBackend, outcome);
+                UpscalerSwitch.Outcome outcome = VulkanRtxConfig.applyUpscaler(val.backend(), null, null, null, val.version(), "ui_backend");
+                LOGGER.info("[VKB-AUTOTEST] ui_upscaler selected={} active={} outcome={}", val, VulkanRtxConfig.activeBackend, outcome);
                 VulkanRtxManager.applyResolutionScalingNow();
-            }, () -> VulkanRtxConfig.activeBackend)
+            }, () -> UpscalerChoice.of(VulkanRtxConfig.activeBackend, VulkanRtxConfig.fsrVersion))
             .setImpact(OptionImpact.MEDIUM).setStorageHandler(st);
         if (restartNeeded(gameDir, UpscalerBackend.XESS) || restartNeeded(gameDir, UpscalerBackend.DLSS) || restartNeeded(gameDir, UpscalerBackend.FSR)) {
             backendOpt.setFlags(OptionFlag.REQUIRES_GAME_RESTART);
@@ -517,7 +536,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                 .setDefaultValue(UpscalerModes.defaultMode(ub))
                 .setAllowedValues(EnumSet.copyOf(UpscalerModes.modesFor(ub)))
                 .setElementNameProvider(val -> modeName(ub, val))
-                .setEnabledProvider(s -> s.readEnumOption(backendId, UpscalerBackend.class) == ub, backendId)
+                .setEnabledProvider(s -> s.readEnumOption(backendId, UpscalerChoice.class).backend() == ub, backendId)
                 .setControlHiddenWhenDisabled(true)
                 .setBinding(val -> {
                     UpscalerSwitch.Outcome outcome = switch (ub) {
@@ -554,10 +573,24 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                 VulkanRtxConfig.syncUpscalerTypeWithPreset();
                 VulkanRtxManager.applyResolutionScalingNow();
             }, () -> VulkanRtxConfig.qualityPreset)
-            .setEnabledProvider(s -> s.readEnumOption(backendId, UpscalerBackend.class) == UpscalerBackend.BILINEAR, backendId)
+            .setEnabledProvider(s -> s.readEnumOption(backendId, UpscalerChoice.class).backend() == UpscalerBackend.BILINEAR, backendId)
             .setControlHiddenWhenDisabled(true).setImpact(OptionImpact.MEDIUM).setStorageHandler(st);
         hideRowWhenDisabled("quality_preset");
         group.addOption(track("quality_preset", q));
+    }
+
+    private void addDlssModel(ConfigBuilder builder, OptionGroupBuilder group, Identifier backendId, StorageEventHandler st) {
+        String path = "dlss_sr_preset";
+        var option = builder.createEnumOption(id(path), DlssSrPreset.class);
+        option.setName(nameOf(path)).setTooltip(value -> tipOf(path)).setDefaultValue(DlssSrPreset.AUTO)
+            .setAllowedValues(EnumSet.allOf(DlssSrPreset.class))
+            .setElementNameProvider(value -> value == DlssSrPreset.AUTO ? tr("bedray.fsr_version.auto", "Auto") : Component.literal(value.name()))
+            .setEnabledProvider(state -> state.readEnumOption(backendId, UpscalerChoice.class) == UpscalerChoice.DLSS, backendId)
+            .setControlHiddenWhenDisabled(true)
+            .setBinding(value -> VulkanRtxConfig.dlssSrPreset = value, () -> VulkanRtxConfig.dlssSrPreset)
+            .setImpact(OptionImpact.MEDIUM).setStorageHandler(st);
+        hideRowWhenDisabled(path);
+        group.addOption(track(path, option));
     }
 
     private static OptionBuilder presetsButton(ConfigBuilder builder) {
@@ -808,7 +841,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                 VulkanRtxManager.applyResolutionScalingNow();
             }, () -> VulkanRtxConfig.customScalePercent,
             s -> s.readEnumOption(id("quality_preset"), VulkanRtxConfig.QualityPreset.class) == VulkanRtxConfig.QualityPreset.CUSTOM
-                && s.readEnumOption(backendId, UpscalerBackend.class) == UpscalerBackend.BILINEAR,
+                && s.readEnumOption(backendId, UpscalerChoice.class).backend() == UpscalerBackend.BILINEAR,
             new Identifier[] {id("quality_preset"), backendId}, Mark.NONE, OptionImpact.MEDIUM, true, st));
         img.addOption(intOpt(builder, "fsr_sharpness", 0, 0, 100, 5,
             v -> v == 0 ? tr("bedray.onoff.off", "Off") : Component.literal(v + "%"),
@@ -816,7 +849,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                 VulkanRtxConfig.fsrSharpness = v / 100.0f;
                 LOGGER.info("[VKB-AUTOTEST] ui_upscaler fsr_sharpness={}", VulkanRtxConfig.fsrSharpness);
             }, () -> Math.round(VulkanRtxConfig.fsrSharpness * 100.0f),
-            s -> s.readEnumOption(backendId, UpscalerBackend.class) == UpscalerBackend.FSR, new Identifier[] {backendId}, Mark.NONE,
+            s -> s.readEnumOption(backendId, UpscalerChoice.class).backend() == UpscalerBackend.FSR, new Identifier[] {backendId}, Mark.NONE,
             OptionImpact.LOW, true, st));
         endGroup(builder, page, img, "adv_image");
 
@@ -841,7 +874,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         // ---- Fine-tuning & expert numbers: dev knobs, only with expert UI (-Dvkrtx.ui.expert=true / ui_expert in bedray.toml)
         if (expert) {
             OptionGroupBuilder ex = collapsible(builder, CollapsibleGroups.RT_EXPERT, "Fine-Tuning & Budgets", "expert");
-            addExpertOptions(builder, ex, raysOn, anyRt, pathOn, dMode, modeId, gameDir, st);
+            addExpertOptions(builder, ex, raysOn, anyRt, dMode, modeId, st);
             endGroup(builder, page, ex, "expert");
         }
 
@@ -986,8 +1019,8 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     }
 
     private void addExpertOptions(ConfigBuilder builder, OptionGroupBuilder ex, Function<ConfigState, Boolean> raysOn,
-                                  Function<ConfigState, Boolean> anyRt, Function<ConfigState, Boolean> pathOn, Identifier[] dMode,
-                                  Identifier modeId, Path gameDir, StorageEventHandler st) {
+                                  Function<ConfigState, Boolean> anyRt, Identifier[] dMode,
+                                  Identifier modeId, StorageEventHandler st) {
         String[] names = {"rays_reflection_distance", "rays_ao_radius", "rays_emissive_quality", "rays_emissive_distance",
             "rays_gi_distance"};
         int[][] r = {{128, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16}, {3, 1, 8, 1}, {1, 1, 8, 1},
@@ -1024,31 +1057,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             RtSettings.rtFogInScattering = v;
             RtSettings.fogInScattering = RtSettings.clampFloat(v / 100f, 0.0f, 2.0f);
         }, () -> RtSettings.rtFogInScattering, anyRt, dMode, Mark.NONE, OptionImpact.MEDIUM, false, st));
-        addFsrVersion(builder, ex, id("upscaler_backend"), gameDir, st);
-    }
-
-    private void addFsrVersion(ConfigBuilder builder, OptionGroupBuilder group, Identifier backendId, Path gameDir, StorageEventHandler st) {
-        List<FfxNative.ProviderVersion> providers = UpscalerSelection.status(UpscalerBackend.FSR, gameDir) == UpscalerSelection.Status.AVAILABLE
-            ? FsrRuntime.availableVersions() : List.of();
-        EnumSet<FsrVersion> versions = EnumSet.of(FsrVersion.AUTO);
-        for (FsrVersion v : FsrVersion.values()) {
-            if (v.isAvailableIn(providers)) {
-                versions.add(v);
-            }
-        }
-        EnumOptionBuilder<FsrVersion> o = builder.createEnumOption(id("fsr_version"), FsrVersion.class);
-        o.setName(nameOf("fsr_version")).setTooltip(v -> tipOf("fsr_version")).setDefaultValue(FsrVersion.AUTO).setAllowedValues(versions)
-            .setElementNameProvider(val -> {
-                String suffix = val.pick(providers).map(p -> " (" + p.name() + ")").orElse("");
-                return Component.empty().append(tr("bedray.fsr_version." + val.name().toLowerCase(Locale.ROOT), val.displayName())).append(suffix);
-            })
-            .setEnabledProvider(s -> s.readEnumOption(backendId, UpscalerBackend.class) == UpscalerBackend.FSR, backendId)
-            .setControlHiddenWhenDisabled(false)
-            .setBinding(val -> VulkanRtxConfig.applyUpscaler(VulkanRtxConfig.activeBackend, null, null, null, val, "ui_fsr_version"),
-                () -> versions.contains(VulkanRtxConfig.fsrVersion) ? VulkanRtxConfig.fsrVersion : FsrVersion.AUTO)
-            .setImpact(OptionImpact.LOW).setStorageHandler(st);
-        hideRowWhenDisabled("fsr_version");
-        group.addOption(track("fsr_version", o));
     }
 
     public static void afterPresetApplied() {
@@ -1289,8 +1297,9 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
      * "Bilinear (built-in)", "XeSS (Intel)", or the technology name plus " - not implemented" / " - library missing" /
      * " - restart required" (available, but the device was created without its requirements).
      */
-    static Component backendName(UpscalerBackend backend, UpscalerSelection.Status status, boolean requiresRestart) {
-        Component base = Component.translatableWithFallback(backend.getTranslationKey(), backend.getDisplayName());
+    static Component backendName(UpscalerBackend backend, UpscalerSelection.Status status, boolean requiresRestart, String version) {
+        var base = Component.translatableWithFallback(backend.getTranslationKey(), backend.getDisplayName());
+        if (version != null) base.append(" · ").append(version);
         return switch (status) {
             case AVAILABLE -> requiresRestart
                 ? Component.empty().append(base).append(" - ").append(
@@ -1313,8 +1322,8 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             case AVAILABLE -> switch (backend) {
                 case BILINEAR -> "Built-in bilinear stretch of the scaled 3D target. No temporal reconstruction.";
                 case FSR -> restart
-                    ? "Temporal super resolution (AMD FSR 3.1/2, official FidelityFX Vulkan library). The Vulkan device was created without the FSR features (library appeared after startup, or -Dvkrtx.upscaler.preregister=false): applied after a game restart."
-                    : "Temporal super resolution (AMD FSR 3.1/2, official FidelityFX Vulkan library). Applied immediately. Frame Generation is not available.";
+                    ? "Temporal super resolution through the installed AMD FSR Vulkan providers. The Vulkan device was created without the FSR features (library appeared after startup, or -Dvkrtx.upscaler.preregister=false): applied after a game restart."
+                    : "Temporal super resolution through the installed AMD FSR Vulkan providers. Applied immediately.";
                 case DLSS -> restart
                     ? "Temporal super resolution (NVIDIA DLSS). The Vulkan device was created without the DLSS extensions (library appeared after startup, or -Dvkrtx.upscaler.preregister=false): applied after a game restart."
                     : "Temporal super resolution (NVIDIA DLSS). Applied immediately: the Vulkan device was created with the DLSS extensions at startup.";
@@ -1325,7 +1334,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             case NOT_IMPLEMENTED -> "Not implemented yet. Selecting it has no effect: Bilinear stays active.";
             case LIBRARY_MISSING -> switch (backend) {
                 case DLSS -> "nvngx_dlss.dll and vkb_dlss.dll are not both installed (see docs/INSTALL.md). Selecting it has no effect: Bilinear stays active.";
-                case FSR -> "The official AMD amd_fidelityfx_vk.dll (FidelityFX SDK v1.1.4, PrebuiltSignedDLL) is not installed (see docs/INSTALL.md), or the file is not an official build. Selecting it has no effect: Bilinear stays active.";
+                case FSR -> "Install the signed Vulkan files from AMD FSR SDK 2.4 or FidelityFX SDK 1.1.4, then restart. See the runtime library guide.";
                 default -> "libxess.dll is not found in bedray/natives. Selecting it has no effect: Bilinear stays active.";
             };
             case UNSUPPORTED_GPU -> "DLSS needs an NVIDIA RTX GPU with a current driver. Selecting it has no effect: Bilinear stays active.";

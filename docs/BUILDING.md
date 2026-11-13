@@ -127,6 +127,10 @@ the official Streamline 2.14.16 Windows x64 archive, and the signed DLSS Neural 
 revisions. Use the same revision unless you have checked that the native sources are identical. The packager verifies provenance,
 checksums and Windows x64 DLL headers and writes an extraction manifest. It embeds the licences alongside the runtime.
 
+To include FSR 4 in this local package, pass `--fsr24 <folder>`. Place the unmodified `amd_fidelityfx_loader_vk.dll`
+and `amd_fidelityfx_upscaler_vk.dll` from `Kits/FidelityFX/signedbin/` and `Kits/FidelityFX/docs/license.md` from AMD FSR SDK 2.4.0
+in that folder. Both DLL hashes and the SDK licence hash are verified.
+
 ### Continuous integration and compatibility checks
 
 * `.github/workflows/native-windows.yml` runs on pull requests and pushes to `main`: it builds the DLSS resource wrappers against pinned Vulkan-Headers and

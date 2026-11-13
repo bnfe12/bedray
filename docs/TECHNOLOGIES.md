@@ -15,8 +15,8 @@ The published `0.1.0-alpha.1` is an earlier renderer; use its release notes.
 | **NVIDIA Reflex** | Coordinate CPU/GPU timing to reduce latency. | Streamline integration; runtime support must initialise successfully. |
 | **DLSS 5 Neural Rendering** | Apply a separate neural-rendering stage. | Experimental direct Vulkan path with restricted setup and pending RTX evaluation; see the [specific guide](experiments/dlss5.md). |
 | **NRD REBLUR / ReLAX** | Denoise ray-traced signals without DLSS SR. | Experimental integration. Compare actual output and motion stability; file presence alone is not a successful denoiser run. |
-| **FSR 2 / 3.1 upscaling** | Reconstruct a larger image from lower-resolution input and frame history. | Current FidelityFX 1.1.4 Vulkan integration. Its `amd_fidelityfx_vk.dll` is the reviewed AMD runtime in the existing bundle. |
-| **FSR 4.1.2 upscaling** | AMD's newer ML-based upscaling. | Available in AMD FSR SDK 2.4 for Vulkan; **not integrated in Bedray**. Requires the newer loader/effect API, not a file rename. |
+| **FSR 2 / 3.1 upscaling** | Reconstruct a larger image from lower-resolution input and frame history. | Uses the analytical providers from AMD FSR SDK 2.4 or FidelityFX SDK 1.1.4. |
+| **FSR 4.1.2 upscaling** | AMD's newer ML-based upscaling. | Experimental Vulkan integration through the signed AMD FSR SDK 2.4 loader and upscaler. ML requires a supported Radeon. See [setup](UPSCALERS.md). |
 | **AMD FSR Frame Generation** | Generate intermediate frames. | Source work exists, but current documentation has no accepted live result for the new path. The newer SDK's FSR 4.0.2 implementation also needs integration. |
 | **AMD FSR Ray Regeneration 1.2.1** | AMD's reconstruction of ray-traced lighting. | **Not integrated**; the reviewed public AMD SDK exposes it for DirectX 12, not Vulkan. |
 | **XeSS Super Resolution** | Intel's image reconstruction, with supported cross-vendor paths. | Vulkan integration exists through `libxess.dll`; GPU requirements and current validation still apply. |

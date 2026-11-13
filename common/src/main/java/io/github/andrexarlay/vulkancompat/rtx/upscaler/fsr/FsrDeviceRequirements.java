@@ -1,10 +1,19 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr;
 
+import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.api.DeviceFeatureRegistry;
 import io.github.andrexarlay.vulkanbridge.api.DeviceRequirement;
 import io.github.andrexarlay.vulkanbridge.api.FeatureRequest;
+import io.github.andrexarlay.vulkancompat.mixin.rt.MixinVulkanDeviceFeaturesAccessor;
+import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VK11;
+import org.lwjgl.vulkan.VK13;
+import org.lwjgl.vulkan.VkFormatProperties2;
+import org.lwjgl.vulkan.VkFormatProperties3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -57,7 +66,52 @@ public final class FsrDeviceRequirements {
     /** Device extensions of the base group; FsrRuntime refuses to create a context when the engine device lacks them. */
     public static final Set<String> BASE_EXTENSIONS = Set.of("VK_KHR_get_memory_requirements2", "VK_KHR_dedicated_allocation");
 
+    private static final String COOPERATIVE_MATRIX = "VK_KHR_cooperative_matrix";
+    private static final String COOPERATIVE_MATRIX_STRUCT = "org.lwjgl.vulkan.VkPhysicalDeviceCooperativeMatrixFeaturesKHR";
+    private static final String FLOAT8_STRUCT = "org.lwjgl.vulkan.VkPhysicalDeviceShaderFloat8FeaturesEXT";
+    private static final List<FeatureRequest> ML_FEATURES = List.of(
+        new FeatureRequest(COOPERATIVE_MATRIX_STRUCT, "cooperativeMatrix"),
+        FeatureRequest.core(FeatureRequest.VK11, "storageBuffer16BitAccess"),
+        FeatureRequest.core(FeatureRequest.VK12, "storageBuffer8BitAccess"),
+        FeatureRequest.core(FeatureRequest.VK12, "shaderFloat16"),
+        FeatureRequest.core(FeatureRequest.VK12, "shaderInt8"),
+        FeatureRequest.core(FeatureRequest.VK12, "vulkanMemoryModel"));
+    private static volatile boolean modernRegistered;
+
     private FsrDeviceRequirements() {}
+
+    public static boolean modernRegistered() { return modernRegistered; }
+
+    public static boolean mlDeviceEnabled(VulkanDevice device) {
+        if (VulkanCapabilityChecker.getGpuVendorId() != VulkanCapabilityChecker.VENDOR_ID_AMD
+            || !((Object) device instanceof MixinVulkanDeviceFeaturesAccessor access)) return false;
+        var enabled = access.vkb$enabledFeatures();
+        if (enabled == null || !enabled.extensions().contains(COOPERATIVE_MATRIX)) return false;
+        var names = enabled.features().stream().map(f -> f.name()).collect(java.util.stream.Collectors.toSet());
+        return ML_FEATURES.stream().allMatch(feature -> names.contains(feature.field()));
+    }
+
+    private static void registerMl(DeviceFeatureRegistry registry) {
+        if (!featureStructPresent(COOPERATIVE_MATRIX_STRUCT)) return;
+        registry.register(new DeviceRequirement("VKB FSR 4 ML", Set.of(COOPERATIVE_MATRIX), ML_FEATURES,
+            0, true, () -> Boolean.TRUE));
+        // The SDK sample enables Float8 when the driver supports both features. Older GPUs use INT8.
+        if (!featureStructPresent(FLOAT8_STRUCT)) return;
+        registry.register(new DeviceRequirement("VKB FSR 4 FP8", Set.of(COOPERATIVE_MATRIX, "VK_EXT_shader_float8"), List.of(
+            new FeatureRequest(FLOAT8_STRUCT, "shaderFloat8"),
+            new FeatureRequest(FLOAT8_STRUCT, "shaderFloat8CooperativeMatrix")
+        ), 0, true, () -> Boolean.TRUE));
+    }
+
+    private static boolean featureStructPresent(String name) {
+        try {
+            Class.forName(name, false, FsrDeviceRequirements.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError ignored) {
+            LOGGER.info("[VKB-FSR] optional Vulkan binding unavailable: {}", name);
+            return false;
+        }
+    }
 
     public static DeviceRequirement base() {
         return new DeviceRequirement(
@@ -71,6 +125,40 @@ public final class FsrDeviceRequirements {
             0,
             true,
             () -> Boolean.TRUE);
+    }
+
+    private static final String COMPUTE_DERIVATIVES = "VK_KHR_compute_shader_derivatives";
+    private static final String DERIVATIVES_STRUCT = "org.lwjgl.vulkan.VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR";
+    private static final List<FeatureRequest> MODERN_FEATURES = List.of(
+        FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageExtendedFormats"),
+        FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageWriteWithoutFormat"),
+        new FeatureRequest(DERIVATIVES_STRUCT, "computeDerivativeGroupLinear"));
+
+    private static DeviceRequirement modernBase() {
+        return new DeviceRequirement("VKB FSR SDK 2.4", Set.of(COMPUTE_DERIVATIVES), MODERN_FEATURES,
+            0, true, () -> Boolean.TRUE);
+    }
+
+    static boolean supportsSdk(VulkanDevice device, boolean modern) {
+        if (!modern) {
+            var extensions = device.getDeviceInfo().underlyingExtensions();
+            return BASE_EXTENSIONS.stream().allMatch(ext -> extensions.contains(ext + " (D)"));
+        }
+        if (!((Object) device instanceof MixinVulkanDeviceFeaturesAccessor access)) return false;
+        var enabled = access.vkb$enabledFeatures();
+        if (enabled == null || !enabled.extensions().contains(COMPUTE_DERIVATIVES) || !MODERN_FEATURES.stream().allMatch(required ->
+            enabled.features().stream().anyMatch(actual -> required.field().equals(actual.name())))) return false;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var physical = device.vkDevice().getPhysicalDevice();
+            var typed = VkFormatProperties3.calloc(stack).sType$Default();
+            var format = VkFormatProperties2.calloc(stack).sType$Default().pNext(typed);
+            VK11.vkGetPhysicalDeviceFormatProperties2(physical, VK10.VK_FORMAT_R16G16B16A16_UNORM, format);
+            long required = VK13.VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT | VK13.VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT;
+            long actual = typed.optimalTilingFeatures();
+            LOGGER.info("[VKB-FSR] sdk=2.4 format=R16G16B16A16_UNORM required=0x{} available=0x{}",
+                Long.toHexString(required), Long.toHexString(actual));
+            return (actual & required) == required;
+        }
     }
 
     public static DeviceRequirement fp16() {
@@ -97,7 +185,14 @@ public final class FsrDeviceRequirements {
     }
 
     public static void register(DeviceFeatureRegistry registry) {
-        register(registry, FsrConfig.requestedRequest() != null, UpscalerPreregistration.enabled(), FsrLibrary.library());
+        FsrLibrary.Library modern = FsrLibrary.modernLibrary();
+        register(registry, FsrConfig.requestedRequest() != null, UpscalerPreregistration.enabled(),
+            modern.usable() ? modern : FsrLibrary.library());
+        modernRegistered = modern.usable() && UpscalerPreregistration.isRegistered(UpscalerBackend.FSR);
+        if (modernRegistered && featureStructPresent(DERIVATIVES_STRUCT)) {
+            registry.register(modernBase());
+            registerMl(registry);
+        }
     }
 
     /** Decision with explicit inputs (tests). */

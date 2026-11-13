@@ -114,6 +114,8 @@ public final class NativeCatalog {
     public static final String SHA_FSR = "a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78";
     /** XeSS SDK 3.0.2 bin/libxess.dll, 77 795 704 bytes, Intel Simplified Software License. */
     public static final String SHA_XESS = "251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7";
+    /** xessGetVersion from the SDK 3.0.2 Vulkan DLL above, which has no PE version resource. */
+    static final String XESS_VULKAN_VERSION = "2.0.2";
     public static final String URL_FSR = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4";
     public static final String URL_XESS = "https://github.com/intel/xess/releases";
     public static final String URL_DLSS = "https://github.com/NVIDIA/DLSS";
@@ -147,9 +149,10 @@ public final class NativeCatalog {
             "Experimental direct Vulkan NGX. The file check reports presence. A Neural Rendering wrapper build is required.", URL_DLSS5,
             List.of(new Slot(Folder.NATIVES, "nvngx_dlssnr.dll", false, Kind.PARTNER_SDK, null),
                 new Slot(Folder.STREAMLINE, "sl.dlss_nr.dll", false, Kind.PARTNER_SDK, null))),
-        new Group("fsr4", "AMD FSR 4 (AI Neural Upscaling)", "AMD",
-            "FidelityFX neural upscaler & AI frame generation (planned in roadmap v0.3.0).", URL_FSR,
-            List.of(upcoming(Folder.NATIVES, "ffx_fsr4_x64.dll"), upcoming(Folder.NATIVES, "amd_fidelityfx_ai_vk.dll"))),
+        new Group("fsr4", "AMD FSR Upscaling 4 (Vulkan)", "AMD",
+            "FSR 4.1.2 on supported AMD GPUs, plus FSR 3.1.6 and 2.3.4. Install both signed DLLs from AMD FSR SDK 2.4.",
+            LibraryDescriptor.FSR4_SDK_URL, List.of(req(Folder.NATIVES, LibraryDescriptor.FSR4_LOADER),
+                req(Folder.NATIVES, LibraryDescriptor.FSR4_UPSCALER))),
         new Group("xess2", "Intel XeSS 2.0 & XeLL", "Intel",
             "Next-gen XeSS 2.0 AI upscaling with frame generation (planned in roadmap v0.3.0).", URL_XESS,
             List.of(upcoming(Folder.NATIVES, "libxess_fg.dll"), upcoming(Folder.NATIVES, "libxell.dll"))),

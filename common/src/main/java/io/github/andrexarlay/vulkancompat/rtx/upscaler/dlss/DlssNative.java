@@ -94,6 +94,7 @@ public final class DlssNative implements AutoCloseable {
     private final MethodHandle resourceContractVersion;
     private final MethodHandle queryOptimalSettings;
     private final MethodHandle createFeature;
+    private final MethodHandle createFeatureWithPreset;
     private final MethodHandle evaluate;
     private final MethodHandle releaseFeature;
     private final MethodHandle queryCaps;
@@ -134,6 +135,9 @@ public final class DlssNative implements AutoCloseable {
             // int32_t (uint64 commandBuffer, const VkbDlssCreateInfo*, uint64_t* outFeature)
             createFeature = bind(linker, lookup, "vkb_dlss_create_feature",
                 FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, ADDRESS));
+            createFeatureWithPreset = lookup.find("vkb_dlss_create_feature_with_preset")
+                .map(sym -> linker.downcallHandle(sym, FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS)))
+                .orElse(null);
             // int32_t (uint64 commandBuffer, uint64 feature, const VkbDlssEvalInfo*)
             evaluate = bind(linker, lookup, "vkb_dlss_evaluate", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG, ADDRESS));
             releaseFeature = bind(linker, lookup, "vkb_dlss_release_feature", FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
@@ -294,6 +298,15 @@ public final class DlssNative implements AutoCloseable {
     /** Records feature creation into {@code commandBuffer}; the new handle (opaque, not an NGX pointer) goes to {@code outFeature[0]}. */
     public Status createFeature(long commandBuffer, int renderW, int renderH, int outW, int outH, DlssQuality quality,
                                 int flags, long[] outFeature) {
+        return createFeature(commandBuffer, renderW, renderH, outW, outH, quality, flags, DlssSrPreset.AUTO, outFeature);
+    }
+
+    public boolean supportsSrPresets() {
+        return createFeatureWithPreset != null;
+    }
+
+    public Status createFeature(long commandBuffer, int renderW, int renderH, int outW, int outH, DlssQuality quality,
+                                int flags, DlssSrPreset preset, long[] outFeature) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment info = a.allocate(DlssLayouts.CREATE_INFO);
             info.set(JAVA_INT, 0, DlssLayouts.SIZE_CREATE_INFO);
@@ -305,7 +318,9 @@ public final class DlssNative implements AutoCloseable {
             info.set(JAVA_INT, 24, flags);
             info.set(JAVA_INT, 28, 0);
             MemorySegment handle = a.allocate(JAVA_LONG);
-            int r = invokeInt(createFeature, commandBuffer, info, handle);
+            int r = preset != DlssSrPreset.AUTO && supportsSrPresets()
+                ? invokeInt(createFeatureWithPreset, commandBuffer, info, preset.nativeValue(), handle)
+                : invokeInt(createFeature, commandBuffer, info, handle);
             // A failed SDK create can still return an owner which must survive CB discard.
             outFeature[0] = handle.get(JAVA_LONG, 0);
             return lastStatus(r);

@@ -300,7 +300,7 @@ public final class UpscalerSwitchChecks {
         check(fsr.get(0).mode() == UpscalerMode.QUALITY && fsr.get(0).fsrVersion() == FsrVersion.AUTO, "FSR default step");
         check(fsr.get(1).mode() == UpscalerMode.PERFORMANCE && fsr.get(1).fsrVersion() == FsrVersion.FSR_2, "FSR:PERFORMANCE:2");
         check(fsr.get(2).fsrVersion() == FsrVersion.FSR_3_1, "FSR:NATIVE_AA:3.1");
-        for (String bad : new String[] {"FSR:ULTRA_QUALITY", "FSR:QUALITY:4", "XESS:QUALITY:2", "XESS:DLAA", "BILINEAR:QUALITY", "NOPE", ""}) {
+        for (String bad : new String[] {"FSR:ULTRA_QUALITY", "FSR:QUALITY:9", "XESS:QUALITY:2", "XESS:DLAA", "BILINEAR:QUALITY", "NOPE", ""}) {
             boolean threw = false;
             try {
                 UpscalerSwitchScenario.parseSteps(bad);
