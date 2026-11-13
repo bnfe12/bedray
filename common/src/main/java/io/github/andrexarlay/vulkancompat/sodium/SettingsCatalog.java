@@ -185,6 +185,11 @@ public final class SettingsCatalog {
             "Reports the requested renderer and host command recording. A recorded frame does not establish gameplay compatibility.",
             "Read-only status.", "Missing add-ons and initialization failures are shown explicitly.",
             "Runtime status has no comparison image.");
+        putNoImage("shader_host", Tier.ESSENTIAL, "Shader Host",
+            "Native uses Bedray's built-in ray/path tracing renderer. Iris renders the selected Iris/OptiFine shaderpack through Bedray's Vulkan raster host (no OpenGL). The switch applies live at the next frame. A pack that needs device extensions the GPU was not started with applies after a restart; an unsupported pack honestly falls back to Native.",
+            "Experimental; the Iris host cost depends on the pack.",
+            "Iris needs a selected shaderpack and Minecraft's Vulkan backend.",
+            "No gameplay comparison has been captured for the Iris shader host.");
         putNoImage("gi_execution_status", Tier.ADVANCED, "GI Execution Technologies",
             "Honest supported / enabled / implemented state of the GI execution and geometry paths: raygen, NV Shader Execution Reordering, opacity micromap and partitioned TLAS. Raygen and SER are startup device features (-Dbedray.rt.raygen / -Dbedray.rt.ser); OMM and partitioned TLAS are deferred and not implemented. The regional in-place TLAS update is already active.",
             "Read-only status; no FPS claim. Measured: raygen -7.8% gpu_rt vs compute (RD16, PT on).",

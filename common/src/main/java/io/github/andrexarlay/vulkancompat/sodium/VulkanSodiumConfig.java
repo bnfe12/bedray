@@ -19,6 +19,9 @@ import io.github.andrexarlay.vulkancompat.rtx.config.UpscalerSelection;
 import io.github.andrexarlay.vulkancompat.rtx.config.TextureLodBias;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
+import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostConfig;
+import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostKind;
+import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHosts;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerSwitch;
@@ -307,6 +310,13 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             : tr("bedray.renderer.voxel", "Voxel (Experimental)");
     }
 
+    public static Component shaderHostName(ShaderHostKind kind) {
+        return switch (kind) {
+            case NATIVE -> tr("bedray.shader_host.native", "Native RT");
+            case IRIS -> tr("bedray.shader_host.iris", "Iris Shaderpack");
+        };
+    }
+
     public static Component computeSceneName(GraphicsBackendRegistry.SceneMode scene) {
         return switch (scene) {
             case OFF -> tr("bedray.compute.scene.off", "Hardware / Raster");
@@ -351,6 +361,14 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setEnabledProvider(s -> false).setControlHiddenWhenDisabled(false)
             .setBinding(v -> {}, () -> RendererStatus.STATUS).setStorageHandler(st);
         rt.addOption(track("renderer_status", rendererStatus));
+        EnumOptionBuilder<ShaderHostKind> shaderHost = builder.createEnumOption(id("shader_host"), ShaderHostKind.class);
+        shaderHost.setName(nameOf("shader_host")).setTooltip(v -> tipOf("shader_host"))
+            .setDefaultValue(ShaderHostKind.NATIVE)
+            .setAllowedValues(EnumSet.allOf(ShaderHostKind.class))
+            .setElementNameProvider(VulkanSodiumConfig::shaderHostName)
+            .setBinding(VulkanSodiumConfig::applyShaderHostFromUi, ShaderHostConfig::persisted)
+            .setImpact(OptionImpact.HIGH).setStorageHandler(st);
+        rt.addOption(track("shader_host", shaderHost));
         EnumOptionBuilder<GiExecutionStatusRow> giStatus = builder.createEnumOption(id("gi_execution_status"), GiExecutionStatusRow.class);
         giStatus.setName(nameOf("gi_execution_status")).setTooltip(v -> Component.empty()
             .append(tipOf("gi_execution_status")).append("\n")
@@ -1127,6 +1145,12 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
 
     public static void applyRendererFromUi(VulkanRtxConfig.RendererSelection renderer) {
         BedraySettingsActions.applyRendererFromUi(renderer);
+    }
+
+    /** #35: the settings-page shader_host toggle. Persists the choice and queues a live switch applied at the next frame head. */
+    public static void applyShaderHostFromUi(ShaderHostKind kind) {
+        ShaderHosts.requestSwitch(kind);
+        requestValueRefresh();
     }
 
     public static void applyComputeSceneFromUi(GraphicsBackendRegistry.SceneMode scene) {

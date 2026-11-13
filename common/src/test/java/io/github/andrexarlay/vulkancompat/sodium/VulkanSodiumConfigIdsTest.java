@@ -53,7 +53,7 @@ public class VulkanSodiumConfigIdsTest {
             "options depend on ids that are not registered (Sodium crashes with Config.validateDependencies): " + dangling);
 
         List<String> required = List.of(
-            "renderer", "renderer_status", "rt_mode", "path_bounces", "path_auto_exposure", "water_style", "atm_godrays",
+            "renderer", "renderer_status", "shader_host", "rt_mode", "path_bounces", "path_auto_exposure", "water_style", "atm_godrays",
             "gi_execution_status",
             "upscaler_backend", "quality_preset", "dlss_mode", "xess_mode", "fsr_mode", "frame_generation_provider",
             "pt_preset", "path_spp", "path_distance", "path_denoiser", "path_caustics", "adaptive_quality",
