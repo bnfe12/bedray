@@ -1,28 +1,63 @@
-# Documentation index
+# Bedray documentation
 
-Current state is `main` = unreleased `0.2.0-alpha` (Slang renderer, native core). Start with the [project README](https://github.com/bnfe12/bedray#readme).
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="images/bedray-banner.png">
+  <img src="images/bedray-banner.gif" alt="Bedray — light, block by block. Brand animation of a reflected ray." width="100%">
+</picture>
 
-## Use it
-[INSTALL](INSTALL.md) | [INSTALL_NATIVES_WITH_AI](INSTALL_NATIVES_WITH_AI.md) | [USER_GUIDE](USER_GUIDE.md) | [SETTINGS_REFERENCE](SETTINGS_REFERENCE.md) |
-[UPSCALERS](UPSCALERS.md) | [FRAME_GENERATION](FRAME_GENERATION.md) | [TROUBLESHOOTING](TROUBLESHOOTING.md) | [FAQ](FAQ.md) | [KNOWN_ISSUES](KNOWN_ISSUES.md) |
-[DLSS 5 Neural Rendering](experiments/dlss5.md) |
-[GALLERY (legacy images)](GALLERY.md)
+[Project home](https://github.com/bnfe12/bedray/blob/main/README.md) · [Downloads](https://github.com/bnfe12/bedray/releases) · [Report an issue](https://github.com/bnfe12/bedray/issues/new/choose)
 
-## Status and evidence
-[FEATURE_MATRIX](FEATURE_MATRIX.md) | [VERIFICATION_LOG](VERIFICATION_LOG.md) | [measurements/GI_STACK_REPORT](measurements/GI_STACK_REPORT.md) |
-[measurements/L5_REPRO](measurements/L5_REPRO.md) | [STACK_IMPLEMENTATION_PLAN](STACK_IMPLEMENTATION_PLAN.md) | [MIGRATION_STATUS](MIGRATION_STATUS.md) |
-[NATIVE_1080P_60_AUDIT](NATIVE_1080P_60_AUDIT.md) | [AUDIT_DEFECTS_AND_ISSUES](AUDIT_DEFECTS_AND_ISSUES.md) | [SETTINGS_AUDIT](SETTINGS_AUDIT.md)
+Start with the guide for your build. `main` is the unreleased `0.2.0-alpha` renderer;
+the published `0.1.0-alpha.1` uses the earlier renderer and has its own release instructions.
 
-## Architecture
-[ARCHITECTURE_MANIFESTO](ARCHITECTURE_MANIFESTO.md) | [ARCHITECTURE_REASSESSMENT](ARCHITECTURE_REASSESSMENT.md) | [SLANG_MIGRATION](SLANG_MIGRATION.md) |
-[ENGINE_ARCHITECTURE_AND_PITFALLS](ENGINE_ARCHITECTURE_AND_PITFALLS.md) | [RESTIR_GI_DERIVATION](RESTIR_GI_DERIVATION.md) | [RC_RECONSTRUCTION_PLAN](RC_RECONSTRUCTION_PLAN.md) |
-[TRANSPARENT_MATERIALS](TRANSPARENT_MATERIALS.md) | [SHADER_CACHE](SHADER_CACHE.md) | [DXGI_PRESENT](DXGI_PRESENT.md) | [ai-agent-addenda/](ai-agent-addenda/) (per-subsystem notes)
+## Play and configure
 
-## Iris and Voxel
-[IRIS_VULKAN](IRIS_VULKAN.md) | [IRIS_OPTIONS](IRIS_OPTIONS.md) | [IRIS_RESOURCE_GRAPH](IRIS_RESOURCE_GRAPH.md) | [IRIS_FRAME_GUIDES](IRIS_FRAME_GUIDES.md) |
-[CUSTOM_RT_SHADERS](CUSTOM_RT_SHADERS.md) | [COMPUTE](COMPUTE.md) | [SOFTWARE_RENDERER_MOD_SPEC](SOFTWARE_RENDERER_MOD_SPEC.md)
+| Guide | What you will find |
+| :--- | :--- |
+| [Installation](INSTALL.md) | Requirements, loader setup, renderer core and optional libraries |
+| [User guide](USER_GUIDE.md) | First start, renderer modes and diagnostics |
+| [Settings reference](SETTINGS_REFERENCE.md) | Available controls and their trade-offs |
+| [Upscalers](UPSCALERS.md) | Resolution scaling and hardware-dependent integrations |
+| [Frame generation](FRAME_GENERATION.md) | Setup, requirements and limitations |
+| [Experimental DLSS 5](experiments/dlss5.md) | Source-build setup and current validation limits |
 
-## Contribute and release
-[BUILDING](BUILDING.md) | [TESTING](TESTING.md) | [BRANCH_LAYOUT](BRANCH_LAYOUT.md) | [DEVELOPMENT_BRANCHES](DEVELOPMENT_BRANCHES.md) | [RELEASE_CHECKLIST](RELEASE_CHECKLIST.md) |
-[ADDON_SETTINGS_API](ADDON_SETTINGS_API.md) |
-[Roadmap](https://github.com/bnfe12/bedray/blob/main/ROADMAP.md) | [Changelog](https://github.com/bnfe12/bedray/blob/main/CHANGELOG.md) | [Contributing](https://github.com/bnfe12/bedray/blob/main/CONTRIBUTING.md) | [Security](https://github.com/bnfe12/bedray/blob/main/SECURITY.md) | [Privacy](https://github.com/bnfe12/bedray/blob/main/PRIVACY.md)
+## Get help
+
+| Guide | What you will find |
+| :--- | :--- |
+| [Troubleshooting](TROUBLESHOOTING.md) | Startup, rendering and native-library problems |
+| [Known issues](KNOWN_ISSUES.md) · [FAQ](FAQ.md) | Current limitations and common questions |
+| [Testing and bug reports](TESTING.md) | Useful evidence and safe log sharing |
+| [Privacy](https://github.com/bnfe12/bedray/blob/main/PRIVACY.md) · [Security](https://github.com/bnfe12/bedray/blob/main/SECURITY.md) | Diagnostics handling and vulnerability reporting |
+
+## Follow the project
+
+- [Roadmap](https://github.com/bnfe12/bedray/blob/main/ROADMAP.md) and [changelog](https://github.com/bnfe12/bedray/blob/main/CHANGELOG.md)
+- [Feature status and evidence levels](FEATURE_MATRIX.md)
+- [Legacy screenshot gallery](GALLERY.md) — captures of the earlier renderer
+- [Brand assets](BRAND.md) — logo, banner and animation
+
+<details>
+<summary><strong>For contributors: architecture, builds and measurements</strong></summary>
+
+### Build and validate
+
+[Building](BUILDING.md) · [Contributing](https://github.com/bnfe12/bedray/blob/main/CONTRIBUTING.md) · [Branch layout](BRANCH_LAYOUT.md) · [Add-on settings API](ADDON_SETTINGS_API.md) ·
+[Release checklist](RELEASE_CHECKLIST.md) · [Verification log](VERIFICATION_LOG.md)
+
+### Renderer
+
+[Architecture](ARCHITECTURE_MANIFESTO.md) · [Slang migration](SLANG_MIGRATION.md) ·
+[Transparent materials](TRANSPARENT_MATERIALS.md) · [Shader cache](SHADER_CACHE.md) · [DXGI presentation](DXGI_PRESENT.md)
+
+### Experimental integrations
+
+[Iris shaderpacks](IRIS_VULKAN.md) · [Pack options](IRIS_OPTIONS.md) · [Custom RT shaders](CUSTOM_RT_SHADERS.md) ·
+[Voxel provider](COMPUTE.md)
+
+### Measurements and remaining work
+
+[GI stack report](measurements/GI_STACK_REPORT.md) · [Reproduction guide](measurements/L5_REPRO.md) ·
+[Native 1080p audit](NATIVE_1080P_60_AUDIT.md) · [Implementation plan](STACK_IMPLEMENTATION_PLAN.md)
+
+</details>

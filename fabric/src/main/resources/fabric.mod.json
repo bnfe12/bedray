@@ -5,6 +5,12 @@
   "name": "${mod_name}",
   "description": "${mod_description}",
   "authors": ["bnfe12"],
+  "icon": "assets/bedray/icon.png",
+  "contact": {
+    "homepage": "https://github.com/bnfe12/bedray",
+    "issues": "https://github.com/bnfe12/bedray/issues",
+    "sources": "https://github.com/bnfe12/bedray"
+  },
   "license": "LGPL-3.0-or-later",
   "environment": "client",
   "entrypoints": {
