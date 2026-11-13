@@ -82,7 +82,12 @@ class SlangDeadCodeTest {
                 continue;
             }
             String base = target.substring(target.lastIndexOf('/') + 1);
-            for (String key : modules.keySet()) if (key.equals(base) || key.endsWith("/" + base)) out.add(key);
+            List<String> matches = modules.keySet().stream()
+                .filter(key -> key.equals(base) || key.endsWith("/" + base)).toList();
+            if (m.group(1) != null || matches.size() != 1) {
+                throw new AssertionError("Unresolved or ambiguous Slang import: " + target);
+            }
+            out.add(matches.getFirst());
         }
         return out;
     }

@@ -20,6 +20,37 @@ permissions:
   contents: read
 
 jobs:
+  java-source-contracts:
+    name: Java and shader source contracts (no GPU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install JDK
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '25.0.3+9.0.LTS'
+      - name: Run standalone regressions
+        shell: bash
+        working-directory: common
+        run: |
+          junit="$RUNNER_TEMP/junit-platform-console-standalone.jar"
+          curl --fail --silent --show-error --retry 3 --output "$junit" \
+            'https://repo.maven.apache.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.2/junit-platform-console-standalone-1.10.2.jar'
+          echo "a1de557821293ce903c213c694165fff532cf92081bac4238b9e05b35f04f43f  $junit" | sha256sum --check
+          classes="$RUNNER_TEMP/bedray-contract-classes"
+          mkdir -p "$classes"
+          base=io/github/andrexarlay/vulkancompat
+          javac -encoding UTF-8 --release 25 -cp "$junit" -d "$classes" \
+            "src/main/java/$base/rtx/debug/DiagnosticsScrubber.java" \
+            "src/test/java/$base/rtx/debug/DiagnosticsRedactionTest.java" \
+            "src/test/java/$base/rt/world/RtSlangVisibilityOverflowTest.java"
+          java -jar "$junit" execute --class-path "$classes" --scan-class-path --fail-if-no-tests
+
   vendor-resources:
     name: DLSS resource contracts (no GPU)
     runs-on: windows-2022
@@ -140,6 +171,18 @@ jobs:
           "Slang $env:SLANG_VERSION sha256=$hash; Vulkan-Headers $env:VULKAN_HEADERS_SHA" | Tee-Object evidence/dependencies.txt
           & ./deps/slang/bin/slangc.exe -version 2>&1 | Tee-Object evidence/slang-version.txt
           if ($LASTEXITCODE -ne 0) { throw 'slangc version probe failed' }
+      - name: Compile the path tracing shaders
+        if: matrix.revision == 'candidate'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $shaderRoot = 'source/common/src/main/resources/shaders/slang'
+          $passNames = @('path_trace_scene', 'rc_path_trace_scene')
+          foreach ($pass in $passNames) {
+            & ./deps/slang/bin/slangc.exe -target spirv -profile cs_6_5 -entry main -matrix-layout-column-major `
+              -I $shaderRoot -o "evidence/$pass.spv" "$shaderRoot/passes/$pass.slang"
+            if ($LASTEXITCODE -ne 0) { throw "Slang failed for $pass" }
+          }
       - name: Checkout pinned NRD headers
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
