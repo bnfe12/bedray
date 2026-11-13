@@ -6,6 +6,7 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisExpressionUniforms;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisUniformBlock;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisUniforms;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.IrisCustomTextures;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.IrisPackSettings;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.ProgramName;
 import org.joml.Matrix4f;
@@ -72,7 +73,7 @@ import java.util.regex.Pattern;
  * at {@link IrisUniforms#UBO_BINDING} with canonical offsets. All images stay in GENERAL layout (host convention).
  * <p>
  * Honest fallbacks: a gbuffers program with no geometry source is skipped and logged by name; depthtex1/2 sample depthtex0
- * and shadowtex1 samples shadowtex0 (single depth pass); custom pack textures bind a 1x1 white image until loaded.
+ * and shadowtex1 samples shadowtex0 (single depth pass); a custom pack texture whose file is missing/undecodable binds white.
  */
 public final class IrisForwardExecutor implements AutoCloseable {
 
@@ -154,6 +155,7 @@ public final class IrisForwardExecutor implements AutoCloseable {
     private IrisPassGraph.FullResult graph;
     private final Set<String> loggedSkips = new LinkedHashSet<>();
     private final Map<Integer, String> customNames = new LinkedHashMap<>();
+    private final Map<Integer, RtMemory.Img> customImages = new LinkedHashMap<>();
 
     public IrisForwardExecutor(VkDevice device, RtMemory memory, IrisPackSettings settings) {
         this.device = Objects.requireNonNull(device, "device");
@@ -512,6 +514,15 @@ public final class IrisForwardExecutor implements AutoCloseable {
         }
         white = memory.createImage("iris_white", 1, 1, VK10.VK_FORMAT_R8G8B8A8_UNORM,
             VK10.VK_IMAGE_USAGE_SAMPLED_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        customImages.clear();
+        for (Map.Entry<Integer, String> e : customNames.entrySet()) {
+            IrisCustomTextures.Pixels px = settings.customTexturePixels(e.getValue());
+            if (px == null) {
+                continue;
+            }
+            customImages.put(e.getKey(), memory.createImage("iris_custom_" + e.getValue(), px.width(), px.height(),
+                VK10.VK_FORMAT_R8G8B8A8_UNORM, VK10.VK_IMAGE_USAGE_SAMPLED_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT));
+        }
         imagesInitialized = false;
         LOGGER.info("[VKB-IRIS] targets allocated: {} colortex pairs, {}x{}", targets.colorCount(), width, height);
     }
@@ -555,6 +566,12 @@ public final class IrisForwardExecutor implements AutoCloseable {
             memory.destroy(white);
             white = null;
         }
+        for (RtMemory.Img img : customImages.values()) {
+            if (img != null) {
+                memory.destroy(img);
+            }
+        }
+        customImages.clear();
         imagesInitialized = false;
     }
 
@@ -571,6 +588,14 @@ public final class IrisForwardExecutor implements AutoCloseable {
         }
         if (in.engineColorView() == 0L) {
             throw new IllegalArgumentException("engineColorView is null");
+        }
+        // Refuse to emit any GPU work when the pack's gbuffers have nothing to draw. The fullscreen composite/final chain
+        // would then sample never-written colortex and the final pass would still overwrite the engine colour image that
+        // vanilla rendered this frame — an incomplete frame submitted from a separate transient command buffer alongside
+        // vanilla's own draw of that image, which lost the Vulkan device. Leaving the engine target untouched instead.
+        if (!frameIsCoherent(graph.passes(), in.meshes().keySet())) {
+            LOGGER.info("[VKB-IRIS] no gbuffers geometry this frame: leaving the engine target untouched");
+            return false;
         }
         ensureImages(in.width(), in.height());
         currentFrameSlot = (currentFrameSlot + 1) % FRAME_SLOTS;
@@ -598,6 +623,7 @@ public final class IrisForwardExecutor implements AutoCloseable {
             if (!imagesInitialized) {
                 transitionAll(cmd);
                 uploadWhite(cmd, stack);
+                uploadCustomTextures(cmd, stack);
                 imagesInitialized = true;
             }
             List<IrisPassGraph.FullPass> passes = graph.passes();
@@ -759,9 +785,13 @@ public final class IrisForwardExecutor implements AutoCloseable {
             case 23 -> in.lightmapView() != 0L ? in.lightmapView() : white.view;
             case 26 -> in.atlasView() != 0L ? in.atlasView() : white.view;
             default -> {
-                String custom = customNames.get(binding);
-                if (custom != null && loggedSkips.add("custom:" + custom)) {
-                    LOGGER.warn("[VKB-IRIS] custom texture '{}' not loaded yet, binding white fallback", custom);
+                RtMemory.Img custom = customImages.get(binding);
+                if (custom != null) {
+                    yield custom.view;
+                }
+                String name = customNames.get(binding);
+                if (name != null && loggedSkips.add("custom:" + name)) {
+                    LOGGER.warn("[VKB-IRIS] custom texture '{}' not loaded, binding white fallback", name);
                 }
                 yield white.view;
             }
@@ -813,15 +843,28 @@ public final class IrisForwardExecutor implements AutoCloseable {
     }
 
     private void uploadWhite(VkCommandBuffer cmd, MemoryStack stack) {
-        RtMemory.Buf staging = memory.createBuffer("iris_white_staging", 4, VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
-        MemoryUtil.memPutInt(staging.mapped, 0xFFFFFFFF);
-        VkBarriers.transition(cmd, white.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+        uploadPixels(cmd, stack, white, new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF}, 1, 1);
+    }
+
+    private void uploadCustomTextures(VkCommandBuffer cmd, MemoryStack stack) {
+        for (Map.Entry<Integer, RtMemory.Img> e : customImages.entrySet()) {
+            IrisCustomTextures.Pixels px = settings.customTexturePixels(customNames.get(e.getKey()));
+            if (px != null) {
+                uploadPixels(cmd, stack, e.getValue(), px.rgba(), px.width(), px.height());
+            }
+        }
+    }
+
+    private void uploadPixels(VkCommandBuffer cmd, MemoryStack stack, RtMemory.Img img, byte[] rgba, int w, int h) {
+        RtMemory.Buf staging = memory.createBuffer("iris_tex_staging", rgba.length, VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+        MemoryUtil.memByteBuffer(staging.mapped, rgba.length).put(rgba);
+        VkBarriers.transition(cmd, img.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
             VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
         region.get(0).imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
-        region.get(0).imageExtent().set(1, 1, 1);
-        VK10.vkCmdCopyBufferToImage(cmd, staging.handle, white.image, VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
-        VkBarriers.transition(cmd, white.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+        region.get(0).imageExtent().set(w, h, 1);
+        VK10.vkCmdCopyBufferToImage(cmd, staging.handle, img.image, VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
+        VkBarriers.transition(cmd, img.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
             VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK10.VK_IMAGE_LAYOUT_GENERAL);
         VkBarriers.fullMemoryBarrier(cmd);
         memory.destroy(staging);
@@ -953,6 +996,26 @@ public final class IrisForwardExecutor implements AutoCloseable {
             return "sky";
         }
         return program;
+    }
+
+    /**
+     * True when this frame's pass chain can be recorded without producing an incoherent image. A pack that declares
+     * gbuffers geometry passes is only coherent if at least one of them has a geometry source to draw (so its colortex
+     * output exists for the composite/final reads and the engine-colour overwrite is a real replacement). A pack with no
+     * gbuffers passes at all (pure composite/final over the engine colour) is not gated here. {@code availableMeshKeys}
+     * are the source keys that actually carry geometry this frame (see {@link IrisFrameGeometry#build}).
+     */
+    static boolean frameIsCoherent(List<IrisPassGraph.FullPass> passes, Set<String> availableMeshKeys) {
+        boolean hasGbuffers = false;
+        for (IrisPassGraph.FullPass pass : passes) {
+            if (pass.family() != ProgramName.Family.SHADOW && !pass.fullscreen()) {
+                hasGbuffers = true;
+                if (availableMeshKeys.contains(meshKey(pass.name()))) {
+                    return true;
+                }
+            }
+        }
+        return !hasGbuffers;
     }
 
     private void beginRendering(VkCommandBuffer cmd, VkRenderingInfo info) {

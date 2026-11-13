@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -141,6 +142,24 @@ class IrisForwardExecutorTest {
                 0L, 0L, 0L, 0L, 0L, 8, 8, 0f, 0, 0.05f, 128f, 0.016f);
             assertFalse(ex.record(null, in));
         }
+    }
+
+    /**
+     * The Iris forward executor records the gbuffers geometry into its own colortex, then runs the fullscreen
+     * deferred/composite/final chain and writes the engine colour image from a separate transient submission. If every
+     * gbuffers pass skips because no geometry source arrived this frame, composite/final would still sample never-written
+     * colortex and final would still overwrite the engine colour that vanilla rendered this same frame — an incomplete
+     * frame submitted alongside vanilla's own draw of that image, which loses the Vulkan device (VK_ERROR_DEVICE_LOST,
+     * observed as PerfMonitor "vkGetQueryPoolResults failed: -4"). A frame with gbuffers passes is therefore only
+     * coherent to record when at least one of them actually has geometry to draw.
+     */
+    @Test
+    void frameIsIncoherentWhenGbuffersHaveNoGeometry() throws IOException {
+        IrisPassGraph.FullResult graph = fullGraph(); // shadow + gbuffers_terrain + composite + final
+        assertTrue(IrisForwardExecutor.frameIsCoherent(graph.passes(), Set.of("terrain")),
+            "with terrain geometry the gbuffers pass draws, so the post/final chain is coherent");
+        assertFalse(IrisForwardExecutor.frameIsCoherent(graph.passes(), Set.of()),
+            "with no gbuffers geometry the final must not composite over the engine target");
     }
 
     @Test
