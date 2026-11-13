@@ -15,11 +15,15 @@ import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTexture;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
+import io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe;
 import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion;
 import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement;
 import io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate;
+import io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
+import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame;
+import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager;
@@ -113,10 +117,17 @@ public final class WorldTargetManager {
     private WorldTargetManager() {}
     private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan resolutionPlan;
 
-    private static io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Stamp resolutionStamp;
+    private static WorldFrame.Stamp resolutionStamp;
+    private static WorldFrame.Stamp rasterMotionStamp;
+
     public static boolean rrOutputThisFrame() {
-        return resolutionStamp != null && io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.isCurrent(resolutionStamp)
+        return resolutionStamp != null && WorldFrames.isCurrent(resolutionStamp)
             && resolutionPlan != null && resolutionPlan.rayReconstructionOutput();
+    }
+
+    /** True after a depth copy and raster velocity dispatch have both been submitted for this world frame. */
+    public static boolean hasCurrentRasterMotion() {
+        return rasterMotionStamp != null && WorldFrames.isCurrent(rasterMotionStamp);
     }
 
     public static boolean rrResolvesOutput() { return inWorldPhase && resolutionPlan != null && resolutionPlan.rayReconstructionOutput(); }
@@ -294,6 +305,7 @@ public final class WorldTargetManager {
     public static void beginWorldPhase(GameRenderer renderer, int winW, int winH) {
         resolutionPlan = null;
         resolutionStamp = null;
+        rasterMotionStamp = null;
         // Always start from "unresolved": only this frame's denoiser record may claim the colour is already resolved.
         io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.resetFrameColorTemporallyResolved();
         if (!isScalingActive()) {
@@ -312,13 +324,13 @@ public final class WorldTargetManager {
 
         // 100% resolution or invalid dimensions: zero overhead vanilla path when hardware RT is disabled
         final boolean rtNow = io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.enabled();
-        if (!rtNow && !TemporalUpscaler.isActive() && !FrameGenRuntime.usable() && !SpatialUpscaler.isSelected()
+        if (!rtNow && !TemporalUpscaler.isActive() && !FrameGenRuntime.needsDlssgInputs() && !SpatialUpscaler.isSelected()
             && targetW == winW && targetH == winH) {
             return;
         }
 
         resolutionPlan = chooseResolutionPlan(targetW, targetH, winW, winH);
-        resolutionStamp = io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull();
+        resolutionStamp = WorldFrames.stampOrNull();
         ensureTargets(resolutionPlan.worldWidth(), resolutionPlan.worldHeight());
         if (!resolutionPlan.equals(lastLoggedResolutionPlan)) {
             lastLoggedResolutionPlan = resolutionPlan;
@@ -425,7 +437,7 @@ public final class WorldTargetManager {
                     dispatched = true;
                 } else if (TemporalUpscaler.isActive()) {
                     dispatched = runXessPass(fullMain);
-                } else if (FrameGenRuntime.usable()) {
+                } else if (FrameGenRuntime.needsDlssgInputs()) {
                     runMotionVectorsOnly();
                 }
 
@@ -512,7 +524,7 @@ public final class WorldTargetManager {
         }
 
         if ((resolutionPlan == null || !resolutionPlan.rayReconstructionOutput())
-                && (TemporalUpscaler.isActive() || FrameGenRuntime.usable())) {
+                && (TemporalUpscaler.isActive() || FrameGenRuntime.needsDlssgInputs())) {
             ensureTemporalTargets(w, h);
         }
     }
@@ -556,7 +568,7 @@ public final class WorldTargetManager {
     public static void copyWorldDepth() {
         // Output-grid raster depth is already available to UI; RR owns its input-grid motion/depth guides.
         if (rrResolvesOutput()) return;
-        if (!inWorldPhase || (!TemporalUpscaler.isActive() && !FrameGenRuntime.usable()) || worldTarget == null || depthCopy == null) {
+        if (!inWorldPhase || (!TemporalUpscaler.isActive() && !FrameGenRuntime.needsDlssgInputs()) || worldTarget == null || depthCopy == null) {
             return;
         }
         if (depthCopy.width != worldTarget.width || depthCopy.height != worldTarget.height) {
@@ -684,7 +696,6 @@ public final class WorldTargetManager {
         IUpscalerBackend backend = UpscalerLibraryLoader.getBackend(kind);
         long rasterDepthView = extractVkImageView(depthCopy.getDepthTextureView());
         long rasterDepthImg = extractDepthVkImage(depthCopy);
-        long rtDepth = io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.getActiveDepthView();
         long mvView = extractVkImageView(motionVectorsTarget.getColorTextureView());
         long colorView = extractVkImageView(worldTarget.getColorTextureView());
         long outView = extractVkImageView(xessOutput.getColorTextureView());
@@ -693,8 +704,7 @@ public final class WorldTargetManager {
         long outImg = extractVkImage(xessOutput);
         // The DLSS-RR image is resolved on the render grid and moved by entity and RT-geometry motion. Reusing RR's own
         // motion vectors keeps the upscaler's reprojection consistent with the denoiser; a raster-depth pass would only
-        // know camera motion and would drag moving entities and water across block edges. The raster pass still runs
-        // below, because frame generation consumes the same motion vector image.
+        // know camera motion and would drag moving entities and water across block edges.
         final boolean colorResolved = io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.frameColorTemporallyResolved();
         final long resolvedMvView = colorResolved ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeMotionVectorView() : 0L;
         final long resolvedMvImg = colorResolved ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeMotionVectorImage() : 0L;
@@ -707,7 +717,9 @@ public final class WorldTargetManager {
                 + " mvView=" + mvView + " colorView=" + colorView + " outView=" + outView + " color=" + colorImg
                 + " depth=" + rasterDepthImg + " mv=" + mvImg + " out=" + outImg + ")");
         }
-        VelocityPipeline velocityPipeline = velocityRecordings.ensure(vulkanDevice);
+        final boolean probeRasterMotion = MotionProbe.armed() && RtFrameRenderer.getActiveDepthView() != 0L
+            && RtFrameRenderer.probeMemory() != null;
+        final boolean recordRasterMotion = !reuseDenoiserMotion || FrameGenRuntime.needsFrameInputs() || probeRasterMotion;
 
         final int inW = worldTarget.width;
         final int inH = worldTarget.height;
@@ -727,11 +739,12 @@ public final class WorldTargetManager {
         final float srJitterY = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterY());
         boolean ok = recordVelocityCommands(vulkanDevice, cmd -> {
             VkBarriers.fullMemoryBarrier(cmd);
-            // Motion vectors must match the exact same hardware Reversed-Z depth buffer (rasterDepthView) passed to the upscaler
-            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, WorldCameraHistory.invViewProj(), WorldCameraHistory.prevViewProj(), camDelta);
-            VkBarriers.fullMemoryBarrier(cmd);
-            if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
-                && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
+            if (recordRasterMotion) {
+                velocityRecordings.pipeline().dispatch(cmd, rasterDepthView, mvView, inW, inH,
+                    WorldCameraHistory.invViewProj(), WorldCameraHistory.prevViewProj(), camDelta);
+                VkBarriers.fullMemoryBarrier(cmd);
+            }
+            if (probeRasterMotion) {
                 io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.record(cmd,
                     io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory(),
                     io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthImage(), mvImg, 0L, inW, inH,
@@ -755,6 +768,9 @@ public final class WorldTargetManager {
         });
         if (!ok) {
             return false; // the backend's dispatch already logged stage=execute and disabled itself
+        }
+        if (recordRasterMotion) {
+            rasterMotionStamp = resolutionStamp;
         }
         var neural = kind == UpscalerBackend.DLSS && !colorResolved ? DlssRuntime.neuralRendering() : null;
         boolean neuralPresented = false;
@@ -828,7 +844,7 @@ public final class WorldTargetManager {
         final int inW = worldTarget.width;
         final int inH = worldTarget.height;
 
-        recordVelocityCommands(vulkanDevice, cmd -> {
+        boolean recorded = recordVelocityCommands(vulkanDevice, cmd -> {
             VkBarriers.fullMemoryBarrier(cmd);
             velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, WorldCameraHistory.invViewProj(), WorldCameraHistory.prevViewProj(), camDelta);
             VkBarriers.fullMemoryBarrier(cmd);
@@ -845,6 +861,9 @@ public final class WorldTargetManager {
 
             return true;
         });
+        if (recorded) {
+            rasterMotionStamp = resolutionStamp;
+        }
     }
 
     private static boolean recordVelocityCommands(VulkanDevice device, java.util.function.Function<VkCommandBuffer, Boolean> commands) {
@@ -1147,7 +1166,7 @@ public final class WorldTargetManager {
     }
 
     /**
-     * Performs a full-screen bilinear blit/upscale from low-res world target to native fullMain target.
+     * Copies matching native-size color targets or uses a bilinear blit when scaling or conversion is needed.
      */
     private static void upscaleWorld(RenderTarget world, RenderTarget fullMain) {
         GpuTextureView srcView = world.getColorTextureView();
@@ -1157,6 +1176,14 @@ public final class WorldTargetManager {
         }
 
         CommandEncoder enc = RenderSystem.getDevice().createCommandEncoder();
+        GpuTexture src = world.getColorTexture();
+        GpuTexture dst = fullMain.getColorTexture();
+        if (world.width == fullMain.width && world.height == fullMain.height
+                && hasUsage(src, GpuTexture.USAGE_COPY_SRC) && hasUsage(dst, GpuTexture.USAGE_COPY_DST)
+                && src.getFormat() == dst.getFormat()) {
+            enc.copyTextureToTexture(src, dst, 0, 0, 0, 0, 0, world.width, world.height);
+            return;
+        }
         try (RenderPass p = enc.createRenderPass(() -> "VKB upscale", dstView, Optional.empty())) {
             p.setPipeline(RenderSystem.getCompiledPipeline(RenderPipelines.TRACY_BLIT));
             RenderSystem.bindDefaultUniforms(p);
@@ -1224,7 +1251,7 @@ public final class WorldTargetManager {
         return worldHud3d;
     }
 
-    /** World depth copy of the temporal-upscaler path (D32, render size), null while no temporal upscaler ran. Read by frame generation. */
+    /** Retained render-size depth target. The frame-generation hooks check current raster motion before using it. */
     public static TextureTarget getDepthCopy() {
         return depthCopy;
     }

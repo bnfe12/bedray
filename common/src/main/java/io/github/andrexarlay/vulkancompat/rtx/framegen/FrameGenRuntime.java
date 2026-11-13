@@ -342,6 +342,17 @@ public final class FrameGenRuntime {
         return !amd() && StreamlineBootstrap.isReady() && !failed;
     }
 
+    /** DLSS-G can also request raster guides without a temporal upscaler. Reflex uses the broader runtime gate. */
+    public static boolean needsDlssgInputs() {
+        return usable() && Boolean.TRUE.equals(supported) && userEnabled
+            && FrameGenSettings.mode() != FrameGenSettings.Mode.OFF;
+    }
+
+    /** Whether the selected provider can consume this frame's world inputs. */
+    public static boolean needsFrameInputs() {
+        return amd() ? Fsr3FrameGen.needsFrameInputs() : needsDlssgInputs();
+    }
+
     private static void fail(String stage, String detail, Throwable t) {
         failed = true;
         failure = LogPaths.show(stage + ": " + detail);
@@ -418,7 +429,7 @@ public final class FrameGenRuntime {
             Fsr3FrameGen.onWorldReady(renderer);
             return;
         }
-        if (!usable()) {
+        if (!needsDlssgInputs()) {
             return;
         }
         try {
@@ -429,6 +440,10 @@ public final class FrameGenRuntime {
             boolean rrFrame = WorldTargetManager.rrOutputThisFrame();
             FrameGenGuides guides = rrFrame ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.frameGenGuides() : null;
             if (rrFrame && guides == null) { worldFail = "rr_guides_missing_current_frame"; return; }
+            if (!rrFrame && !WorldTargetManager.hasCurrentRasterMotion()) {
+                worldFail = "raster_guides_missing_current_frame";
+                return;
+            }
             if (world == null || (!rrFrame && (depthCopy == null || mvTarget == null)) || main == null) {
                 worldFail = "missing_targets";
                 if (!unsupportedLogged) {
@@ -507,7 +522,7 @@ public final class FrameGenRuntime {
             boolean want = false;
             windowFocused = Minecraft.getInstance().getWindow().isFocused();
             FrameGenSettings.Mode wanted = FrameGenSettings.mode();
-            boolean allowed = userEnabled && windowFocused && Boolean.TRUE.equals(supported) && wanted != FrameGenSettings.Mode.OFF;
+            boolean allowed = windowFocused && needsDlssgInputs();
             if (worldReady && !surfaceChanged) {
                 validFrames++;
                 sendFrameGenConstants(sl);
