@@ -12,6 +12,7 @@ constexpr std::array<std::uint32_t,17> bindings{0,2,3,9,10,16,17,18,20,21,22,23,
 bool wrong_push = false, wrong_count = false, unknown_program = false;
 std::uint32_t missing_binding = std::numeric_limits<std::uint32_t>::max();
 std::vector<std::size_t> barrier_after_calls;
+std::vector<bool> barrier_broad;
 std::uint32_t descriptor_type(std::uint32_t binding) {
     if (binding == 0) return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     if (binding == 3 || binding == 9 || binding == 10) return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -40,14 +41,20 @@ template<class T> T get(const std::vector<unsigned char>& bytes, std::size_t off
 VKAPI_ATTR void VKAPI_CALL barrier(VkCommandBuffer command,VkPipelineStageFlags src,VkPipelineStageFlags dst,
     VkDependencyFlags flags,std::uint32_t count,const VkMemoryBarrier* memory,
     std::uint32_t buffer_count,const VkBufferMemoryBarrier*,std::uint32_t image_count,const VkImageMemoryBarrier*) {
-    CHECK(command != VK_NULL_HANDLE && src == VK_PIPELINE_STAGE_ALL_COMMANDS_BIT && dst == src);
+    CHECK(command != VK_NULL_HANDLE && dst == src);
     CHECK(flags == 0 && count == 1 && buffer_count == 0 && image_count == 0);
-    CHECK(memory && memory->srcAccessMask == VK_ACCESS_MEMORY_WRITE_BIT);
-    CHECK(memory && memory->dstAccessMask == (VK_ACCESS_MEMORY_READ_BIT|VK_ACCESS_MEMORY_WRITE_BIT));
+    // The leading and trailing barriers drain the whole device (host scene upload in, path-trace consumer out); the four
+    // inter-level barriers only order one RC build compute dispatch's writes against the next level's reads.
+    const bool broad = src == VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    CHECK(broad || src == VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    CHECK(memory && memory->srcAccessMask == static_cast<VkAccessFlags>(broad ? VK_ACCESS_MEMORY_WRITE_BIT : VK_ACCESS_SHADER_WRITE_BIT));
+    CHECK(memory && memory->dstAccessMask == static_cast<VkAccessFlags>(broad ? (VK_ACCESS_MEMORY_READ_BIT|VK_ACCESS_MEMORY_WRITE_BIT)
+        : (VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT)));
+    barrier_broad.push_back(broad);
     barrier_after_calls.push_back(fake::render_calls.size()); ++fake::barriers;
 }
 DeviceFns device() { auto fns=make_device_fns(); fns.cmd_pipeline_barrier=barrier; return fns; }
-void reset() { fake::reset(); barrier_after_calls.clear(); wrong_push=wrong_count=unknown_program=false; missing_binding=UINT32_MAX; }
+void reset() { fake::reset(); barrier_after_calls.clear(); barrier_broad.clear(); wrong_push=wrong_count=unknown_program=false; missing_binding=UINT32_MAX; }
 BedrayRCDesc configuration(std::uint32_t axis=8) { return {BEDRAY_CORE_ABI_VERSION,sizeof(BedrayRCDesc),1,axis,0,0}; }
 std::array<BedrayResource,14> inputs() {
     std::array<BedrayResource,14> result{};
@@ -155,6 +162,7 @@ void dispatch_order_payloads_and_immutable_ranges() {
     CHECK(pass.record(f,data,first,&error) == BEDRAY_OK);
     CHECK(fake::render_calls.size() == 5 && fake::barriers == 6);
     CHECK(barrier_after_calls == std::vector<std::size_t>({0,1,2,3,4,5}));
+    CHECK(barrier_broad == std::vector<bool>({true,false,false,false,false,true}));
     CHECK(first[0].binding == 34 && first[0].descriptor_type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && first[0].range == 288);
     CHECK(first[1].binding == 35 && first[1].descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER && first[1].range == 69168ull*32u);
     const auto upload=bytes(first[0].handle);

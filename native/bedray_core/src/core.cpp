@@ -1191,11 +1191,18 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_frame(
         }
     }
 
-    std::vector<VkWriteDescriptorSet> writes;
-    std::vector<VkDescriptorBufferInfo> buffer_infos;
-    std::vector<VkDescriptorImageInfo> image_infos;
-    std::vector<VkWriteDescriptorSetAccelerationStructureKHR> acceleration_infos;
-    std::vector<VkAccelerationStructureKHR> acceleration_handles;
+    // Reused per thread: reserve() up front keeps the .back() pointers below stable for the whole call, so clearing
+    // instead of reallocating removes the per-dispatch heap traffic without changing a single descriptor value.
+    thread_local std::vector<VkWriteDescriptorSet> writes;
+    thread_local std::vector<VkDescriptorBufferInfo> buffer_infos;
+    thread_local std::vector<VkDescriptorImageInfo> image_infos;
+    thread_local std::vector<VkWriteDescriptorSetAccelerationStructureKHR> acceleration_infos;
+    thread_local std::vector<VkAccelerationStructureKHR> acceleration_handles;
+    writes.clear();
+    buffer_infos.clear();
+    image_infos.clear();
+    acceleration_infos.clear();
+    acceleration_handles.clear();
     try {
         writes.reserve(desc->resource_count);
         buffer_infos.reserve(desc->resource_count);

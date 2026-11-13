@@ -40,6 +40,16 @@ void barrier(const DeviceFns& f, VkCommandBuffer cmd) {
     f.cmd_pipeline_barrier(cmd,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
         0,1,&m,0,nullptr,0,nullptr);
 }
+// Between cascade levels the only producer and consumer are the RC build compute dispatches on the tails buffer, so a
+// compute-scoped shader barrier orders them without draining the whole device. The leading and trailing barriers stay
+// broad: their producers (host scene upload) and consumers (path trace) are outside this pass.
+void compute_barrier(const DeviceFns& f, VkCommandBuffer cmd) {
+    VkMemoryBarrier m{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    m.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    m.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    f.cmd_pipeline_barrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0,1,&m,0,nullptr,0,nullptr);
+}
 BedrayResource resource(std::uint32_t binding, const gpu::BufferView& view) noexcept {
     BedrayResource r{}; r.binding = binding; r.descriptor_type = type(binding);
     r.handle = bits(view.buffer); r.range = view.size; return r;
@@ -195,7 +205,7 @@ BedrayStatus RCFieldPass::record(const BedrayPathTraceFrameDesc& frame,std::span
             if (status==BEDRAY_ERROR_DEVICE_LOST) { lost_=true; buffers_->device_lost(); }
             return status;
         }
-        barrier(fns_,cmd);
+        if (c > 0) compute_barrier(fns_,cmd); else barrier(fns_,cmd);
     }
     // This field is the next recording's history; the one it read stays pinned by this recording until its proof.
     drop_history();
