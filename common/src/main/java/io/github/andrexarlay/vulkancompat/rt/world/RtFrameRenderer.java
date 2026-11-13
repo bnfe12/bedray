@@ -1946,7 +1946,7 @@ public final class RtFrameRenderer {
             RtTraceTelemetry submitted = lastTraceTelemetry;
             StatsMetadata metered = lastStatsMetadata;
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] rt_pass ok frames=%d trace=%s output=%s trace_pixels=%d output_pixels=%d primary_samples=%d stats_trace=%s stats_sequence=%d stats_frame=%d stats_metered_pixels=%d stats_trusted_pixels=%d hit_pct=%s reject_pct=%s invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f record_wall_ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
+                "[VKB-RT] rt_pass ok frames=%d trace=%s output=%s trace_pixels=%d output_pixels=%d primary_samples=%d stats_trace=%s stats_sequence=%d stats_frame=%d stats_metered_pixels=%d stats_trusted_pixels=%d hit_pct=%s reject_pct=%s invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f record_wall_ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s accum_frames=%d nearby_scene_changed=%s",
                 passFrames, submitted == null ? "n/a" : submitted.traceExtent(), submitted == null ? "n/a" : submitted.outputExtent(),
                 submitted == null ? 0L : submitted.tracePixels(), submitted == null ? 0L : submitted.outputPixels(),
                 submitted == null ? 0L : submitted.primarySamples(),
@@ -1970,7 +1970,7 @@ public final class RtFrameRenderer {
                 msOrNa(gpuTimer == null ? -1.0 : gpuTimer.recentMs(SPAN_WORLD, SPAN_ATMO)),
                 budget <= 0.0 ? "off" : String.format(Locale.ROOT, "%.1f", budget),
                 RtAdaptiveQuality.level(), RtAdaptiveQuality.levels(userSpp, userBounces),
-                RtConfig.displayed(), RtConfig.effectiveModeName()));
+                RtConfig.displayed(), RtConfig.effectiveModeName(), lastAccumulatedFrames(), params.sceneChanged));
         } else if (s.instances() == 0 && s.pending() > 0) {
             LOGGER.info("[VKB-RT] rt_pass waiting instances=0 pending={}", s.pending());
         }

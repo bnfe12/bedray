@@ -834,8 +834,8 @@ public final class RtEmitters {
      * coordinates 0..1 over {@code tex}) to {@code dst[o ..]}; false when the quad has no emissive texel. The texels of the
      * UV rectangle of the quad are scanned (at most {@link #MAX_SCAN} per axis); the emitter is shrunk to the bounding rectangle of
      * the emissive texels, so a torch flame (a 2x2 texel spot on a 2x10 texel quad) is a small quad AT the flame and the light
-     * leaves from there, not from the stick. Its power (area x mean emission over that rectangle x boost) is raised to
-     * {@link #MIN_POWER} when smaller, capped by {@link #MAX_BOOST}. Layout: see the class comment; {@code uvc.w} (index
+     * leaves from there, not from the stick. Full-strength lamps receive the small-source power compensation, capped by
+     * {@link #MAX_BOOST}; weak authored texels retain their area-integrated emission. Layout: see the class comment; {@code uvc.w} (index
      * {@code o + 15}) is 0 (block atlas); entity callers set it to slot + 1.
      */
     public static boolean buildQuadRecord(float[] dst, int o, float[] positions, int po, float[] uvs, int uo, TexelEmission tex,
@@ -1006,11 +1006,14 @@ public final class RtEmitters {
     }
 
     /**
-     * Power boost of an emitter rectangle: small bright spots get a lift, with a minimum power proportional to their
-     * brightest texel. Scaling a material's emission must scale its light instead of lifting dim growth to torch power.
-     * Full-strength torch flames retain {@link #MIN_POWER}; all boosts remain capped by {@link #MAX_BOOST}.
+     * Power compensation for full-strength lamp texels. Weak authored emission retains its integrated area and mean:
+     * compensating sparse spores as lamp flames made each canopy face light an entire room. Full-strength torch flames
+     * retain {@link #MIN_POWER}; their boosts remain capped by {@link #MAX_BOOST}.
      */
     public static float powerBoost(float area, float meanEmission, float bestEmission) {
+        if (bestEmission < 1f) {
+            return 1f;
+        }
         float boost = Math.max(1f, bestEmission * 0.5f / meanEmission);
         float power = area * meanEmission * boost;
         float minimumPower = MIN_POWER * Math.max(0f, Math.min(bestEmission, 1f));
