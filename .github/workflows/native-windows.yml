@@ -2,6 +2,11 @@ name: Native Windows contracts
 
 on:
   workflow_dispatch:
+    inputs:
+      dlss_neural_rendering:
+        description: Compile and probe the optional NVIDIA DLSS Neural Rendering ABI
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
   push:
@@ -30,8 +35,10 @@ jobs:
           persist-credentials: false
       - name: Build production wrappers and exercise actual entrypoints with SDK failures
         shell: pwsh
+        env:
+          PROBE_DLSS_NR: ${{ inputs.dlss_neural_rendering }}
         run: |
-          ./source/.github/scripts/vendor-resources-ci.ps1 -SourceRoot source -Headers deps/Vulkan-Headers/include -BuildRoot evidence/vendor -DependencyRoot deps/vendor
+          ./source/.github/scripts/vendor-resources-ci.ps1 -SourceRoot source -Headers deps/Vulkan-Headers/include -BuildRoot evidence/vendor -DependencyRoot deps/vendor -ProbeDlssNeuralRendering:($env:PROBE_DLSS_NR -eq 'true')
       - name: Install JDK for actual host FFM probes
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
@@ -39,8 +46,11 @@ jobs:
           java-version: '25.0.3+9.0.LTS'
       - name: Exercise actual Java bindings against fault and production DLLs
         shell: pwsh
+        env:
+          PROBE_DLSS_NR: ${{ inputs.dlss_neural_rendering }}
         run: |
-          ./source/.github/scripts/dlss-ffm-ci.ps1 -SourceRoot source -RuntimeRoot evidence/vendor/runtime -DependencyRoot deps/java -EvidenceRoot evidence/vendor/ffm
+          $partner = if ($env:PROBE_DLSS_NR -eq 'true') { 'evidence/vendor/partner/Release/vkb_dlss_nr_contract.dll' } else { '' }
+          ./source/.github/scripts/dlss-ffm-ci.ps1 -SourceRoot source -RuntimeRoot evidence/vendor/runtime -DependencyRoot deps/java -EvidenceRoot evidence/vendor/ffm -PartnerWrapper $partner
       - name: Publish resource test evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

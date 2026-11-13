@@ -44,6 +44,7 @@ extensions that backend needs (for example the library appeared after the game s
 ## Notes
 
 * Texture detail: "Auto Texture LOD Bias" (Page 1) sharpens textures when the render scale is below 100%.
-* FSR version: Auto uses FSR 3.1; "FSR 2" is listed only if your AMD library contains it. FSR 4 is not available on Vulkan.
+* FSR version: Auto uses FSR 3.1. "FSR 2" is listed if the installed AMD library contains it. Bedray's Vulkan backend currently integrates FSR 3.1 and 2.x.
 * A backend that is not usable is rejected with a log line, never silently replaced: look for `upscaler=rejected` in `latest.log`.
 * Frame generation is separate: [FRAME_GENERATION.md](FRAME_GENERATION.md). With it on, DLSS runs through Streamline plugins (see that page).
+* [DLSS 5 Neural Rendering](experiments/dlss5.md) is an opt-in pass after direct DLSS Super Resolution or DLAA in the raster renderer.

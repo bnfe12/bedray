@@ -78,6 +78,7 @@ public final class DlssNative implements AutoCloseable {
 
     private final Arena arena = Arena.ofShared();
     private final Path libraryPath;
+    private final SymbolLookup lookup;
     private MemorySegment logStub;
 
     private final MethodHandle getApiVersion;
@@ -100,7 +101,6 @@ public final class DlssNative implements AutoCloseable {
     private DlssNative(Path libraryPath) {
         DlssLayouts.verify();
         this.libraryPath = libraryPath;
-        SymbolLookup lookup;
         try {
             lookup = SymbolLookup.libraryLookup(libraryPath, arena);
         } catch (IllegalArgumentException | UnsatisfiedLinkError e) {
@@ -164,7 +164,7 @@ public final class DlssNative implements AutoCloseable {
         return lib;
     }
 
-    private static MethodHandle bind(Linker linker, SymbolLookup lookup, String name, FunctionDescriptor fd) {
+    static MethodHandle bind(Linker linker, SymbolLookup lookup, String name, FunctionDescriptor fd) {
         MemorySegment symbol = lookup.find(name).orElseThrow(() -> new DlssNativeException("vkb_dlss.dll has no export " + name, null));
         return linker.downcallHandle(symbol, fd);
     }
@@ -183,11 +183,11 @@ public final class DlssNative implements AutoCloseable {
     }
 
     /** UTF-16 NUL-terminated copy for a {@code const wchar_t*} parameter (wchar_t is 16 bit on Windows). */
-    private static MemorySegment wide(Arena a, Path path) {
+    static MemorySegment wide(Arena a, Path path) {
         return a.allocateFrom(JAVA_CHAR, (path.toString() + "\0").toCharArray());
     }
 
-    private Status lastStatus(int code) {
+    Status lastStatus(int code) {
         try {
             MemorySegment msg = ((MemorySegment) getLastErrorString.invokeExact()).reinterpret(Long.MAX_VALUE);
             int ngx = (int) getLastNgxResult.invokeExact();
@@ -337,7 +337,10 @@ public final class DlssNative implements AutoCloseable {
     }
 
     private static void writeImage(MemorySegment evalInfo, String member, Image img) {
-        long base = DlssLayouts.offset(DlssLayouts.EVAL_INFO, member);
+        writeImage(evalInfo, DlssLayouts.offset(DlssLayouts.EVAL_INFO, member), img);
+    }
+
+    static void writeImage(MemorySegment evalInfo, long base, Image img) {
         evalInfo.set(JAVA_LONG, base + DlssLayouts.offset(DlssLayouts.IMAGE, "image"), img.image());
         evalInfo.set(JAVA_LONG, base + DlssLayouts.offset(DlssLayouts.IMAGE, "view"), img.view());
         evalInfo.set(JAVA_INT, base + DlssLayouts.offset(DlssLayouts.IMAGE, "format"), img.format());
@@ -385,7 +388,7 @@ public final class DlssNative implements AutoCloseable {
         }
     }
 
-    private static List<String> readStrings(int count, MemorySegment namesPtr) {
+    static List<String> readStrings(int count, MemorySegment namesPtr) {
         List<String> out = new ArrayList<>(count);
         if (count == 0) {
             return out;
@@ -397,12 +400,17 @@ public final class DlssNative implements AutoCloseable {
         return out;
     }
 
-    private static int invokeInt(MethodHandle handle, Object... args) {
+    static int invokeInt(MethodHandle handle, Object... args) {
         try {
             return (int) handle.invokeWithArguments(args);
         } catch (Throwable t) {
             throw new DlssNativeException("native call failed: " + handle.type(), t);
         }
+    }
+
+    /** Resolves the optional Neural Rendering ABI from this exact NGX wrapper. */
+    DlssNrNative neuralRendering() {
+        return DlssNrNative.bind(this, lookup);
     }
 
     @Override

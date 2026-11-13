@@ -105,6 +105,8 @@ Do it by hand with [docs/INSTALL.md](docs/INSTALL.md), or let an AI assistant do
 
 ## Documentation
 
+Start with the [Bedray documentation site](https://bnfe12.github.io/bedray/) or browse the [full documentation index](docs/README.md).
+
 | | |
 |---|---|
 | [INSTALL](docs/INSTALL.md) | Step by step, vendor libraries and where they go |
@@ -112,6 +114,7 @@ Do it by hand with [docs/INSTALL.md](docs/INSTALL.md), or let an AI assistant do
 | [SETTINGS_REFERENCE](docs/SETTINGS_REFERENCE.md) | Every option, FPS cost, status |
 | [UPSCALERS](docs/UPSCALERS.md) | Which upscaler to choose |
 | [FRAME_GENERATION](docs/FRAME_GENERATION.md) | DLSS frame generation and Reflex |
+| [DLSS 5 Neural Rendering](docs/experiments/dlss5.md) | Experimental Vulkan build and verification |
 | [TROUBLESHOOTING](docs/TROUBLESHOOTING.md), [FAQ](docs/FAQ.md), [KNOWN_ISSUES](docs/KNOWN_ISSUES.md) | When something is wrong |
 | [ROADMAP](ROADMAP.md) | Long-term plan, priorities and acceptance gates |
 | [SHADER_CACHE](docs/SHADER_CACHE.md) | AOT SPIR-V and Vulkan pipeline-cache behavior |
@@ -148,7 +151,6 @@ needed); XeSS (Intel library needed); Path Tracing with the NRD denoiser. The ex
 ## What is not included
 
 * General Iris / "Dirt RT" shaderpack compatibility. The implemented opt-in post subset has explicit unsupported features.
-* DLSS 5 Neural Rendering requires the NVIDIA partner SDK. The Natives Manager reports local file presence for diagnostics.
 * DLSS Ray Reconstruction preset D/E/F A/B numbers, ReLAX-vs-REBLUR A/B numbers and isolated TLAS timing are not yet captured ([GI report](docs/measurements/GI_STACK_REPORT.md)).
 * AMD FSR frame generation and [FSR 4 on Vulkan](https://gpuopen.com/amd-fsr-sdk/) are not integrated in Bedray.
 * Complete particle transport in reflections and shadows; physical closed-volume refraction through glass.

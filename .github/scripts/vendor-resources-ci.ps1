@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory)][string]$SourceRoot,
     [Parameter(Mandatory)][string]$Headers,
     [Parameter(Mandatory)][string]$BuildRoot,
-    [Parameter(Mandatory)][string]$DependencyRoot
+    [Parameter(Mandatory)][string]$DependencyRoot,
+    [switch]$ProbeDlssNeuralRendering
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -45,8 +46,21 @@ $ngx = Get-PinnedSdk 'DLSS' 'NVIDIA/DLSS' $ngxRevision @('include', 'lib/Windows
 $sl = Get-PinnedSdk 'Streamline' 'NVIDIA-RTX/Streamline' $slRevision @('include')
 $sourceRevision = (& git -C $SourceRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot identify source revision' }
-Invoke-Checked 'cmake' @('-S', (Join-Path $SourceRoot 'native/vendor_resource_tests'), '-B', $BuildRoot,
+$configure = @('-S', (Join-Path $SourceRoot 'native/vendor_resource_tests'), '-B', $BuildRoot,
     '-G', 'Visual Studio 17 2022', '-A', 'x64', "-DVKB_NGX_SDK=$ngx", "-DVKB_SL_SDK=$sl", "-DBEDRAY_VULKAN_HEADERS=$Headers")
+if ($ProbeDlssNeuralRendering) {
+    # NVIDIA pins this dependency in dxvk-remix at remix-1.6.1. Extract only the headers for compile validation.
+    $archive = Join-Path $DependencyRoot 'rtx-remix-ngx_sdk_dlnr@2.7z'
+    $overlay = Join-Path $DependencyRoot 'ngx-nr'
+    Invoke-WebRequest -Uri 'https://d1oqksizpb0e3d.cloudfront.net/rtx-remix-ngx_sdk_dlnr@2.7z' -OutFile $archive
+    $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($hash -ne '4bb8651b3ac2180f23df1f39422c489810a13d445a94dc836c876c18c93ecefe') {
+        throw 'NVIDIA Neural Rendering dependency checksum mismatch'
+    }
+    Invoke-Checked (Join-Path $env:ProgramFiles '7-Zip/7z.exe') @('x', '-y', "-o$overlay", $archive, 'include/*')
+    $configure += "-DVKB_NGX_NR_HEADERS=$(Join-Path $overlay 'include')"
+}
+Invoke-Checked 'cmake' $configure
 Invoke-Checked 'cmake' @('--build', $BuildRoot, '--config', 'Release', '--parallel', '2')
 Invoke-Checked 'ctest' @('--test-dir', $BuildRoot, '-C', 'Release', '--verbose', '--output-on-failure', '--no-tests=error',
     '--output-junit', (Join-Path $BuildRoot 'ctest.xml'))

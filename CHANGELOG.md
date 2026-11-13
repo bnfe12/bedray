@@ -17,6 +17,10 @@
 
 ### Unreleased details
 
+* Added an experimental direct Vulkan DLSS 5 Neural Rendering pass after raster DLSS SR or DLAA. The standard wrapper keeps
+  its existing SR and RR support. The local NR build uses the official RTX Remix SDK overlay. See the [DLSS 5 guide](docs/experiments/dlss5.md).
+* Added the [Bedray documentation site](https://bnfe12.github.io/bedray/) with installation, settings, feature status and add-on development links.
+
 * Split the typed Radiance Cascades trace into modules with one owner each: `rc_trace_options.slang`
   keeps the host policy, diagnostics and result; `rc_trace_shade.slang` owns the first-surface
   emission/NEE sample; `rc_trace_walk.slang` owns segment finalization and the interval walk;

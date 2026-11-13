@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory)][string]$SourceRoot,
     [Parameter(Mandatory)][string]$RuntimeRoot,
     [Parameter(Mandatory)][string]$DependencyRoot,
-    [Parameter(Mandatory)][string]$EvidenceRoot
+    [Parameter(Mandatory)][string]$EvidenceRoot,
+    [string]$PartnerWrapper
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -34,6 +35,7 @@ $sources = @(
     ($base + 'rtx/upscaler/dlss/DlssLayouts.java'),
     ($base + 'rtx/upscaler/dlss/DlssNativeException.java'),
     ($base + 'rtx/upscaler/dlss/DlssNative.java'),
+    ($base + 'rtx/upscaler/dlss/DlssNrNative.java'),
     ($base + 'rtx/upscaler/dlss/rr/DlssRrParams.java'),
     ($base + 'rtx/upscaler/dlss/rr/DlssRayReconstruction.java'),
     'common/src/test/java/io/github/andrexarlay/vulkancompat/rtx/upscaler/dlss/DlssResourceContractProbe.java'
@@ -42,10 +44,14 @@ Invoke-Checked 'javac' (@('-encoding', 'UTF-8', '-cp', $slf4j, '-d', $classes) +
 $probe = 'io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssResourceContractProbe'
 foreach ($test in @(
     @{dll='vendor_ngx_fault.dll'; kind='ngx'}, @{dll='vendor_sl_fault.dll'; kind='sl'},
-    @{dll='vkb_dlss.dll'; kind='production'}, @{dll='vkb_sl.dll'; kind='production'}
+    @{dll='vkb_dlss.dll'; kind='production-ngx'}, @{dll='vkb_sl.dll'; kind='production'}
 )) {
     Invoke-Checked 'java' @('--enable-native-access=ALL-UNNAMED', '-cp', "$classes;$slf4j", $probe,
         (Join-Path $RuntimeRoot $test.dll), $test.kind)
+}
+if ($PartnerWrapper) {
+    $PartnerWrapper = (Resolve-Path -LiteralPath $PartnerWrapper).Path
+    Invoke-Checked 'java' @('--enable-native-access=ALL-UNNAMED', '-cp', "$classes;$slf4j", $probe, $PartnerWrapper, 'partner-ngx')
 }
 $manifestPath = Join-Path $RuntimeRoot 'manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -AsHashtable

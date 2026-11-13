@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page.title | default: site.title | escape }} · Bedray documentation</title>
+  <link rel="stylesheet" href="{{ '/site.css' | relative_url }}">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="masthead wrap">
+    <a class="brand" href="{{ '/' | relative_url }}">
+      <img src="{{ '/images/bedray-logo.png' | relative_url }}" width="36" height="36" alt="">
+      <span>Bedray</span>
+    </a>
+    <nav aria-label="Main navigation">
+      <a href="{{ '/#docs' | relative_url }}">Docs</a>
+      <a href="https://github.com/bnfe12/bedray">GitHub</a>
+    </nav>
+  </header>
+  <main id="main" class="wrap">
+    <article class="guide">{{ content }}</article>
+  </main>
+</body>
+</html>

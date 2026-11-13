@@ -144,7 +144,7 @@ public final class NativeCatalog {
             List.of(req(Folder.STREAMLINE, "sl.dlss.dll"), req(Folder.STREAMLINE, "sl.dlss_d.dll"),
                 req(Folder.STREAMLINE, "nvngx_dlss.dll"), req(Folder.STREAMLINE, LibraryDescriptor.DLSS_RR_DLL))),
         new Group("dlss5", "DLSS 5 Neural Rendering", "NVIDIA",
-            "NVIDIA partner SDK required. Local file detection only.", URL_DLSS5,
+            "Experimental direct Vulkan NGX. The file check reports presence. A Neural Rendering wrapper build is required.", URL_DLSS5,
             List.of(new Slot(Folder.NATIVES, "nvngx_dlssnr.dll", false, Kind.PARTNER_SDK, null),
                 new Slot(Folder.STREAMLINE, "sl.dlss_nr.dll", false, Kind.PARTNER_SDK, null))),
         new Group("fsr4", "AMD FSR 4 (AI Neural Upscaling)", "AMD",

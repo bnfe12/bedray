@@ -254,6 +254,54 @@ VKB_DLSS_API int32_t vkb_dlss_rr_create_feature(uint64_t commandBuffer, const Vk
 VKB_DLSS_API int32_t vkb_dlss_rr_evaluate(uint64_t commandBuffer, uint64_t feature, const VkbDlssRrEvalInfo* info);
 VKB_DLSS_API int32_t vkb_dlss_rr_release_feature(uint64_t feature);
 
+/* ---- DLSS 3D-Guided Neural Rendering (NGX DLSS-NR) ------------------------------------------- */
+/* 1 when built with NVIDIA's typed DLSS-NR Vulkan SDK, 0 for public SDK builds without it. */
+VKB_DLSS_API uint32_t vkb_dlss_nr_contract_version(void);
+
+VKB_DLSS_API int32_t vkb_dlss_nr_get_required_instance_extensions(
+    const wchar_t* featurePath, const wchar_t* dataPath, uint32_t* outCount, const char* const** outNames);
+VKB_DLSS_API int32_t vkb_dlss_nr_get_required_device_extensions(
+    uint64_t instance, uint64_t physicalDevice, const wchar_t* featurePath, const wchar_t* dataPath,
+    uint32_t* outCount, const char* const** outNames);
+
+typedef struct VkbDlssNrCaps {
+    uint32_t struct_size;
+    uint32_t available;
+    uint32_t needs_updated_driver;
+    uint32_t min_driver_major, min_driver_minor;
+    uint32_t feature_init_result;
+} VkbDlssNrCaps;
+
+typedef struct VkbDlssNrCreateInfo {
+    uint32_t struct_size;
+    uint32_t width, height;          /* display extent */
+    uint32_t reserved;
+} VkbDlssNrCreateInfo;
+
+typedef struct VkbDlssNrEvalInfo {
+    uint32_t struct_size;
+    uint32_t reset;
+    VkbDlssImage color;              /* tone-mapped display-resolution scene, before UI */
+    VkbDlssImage output;             /* separate display-resolution image with storage usage */
+    VkbDlssImage depth;              /* normalized device depth, render extent */
+    VkbDlssImage motion_vectors;     /* render-pixel motion, render extent */
+    VkbDlssImage control_mask;       /* optional display-resolution control image, image/view == 0 if absent */
+    float jitter_x, jitter_y;
+    float mv_scale_x, mv_scale_y;
+    float intensity, tone_strength, structure_strength, skin_structure_strength;
+    uint32_t model;                  /* appearance model 0..2 */
+    uint32_t use_auto_mask;
+    uint32_t depth_inverted;
+    uint32_t reserved;
+} VkbDlssNrEvalInfo;
+
+/* Uses the existing initialized NGX device. Call only after required extensions are enabled. */
+VKB_DLSS_API int32_t vkb_dlss_nr_query_caps(VkbDlssNrCaps* outCaps);
+/* Creation/evaluation record commands. A nonzero owner after an error remains release-only until the host retires that recording. */
+VKB_DLSS_API int32_t vkb_dlss_nr_create_feature(uint64_t commandBuffer, const VkbDlssNrCreateInfo* info, uint64_t* outFeature);
+VKB_DLSS_API int32_t vkb_dlss_nr_evaluate(uint64_t commandBuffer, uint64_t feature, const VkbDlssNrEvalInfo* info);
+VKB_DLSS_API int32_t vkb_dlss_nr_release_feature(uint64_t feature);
+
 /* ---- STUBS: not implemented yet ------------------------------------------------------------- */
 /* STUB: DLSS Frame Generation needs Streamline (swapchain/present ownership, Reflex), separate step. */
 VKB_DLSS_API int32_t vkb_dlss_fg_is_supported(uint32_t* outSupported);

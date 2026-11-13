@@ -118,7 +118,7 @@ public final class NativesManagerScreen extends Screen {
             libraries.add(new LibInfo(
                 g.title(),
                 fileLabel,
-                partnerSdk ? tr("bedray.natives.partner_sdk_required", "NVIDIA partner SDK required").getString() : g.purpose(),
+                partnerSdk ? tr("bedray.natives.partner_sdk_required", "Neural Rendering wrapper required").getString() : g.purpose(),
                 gs.complete(),
                 bundled,
                 gs.anyInvalid(),
@@ -284,7 +284,7 @@ public final class NativesManagerScreen extends Screen {
             if (lib.partnerSdk && mouseX >= x && mouseX < x + w
                     && mouseY >= Math.max(ry, startY) && mouseY < Math.min(ry + rowH, listBottom)) {
                 g.setComponentTooltipForNextFrame(font, List.of(
-                    tr("bedray.natives.partner_sdk_required", "NVIDIA partner SDK required"),
+                    tr("bedray.natives.partner_sdk_required", "Neural Rendering wrapper required"),
                     tr("bedray.natives.partner_file_detection", "Local files are checked for diagnostics only."),
                     Component.literal(lib.fileName)), mouseX, mouseY);
             }

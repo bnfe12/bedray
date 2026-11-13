@@ -67,7 +67,7 @@ public final class BedrayRoadmapScreen extends Screen {
             "Iris Shaderpack Compatibility & Next-Gen AI Upscaling",
             List.of(
                 "Iris Dual-Path (I0-I6): Run OptiFine / Iris shaderpacks on Vulkan with SPIR-V translation",
-                "DLSS 5 Neural Rendering requires the NVIDIA partner SDK",
+                "DLSS 5 Neural Rendering: validate the experimental Vulkan path on RTX",
                 "AMD FSR 4 AI Neural Upscaler & Intel XeSS 2.0 Frame Generation (slot reserved)",
                 "NVIDIA NRC (Neural Radiance Caching) for instant real-time noise-free path tracing convergence",
                 "Moving Contraptions RT: Dynamic TLAS updates for Create Mod moving contraptions",

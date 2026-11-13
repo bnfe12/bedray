@@ -1,0 +1,13 @@
+title: Bedray
+url: https://bnfe12.github.io
+baseurl: /bedray
+markdown: kramdown
+plugins:
+  - jekyll-relative-links
+relative_links:
+  enabled: true
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: guide

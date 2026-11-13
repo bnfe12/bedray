@@ -112,7 +112,7 @@ the build remains native-free. Verify the JAR contents and compare both DLL hash
 Set `SLANG_DIR` to the Slang SDK directory and run `gradlew fabricBedrayDistribution` or
 `gradlew neoforgeBedrayDistribution`.
 The distribution pairs the loader JAR and the matching `bedray_core.dll`, which exports the native GPU scene ABI.
-See [distribution paths and build options](../native/bedray_core/DISTRIBUTION.md).
+See [distribution paths and build options](https://github.com/bnfe12/bedray/blob/main/native/bedray_core/DISTRIBUTION.md).
 
 ### Continuous integration and compatibility checks
 
@@ -136,6 +136,8 @@ contain them.
 from environment variables (`VKB_NGX_SDK`, `VKB_VK_HEADERS`, `VKB_NRD_SRC`, `VKB_SL_SDK`, `VKB_VCVARS`) and have no defaults; each
 script prints what is missing. Vendor SDKs are downloaded from the vendor and are never committed. Built DLLs go into `<game folder>/bedray/natives/`
 (see [INSTALL.md](INSTALL.md)) and must not be committed.
+
+For the opt-in DLSS 5 Neural Rendering build, see the [RTX Remix SDK overlay instructions](experiments/dlss5.md#build-a-local-wrapper).
 
 ## 7. Optional deploy tasks
 

@@ -24,7 +24,7 @@ as `bedray_compute`. The `-host-only.jar` artifact is intended for developers, n
 
 Copy the **matching `bedray_core.dll`** from the same build to `bedray/natives/` inside the instance's game folder.
 The renderer DLL contains the native GPU scene and is required for ray tracing and path tracing.
-See the [Windows distribution instructions](../native/bedray_core/DISTRIBUTION.md) to build this pair from source.
+See the [Windows distribution instructions](https://github.com/bnfe12/bedray/blob/main/native/bedray_core/DISTRIBUTION.md) to build this pair from source.
 
 Do not install the NeoForge and the Fabric jar together. Start the game once. If everything is right, **Options, Video Settings**
 shows the pages **Bedray ALPHA: Upscaling, Ray Tracing, Advanced and Experimental**, and the F3 screen has "Bedray" sections (overview, load, quality, libraries; two more can be enabled in the F3+F6 screen).
@@ -67,6 +67,8 @@ and `native/*/build.bat` (the scripts read the SDK locations from environment va
 
 * **DLSS:** `nvngx_dlss.dll` (Super Resolution), `nvngx_dlssd.dll` (Ray Reconstruction), `vkb_dlss.dll`. A restart is needed if the
   files appear after the game has started (the page says "restart required").
+* **DLSS 5 Neural Rendering:** The experimental Windows Vulkan path uses a locally built NR-capable wrapper and the signed NVIDIA
+  model. Follow the [DLSS 5 guide](experiments/dlss5.md) for file verification and launch settings.
 * **FSR:** the DLL must be the official build. The mod checks its SHA-256 against the known official file
   (`a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78` for `PrebuiltSignedDLL/amd_fidelityfx_vk.dll` of v1.1.4). Other builds
   are refused ("library missing" on the page). Bedray currently uses the FSR 3.1/2.x integration. AMD provides FSR 4 for Vulkan in the [FSR SDK](https://gpuopen.com/amd-fsr-sdk/).
