@@ -249,6 +249,8 @@
 * Correct water/glass diagnostics and documentation: realistic water refracts approximately; glass stays a thin filter.
   Caustic diagnostics now follow the selected setting. No builds, tests, shader compilation or FPS measurements were run
   for this source integration at the owner's request; it is not a new validated release.
+* Preserve resident Voxel pages until replacements are complete, order overlapping GPU directory
+  transfers, and avoid evictions that cannot free the arena blocking admission.
 
 * Notify the Voxel stream directly about propagated block/sky-light changes, including empty air
   sections, with bounded delivery and current-world checks independent of geometry uploads.

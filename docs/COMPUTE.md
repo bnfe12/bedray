@@ -43,11 +43,19 @@ backend baseline and the provider's queue/format/descriptor checks. This is not 
 
 ### Engine follow-up
 
+Streamed page replacement retains the previous resident descriptor until the new payload is ready.
+An update that reuses existing storage must fit all of its payload spans and directory publication in
+one frame's byte/command budget. Transfer-write dependencies order directory tombstones, payload reuse
+and resident publication, including bucket reuse within one upload call. Admission evicts only farther
+pages that can free a constrained arena. Actual memory pressure can still reduce distant coverage;
+these changes do not establish that all movement-related visual popping is resolved.
+
 Propagated block/sky-light changes notify the Voxel stream directly through the client chunk cache,
 including air sections with no Sodium geometry upload. The notification queue coalesces section
 coordinates, retains at most 8192 entries and drains at most 256 per client frame. Capture/upload
-budgets still apply after delivery. Callbacks from an old world's chunk cache are ignored; an
-overflow starts a fresh bounded stream session instead of silently retaining stale lighting.
+budgets still apply after delivery. A full downstream capture queue keeps notifications pending.
+Callbacks from an old world's chunk cache are ignored before they can fill the queue. Overflow
+requests incremental section revalidation while retaining GPU residency and the stream session.
 
 The experimental translucent path integrates extinction and medium radiance separately over each
 water segment. Exiting water restores air transport and applies the water-to-air Snell ratio; later

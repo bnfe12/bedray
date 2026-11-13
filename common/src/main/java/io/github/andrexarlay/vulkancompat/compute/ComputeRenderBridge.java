@@ -63,7 +63,10 @@ public final class ComputeRenderBridge {
 
     /** Accepted Sodium builds notify voxel extraction without enabling the hardware geometry decoder. */
     public static void sectionChanged(int x, int y, int z) {
-        if (enabled()) worldCapture.sectionChanged(x, y, z);
+        if (enabled() && !worldCapture.sectionChanged(x, y, z)) {
+            var level = net.minecraft.client.Minecraft.getInstance().level;
+            if (level != null) lightInvalidations.changed(level.getChunkSource(), x, y, z);
+        }
     }
     public static void sectionRemoved(int x, int y, int z) {
         if (enabled()) worldCapture.sectionRemoved(x, y, z);
@@ -90,7 +93,9 @@ public final class ComputeRenderBridge {
         hadWorld = hasWorld;
         appliedRequest = nextRequest;
         cameraPending = appliedRequest.mode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
-        lightInvalidations.setEnabled(hasWorld && cameraPending && !cleanupBroken);
+        var activeLevel = net.minecraft.client.Minecraft.getInstance().level;
+        lightInvalidations.setSource(hasWorld && cameraPending && !cleanupBroken && activeLevel != null
+            ? activeLevel.getChunkSource() : null);
         if (enabled()) VulkanRtxConfig.enforceComputeCompatibility();
         if (requestChanged) {
             if (!releaseResources()) return;

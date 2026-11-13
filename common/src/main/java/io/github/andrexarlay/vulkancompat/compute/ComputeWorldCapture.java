@@ -23,7 +23,8 @@ final class ComputeWorldCapture {
     private String pendingReason;
     private boolean extendedGeometry;
     void clear() { stream.clear(); streaming.clear(); materials.clear(); pendingReason = null; }
-    void sectionChanged(int x, int y, int z) { streaming.changed(x, y, z); }
+    boolean sectionChanged(int x, int y, int z) { return streaming.changed(x, y, z); }
+    void refreshSections() { streaming.refresh(); }
     void sectionRemoved(int x, int y, int z) { streaming.removed(x, y, z); }
     void invalidated(SectionKey key) { streaming.invalidated(key); }
     String pendingReason() { return pendingReason; }

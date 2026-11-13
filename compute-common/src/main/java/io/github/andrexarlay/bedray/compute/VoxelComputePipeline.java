@@ -389,8 +389,13 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 if (streamed != null) {
                     upload.clear();streamed.writeHeader(upload);upload.flip();
                     vkCmdUpdateBuffer(command,gridBuffer,0,upload);
+                    VkMemoryBarrier.Buffer updateOrder = VkMemoryBarrier.calloc(1,stack);
+                    updateOrder.get(0).sType$Default().srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
                     boolean changed=streamed.upload((buffer,offset,bytes)->vkCmdUpdateBuffer(command,
-                        buffer==0?gridBuffer:buffer==1?paletteBuffer:modelBuffer,offset,bytes),upload,
+                        buffer==0?gridBuffer:buffer==1?paletteBuffer:modelBuffer,offset,bytes),
+                        ()->vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            0,updateOrder,null,null),upload,
                         StreamedVoxelScene.HEADER_BYTES+FRAME_BYTES);
                     if(raster!=null)history.prepare(camera,originX(origin),originY(origin),originZ(origin),changed,
                         GraphicsBackendRegistry.debugView()==GraphicsBackendRegistry.DebugView.SHADED);

@@ -35,20 +35,28 @@ final class ComputeWorldStream {
     private int discoveryShell, discoveryY, discoveryColumn = -1;
     private SectionKey discoveryKey;
     private int[] vertical;
-    private boolean reset, refreshing;
+    private boolean reset;
     private SectionSnapshot pending;
 
     void clear() {
         world = null; generation = 0; bounds = null; recent.clear(); dirty.clear(); dirtySet.clear();
         removed.clear(); discovered.clear(); empty.clear(); captured.clear(); cacheBytes = 0;
-        discoveredCount = emptyCount = capturedCount = 0; pending = null; refreshing = false;
+        discoveredCount = emptyCount = capturedCount = 0; pending = null;
         discoveryShell = discoveryY = 0; discoveryColumn = -1; discoveryKey = null;
         verticalCenter = Integer.MIN_VALUE; retryAfter.clear();
     }
-    void changed(int x, int y, int z) {
+    boolean changed(int x, int y, int z) {
         SectionKey key = new SectionKey(x, y, z);
-        if (bounds == null || !bounds.contains(key)) return;
-        if (dirtySet.size() < DIRTY_LIMIT && dirtySet.add(key)) dirty.addLast(key);
+        if (bounds == null || !bounds.contains(key) || dirtySet.contains(key)) return true;
+        if (dirtySet.size() >= DIRTY_LIMIT) return false;
+        dirtySet.add(key); dirty.addLast(key);
+        return true;
+    }
+    /** Revalidate incrementally after notification overflow without discarding the visible GPU scene. */
+    void refresh() {
+        recent.clear(); cacheBytes = 0; dirty.clear(); dirtySet.clear(); pending = null;
+        captured.clear(); capturedCount = 0;
+        discoveryShell = discoveryY = 0; discoveryColumn = -1; discoveryKey = null;
     }
     void removed(int x, int y, int z) {
         SectionKey key = new SectionKey(x, y, z);
@@ -67,14 +75,49 @@ final class ComputeWorldStream {
     private int index(SectionKey key) {
         int width = 2 * bounds.effectiveRenderDistanceChunks() + 1;
         int height = bounds.maxSectionY() - bounds.minSectionY() + 1;
-        return key.x() - bounds.minSectionX() + width *
-            (key.y() - bounds.minSectionY() + height * (key.z() - bounds.minSectionZ()));
+        // A width-wide domain contains exactly one coordinate for each horizontal residue.
+        // Overlapping absolute sections keep their slots when the camera crosses a chunk boundary.
+        return Math.floorMod(key.x(), width) + width *
+            (key.y() - bounds.minSectionY() + height * Math.floorMod(key.z(), width));
     }
-    private void invalidate(SectionKey key) {
-        int i = index(key);
+    private void forgetIndex(int i) {
         if (discovered.get(i)) { discovered.clear(i); discoveredCount--; }
         if (empty.get(i)) { empty.clear(i); emptyCount--; }
         if (captured.get(i)) { captured.clear(i); capturedCount--; }
+    }
+    private void clearMarkers() {
+        discovered.clear(); empty.clear(); captured.clear();
+        discoveredCount = emptyCount = capturedCount = 0;
+    }
+    private void clearColumn(int x, int z) {
+        int width = 2 * bounds.effectiveRenderDistanceChunks() + 1;
+        int height = bounds.maxSectionY() - bounds.minSectionY() + 1;
+        int base = Math.floorMod(x, width) + width * height * Math.floorMod(z, width);
+        for (int y = 0; y < height; y++) forgetIndex(base + width * y);
+    }
+    /** Release only outgoing planes; no overlapping section is relabeled or recaptured for movement. */
+    private void moveMarkers(WorldCoverageBounds previous) {
+        int width = 2 * bounds.effectiveRenderDistanceChunks() + 1;
+        long dx = (long)bounds.centerSectionX() - previous.centerSectionX();
+        long dz = (long)bounds.centerSectionZ() - previous.centerSectionZ();
+        if (Math.abs(dx) >= width || Math.abs(dz) >= width) { clearMarkers(); return; }
+        // Offset loops remain finite even when a valid domain ends at Integer.MAX_VALUE.
+        for (int offsetX = 0; offsetX < width; offsetX++) {
+            int x = previous.minSectionX() + offsetX;
+            if (x >= bounds.minSectionX() && x <= bounds.maxSectionX()) continue;
+            for (int offsetZ = 0; offsetZ < width; offsetZ++) clearColumn(x, previous.minSectionZ() + offsetZ);
+        }
+        for (int offsetZ = 0; offsetZ < width; offsetZ++) {
+            int z = previous.minSectionZ() + offsetZ;
+            if (z >= bounds.minSectionZ() && z <= bounds.maxSectionZ()) continue;
+            for (int offsetX = 0; offsetX < width; offsetX++) {
+                int x = previous.minSectionX() + offsetX;
+                if (x >= bounds.minSectionX() && x <= bounds.maxSectionX()) clearColumn(x, z);
+            }
+        }
+    }
+    private void invalidate(SectionKey key) {
+        forgetIndex(index(key));
         SectionSnapshot old = recent.remove(key);
         if (old != null) cacheBytes -= cacheCost(old);
         if (pending != null && pending.x() == key.x() && pending.y() == key.y() && pending.z() == key.z()) pending = null;
@@ -89,23 +132,30 @@ final class ComputeWorldStream {
         }
         int cameraY = Math.clamp((int) Math.floor(camera.y() / 16), next.minSectionY(), next.maxSectionY());
         if (!next.equals(bounds) || cameraY != verticalCenter) {
-            boolean domainChanged = bounds == null || next.centerSectionX() != bounds.centerSectionX()
-                || next.centerSectionZ() != bounds.centerSectionZ()
-                || next.effectiveRenderDistanceChunks() != bounds.effectiveRenderDistanceChunks()
-                || next.minSectionY() != bounds.minSectionY() || next.maxSectionY() != bounds.maxSectionY()
-                || cameraY != verticalCenter;
+            WorldCoverageBounds previous = bounds;
+            boolean layoutChanged = previous == null
+                || next.effectiveRenderDistanceChunks() != previous.effectiveRenderDistanceChunks()
+                || next.minSectionY() != previous.minSectionY() || next.maxSectionY() != previous.maxSectionY();
+            boolean moved = previous != null && (next.centerSectionX() != previous.centerSectionX()
+                || next.centerSectionZ() != previous.centerSectionZ());
             bounds = next;
-            if (domainChanged) {
-                discovered.clear(); empty.clear(); captured.clear();
-                discoveredCount = emptyCount = capturedCount = 0;
+            if (layoutChanged) clearMarkers();
+            else if (moved) moveMarkers(previous);
+            if (layoutChanged || moved || cameraY != verticalCenter) {
                 discoveryShell = discoveryY = 0; discoveryColumn = -1; discoveryKey = null;
-                verticalCenter = cameraY; retryAfter.clear();
+                verticalCenter = cameraY;
                 vertical = new int[next.maxSectionY() - next.minSectionY() + 1];
                 int count = 0;
                 for (int d = 0; count < vertical.length; d++) {
                     if (cameraY + d <= next.maxSectionY()) vertical[count++] = cameraY + d;
                     if (d != 0 && cameraY - d >= next.minSectionY()) vertical[count++] = cameraY - d;
                 }
+            }
+            if (layoutChanged || moved) {
+                // Preserve eviction cooldowns for the overlap, avoiding immediate retries at every crossing.
+                retryAfter.keySet().removeIf(key -> !bounds.contains(key));
+                dirty.removeIf(key -> !bounds.contains(key));
+                dirtySet.removeIf(key -> !bounds.contains(key));
                 var iterator = recent.entrySet().iterator();
                 while (iterator.hasNext()) {
                     var entry = iterator.next();
@@ -137,11 +187,12 @@ final class ComputeWorldStream {
             if (!fromDirty && retryAfter.getOrDefault(key, 0L) > frame) { discoveryKey = null; continue; }
             int i = index(key);
             if (!source.loaded(key)) {
-                if (captured.get(i) || recent.containsKey(key)) { removals.add(key); invalidate(key); }
+                // Revalidation may have cleared delivery markers while retaining GPU residency.
+                if (discovered.get(i) || recent.containsKey(key)) { removals.add(key); invalidate(key); }
             } else {
                 if (!discovered.get(i)) { discovered.set(i); discoveredCount++; }
                 boolean isEmpty = source.empty(key);
-                boolean needsCapture = fromDirty || !captured.get(i) || isEmpty != empty.get(i) || refreshing;
+                boolean needsCapture = fromDirty || !captured.get(i) || isEmpty != empty.get(i);
                 if (needsCapture) {
                     if (backpressure) {
                         if (fromDirty && dirtySet.add(key)) dirty.addFirst(key);
@@ -194,8 +245,11 @@ final class ComputeWorldStream {
         while (true) {
             if (discoveryShell > maxShell) {
                 discoveryShell = discoveryY = 0; discoveryColumn = -1;
-                refreshing = frame >= nextRefresh;
-                if (refreshing) nextRefresh = frame + 600;
+                if (frame >= nextRefresh) {
+                    // Invalidate once per refresh, not every revisit after movement restarts discovery.
+                    captured.clear(); capturedCount = 0;
+                    nextRefresh = frame + 600;
+                }
             }
             if (discoveryY == vertical.length) {
                 discoveryShell++; discoveryY = 0; discoveryColumn = -1; continue;
