@@ -804,7 +804,10 @@ GeometryRef planned_geometry(const PreparePlan& plan, bool is_section, uint64_t 
     if (is_section) {
         for (const CompactionCopy& compaction : plan.compactions) {
             if (compaction.section_id == id) {
-                return { compaction.compact.address, compaction.compact.handle };
+                // Compaction replaces only the BLAS; the vertex buffer stays put,
+                // so the section record must keep the committed vertex address.
+                return { compaction.compact.address, compaction.compact.handle,
+                         committed != nullptr ? committed->vertex_address : 0 };
             }
         }
     }
