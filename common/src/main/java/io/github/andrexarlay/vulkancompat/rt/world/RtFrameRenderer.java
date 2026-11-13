@@ -586,7 +586,7 @@ public final class RtFrameRenderer {
         if (world == null || RtSlangPathPass.ptOutOfMemory) return false;
         String reason = null;
         for (Throwable t = failure; t != null && reason == null; t = t.getCause()) {
-            String m = t.getMessage();
+            String m = LogPaths.show(t.getMessage());
             if (m == null) continue;
             if (m.contains("ReSTIR PT ring")) {
                 reason = "native_pt_ring";
