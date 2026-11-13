@@ -103,6 +103,7 @@ public final class PerfMonitor {
     // ---- CPU state of the current frame ----
     private static final long[] cpuNs = new long[MARKS];
     private static final boolean[] cpuWritten = new boolean[MARKS];
+    private static final double[] cpuSamples = new double[SEGS];
     private static long lastFrameBeginNs;
     private static boolean frameOpen;
 
@@ -174,7 +175,7 @@ public final class PerfMonitor {
         frameOpen = false;
         accumulate(cpuNs, cpuWritten, 1.0e-6, cpuSum, cpuCount);
         if (FrameBenchmark.active()) {
-            FrameBenchmark.end(frameIndex, cpuWritten[Mark.WORLD_BEGIN.ordinal()], samples(cpuNs, cpuWritten, 1.0e-6));
+            FrameBenchmark.end(frameIndex, cpuWritten[Mark.WORLD_BEGIN.ordinal()], samples(cpuNs, cpuWritten, 1.0e-6, cpuSamples));
         }
         frameIndex++;
         long now = System.nanoTime();
@@ -255,14 +256,14 @@ public final class PerfMonitor {
             written[q] = false;
         }
         accumulate(gpuTicks, gpuHave, timestampPeriodNs * 1.0e-6, gpuSum, gpuCount);
-        if (FrameBenchmark.active()) FrameBenchmark.gpu(slotFrames[s], samples(gpuTicks, gpuHave, timestampPeriodNs * 1.0e-6));
+        if (FrameBenchmark.active()) FrameBenchmark.gpu(slotFrames[s], samples(gpuTicks, gpuHave, timestampPeriodNs * 1.0e-6, gpuSamples));
     }
 
     private static final long[] gpuTicks = new long[MARKS];
     private static final boolean[] gpuHave = new boolean[MARKS];
+    private static final double[] gpuSamples = new double[SEGS];
 
-    private static double[] samples(long[] ticks, boolean[] have, double toMs) {
-        double[] values = new double[SEGS];
+    private static double[] samples(long[] ticks, boolean[] have, double toMs, double[] values) {
         java.util.Arrays.fill(values, Double.NaN);
         for (Segment segment : SEG_VALUES) {
             Mark from = segment.from;

@@ -17,6 +17,7 @@ import io.github.andrexarlay.vulkancompat.rt.denoise.NrdAvailability;
 import io.github.andrexarlay.vulkancompat.rt.denoise.NrdDenoiser;
 import io.github.andrexarlay.vulkancompat.rt.denoise.NrdException;
 import io.github.andrexarlay.vulkancompat.rt.material.MaterialAtlasBaker;
+import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssAvailability;
 import io.github.andrexarlay.vulkancompat.rt.material.RtMaterialAtlas;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangDeviceCapabilities;
@@ -1188,7 +1189,8 @@ public final class RtFrameRenderer {
                     frameColorTemporallyResolved = owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
                         params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY, camera.projectionMatrix);
                     rrColorResolved = frameColorTemporallyResolved;
-                    if (rrColorResolved && WorldTargetManager.rrResolvesOutput())
+                    if (rrColorResolved && WorldTargetManager.rrResolvesOutput()
+                            && FrameGenRuntime.needsFrameInputs())
                         pendingFgGuides = owner.frameGenGuides(
                             io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull(), vulkanDevice,
                             slang.guideFrame().jitter.x, slang.guideFrame().jitter.y);
@@ -1678,7 +1680,7 @@ public final class RtFrameRenderer {
         drainingHostSubmissions = true;
         VulkanCommandEncoder encoder = host.createCommandEncoder();
         try (var completion = encoder.createFence()) {
-            io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.drainProducerRecordings();
+            FrameGenRuntime.drainProducerRecordings();
             encoder.submit();
             if (!completion.awaitCompletion(5_000_000_000L)) {
                 throw new RtFailure(stage, "host graphics submission completion timed out; resources retained");
