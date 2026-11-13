@@ -108,6 +108,14 @@ SurfaceVisibility traceFilteredVisibility<T : ISceneTracer>(T traversal,
             continue;
         }
 
+        // Vanilla tinted_glass passes camera rays but stops all light: end the walk here even though the pane is
+        // translucent, so sun and shadow rays cannot leak through it.
+        if (materialBlocksLight(surface.material)) {
+            visibility.result = blockedResult(hit, float3(0.0));
+            visibility.flags |= SURFACE_VISIBILITY_FLAG_ABSORBED;
+            return visibility;
+        }
+
         // A shadow ray sees a leaf as a coloured filter, not a wall.  Only the shadow wrappers below set the flag:
         // visibility, AO, sky and camera queries keep the binary cutout, because a canopy still occludes them.
         if ((options.flags & MATERIAL_SAMPLING_FLAG_FILTER_FOLIAGE) != 0u
@@ -218,6 +226,13 @@ SurfaceVisibility traceFilteredVisibilityMedium<T : ISceneTracer>(T traversal,
             current = skipSurfaceCandidate(current, hit.t, SURFACE_VISIBILITY_BIAS);
             visibility.layers++;
             continue;
+        }
+
+        // Vanilla tinted_glass stops all light here too, even while the walk is tracking a water body.
+        if (materialBlocksLight(surface.material)) {
+            visibility.result = blockedResult(hit, float3(0.0));
+            visibility.flags |= SURFACE_VISIBILITY_FLAG_ABSORBED;
+            return visibility;
         }
 
         if ((options.flags & MATERIAL_SAMPLING_FLAG_FILTER_FOLIAGE) != 0u

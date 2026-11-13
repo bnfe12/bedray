@@ -20,9 +20,13 @@ public final class OpticalMaterials {
     public static final int FLOATS = 12;
     public static final int BYTES = CAPACITY * FLOATS * Float.BYTES;
     public static final int SHIFT = 3;
+    /** Fixed palette slot of the vanilla tinted_glass light blocker; the Slang sentinel OPTICAL_PROFILE_TINTED_GLASS must match. */
+    public static final int TINTED_GLASS_PROFILE_ID = 5;
     private static final Logger LOG = LoggerFactory.getLogger("VKB-RT");
     private static final AtomicInteger WARNINGS = new AtomicInteger();
     private static final Set<String> KEYS = Set.of("ior", "thickness", "measurementDistance", "diffuseLayer", "transmittance", "kind", "cullSharedFaces");
+    // Zero transmittance: the visibility walk stops light here, while the camera path keeps the pane a translucent filter.
+    private static final Profile TINTED_GLASS_BLOCKER = new Profile(1.52f, 1f, 1f, 0f, 0f, 0f, 0f, 1, true);
 
     public record Profile(float ior, float thickness, float distance, float diffuse,
                           float red, float green, float blue, int kind, boolean cullShared) {
@@ -40,6 +44,7 @@ public final class OpticalMaterials {
         profiles.add(new Profile(1.52f, 1f, 1f, 1f, 0.97f, 0.97f, 0.97f, 1, true));
         profiles.add(defaults(2));
         profiles.add(defaults(3));
+        profiles.add(TINTED_GLASS_BLOCKER); // slot TINTED_GLASS_PROFILE_ID
     }
 
     public synchronized int intern(Profile profile) {
@@ -71,6 +76,8 @@ public final class OpticalMaterials {
     private static Profile read(Identifier sprite, ResourceProvider resources) {
         String path = sprite.getPath();
         String texture = path.substring(path.lastIndexOf('/') + 1);
+        // Vanilla tinted_glass blocks all light: the dedicated zero-transmittance blocker, not a tunable sidecar.
+        if (texture.equals("tinted_glass")) return TINTED_GLASS_BLOCKER;
         int kind = texture.contains("glass") ? 1
             : (texture.equals("water_still") || texture.equals("water_flow") || texture.equals("water_overlay")) ? 2
             : (texture.equals("ice") || texture.equals("packed_ice") || texture.equals("blue_ice") || texture.startsWith("frosted_ice_")) ? 3 : 0;

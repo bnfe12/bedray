@@ -475,6 +475,11 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
             material.alphaMode = AlphaMode.Translucent;
             material.flags |= MATERIAL_FLAG_THIN_GLASS;
         }
+        // Vanilla tinted_glass: the baker's dedicated optical-profile id (high source bits) selects a light blocker.
+        // The pane stays translucent for the camera; the visibility walks read this flag to stop sun/shadow rays.
+        if ((legacySourceFlags >> 3u) == OPTICAL_PROFILE_TINTED_GLASS) {
+            material.flags |= MATERIAL_FLAG_BLOCKS_LIGHT;
+        }
         if ((hit.flags & HIT_FLAG_EMISSIVE) != 0u) {
             material.flags |= MATERIAL_FLAG_EMISSIVE;
         }
