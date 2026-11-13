@@ -256,8 +256,14 @@ public final class FfxFgNative {
             if (r != 0) {
                 throw new IllegalStateException("ffxQuery(replacement functions) returned " + r);
             }
-            return new Replacement(addr(d, "createSwapchain"), addr(d, "destroySwapchain"), addr(d, "getSwapchainImages"),
+            Replacement functions = new Replacement(addr(d, "createSwapchain"), addr(d, "destroySwapchain"), addr(d, "getSwapchainImages"),
                 addr(d, "acquireNextImage"), addr(d, "queuePresent"), addr(d, "getLastPresentCount"));
+            if (functions.createSwapchain() == 0L || functions.destroySwapchain() == 0L
+                || functions.getSwapchainImages() == 0L || functions.acquireNextImage() == 0L
+                || functions.queuePresent() == 0L || functions.getLastPresentCount() == 0L) {
+                throw new IllegalStateException("ffxQuery returned an incomplete replacement table");
+            }
+            return functions;
         }
     }
 

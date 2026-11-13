@@ -41,6 +41,18 @@ class RtSlangVisibilityOverflowTest {
             "the predicate is declared before the boolean helper uses it: Slang needs the definition first");
     }
 
+    @Test
+    void exhaustedIntervalIsDistinctFromExhaustedLayerBudget() {
+        String source = read(VISIBILITY);
+        for (String walker : new String[] {"traceFilteredVisibility", "traceFilteredVisibilityMedium"}) {
+            String body = block(source, "SurfaceVisibility " + walker + "<");
+            assertTrue(body.contains("if (current.tMax > current.tMin) {\n        visibility.flags |= SURFACE_VISIBILITY_FLAG_OVERFLOW;"),
+                walker + " must report overflow only when some of the interval remains");
+        }
+        String medium = block(source, "SurfaceVisibility traceFilteredVisibilityMedium<");
+        assertTrue(medium.contains("} else if (medium.inside) {\n        transmittance *= waterSegmentTransmittance(medium, max(ray.tMax - lastT, 0.0));"));
+    }
+
     /**
      * The sweep that keeps the decision from rotting: any shader that reads the raw visibility bit either goes
      * through the predicate or has to state the overflow itself.

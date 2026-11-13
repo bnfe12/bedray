@@ -47,7 +47,7 @@ Feature availability and validation vary; the [feature status](docs/FEATURE_MATR
 | **Published alpha** · [0.1.0-alpha.1](https://github.com/bnfe12/bedray/releases/tag/v0.1.0-alpha.1) | The earlier renderer. Follow the installation instructions on that release. |
 | **Development** · `main` / `0.2.0-alpha` | The new Slang renderer and native C++ core. No published build yet; [build from source](docs/BUILDING.md). |
 
-The banner is a brand animation. The [legacy screenshot gallery](docs/GALLERY.md)
+The banner is a brand animation. The [legacy screenshot gallery](https://github.com/bnfe12/bedray/blob/main/docs/GALLERY.md)
 shows the earlier renderer; it does not represent current `main`.
 
 ## Get started

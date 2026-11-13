@@ -163,7 +163,7 @@ void mainLighting<Tracer : ISceneTracer>(Tracer tracer, ...) {
 * **Решение:** Перенумерация битов маски $4\times 4\times 4$ по 3D Z-кривой (Morton Order). Соседние в пространстве микровоксели лежат в смежных битах `uint64_t`, что дает $+5–8\%$ чистого FPS в DDA за счет когерентности L1-кэша.
 
 ### 6.2 Октаэдральная упаковка нормалей (Octahedral Normal Encoding)
-* **Реализация:** Модуль [`contracts/octahedral.slang`](contracts/octahedral.slang).
+* **Реализация:** Модуль [`contracts/octahedral.slang`](../common/src/main/resources/shaders/slang/contracts/octahedral.slang).
 * **Эффект:** Упаковка 3D-нормалей из `float3` (12 байт) в `snorm16x2` (4 байта) за 4 такта ALU. Экономия 66% пропускной способности шины памяти VRAM на чтении/записи нормалей G-буфера с нулевой визуальной погрешностью.
 
 ### 6.3 Половинная точность (FP16 / `float16_t`)

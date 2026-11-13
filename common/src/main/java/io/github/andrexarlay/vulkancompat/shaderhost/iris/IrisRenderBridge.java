@@ -452,10 +452,12 @@ public final class IrisRenderBridge {
         if (!failed && selection != null && selection.requested() == ShaderHostKind.IRIS
             && selection.active() != ShaderHostKind.IRIS)
             runtimeStatus = selection.requestedStatus().detail();
-        if (worldIdentity != world || world == null || !Boolean.getBoolean("bedray.iris.post")
-            || ShaderHosts.active()
-                != ShaderHostKind.IRIS) {
+        boolean worldChanged = worldIdentity != world;
+        boolean irisActive = selection != null && selection.active() == ShaderHostKind.IRIS;
+        if (worldChanged || world == null || !Boolean.getBoolean("bedray.iris.post") || !irisActive) {
             retire();
+        }
+        if (worldChanged) {
             worldIdentity = world;
             // A dimension change always arrives as a new client level, so the resources above are already retired;
             // here the host switches to the program folder Iris uses for that dimension (world0, world-1, ...).
@@ -640,43 +642,46 @@ public final class IrisRenderBridge {
             ShaderHosts.noteIrisFailure(runtimeStatus);retire();return false;
         }
         updateTiming();
-        var encoder=device.createCommandEncoder();
-        var command=encoder.allocateAndBeginTransientCommandBuffer();
-        boolean recorded=false;
         try {
+            var encoder = device.createCommandEncoder();
+            var command = encoder.allocateAndBeginTransientCommandBuffer();
             VkBarriers.fullMemoryBarrier(command);
-            float near=camera == null ? 0.05f : camera.near(), far=camera == null ? 256f : camera.far();
-            if(depthConverter!=null)depthConverter.record(command,camera,encoding);
+            float near = camera == null ? 0.05f : camera.near(), far = camera == null ? 256f : camera.far();
+            if (depthConverter != null) depthConverter.record(command, camera, encoding);
             ByteBuffer worldBytes = null;
-            if (!worldUsed.isEmpty()) {
-                if (smoothing == null || !graph.worldConstants().equals(smoothingConstants)) {
-                    smoothingConstants = graph.worldConstants();
-                    smoothing = new IrisWorldUniforms.Smoothing(smoothingConstants);
-                }
-                worldBytes = MemoryUtil.memAlloc(IrisUniforms.WORLD_BYTES);
-                // Without a camera no program reads a camera-dependent member (checked above); those slots are then unused.
-                IrisWorldUniforms.write(worldBytes, world.sample(), camera != null ? camera.modelView() : new org.joml.Matrix4f(),
-                    graph.worldConstants(), smoothing, frameTime());
-            }
             try {
-                executor.record(command,graph,colorImage,colorView,depthConverter!=null ? depthConverter.view() : depthView,width,height,
-                    frameTimeCounter(),frameCounter(),near,far,frameTime(),camera,previousCamera,worldBytes);
+                if (!worldUsed.isEmpty()) {
+                    if (smoothing == null || !graph.worldConstants().equals(smoothingConstants)) {
+                        smoothingConstants = graph.worldConstants();
+                        smoothing = new IrisWorldUniforms.Smoothing(smoothingConstants);
+                    }
+                    worldBytes = MemoryUtil.memAlloc(IrisUniforms.WORLD_BYTES);
+                    // Without a camera no program reads a camera-dependent member (checked above).
+                    IrisWorldUniforms.write(worldBytes, world.sample(),
+                        camera != null ? camera.modelView() : new org.joml.Matrix4f(),
+                        graph.worldConstants(), smoothing, frameTime());
+                }
+                executor.record(command, graph, colorImage, colorView, depthConverter != null ? depthConverter.view() : depthView,
+                    width, height, frameTimeCounter(), frameCounter(), near, far, frameTime(), camera, previousCamera, worldBytes);
             } finally {
                 if (worldBytes != null) MemoryUtil.memFree(worldBytes);
             }
-            recorded=true;
-        } catch (RuntimeException | LinkageError error) {
-            failed=true;runtimeStatus=LogPaths.show("Iris recording failed: "+error.getMessage());
-            LOGGER.error("[IrisRenderBridge] {}\n{}",runtimeStatus,LogPaths.stack(error));
-        } finally {
             VkBarriers.fullMemoryBarrier(command);
-            int result=VK10.vkEndCommandBuffer(command);
-            if(result==VK10.VK_SUCCESS)encoder.execute(command);
-            else {failed=true;cleanupBroken=true;recorded=false;runtimeStatus="Iris command finalization failed; restart required";}
+            int result = VK10.vkEndCommandBuffer(command);
+            if (result != VK10.VK_SUCCESS) {
+                throw new IllegalStateException("Iris command finalization failed: " + result);
+            }
+            encoder.execute(command);
+            runtimeStatus = "Iris post commands recorded: " + graph.packName() + " (unverified in-game)";
+            return true;
+        } catch (RuntimeException | LinkageError error) {
+            failed = true;
+            runtimeStatus = LogPaths.show("Iris post failed: " + error.getMessage());
+            LOGGER.error("[IrisRenderBridge] {}\n{}", runtimeStatus, LogPaths.stack(error));
+            ShaderHosts.noteIrisFailure(runtimeStatus);
+            retire();
+            return false;
         }
-        if(recorded)runtimeStatus="Iris post commands recorded: "+graph.packName()+" (unverified in-game)";
-        else if(failed)ShaderHosts.noteIrisFailure(runtimeStatus);
-        return recorded;
     }
 
     private static boolean supportedDepth(WorldFrame.Depth depth, WorldFrame.Camera camera) {

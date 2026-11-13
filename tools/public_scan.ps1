@@ -3,7 +3,8 @@
   Checks the tree that would be exported to the public repository (tools/PUBLIC_EXPORT_ALLOWLIST.txt) and fails (exit 1)
   when it contains forbidden content: personal paths, e-mail addresses, tokens, AI-tooling or internal-notes words,
   binaries. Run from any folder:  powershell -ExecutionPolicy Bypass -File tools/public_scan.ps1
-  Optional: -Export <dir> copies the scanned files to <dir> (after a successful scan).
+  Optional: -Export <dir> copies the allowlisted files to <dir> after a successful scan.
+  Personal paths and launcher names are also checked in tracked diagnostics and the historical audit.
 #>
 param([string]$Export = "")
 
@@ -72,6 +73,18 @@ $jarAllowed = '^gradle/wrapper/gradle-wrapper\.jar$'
 $skipContentExt = '\.(png|jpg|jpeg|gif|ico|spv|jar|bin|ttf|otf)$'
 
 $problems = New-Object System.Collections.Generic.List[string]
+$privacyRules = $forbiddenEverywhere | Where-Object { $_.Name -in @('personal Windows path', 'launcher instance name') }
+$publicEvidence = $tracked | Where-Object { $_ -eq 'docs/AUDIT_DEFECTS_AND_ISSUES.md' -or $_ -match '^diagnostics/.*\.(log|txt|md|toml)$' }
+foreach ($evidencePath in $publicEvidence) {
+    if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) { continue }
+    $lineNumber = 0
+    foreach ($line in [System.IO.File]::ReadLines((Join-Path $root $evidencePath))) {
+        $lineNumber++
+        foreach ($rule in $privacyRules) {
+            if ($line -match $rule.Re) { $problems.Add(("{0}:{1}: {2}" -f $evidencePath, $lineNumber, $rule.Name)) }
+        }
+    }
+}
 foreach ($f in $files) {
     if ($f -match $binaryExt -or ($f -match '\.jar$' -and $f -notmatch $jarAllowed)) {
         $problems.Add("binary file in export: $f"); continue

@@ -317,7 +317,7 @@ Details:
 	JVM Flags: 4 total; -XX:StackShadowPages=32 -XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump -Xms1024m -Xmx4096m
 	Debug Flags: 0 total; 
 	Launched Version: 26.3
-	Launcher name: FreesmLauncher
+	Launcher name: <launcher>
 	Backend library: LWJGL version 3.4.3+4
 	Window size: 2560x1369
 	Surface Info: acquired, IMMEDIATE, 2560 x 1369
@@ -345,7 +345,7 @@ Details:
 	File encoding: UTF-8
 	CPU: 12x AMD Ryzen 5 5600XT 6-Core Processor 
 	Server Running: true
-	Player Count: 1 / 8; [ServerPlayer['<player>'/1, l='ServerLevel[RTX Test World]', x=98.37, y=-60.00, z=12.32]]
+	Player Count: 1 / 8; [ServerPlayer['<player>'/1, l='ServerLevel[<world>]', x=98.37, y=-60.00, z=12.32]]
 	Active Data Packs: vanilla, mod_data, mod/sodium, mod/bedray, mod/iris, mod/bedray_compute, mod/neoforge, file/rtxtest
 	Available Data Packs: minecart_improvements, redstone_experiments, trade_rebalance, vanilla, file/rtxtest, mod/bedray, mod/bedray_compute, mod/iris, mod/neoforge, mod/sodium, mod_data
 	Enabled Feature Flags: minecraft:vanilla

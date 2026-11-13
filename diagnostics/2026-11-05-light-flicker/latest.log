@@ -1,11 +1,11 @@
 [05Nov2026 00:21:59.960] [main/INFO] [net.neoforged.fml.startup.Entrypoint/]: JVM Uptime at startup: 2568ms
 [05Nov2026 00:22:00.219] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]: Starting FancyModLoader version 12.0.12 (CLIENT in PROD)
-[05Nov2026 00:22:00.220] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]: Game directory: %USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft
+[05Nov2026 00:22:00.220] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]: Game directory: <game-dir>
 [05Nov2026 00:22:00.291] [main/INFO] [net.neoforged.fml.loading.EarlyServiceDiscovery/]: Found 3 early service jars (out of 108) in 37ms
 [05Nov2026 00:22:00.292] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]: Loading FML Early Services:
-[05Nov2026 00:22:00.293] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]:  - %USERPROFILE%/AppData/Roaming/FreesmLauncher/libraries/net/neoforged/fancymodloader/loader/12.0.12/loader-12.0.12.jar
+[05Nov2026 00:22:00.293] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]:  - <launcher-dir>/libraries/net/neoforged/fancymodloader/loader/12.0.12/loader-12.0.12.jar
 [05Nov2026 00:22:00.294] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]:  - mods/sodium-neoforge-0.9.2+mc26.3.jar
-[05Nov2026 00:22:00.295] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]:  - %USERPROFILE%/AppData/Roaming/FreesmLauncher/libraries/net/neoforged/fancymodloader/earlydisplay/12.0.12/earlydisplay-12.0.12.jar
+[05Nov2026 00:22:00.295] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]:  - <launcher-dir>/libraries/net/neoforged/fancymodloader/earlydisplay/12.0.12/earlydisplay-12.0.12.jar
 [05Nov2026 00:22:00.300] [main/INFO] [net.neoforged.fml.loading.ImmediateWindowHandler/]: Running graphics bootstrap plugin sodium
 [05Nov2026 00:22:00.303] [main/INFO] [Sodium-GraphicsAdapterProbe/]: Searching for graphics cards...
 [05Nov2026 00:22:00.531] [main/INFO] [Sodium-GraphicsAdapterProbe/]: Found graphics adapter: AdapterInfo{vendor=NVIDIA, description='NVIDIA GeForce RTX 5060 Ti', adapterType=0x0000231B, openglIcdFilePath='C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispi.inf_amd64_20f49c6eb5c9b39b\nvoglv64.dll', openglIcdVersion=32.0.16.2101}
@@ -14,7 +14,7 @@
 [05Nov2026 00:22:00.534] [main/INFO] [Sodium-NvidiaWorkarounds/]: Modifying process environment to apply workarounds for the NVIDIA graphics driver...
 [05Nov2026 00:22:00.537] [main/INFO] [net.neoforged.fml.loading.ImmediateWindowHandler/]: Loading ImmediateWindowProvider fmlearlywindow
 [05Nov2026 00:22:01.154] [main/INFO] [net.neoforged.fml.earlydisplay.render.backend.opengl.GlRenderer/]: GL info: NVIDIA GeForce RTX 5060 Ti/PCIe/SSE2 GL version 3.3.0 NVIDIA 621.01, NVIDIA Corporation
-[05Nov2026 00:22:01.177] [ForkJoinPool.commonPool-worker-1/INFO] [net.neoforged.fml.loading.moddiscovery.locators.GameLocator/]: Marking unmodified client jar as claimed to prevent loading: %USERPROFILE%\AppData\Roaming\FreesmLauncher\libraries\com\mojang\minecraft\26.3\minecraft-26.3-client.jar
+[05Nov2026 00:22:01.177] [ForkJoinPool.commonPool-worker-1/INFO] [net.neoforged.fml.loading.moddiscovery.locators.GameLocator/]: Marking unmodified client jar as claimed to prevent loading: <launcher-dir>\libraries\com\mojang\minecraft\26.3\minecraft-26.3-client.jar
 [05Nov2026 00:22:01.185] [ForkJoinPool.commonPool-worker-1/INFO] [net.neoforged.fml.loading.moddiscovery.locators.GameLocator/]: Failed to find common Minecraft classes and resources on the classpath. Assuming we're launching production.
 [05Nov2026 00:22:01.546] [ForkJoinPool.commonPool-worker-1/INFO] [net.neoforged.fml.loading.moddiscovery.locators.JarInJarDependencyLocator/]: Found 7 dependencies adding them to mods collection
 [05Nov2026 00:22:01.548] [ForkJoinPool.commonPool-worker-1/INFO] [net.neoforged.fml.loading.moddiscovery.ModDiscoverer/]: 
@@ -27,7 +27,7 @@
 		Minecraft 26.3 (minecraft)
 		NeoForge 26.3.0.76 (neoforge)
 		Sodium 0.9.2+mc26.3 (sodium)
-[05Nov2026 00:22:01.728] [main/INFO] [mixin/]: SpongePowered MIXIN Subsystem Version=0.8.7 Source=file:/%USERPROFILE%/AppData/Roaming/FreesmLauncher/libraries/net/fabricmc/sponge-mixin/0.17.4+mixin.0.8.7/sponge-mixin-0.17.4+mixin.0.8.7.jar Service=FML Env=CLIENT
+[05Nov2026 00:22:01.728] [main/INFO] [mixin/]: SpongePowered MIXIN Subsystem Version=0.8.7 Source=file:/<launcher-dir>/libraries/net/fabricmc/sponge-mixin/0.17.4+mixin.0.8.7/sponge-mixin-0.17.4+mixin.0.8.7.jar Service=FML Env=CLIENT
 [05Nov2026 00:22:01.747] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]: Loading FML Plugins:
 [05Nov2026 00:22:01.748] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]:  - mods/iris-neoforge-1.11.7+mc26.3.jar > antlr4-runtime-4.13.1.jar
 [05Nov2026 00:22:01.748] [main/INFO] [net.neoforged.fml.loading.FMLLoader/]:  - mods/iris-neoforge-1.11.7+mc26.3.jar > jcpp-1.4.14.jar
@@ -293,9 +293,9 @@ com.mojang.realmsclient.exception.RealmsServiceException: Realms authentication 
 [05Nov2026 00:22:17.849] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Generating keypair
 [05Nov2026 00:22:18.168] [Server thread/INFO] [net.minecraft.server.level.progress.LoggingLevelLoadListener/]: Loading 0 persistent chunks...
 [05Nov2026 00:22:18.169] [Server thread/INFO] [net.minecraft.server.level.progress.LoggingLevelLoadListener/]: Preparing spawn area: 16%
-[05Nov2026 00:22:18.181] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[RTX Test World]'/minecraft:overworld
-[05Nov2026 00:22:18.195] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[RTX Test World]'/minecraft:the_end
-[05Nov2026 00:22:18.200] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[RTX Test World]'/minecraft:the_nether
+[05Nov2026 00:22:18.181] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[<world>]'/minecraft:overworld
+[05Nov2026 00:22:18.195] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[<world>]'/minecraft:the_end
+[05Nov2026 00:22:18.200] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[<world>]'/minecraft:the_nether
 [05Nov2026 00:22:18.215] [Server thread/INFO] [net.neoforged.neoforge.server.permission.PermissionAPI/]: Successfully initialized permission handler neoforge:default_handler
 [05Nov2026 00:22:18.638] [Server thread/INFO] [net.minecraft.server.level.progress.LoggingLevelLoadListener/]: Loading 49 chunks for player spawn...
 [05Nov2026 00:22:18.717] [Server thread/INFO] [net.minecraft.server.level.progress.LoggingLevelLoadListener/]: Preparing spawn area: 16%
@@ -317,9 +317,9 @@ com.mojang.realmsclient.exception.RealmsServiceException: Realms authentication 
 [05Nov2026 00:22:19.459] [Render thread/INFO] [Bedray/DlssRuntime/]: [VKB-DLSS] [VKB-AUTOTEST] dlss=lib_loaded wrapper=<gameDir>\bedray\natives\vkb_dlss.dll api=0x100 ngx_api=0x15 featureDir=<gameDir>\bedray\natives
 [05Nov2026 00:22:19.481] [Render thread/INFO] [Bedray/DlssRuntime/]: [VKB-DLSS] [VKB-AUTOTEST] dlss=required_instance_ext names=[VK_KHR_get_physical_device_properties2] engine_api=0x403000 enabled_by_name=true missing=[]
 [05Nov2026 00:22:22.668] [Render thread/INFO] [Bedray/DlssRuntime/]: [VKB-DLSS] [VKB-AUTOTEST] dlss=required_device_ext names=[VK_NVX_binary_import, VK_NVX_image_view_handle, VK_KHR_buffer_device_address, VK_KHR_push_descriptor] missing=[] (fixed list in DlssDeviceRequirements: [VK_NVX_image_view_handle, VK_KHR_buffer_device_address, VK_KHR_push_descriptor, VK_NVX_binary_import])
-[05Nov2026 00:22:22.671] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [util::setLogFilename:284] Logging to requested file (%USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\logs\vkb_dlss/nvsdk_ngx.log) enabled successfully
+[05Nov2026 00:22:22.671] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [util::setLogFilename:284] Logging to requested file (<game-dir>\logs\vkb_dlss/nvsdk_ngx.log) enabled successfully
 [05Nov2026 00:22:22.671] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [NGXSafeInitializeLog:150] App logging hooks successfully initialized
-[05Nov2026 00:22:22.671] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [ngx::util::openLogFileInPath:246] Logging to requested file (%USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\logs\vkb_dlss/nvngx.log) enabled successfully
+[05Nov2026 00:22:22.671] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [ngx::util::openLogFileInPath:246] Logging to requested file (<game-dir>\logs\vkb_dlss/nvngx.log) enabled successfully
 [05Nov2026 00:22:22.671] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [NGXSafeInitializeLog:139] App logging hooks successfully initialized
 [05Nov2026 00:22:22.691] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [NGXGetPathUsingQAI:512] Path to driverStore found using QAI: C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispi.inf_amd64_20f49c6eb5c9b39b
 [05Nov2026 00:22:22.691] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [NGXGetPath:1046] using path for models: C:\ProgramData\NVIDIA\NGX\models
@@ -436,7 +436,7 @@ com.mojang.realmsclient.exception.RealmsServiceException: Realms authentication 
 [05Nov2026 00:22:22.734] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [`anonymous-namespace'::LoadMappingFileData:269] listItem.engineVersion .* listItem.genericCMSId 876232c
 [05Nov2026 00:22:22.734] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [MapProjectId:1879] Found cms id 876232c for engine: custom engineVersion 26.3 projectID 6f1d2c3e-8a4b-4c5d-9e7f-5b0a1c2d3e4f
 [05Nov2026 00:22:22.819] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [NGXDRSInit:182] NvAPI_DRS_FindApplicationByName -166
-[05Nov2026 00:22:22.827] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [NGXInitContext:278] called from module vkb_dlss.dll at %USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\bedray\natives
+[05Nov2026 00:22:22.827] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [NGXInitContext:278] called from module vkb_dlss.dll at <game-dir>\bedray\natives
 [05Nov2026 00:22:22.827] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [NGXContextDenyListData::IsFeatureDenied:679] Feature dldenoiser, denial value 0 for Cms ID 876232c
 [05Nov2026 00:22:22.828] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [NGXSecureLoadFeature:1444] Feature dldenoiser failed to load (cmsid 141959980) from cache (location: C:\ProgramData\NVIDIA\NGX\models\dldenoiser\versions\0\files, name: 160_876232C.bin)
 [05Nov2026 00:22:22.828] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:22] [NGXSecureLoadFeature:1444] Feature dldenoiser failed to load (cmsid 241534723) from cache (location: C:\ProgramData\NVIDIA\NGX\models\dldenoiser\versions\0\files, name: 160_E658703.bin)
@@ -508,9 +508,9 @@ com.mojang.realmsclient.exception.RealmsServiceException: Realms authentication 
 [05Nov2026 00:22:23.705] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:23] [NGXContextDenyListData::IsFeatureDenied:679] Feature dlssnr, denial value 0 for Cms ID 876232c
 [05Nov2026 00:22:23.847] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:23] [NGXSecureLoadFeature:1444] Feature dlssnr failed to load (cmsid 141959980) from cache (location: C:\ProgramData\NVIDIA\NGX\models\dlssnr\versions\0\files, name: 160_876232C.bin)
 [05Nov2026 00:22:23.851] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:23] [NGXSecureLoadFeature:1444] Feature dlssnr failed to load (cmsid 241534723) from cache (location: C:\ProgramData\NVIDIA\NGX\models\dlssnr\versions\0\files, name: 160_E658703.bin)
-[05Nov2026 00:22:24.025] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:24] [NGXSecureLoadFeature:1621] app 876232C feature dlssnr snippet: %USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\bedray\natives/nvngx_dlssnr.dll version: 310.8.0
+[05Nov2026 00:22:24.025] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:24] [NGXSecureLoadFeature:1621] app 876232C feature dlssnr snippet: <game-dir>\bedray\natives/nvngx_dlssnr.dll version: 310.8.0
 [05Nov2026 00:22:24.342] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:24] [NGXLoadFeature:1732] Opened NGX runtime session for PID 3156
-[05Nov2026 00:22:24.489] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:24] [tid:30492][util::setLogFilename:284] Logging to requested file (%USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\logs\vkb_dlss//nvngx_dlss_310_9_16.log) enabled successfully
+[05Nov2026 00:22:24.489] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:24] [tid:30492][util::setLogFilename:284] Logging to requested file (<game-dir>\logs\vkb_dlss//nvngx_dlss_310_9_16.log) enabled successfully
 [05Nov2026 00:22:24.489] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:24] [tid:30492][NGXInitLog:208] App logging hooks successfully initialized
 [05Nov2026 00:22:24.489] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:24] [tid:30492][NGXInitLog:214] Build v310.9.16 CL 38955375
 [05Nov2026 00:22:24.489] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:24] [tid:30492][NGXInitLog:216] Built with APP_NAME = nvapp_override
@@ -531,7 +531,7 @@ com.mojang.realmsclient.exception.RealmsServiceException: Realms authentication 
 Falling back to older API.
 [05Nov2026 00:22:24.845] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:24] [NVSDK_NGX_CORE_VULKAN_Init_Ext:200] warning: passed NVSDK_NGX_FeatureCommonInfo to NGX SDK, but snippet is out of date...
 Falling back to older API.
-[05Nov2026 00:22:25.157] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][util::setLogFilename:284] Logging to requested file (%USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\logs\vkb_dlss//nvngx_dlssg_310_9_16.log) enabled successfully
+[05Nov2026 00:22:25.157] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][util::setLogFilename:284] Logging to requested file (<game-dir>\logs\vkb_dlss//nvngx_dlssg_310_9_16.log) enabled successfully
 [05Nov2026 00:22:25.157] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][NGXInitLog:208] App logging hooks successfully initialized
 [05Nov2026 00:22:25.157] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][NGXInitLog:214] Build v310.9.16 CL 39026150
 [05Nov2026 00:22:25.157] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][NGXInitLog:216] Built with APP_NAME = nvapp_override
@@ -540,7 +540,7 @@ Falling back to older API.
 [05Nov2026 00:22:25.160] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][NGXCubinKernelMap::InitCubins:42] Loading NGXCubin kernels
 [05Nov2026 00:22:25.160] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][NGXCubinGeneric::SetGPUArch:473] m_gpuArch = 0x1b0
 [05Nov2026 00:22:25.160] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][NGXCubinGeneric::genericPostInit:164] Fast UAV clear: supported
-[05Nov2026 00:22:25.314] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][util::setLogFilename:284] Logging to requested file (%USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\logs\vkb_dlss//nvngx_dlssd_310_9_16.log) enabled successfully
+[05Nov2026 00:22:25.314] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][util::setLogFilename:284] Logging to requested file (<game-dir>\logs\vkb_dlss//nvngx_dlssd_310_9_16.log) enabled successfully
 [05Nov2026 00:22:25.315] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][NGXInitLog:208] App logging hooks successfully initialized
 [05Nov2026 00:22:25.315] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][NGXInitLog:214] Build v310.9.16 CL 39061540
 [05Nov2026 00:22:25.315] [Render thread/INFO] [NGX/]: [2026-11-05 00:22:25] [tid:30492][NGXInitLog:216] Built with APP_NAME = app_dlssd_nvapp_override
@@ -870,9 +870,9 @@ Falling back to older API.
 [05Nov2026 00:22:56.924] [Render thread/INFO] [VKB-RT/]: [VKB-RT] rt_pass ok frames=1038 rays=3686400 hit_pct=82.8 reject_pct=0.0 invalid_pct=0.0 trunc_pct=1.6 vis_overflow_pct=0.0 hist_pct=n/a leaf_pct=n/a ms=2.00 spp=1 bounces=2 work_ms=19.8 pass_ms=21.8 budget_ms=off adaptive=0/1 displayed=true mode=path
 [05Nov2026 00:22:57.305] [Render thread/INFO] [VKB-RT/]: [VKB-RT] bob_projection max_abs_diff=0.09998 m11=0.99996316 cam_m11=1.0 m21=-0.008582525 m20=4.5800465E-7 yRot=-78.92913 xRot=12.599882
 [05Nov2026 00:22:57.517] [Server thread/INFO] [net.minecraft.client.server.IntegratedServer/]: Saving and pausing game...
-[05Nov2026 00:22:57.529] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[RTX Test World]'/minecraft:overworld
-[05Nov2026 00:22:57.540] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[RTX Test World]'/minecraft:the_end
-[05Nov2026 00:22:57.540] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[RTX Test World]'/minecraft:the_nether
+[05Nov2026 00:22:57.529] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[<world>]'/minecraft:overworld
+[05Nov2026 00:22:57.540] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[<world>]'/minecraft:the_end
+[05Nov2026 00:22:57.540] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[<world>]'/minecraft:the_nether
 [05Nov2026 00:22:57.700] [VKB-RT-Stats/INFO] [VKB-RT/]: [VKB-RT] sections=3410 quads=1755338 solid=1754542 cutout=12 translucent=784 added=3671 removed=261 replaced=0 failed=0
 [05Nov2026 00:22:57.817] [Server thread/INFO] [net.minecraft.server.network.ServerGamePacketListenerImpl/]: <player> lost connection: Disconnected
 [05Nov2026 00:22:57.817] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: System chat: <player> left the game
@@ -880,9 +880,9 @@ Falling back to older API.
 [05Nov2026 00:22:57.878] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Stopping server
 [05Nov2026 00:22:57.879] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving players
 [05Nov2026 00:22:57.879] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving worlds
-[05Nov2026 00:22:57.972] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[RTX Test World]'/minecraft:overworld
-[05Nov2026 00:22:57.988] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[RTX Test World]'/minecraft:the_end
-[05Nov2026 00:22:57.992] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[RTX Test World]'/minecraft:the_nether
+[05Nov2026 00:22:57.972] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[<world>]'/minecraft:overworld
+[05Nov2026 00:22:57.988] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[<world>]'/minecraft:the_end
+[05Nov2026 00:22:57.992] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[<world>]'/minecraft:the_nether
 [05Nov2026 00:22:58.050] [Render thread/INFO] [ChunkBuilder/]: Stopping worker threads
 [05Nov2026 00:22:58.701] [VKB-RT-Stats/INFO] [VKB-RT/]: [VKB-RT] sections=0 quads=0 solid=0 cutout=0 translucent=0 added=3671 removed=3671 replaced=0 failed=0
 [05Nov2026 00:22:59.333] [Render thread/INFO] [BedrayCore/Options/]: Stopping!

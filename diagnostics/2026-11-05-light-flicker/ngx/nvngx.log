@@ -114,7 +114,7 @@
 [2026-11-05 00:22:22] [`anonymous-namespace'::LoadMappingFileData:269] listItem.engineVersion .* listItem.genericCMSId 876232c
 [2026-11-05 00:22:22] [MapProjectId:1879] Found cms id 876232c for engine: custom engineVersion 26.3 projectID 6f1d2c3e-8a4b-4c5d-9e7f-5b0a1c2d3e4f
 [2026-11-05 00:22:22] [NGXDRSInit:182] NvAPI_DRS_FindApplicationByName -166
-[2026-11-05 00:22:22] [NGXInitContext:278] called from module vkb_dlss.dll at %USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\bedray\natives
+[2026-11-05 00:22:22] [NGXInitContext:278] called from module vkb_dlss.dll at <game-dir>\bedray\natives
 [2026-11-05 00:22:22] [NGXContextDenyListData::IsFeatureDenied:679] Feature dldenoiser, denial value 0 for Cms ID 876232c
 [2026-11-05 00:22:22] [NGXSecureLoadFeature:1444] Feature dldenoiser failed to load (cmsid 141959980) from cache (location: C:\ProgramData\NVIDIA\NGX\models\dldenoiser\versions\0\files, name: 160_876232C.bin)
 [2026-11-05 00:22:22] [NGXSecureLoadFeature:1444] Feature dldenoiser failed to load (cmsid 241534723) from cache (location: C:\ProgramData\NVIDIA\NGX\models\dldenoiser\versions\0\files, name: 160_E658703.bin)
@@ -186,7 +186,7 @@
 [2026-11-05 00:22:23] [NGXContextDenyListData::IsFeatureDenied:679] Feature dlssnr, denial value 0 for Cms ID 876232c
 [2026-11-05 00:22:23] [NGXSecureLoadFeature:1444] Feature dlssnr failed to load (cmsid 141959980) from cache (location: C:\ProgramData\NVIDIA\NGX\models\dlssnr\versions\0\files, name: 160_876232C.bin)
 [2026-11-05 00:22:23] [NGXSecureLoadFeature:1444] Feature dlssnr failed to load (cmsid 241534723) from cache (location: C:\ProgramData\NVIDIA\NGX\models\dlssnr\versions\0\files, name: 160_E658703.bin)
-[2026-11-05 00:22:24] [NGXSecureLoadFeature:1621] app 876232C feature dlssnr snippet: %USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\bedray\natives/nvngx_dlssnr.dll version: 310.8.0
+[2026-11-05 00:22:24] [NGXSecureLoadFeature:1621] app 876232C feature dlssnr snippet: <game-dir>\bedray\natives/nvngx_dlssnr.dll version: 310.8.0
 [2026-11-05 00:22:24] [NGXLoadFeature:1732] Opened NGX runtime session for PID 3156
 [2026-11-05 00:22:24] [NVSDK_NGX_CORE_VULKAN_Init_Ext:195] warning: passed vkGetInstance/DeviceProcAddr to NGX SDK, but snippet is out of date...
 Falling back to older API.
