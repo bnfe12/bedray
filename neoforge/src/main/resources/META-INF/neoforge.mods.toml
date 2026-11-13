@@ -6,6 +6,8 @@ license="LGPL-3.0-or-later"
 modId="${mod_id}"
 version="${mod_version}"
 displayName="${mod_name}"
+displayURL="https://github.com/bnfe12/bedray"
+logoFile="assets/bedray/icon.png"
 description="${mod_description}"
 authors="bnfe12"
 

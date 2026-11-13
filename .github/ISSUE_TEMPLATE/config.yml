@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Read the docs first
+  - name: Documentation and troubleshooting
     url: https://github.com/bnfe12/bedray/blob/main/docs/TROUBLESHOOTING.md
-    about: Troubleshooting, FAQ and known issues.
+    about: Setup help, rendering problems and common questions.
+  - name: Roadmap and feature status
+    url: https://github.com/bnfe12/bedray/blob/main/ROADMAP.md
+    about: See the project direction before suggesting a feature.

@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" role="img" aria-labelledby="title desc">
+<title id="title">Bedray — light, block by block</title>
+<desc id="desc">Brand illustration of a reflected light path. This is not gameplay footage.</desc>
+<rect x="0" y="0" width="1280" height="400" rx="0" fill="#0d1a1b"/>
+<rect x="0" y="0" width="9" height="400" rx="0" fill="#f2c66f"/>
+<polyline points="525,400 1040,103" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="530,105 1045,402" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="595,400 1110,103" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="600,105 1115,402" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="665,400 1180,103" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="670,105 1185,402" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="735,400 1250,103" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="740,105 1255,402" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="805,400 1320,103" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="810,105 1325,402" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="875,400 1390,103" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="880,105 1395,402" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="945,400 1460,103" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="950,105 1465,402" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="1015,400 1530,103" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="1020,105 1535,402" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="1085,400 1600,103" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="1090,105 1605,402" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="1155,400 1670,103" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<polyline points="1160,105 1675,402" fill="none" stroke="#172c2b" stroke-width="1" stroke-linejoin="round"/>
+<rect x="35" y="20" width="645" height="365" rx="0" fill="#0d1a1b"/>
+<text x="72" y="66.2" fill="#b6d0b8" font-size="14" font-family="Segoe UI, DejaVu Sans, Arial, sans-serif" font-weight="700">MINECRAFT JAVA  /  VULKAN</text>
+<polygon points="81.0312,152.969 125,127.844 125,180.188 81.0312,205.312" fill="#305348"/>
+<polygon points="125,127.844 168.969,152.969 168.969,205.312 125,180.188" fill="#1c3b35"/>
+<polygon points="81.0312,205.312 125,180.188 168.969,205.312 125,230.438" fill="#446354"/>
+<polyline points="103.016,140.406 103.016,192.75" fill="none" stroke="#3a5d50" stroke-width="0.785156" stroke-linejoin="round"/>
+<polyline points="146.984,140.406 146.984,192.75" fill="none" stroke="#284b40" stroke-width="0.785156" stroke-linejoin="round"/>
+<polyline points="81.0312,179.141 125,154.016 168.969,179.141" fill="none" stroke="#426451" stroke-width="0.785156" stroke-linejoin="round"/>
+<polyline points="103.016,192.75 146.984,217.875" fill="none" stroke="#56745e" stroke-width="0.785156" stroke-linejoin="round"/>
+<polyline points="146.984,192.75 103.016,217.875" fill="none" stroke="#56745e" stroke-width="0.785156" stroke-linejoin="round"/>
+<polyline points="81.0312,152.969 125,127.844 168.969,152.969" fill="none" stroke="#93b39a" stroke-width="1.57031" stroke-linejoin="round"/>
+<polyline points="81.0312,152.969 81.0312,205.312 125,230.438 168.969,205.312 168.969,152.969" fill="none" stroke="#749780" stroke-width="1.30859" stroke-linejoin="round"/>
+<polyline points="125,127.844 125,180.188" fill="none" stroke="#63856d" stroke-width="1.04688" stroke-linejoin="round"/>
+<polyline points="91.5,136.219 148.031,169.195 103.539,195.105 131.805,211.332" fill="none" stroke="#b58b46" stroke-width="7.06641" stroke-linejoin="round"/>
+<polyline points="91.5,136.219 148.031,169.195 103.539,195.105 131.805,211.332" fill="none" stroke="#f2c66f" stroke-width="4.44922" stroke-linejoin="round"/>
+<polyline points="91.5,136.219 148.031,169.195 103.539,195.105 131.805,211.332" fill="none" stroke="#fff0bc" stroke-width="1.30859" stroke-linejoin="round"/>
+<polygon points="148.031,167.102 150.125,169.195 148.031,171.289 145.938,169.195" fill="#f2c66f"/>
+<polygon points="103.539,193.012 105.633,195.105 103.539,197.199 101.445,195.105" fill="#f2c66f"/>
+<polygon points="91.5,132.293 95.4258,136.219 91.5,140.145 87.5742,136.219" fill="#fff2c4"/>
+<text x="214" y="199.6" fill="#edf3e7" font-size="87" font-family="Segoe UI, DejaVu Sans, Arial, sans-serif" font-weight="700">Bedray</text>
+<text x="76" y="272.2" fill="#edf3e7" font-size="29" font-family="Segoe UI, DejaVu Sans, Arial, sans-serif" font-weight="400">Light, block by block.</text>
+<polyline points="78,315 127,315" fill="none" stroke="#f2c66f" stroke-width="3" stroke-linejoin="round"/>
+<text x="144" y="317.4" fill="#b6d0b8" font-size="13" font-family="Segoe UI, DejaVu Sans, Arial, sans-serif" font-weight="700">PATH TRACING  /  SODIUM ADD-ON</text>
+<polygon points="840.25,139.75 982,58.75 982,227.5 840.25,308.5" fill="#305348"/>
+<polygon points="982,58.75 1123.75,139.75 1123.75,308.5 982,227.5" fill="#1c3b35"/>
+<polygon points="840.25,308.5 982,227.5 1123.75,308.5 982,389.5" fill="#446354"/>
+<polyline points="911.125,99.25 911.125,268" fill="none" stroke="#3a5d50" stroke-width="2.53125" stroke-linejoin="round"/>
+<polyline points="1052.88,99.25 1052.88,268" fill="none" stroke="#284b40" stroke-width="2.53125" stroke-linejoin="round"/>
+<polyline points="840.25,224.125 982,143.125 1123.75,224.125" fill="none" stroke="#426451" stroke-width="2.53125" stroke-linejoin="round"/>
+<polyline points="911.125,268 1052.88,349" fill="none" stroke="#56745e" stroke-width="2.53125" stroke-linejoin="round"/>
+<polyline points="1052.88,268 911.125,349" fill="none" stroke="#56745e" stroke-width="2.53125" stroke-linejoin="round"/>
+<polyline points="840.25,139.75 982,58.75 1123.75,139.75" fill="none" stroke="#93b39a" stroke-width="5.0625" stroke-linejoin="round"/>
+<polyline points="840.25,139.75 840.25,308.5 982,389.5 1123.75,308.5 1123.75,139.75" fill="none" stroke="#749780" stroke-width="4.21875" stroke-linejoin="round"/>
+<polyline points="982,58.75 982,227.5" fill="none" stroke="#63856d" stroke-width="3.375" stroke-linejoin="round"/>
+<polyline points="874,85.75 1056.25,192.062 912.812,275.594 1003.94,327.906" fill="none" stroke="#b58b46" stroke-width="22.7812" stroke-linejoin="round"/>
+<polyline points="874,85.75 1056.25,192.062 912.812,275.594 1003.94,327.906" fill="none" stroke="#f2c66f" stroke-width="14.3438" stroke-linejoin="round"/>
+<polyline points="874,85.75 1056.25,192.062 912.812,275.594 1003.94,327.906" fill="none" stroke="#fff0bc" stroke-width="4.21875" stroke-linejoin="round"/>
+<polygon points="1056.25,185.312 1063,192.062 1056.25,198.812 1049.5,192.062" fill="#f2c66f"/>
+<polygon points="912.812,268.844 919.562,275.594 912.812,282.344 906.062,275.594" fill="#f2c66f"/>
+<polygon points="874,73.0938 886.656,85.75 874,98.4062 861.344,85.75" fill="#fff2c4"/>
+</svg>

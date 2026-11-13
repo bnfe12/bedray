@@ -1,83 +1,61 @@
 name: GPU test report
-description: Tell us how Bedray ran on your GPU (works or not, with numbers)
+description: Share a compatibility result from your hardware
 labels: ["test-report"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you for testing. Bedray is an **alpha** and has only been tested on an NVIDIA GeForce RTX 5060 Ti (8 GB).
-        **AMD Radeon (RDNA 2 or newer) and Intel Arc reports are especially wanted.** The checklist is in `docs/TESTING.md`.
-        Remove personal paths from logs before attaching them.
+        Results from AMD Radeon and Intel Arc are especially helpful. Failed starts are useful reports too.
+        The [testing guide](https://github.com/bnfe12/bedray/blob/main/docs/TESTING.md) explains what to check.
+        Review logs and screenshots for personal information before sharing them.
   - type: input
-    id: gpu
+    id: hardware
     attributes:
-      label: GPU and VRAM
-      placeholder: "AMD Radeon RX 6800 XT 16 GB"
+      label: GPU, VRAM, driver and operating system
     validations:
       required: true
   - type: input
-    id: driver
+    id: build
     attributes:
-      label: Driver version and Windows version
-    validations:
-      required: true
-  - type: input
-    id: mod
-    attributes:
-      label: Bedray version, loader (NeoForge or Fabric), Sodium version
+      label: Bedray build, Minecraft, loader and Sodium versions
+      description: Include a release tag or source commit, and say whether you use NeoForge or Fabric.
     validations:
       required: true
   - type: dropdown
     id: starts
     attributes:
-      label: Game starts with the Vulkan backend and the Bedray page is visible
+      label: Does the game start with Vulkan and show Bedray settings?
       options: ["Yes", "No", "Not tested"]
     validations:
       required: true
   - type: dropdown
-    id: rayquery
+    id: tracing
     attributes:
-      label: Ray tracing can be switched on (Path Tracing)
-      options: ["Works", "Option missing or greyed out", "Crash or errors", "Not tested"]
+      label: Path tracing result
+      options: ["Renders a scene", "Option unavailable", "Crash or error", "Not tested"]
     validations:
       required: true
-  - type: dropdown
-    id: fsr
-    attributes:
-      label: FSR 3.1/2.x (needs the AMD library)
-      options: ["Works", "Does not work", "Library not installed", "Not tested"]
-  - type: dropdown
-    id: xess
-    attributes:
-      label: XeSS (needs libxess.dll)
-      options: ["Works", "Does not work", "Library not installed", "Not tested"]
-  - type: dropdown
-    id: builtin
-    attributes:
-      label: Built-in upscalers (Bilinear, FSR 1, NIS)
-      options: ["All work", "Some do not work", "Not tested"]
-  - type: dropdown
-    id: nrd
-    attributes:
-      label: Path Tracing with the NRD denoiser (needs the NRD libraries)
-      options: ["Works", "Does not work", "Libraries not installed", "Not tested"]
   - type: textarea
-    id: fps
+    id: result
     attributes:
-      label: FPS numbers
-      description: "Scene, resolution, render distance, mode, upscaler, FPS (from the Bedray F3 block). Example: 1920x1080, 12 chunks, Rays High, FSR Quality: 62 fps."
+      label: What did you test?
+      description: Describe the scene, image settings and any optional upscaler or denoiser you tried. Say which native libraries were installed.
+    validations:
+      required: true
   - type: textarea
-    id: notes
+    id: performance
     attributes:
-      label: Problems, artifacts, anything else
+      label: Performance, if measured
+      description: Include resolution, render scale, render distance and FPS. Separate rendered FPS from generated frames.
   - type: textarea
-    id: report
+    id: evidence
     attributes:
-      label: Paste output of /bedray report
-      description: "NeoForge: /bedray report in the chat. NeoForge and Fabric: Video Settings, page Advanced and Experimental, button Copy diagnostics report. Technical data only, nothing is sent."
-      render: text
-  - type: textarea
-    id: log
+      label: Diagnostics and screenshots
+      description: Attach a reviewed Bedray report, relevant log lines or screenshots. Remove personal paths, names and server addresses first.
+  - type: checkboxes
+    id: privacy
     attributes:
-      label: latest.log (optional, personal paths removed)
-      render: text
+      label: Before posting
+      options:
+        - label: I reviewed my attachments and removed personal information.
+          required: true
