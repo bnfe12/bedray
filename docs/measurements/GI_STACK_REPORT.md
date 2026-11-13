@@ -202,6 +202,71 @@ behind a same-session, GPU-timestamped A/B (mode A/B + range sweep). Full reason
 - **Off / deferred:** OMM (no measured terrain win), partitioned PTLAS (TLAS not the bottleneck), SER (measured 2.14x
   slower — off/opt-in), RR preset D/E/F (wired additively, default-off pending A/B).
 
+## ReSTIR DI screen-edge motion artifacts — investigation (owner-reported)
+
+**Symptom (owner):** during camera motion the direct lighting shows many artifacts at the screen borders ("свет с
+рамками не дружит"). **Method:** systematic root-cause investigation of the whole DI pipeline + host wiring. No fix is
+proposed without a confirmed root cause; the GPU is contested (another session's `javaw.exe` is active), so there is no
+L4 observation of the artifact yet.
+
+**Ruled out — verified correct, with evidence:**
+
+- *Off-screen reprojection rejection.* `diReprojectReceiver` rejects a history pixel outside `[0, size)`
+  (`di_block_emitters.slang:81-83`); there is no "clamp instead of reject" bug.
+- *Spatial neighbour bounds.* Both spatial passes skip out-of-bounds neighbours
+  (`spatial_block_emitters.slang:142-145`, `pt_spatial.slang:83-86`).
+- *Host previous-frame matrix.* `prevViewProj` is advanced to `curViewProj` **after** `params.prevViewProj` is copied
+  (`RtFrameRenderer.java:1129` then `:1191`), so the DI pass reads the correct previous matrix; `cameraDelta` is the raw
+  camera-position delta (`:1120-1122`). Not stale, not a sign error.
+- *Reprojection convention.* Identical to the display running-mean, pinned by
+  `RtSlangRestirDiTest.theReuseReprojectsExactlyLikeTheDisplayPass` (same space, delta, matrix, flipY, surface motion).
+- *Parity ring.* Temporal writes half P, DI spatial runs in-place on P, `di.afterDispatch` flips parity once; DI spatial
+  correctly does **not** call `spatialPublished` (`ReferencePathTraceBackend.java:270-277`, `:315`). No double-increment.
+- *Record coverage.* Every pixel's record is rewritten each frame: invalid→`reuseClear` (`path_tracer.slang:602`),
+  primary→`reuseSample` (`:894`), fallback `!reuseHandled`→`reuseClear` (`:1126`). No stale-record leak.
+- *Merge math.* Standard Bitterli RIS (`restir_di.slang` `mergeReservoirs`), M cap 20, ratio caps 8/5, occlusion zeroing.
+
+**Leading hypothesis (NOT confirmed at L4):** the artifact is inherent ReSTIR disocclusion at screen edges during motion,
+amplified by three factors: (1) disoccluded edge pixels get a fresh batch (M = candidates) while the interior accumulates
+M up to 20, so the leading edge is higher-variance; (2) the disocclusion tolerance is thick (`0.05·dist + 0.1`, ~1.1 blocks
+at dist 20) and the normal gate loosens while moving (0.8→0.6), so an edge pixel can accept history from a slightly wrong
+surface → light leaking/streaking at borders; (3) spatial reuse (±7 px) spreads edge disocclusion noise inward and has a
+truncated neighbour window at the border.
+
+**Disposition:** no confirmed correctness bug, and **no speculative fix shipped** (root cause first; off-by-default until
+there are numbers). The fix direction is a measured quiet-window A/B, each arm off by default until it wins: spatial-on
+vs spatial-off during motion (isolates factor 3); a tighter moving-camera position/plane tolerance (factor 2); a higher
+fresh candidate M at disoccluded pixels (factor 1). **L4 confirmation is GPU-gated.** This is honest "investigated, root
+cause not confirmed at L4", not "fixed".
+
+## Stack completeness / quality audit ("is it full-fledged and perfect?")
+
+**ReSTIR GI exists.** It is the ReSTIR PT path-space reuse: `experimental/restir_pt.slang` v5 (reservoir math),
+`restir/pt_temporal.slang` + `restir/pt_spatial.slang` (live stages), a derived change of measure
+(`docs/RESTIR_GI_DERIVATION.md`), host wiring in both path-trace backends, settings (`path_restir_pt`, experimental and
+off by default), and CPU validation (`RestirPtChangeOfMeasureTest`, `RestirPtReservoirInvariantTest`,
+`RestirPtTemporalStageTest`, `RestirPtSpatialStageTest`). It is **L4-proven** (`restir_pt_rd16/`, `328585ea`: +24.7%
+gpu_rt, +569 MiB vs PT off). L5 owner sign-off remains. (The derivation note's old "quarantined / never run on a GPU"
+header was stale and is corrected to match §10 and this capture.)
+
+**The stack is substantial, but it is NOT "perfect", and that is not claimed.** Honest per-technology status:
+
+| technology | status | highest level | caveat |
+|---|---|---|---|
+| ReSTIR DI | live | L4 | screen-edge disocclusion characteristic (investigation above; no confirmed bug) |
+| ReSTIR GI / PT | live, experimental/off | L4 | documented approximations: spatial merge has no pairwise MIS (biased-but-consistent); certificate reads a rough dielectric's GGX as Lambertian; suffix shaded with the old edge's view; moving-entity first vertex rebased by camera delta only; firefly caps |
+| NRD REBLUR / ReLAX | wired | L4 (REBLUR −18% vs RR) | ReLAX-vs-ReBLUR-vs-RR A/B GPU-gated |
+| DLSS RR | wired | L4 | presets D/E/F additive, default-off, A/B GPU-gated; sharpness is an NVIDIA API no-op (not wired) |
+| SER | wired | L4 | measured **2.14x slower** gpu_rt → off/opt-in |
+| BLAS compaction | live | L4 | enables RD32 within 4096 MiB |
+| RC irradiance field | live | L4 | default indirect estimator; ReSTIR is the sampling layer on top |
+| OMM / partitioned PTLAS / path guiding | deferred / research | L0/design | not implemented; evidence-gated, forbidden cache family excluded |
+
+**Known gaps (honest):** the GPU-gated A/B remainder (RR presets, ReLAX, settings live read-back, isolated `tlas_ms`,
+before/after screenshots); L5 owner sign-off pending on every stage; the DI screen-edge characteristic; PT's documented
+estimator approximations. "Perfect" is not claimed — nothing is claimed working beyond its measured L-level, and the
+deferred items are dispositioned with evidence rather than silently skipped.
+
 ## Honest limitations
 
 - **FOCUSED artifact:** the strict native acceptance gate requires the window focused for the whole capture. On a

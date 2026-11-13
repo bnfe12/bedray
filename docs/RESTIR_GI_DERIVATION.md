@@ -1,13 +1,19 @@
 # The ReSTIR GI change of measure
 
-`experimental/restir_pt.slang` v4 reuses a stored path at a different receiver by
+`experimental/restir_pt.slang` v5 reuses a stored path at a different receiver by
 keeping the first scattered vertex and moving the anchor. This note derives the
 density correction that shift needs, states exactly which paths the derivation
 covers, and lists what the implementation deliberately does not model. The
-module is still quarantined: it is imported by no root, has no pass or host and
-has never run on a GPU. v3 gave reuse a proof and a CPU validation instead of an
-open question; v4 makes the reservoir's $M$ the number of attempts the sampler
-made, which is the other half of the same normalisation (§6).
+module is wired into the live v5 stages (§11 temporal, §12 spatial) and a
+manifest-checked host in both path-trace backends; it is experimental and off by
+default (`path_restir_pt`). The math, the property tests, the pass and the host
+are closed (L2), and the GPU smoke run is done (L4: `docs/measurements/restir_pt_rd16/`,
+commit `328585ea` — PT on costs **+24.7% gpu_rt and +569 MiB** vs PT off, a quality
+feature rather than a perf win). What remains is an owner-verified frame (L5); the
+module stays in `experimental/` pending that sign-off (§10). v3 gave reuse a proof
+and a CPU validation instead of an open question; v4 makes the reservoir's $M$ the
+number of attempts the sampler made, which is the other half of the same
+normalisation (§6); v5 added the live stages.
 
 ## 1. What is reused
 
@@ -272,9 +278,11 @@ including both generic reuse functions.
 
 The property test (`RestirPtReservoirInvariantTest`), the mathematical gates of
 §4–§6, a pass and a manifest-checked host are closed: §11 describes the live
-temporal stage and §12 the live spatial stage. What remains is a GPU smoke run
-with the switches on and an owner-verified frame. The module stays in `experimental/` until
-the GPU gate closes (`experimental/README.md`).
+temporal stage and §12 the live spatial stage. The GPU smoke run is closed too
+(L4: `docs/measurements/restir_pt_rd16/`, commit `328585ea` — `valid_native_capture=true`,
+892 frames, PT on **+24.7% gpu_rt / +569 MiB** vs PT off). What remains is an
+owner-verified frame (L5). The module stays in `experimental/` until that sign-off
+(`experimental/README.md`).
 
 ## 11. Live temporal stage (v5)
 
