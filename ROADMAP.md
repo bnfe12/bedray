@@ -1,6 +1,6 @@
 # Bedray roadmap
 
-**Status: active alpha planning, current public build `0.1.0-alpha.1`.** This roadmap describes direction and acceptance gates, not release dates or guarantees. Bedray is expected to change substantially: renderer internals, settings, configuration, compatibility and supported features may change between alpha versions. Bugs, crashes, visual artifacts and performance changes are possible. Use a separate test instance and back up worlds and configuration before trying new builds.
+**Status: active alpha planning. Current public build `0.1.0-alpha.1` (old GLSL renderer); current `main` is the unreleased `0.2.0-alpha` Slang renderer with a native core, which has no published build yet.** This roadmap describes direction and acceptance gates, not release dates or guarantees. Bedray is expected to change substantially: renderer internals, settings, configuration, compatibility and supported features may change between alpha versions. Bugs, crashes, visual artifacts and performance changes are possible. Use a separate test instance and back up worlds and configuration before trying new builds.
 
 The project is unofficial and client-side. The current baseline is Minecraft Java 26.3, Sodium 0.9.x, Java 25, Windows, native Vulkan, and NVIDIA RTX 5060 Ti. Other GPUs and Fabric need more evidence. See the [feature matrix](docs/FEATURE_MATRIX.md), [known issues](docs/KNOWN_ISSUES.md), [release checklist](docs/RELEASE_CHECKLIST.md), and [testing guide](docs/TESTING.md).
 
@@ -9,6 +9,13 @@ The project is unofficial and client-side. The current baseline is Minecraft Jav
 Deliver a maintainable, well-instrumented Vulkan renderer add-on for Minecraft Java that gives consistent path-traced lighting and materials, usable temporal reconstruction and upscaling, and optional frame generation, while keeping the ordinary game usable when an optional vendor feature is absent.
 
 A feature is not considered done merely because its code compiles or a unit test passes. Completion requires the appropriate combination of focused tests, clean packaging, fresh logs from the matching build, and visual checks in the game. User acceptance is recorded separately from developer evidence.
+
+## Where `main` stands (2026-11-13)
+
+The renderer rewrite (Slang AOT, native scene core, ReSTIR PT, compaction, NRD and DLSS RR guides, Iris raster host, Voxel provider) is merged. What blocks
+the first `0.2.0-alpha` publication is evidence, not code: owner (L5) acceptance, before/after screenshots with a denoiser, the open A/B captures
+listed in [GI_STACK_REPORT](docs/measurements/GI_STACK_REPORT.md), a clean build from a fresh clone, and the [release checklist](docs/RELEASE_CHECKLIST.md).
+Detailed per-technology work: [STACK_IMPLEMENTATION_PLAN](docs/STACK_IMPLEMENTATION_PLAN.md).
 
 ## Phase 0 — Verify the current alpha and build a support baseline
 

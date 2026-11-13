@@ -6,10 +6,14 @@
 > Tested only on an **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, NVIDIA driver 617.42**. Other graphics cards have not been checked.
 > **Looking for testers with AMD Radeon (RDNA 2 or newer) and Intel Arc GPUs.** See [Help us test](#help-us-test).
 
-> **Current `main` uses Slang AOT shaders and the native GPU scene.**
-> Build and CPU/native contract checks do not establish RTX visual quality or native 1080p/60 FPS.
-> Earlier screenshots and game evidence describe earlier builds. See [branch ownership](docs/BRANCH_LAYOUT.md)
-> and the [remaining implementation work](docs/STACK_IMPLEMENTATION_PLAN.md).
+> **Current `main` is the unreleased `0.2.0-alpha` source** (2026-11-13). It is a different renderer from the published
+> pre-release [`0.1.0-alpha.1`](https://github.com/bnfe12/bedray/releases/tag/v0.1.0-alpha.1): shaders are Slang compiled ahead of
+> time, and the scene, acceleration structures and frame graph live in a native C++ core (`bedray_core.dll`, ABI 3).
+> The previous Java/GLSL renderer is kept in Git history (commit `9c985fa4`). `main` has **no published build yet**: build it
+> yourself ([BUILDING](docs/BUILDING.md)). What is proven, at which level and on what, is in the
+> [feature matrix](docs/FEATURE_MATRIX.md); measured costs are in the [GI stack report](docs/measurements/GI_STACK_REPORT.md).
+> Build and CPU/native contract checks do **not** establish RTX visual quality or native 1080p/60 FPS.
+> Branch rules: [BRANCH_LAYOUT](docs/BRANCH_LAYOUT.md). Remaining work: [STACK_IMPLEMENTATION_PLAN](docs/STACK_IMPLEMENTATION_PLAN.md).
 
 Bedrock RTX-style ray tracing and path tracing for **Minecraft Java Edition**, running on the game's **native Vulkan backend**, as a
 Sodium add-on with a dedicated Bedray settings screen opened from Video Settings. It also adds temporal upscalers
@@ -34,31 +38,39 @@ Bedray is **unofficial**. It is not affiliated with, endorsed by or sponsored by
 
 ## What it does
 
-* **Path Tracing:** global illumination with several bounces, accumulation, auto exposure and a denoiser
-  (NRD, DLSS Ray Reconstruction, or accumulation only). Development settings provide renderer-specific quality profiles.
-* **Ray Tracing effects (experimental):** traced sun/moon shadows, ambient occlusion, reflections and emissive block light.
-  The published alpha.1 hid this mode; current source exposes experimental renderer choices in the Bedray screen.
-* **Light shafts (volumetric light):** an option in the Basic group of the Ray Tracing page, next to bloom, sun glare and distance haze.
-* **Materials:** LabPBR `_s` / `_n` maps, automatic PBR and normals for vanilla textures.
-* **Water and glass:** realistic water uses approximate Snell refraction and medium segments; vanilla water keeps a textured
-  sheet. Glass uses a thin tinted interface. RT camera and secondary walks use one query with up to 16 sorted layers;
-  Path Tracing reuses sorted 16-entry batches across its existing 24-interface budget instead of restarting per glass face.
-  Resource-pack optical profiles add IOR, authored thickness, RGB reference transmittance/distance and a diffuse coating.
-  Direct/secondary transparent-shadow switches, conservative shared-face filtering and opt-in F3 counters are available.
-  See [transparent materials](docs/TRANSPARENT_MATERIALS.md); this remains a slab approximation rather than closed-volume glass transport.
-* **Iris post host (opt-in, experimental):** a Vulkan fullscreen post subset and custom RT hooks; general shaderpack compatibility
-  remains incomplete. See [IRIS_VULKAN](docs/IRIS_VULKAN.md).
+Everything below describes current `main`. Status words and evidence levels per feature: [FEATURE_MATRIX](docs/FEATURE_MATRIX.md).
+
+* **Renderer core:** typed Slang passes compiled ahead of time to SPIR-V, a native scene/acceleration-structure/memory core,
+  shared pipeline cache, bottom-level structure compaction (measured: render distance 32 fits in 4096 MiB of reserved
+  acceleration-structure memory), regional top-level updates. See [ARCHITECTURE](docs/ARCHITECTURE_MANIFESTO.md) and [SLANG_MIGRATION](docs/SLANG_MIGRATION.md).
+* **Path Tracing (main mode):** global illumination with several bounces, next-event estimation for emissive blocks, ReSTIR direct
+  lighting and an opt-in ReSTIR path-tracing stage, Radiance Cascades field (opt-in), accumulation, auto exposure and HDR exposure,
+  bloom and light shafts. Execution can use compute or ray-generation shaders; shader execution reordering is wired but measured
+  slower on the test GPU, so it is off by default ([report](docs/measurements/GI_STACK_REPORT.md)).
+* **Ray Tracing (Fast) and No-RT tiers (experimental / in development):** the ray profile and the voxel-based Tier 1 path exist in
+  source; the AO and Direct modes are refused by name. The honest per-tier state is in [STACK_IMPLEMENTATION_PLAN](docs/STACK_IMPLEMENTATION_PLAN.md).
+* **Denoisers:** NRD (REBLUR, ReLAX selectable) and DLSS Ray Reconstruction (render preset D/E/F hint, default off), with the primary-lobe
+  signals split as described in [PRIMARY_DENOISER_SIGNALS](docs/ai-agent-addenda/PRIMARY_DENOISER_SIGNALS.md), or accumulation only.
+* **Materials:** LabPBR `_s` / `_n` maps, automatic PBR and normals for vanilla textures, selective Nether and End bioluminescence,
+  texture-style presets and an automatic settings policy.
+* **Water and glass:** realistic water uses approximate Snell refraction and medium segments; vanilla water keeps a textured sheet.
+  Glass is a thin tinted interface with Fresnel reflection; camera and secondary walks use one query with up to 16 sorted layers, and
+  Path Tracing reuses sorted batches within its 24-interface budget. Resource-pack optical profiles add IOR, thickness and transmittance.
+  See [TRANSPARENT_MATERIALS](docs/TRANSPARENT_MATERIALS.md); this remains a slab approximation, not closed-volume glass transport.
+* **Iris / OptiFine shaderpacks (opt-in, experimental):** a Vulkan fullscreen post host and, new in `main`, a pack-level raster forward host
+  (geometry captured from Sodium, pack gbuffers/shadow/composite/final recorded by Bedray, no OpenGL context, no runtime Iris). Unsupported
+  required pack features are refused by name. General shaderpack compatibility is **not** claimed; see [IRIS_VULKAN](docs/IRIS_VULKAN.md).
 * **Upscalers:** DLSS Super Resolution, XeSS, FSR 3.1 / 2.x, plus built-in Bilinear, FSR 1 and NIS that need no extra files.
-* **Frame generation:** NVIDIA DLSS frame generation (2x, 3x, 4x) and Reflex through Streamline. Needs extra files and one restart; tested only on an RTX 5060 Ti. See [docs/FRAME_GENERATION.md](docs/FRAME_GENERATION.md).
+* **Frame generation:** NVIDIA DLSS frame generation (2x, 3x, 4x) and Reflex through Streamline; needs extra files and one restart.
+  See [FRAME_GENERATION](docs/FRAME_GENERATION.md).
+* **Voxel (experimental):** a separately registered software voxel provider nested in the player jar (mod id `bedray_compute`); it uses ordinary
+  Vulkan compute for textured block models, cutouts and bounded world lighting and keeps raster where its representation is incomplete.
+  Do not install an extra Compute jar. See [COMPUTE](docs/COMPUTE.md).
+* **Sodium integration:** a dedicated Bedray page inside Video Settings with pending changes, search and Apply/Revert. Sodium NeoForge
+  0.9.2 through 0.9.3-beta.5 (seven official builds) are checked reproducibly at contract/compile level (L0/L1); see
+  [`tools/sodium_compat_check.py`](tools/sodium_compat_check.py).
 
-What works and how well it is proven is in **[docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md)**. Nothing in this alpha is marked stable.
-
-Development alpha.13 includes **Voxel (Experimental)** in the Bedray player JAR. The provider keeps its own
-mod ID and API, nested inside the loader artifact; do not install an additional external Compute JAR.
-It uses ordinary Vulkan compute for textured block models, cutouts and bounded world lighting, with raster
-preservation where representation is incomplete. Its requested coverage follows Minecraft render distance,
-while actual residency is limited by scene memory and incremental loading. Full material/light transport,
-multi-GPU performance and fresh live-game acceptance remain pending. See [COMPUTE](docs/COMPUTE.md).
+Nothing in this alpha is marked stable.
 
 ## Requirements
 
@@ -70,7 +82,7 @@ multi-GPU performance and fresh live-game acceptance remain pending. See [COMPUT
 | Game | Minecraft 26.3 with the Vulkan graphics backend |
 | Loader | NeoForge 26.3.0.x, or Fabric (fabric-loader 0.19.5 or newer). Fabric has less testing than NeoForge. |
 | Required mods | Sodium 0.9.x (tested with 0.9.2) and the Bedray JAR for your loader |
-| Renderer library | Matching `bedray_core.dll` for ray tracing and path tracing |
+| Renderer library | Matching `bedray_core.dll` (native GPU scene and acceleration structures, ABI 3), built from `native/` |
 | Java | 25 |
 
 Bedray is client-side only and switches the game to the Vulkan backend in `options.txt`.
@@ -106,11 +118,17 @@ Do it by hand with [docs/INSTALL.md](docs/INSTALL.md), or let an AI assistant do
 | [DXGI_PRESENT](docs/DXGI_PRESENT.md) | Minecraft's native DXGI presentation option and Bedray compatibility |
 | [FEATURE_MATRIX](docs/FEATURE_MATRIX.md) | Status and evidence level of every feature |
 | [TESTING](docs/TESTING.md) | How to test and report |
-| [BUILDING](docs/BUILDING.md) | Build from source |
+| [BUILDING](docs/BUILDING.md) | Build from source, native core, CI |
+| [CHANGELOG](CHANGELOG.md) | What changed, per version |
+| [BRANCH_LAYOUT](docs/BRANCH_LAYOUT.md), [DEVELOPMENT_BRANCHES](docs/DEVELOPMENT_BRANCHES.md) | How `main` and branches are organised |
+| [STACK_IMPLEMENTATION_PLAN](docs/STACK_IMPLEMENTATION_PLAN.md) | Remaining renderer work, per technology |
+| [GI_STACK_REPORT](docs/measurements/GI_STACK_REPORT.md) | Measured GI / performance results with evidence levels |
+| [IRIS_VULKAN](docs/IRIS_VULKAN.md) | Iris / OptiFine shaderpack host |
+| [Documentation index](docs/README.md) | Every document, grouped |
 
 ## Help us test
 
-This alpha was developed and checked on **one** machine. Reports of any kind help:
+Bedray was developed and checked on **one** machine. Reports of any kind help:
 
 * bugs and crashes, visual problems, performance numbers (FPS), screenshots,
 * the result of a quick test on your GPU even if everything works.
@@ -131,6 +149,7 @@ needed); XeSS (Intel library needed); Path Tracing with the NRD denoiser. The ex
 
 * General Iris / "Dirt RT" shaderpack compatibility. The implemented opt-in post subset has explicit unsupported features.
 * DLSS 5 Neural Rendering requires the NVIDIA partner SDK. The Natives Manager reports local file presence for diagnostics.
+* DLSS Ray Reconstruction preset D/E/F A/B numbers, ReLAX-vs-REBLUR A/B numbers and isolated TLAS timing are not yet captured ([GI report](docs/measurements/GI_STACK_REPORT.md)).
 * AMD FSR frame generation and [FSR 4 on Vulkan](https://gpuopen.com/amd-fsr-sdk/) are not integrated in Bedray.
 * Complete particle transport in reflections and shadows; physical closed-volume refraction through glass.
 * Linux and macOS.

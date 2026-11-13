@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### 0.2.0-alpha (development) - summary of the 2026-11-13 `main`
+
+* **Renderer:** the Java/GLSL path tracer was replaced by typed Slang passes compiled ahead of time and a native C++ scene/acceleration-structure/memory
+  core (`bedray_core.dll`, ABI 3). The old renderer remains in Git history (`9c985fa4`).
+* **GI / performance stack** (measured, see `docs/measurements/GI_STACK_REPORT.md`): BLAS compaction (render distance 32 fits 4096 MiB), ReSTIR PT, ray-generation
+  execution (-7.8 % GPU), SER wired but kept off (2.14x slower), NRD REBLUR/ReLAX and DLSS RR preset hint, automatic settings policy and texture styles.
+* **Materials and light:** thin-glass Fresnel, ambient visibility and reflection guides through glass, tinted glass, selective Nether/End bioluminescence,
+  torch-glow and auto-exposure fix.
+* **Iris:** pack-level raster forward host merged next to the post host (opt-in, experimental, no acceptance run recorded).
+* **Sodium:** reproducible NeoForge 26.3 compatibility matrix for 0.9.2 to 0.9.3-beta.5.
+* **Structure:** large classes split into single-purpose ones (`WorldCameraHistory`, `WorldLevelProjection`, `RtRenderLog`, `BedraySettingsActions`, and others).
+* **Docs:** old screenshots moved to `docs/images/legacy`; README, feature matrix, branch, roadmap, known-issue and testing documents rewritten for the current tree.
+
+### Unreleased details
+
 * Split the typed Radiance Cascades trace into modules with one owner each: `rc_trace_options.slang`
   keeps the host policy, diagnostics and result; `rc_trace_shade.slang` owns the first-surface
   emission/NEE sample; `rc_trace_walk.slang` owns segment finalization and the interval walk;
@@ -282,7 +297,7 @@
   `\\server\share\Users`), an account name with an apostrophe (`O'Brien`), and leaves a `file:/home/...` URL's
   scheme intact instead of eating its last letter.
 
-## 0.1.1-alpha.13 (development, unreleased)
+## 0.1.1-alpha.13 (development checkpoint of 2026-10-26, superseded by 0.2.0-alpha)
 
 * Include the separately registered Voxel provider in the default Fabric/NeoForge player JAR. Keep
   host-only and standalone provider artifacts for modular development; avoid duplicate external mods.
