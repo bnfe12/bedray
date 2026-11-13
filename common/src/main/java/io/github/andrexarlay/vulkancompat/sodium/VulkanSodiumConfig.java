@@ -729,6 +729,26 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             v -> Component.literal(String.format(Locale.ROOT, "%+.1f EV", v / 10.0)),
             v -> RtSettings.pathExposureEvTenths = v, () -> RtSettings.pathExposureEvTenths,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        EnumOptionBuilder<RtSettings.Tonemapper> tm = builder.createEnumOption(id("tonemapper"), RtSettings.Tonemapper.class);
+        tm.setName(nameOf("tonemapper")).setTooltip(v -> tipOf("tonemapper")).setDefaultValue(RtSettings.Tonemapper.PEAK)
+            .setAllowedValues(EnumSet.allOf(RtSettings.Tonemapper.class))
+            .setElementNameProvider(val -> switch (val) {
+                case PEAK -> tr("bedray.tonemapper.peak", "Peak (BedRay)");
+                case ACES -> tr("bedray.tonemapper.aces", "ACES");
+                case PBR_NEUTRAL -> tr("bedray.tonemapper.pbr_neutral", "PBR Neutral");
+                case GT -> tr("bedray.tonemapper.gt", "Gran Turismo");
+                case AGX -> tr("bedray.tonemapper.agx", "AgX");
+            })
+            .setEnabledProvider(anyRt, dMode).setControlHiddenWhenDisabled(false)
+            .setBinding(v -> RtSettings.tonemapper = v, () -> RtSettings.tonemapper)
+            .setImpact(OptionImpact.LOW).setStorageHandler(st);
+        look.addOption(track("tonemapper", tm));
+        look.addOption(boolOpt(builder, "vibrant_visuals", false, v -> RtSettings.vibrantVisuals = v,
+            () -> RtSettings.vibrantVisuals, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        look.addOption(boolOpt(builder, "vignette", false, v -> RtSettings.vignette = v,
+            () -> RtSettings.vignette, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        look.addOption(boolOpt(builder, "film_grain", false, v -> RtSettings.filmGrain = v,
+            () -> RtSettings.filmGrain, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         Identifier particleId = id("rt_particles");
         look.addOption(boolOpt(builder, "rt_particles", true, v -> RtSettings.rtParticles = v, () -> RtSettings.rtParticles,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
@@ -835,6 +855,31 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         }
 
         // ---- Diagnostics
+        // Bedrock Edition ray-tracing material packs (Vanilla RTX and similar): a drop folder and an import button.
+        OptionGroupBuilder bedrock = collapsible(builder, "bedray.group.bedrock_rtx", "Bedrock RTX packs", "adv_bedrock_rtx");
+        var openBedrock = builder.createExternalButtonOption(id("bedrock_rtx_open"));
+        openBedrock.setName(tr("bedray.option.bedrock_rtx_open", "Open Bedrock RTX pack folder"))
+            .setTooltip(tr("bedray.option.bedrock_rtx_open.tooltip",
+                "Opens bedray/bedrock_rtx_packs/ in the game folder. Put Bedrock ray-tracing resource packs there (a folder, .mcpack or .zip, e.g. Vanilla RTX), then press Import. Bedrock shader packs (BetterRTX .rtpack) are compiled for the Bedrock renderer and cannot be used."))
+            .setEnabledProvider(s -> true)
+            .setScreenConsumer(screen -> {
+                try {
+                    com.mojang.blaze3d.Blaze3D.openPath(
+                        io.github.andrexarlay.vulkancompat.rt.material.bedrock.BedrockRtxPackImporter.sourceDir(Minecraft.getInstance()));
+                } catch (java.io.IOException e) {
+                    LOGGER.warn("[BEDROCK-RTX] cannot open the pack folder: {}", e.toString());
+                }
+            });
+        bedrock.addOption(openBedrock);
+        var importBedrock = builder.createExternalButtonOption(id("bedrock_rtx_import"));
+        importBedrock.setName(tr("bedray.option.bedrock_rtx_import", "Import Bedrock RTX packs"))
+            .setTooltip(tr("bedray.option.bedrock_rtx_import.tooltip",
+                "Converts the metal / emission / roughness / subsurface and height maps of every pack in bedray/bedrock_rtx_packs/ into a Java LabPBR resource pack (resourcepacks/Bedray RTX - <name>), enables it and reloads resources. Java keeps its own colour textures; water keeps Bedray's own water. The converted pack stays on this computer under the source pack's licence."))
+            .setEnabledProvider(s -> true)
+            .setScreenConsumer(screen -> io.github.andrexarlay.vulkancompat.rt.material.bedrock.BedrockRtxPackImporter.importAllAsync());
+        bedrock.addOption(importBedrock);
+        page.addOptionGroup(bedrock);
+
         OptionGroupBuilder diag = collapsible(builder, CollapsibleGroups.ADV_DIAG, "Diagnostics & Reset", "adv_diag");
         if (expert) {
             EnumOptionBuilder<GraphicsBackendRegistry.SceneMode> scene = builder.createEnumOption(id("compute_scene"), GraphicsBackendRegistry.SceneMode.class);

@@ -371,6 +371,24 @@ public final class SettingsCatalog {
             "Manual brightness offset in EV (-4.0 to +4.0). Shifts Auto Exposure when it is on, or sets the fixed brightness when Auto Exposure is off.",
             "", "Needs ray tracing on.",
             "Shares the Auto Exposure behaviour; adjust live to match your monitor brightness.");
+        putNoImage("tonemapper", Tier.ADVANCED, "Tone Curve",
+            "The filmic curve that turns the traced HDR light into the final picture. Peak is the shipped BedRay look; ACES is the classic filmic contrast; "
+                + "PBR Neutral keeps material colours accurate; GT is a smooth sport curve; AgX is the modern Blender/Filament transform with natural highlight rolloff.",
+            "FPS: none - it is a per-pixel curve in the display pass.",
+            "Needs ray tracing on.",
+            "A still shows the look directly; switch live to compare.");
+        putNoImage("vibrant_visuals", Tier.ADVANCED, "Vibrant Visuals",
+            "Mojang-style vibrant palette: richer saturation and higher colour contrast on the tone-mapped picture. The built-in Vibrant preset pairs it with the ACES tone curve.",
+            "FPS: none - a per-pixel grade in the display pass.", "Needs ray tracing on.",
+            "A still shows the palette directly; toggle live to compare.");
+        putNoImage("vignette", Tier.ADVANCED, "Vignette",
+            "Darkens the corners of the picture for a cinematic, lens-like falloff. The centre is untouched; only the edges lose brightness.",
+            "FPS: none - a per-pixel multiply in the display pass.", "Needs ray tracing on.",
+            "A still shows the darkened corners directly; toggle live to compare.");
+        putNoImage("film_grain", Tier.ADVANCED, "Film Grain",
+            "Adds fine animated noise to the picture, strongest in the midtones like photographic film. It crawls every frame and never touches the converged history.",
+            "FPS: none - a per-pixel hash in the display pass.", "Needs ray tracing on.",
+            "Grain is animated; a still shows one frame of it, so judge the amount in motion.");
         putNoImage("rt_particles", Tier.ADVANCED, "Particles in RT",
             "Smoke, flames, sparks, bubbles, block-break and weather splash particles in the ray traced image, occluded by terrain and lit by the scene.",
             "", "Needs ray tracing on.",

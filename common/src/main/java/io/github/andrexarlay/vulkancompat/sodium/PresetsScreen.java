@@ -7,12 +7,14 @@ import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
- * "My presets": save the current Bedray settings under a name, load, delete, copy to / import from the clipboard.
- * Layout is computed from the screen size in GUI units (any GUI scale / window size): the list shows as many rows as fit and
- * pages with the arrow buttons. Presets are files in bedray/presets (PresetStore).
+ * "My presets": the built-in factory looks first, then the player's own files. Save the current Bedray settings under a
+ * name, load, delete, copy to / import from the clipboard. Built-ins are read-only (Load only, no Delete). Layout is
+ * computed from the screen size in GUI units (any GUI scale / window size): the list shows as many rows as fit and pages
+ * with the arrow buttons. Player presets are files in bedray/presets (PresetStore); built-ins come from BuiltinPresets.
  */
 public final class PresetsScreen extends Screen {
     private static final int ROW_H = 22;
@@ -21,7 +23,11 @@ public final class PresetsScreen extends Screen {
     private EditBox nameBox;
     private int page;
     private Component status = Component.empty();
-    private List<String> names = List.of();
+    private List<Row> rows = List.of();
+
+    /** One list row: a built-in factory look (read-only) or a player preset file. */
+    private record Row(String name, boolean builtin) {
+    }
 
     public PresetsScreen(Screen parent) {
         this(parent, parent instanceof BedrayConfigScreen screen ? screen.draft() : new SettingsDraft());
@@ -37,9 +43,20 @@ public final class PresetsScreen extends Screen {
         return Component.translatableWithFallback(k, f, a);
     }
 
+    private static List<Row> collectRows() {
+        List<Row> all = new ArrayList<>();
+        for (BuiltinPresets.Preset p : BuiltinPresets.all()) {
+            all.add(new Row(p.name(), true));
+        }
+        for (String n : PresetStore.list()) {
+            all.add(new Row(n, false));
+        }
+        return all;
+    }
+
     @Override
     protected void init() {
-        names = PresetStore.list();
+        rows = collectRows();
         int w = Math.min(width - 8, 300);
         int x = (width - w) / 2;
         int y = 22;
@@ -62,28 +79,31 @@ public final class PresetsScreen extends Screen {
 
         int bottom = height - 28;
         int listTop = y + 28;
-        int rows = Math.max(1, (bottom - listTop - 16) / ROW_H);
-        int pages = Math.max(1, (names.size() + rows - 1) / rows);
+        int perPage = Math.max(1, (bottom - listTop - 16) / ROW_H);
+        int pages = Math.max(1, (rows.size() + perPage - 1) / perPage);
         page = Math.min(page, pages - 1);
-        for (int i = 0; i < rows; i++) {
-            int idx = page * rows + i;
-            if (idx >= names.size()) {
+        for (int i = 0; i < perPage; i++) {
+            int idx = page * perPage + i;
+            if (idx >= rows.size()) {
                 break;
             }
-            String n = names.get(idx);
+            Row row = rows.get(idx);
+            String n = row.name();
             int ry = listTop + i * ROW_H;
             int bw = Math.max(40, Math.min(58, (w - 60) / 3));
             addRenderableWidget(Button.builder(tr("bedray.presets.load", "Load"), b -> {
-                String t = PresetStore.read(n);
+                String t = row.builtin() ? BuiltinPresets.find(n).text() : PresetStore.read(n);
                 int c = t == null ? -1 : draft.importText(t);
                 status = c < 0 ? tr("bedray.presets.load_failed", "Could not load \"%s\".", n)
                     : tr("bedray.settings.preset_staged", "%s preset values staged. Apply to commit.", c);
             }).bounds(x + w - bw * 2 - 4, ry, bw, 20).build());
-            addRenderableWidget(Button.builder(tr("bedray.presets.delete", "Delete"), b -> {
-                PresetStore.delete(n);
-                status = tr("bedray.presets.deleted", "Deleted \"%s\".", n);
-                rebuild();
-            }).bounds(x + w - bw, ry, bw, 20).build());
+            if (!row.builtin()) {
+                addRenderableWidget(Button.builder(tr("bedray.presets.delete", "Delete"), b -> {
+                    PresetStore.delete(n);
+                    status = tr("bedray.presets.deleted", "Deleted \"%s\".", n);
+                    rebuild();
+                }).bounds(x + w - bw, ry, bw, 20).build());
+            }
         }
         addRenderableWidget(Button.builder(Component.literal("<"), b -> { page = Math.max(0, page - 1); rebuild(); })
             .bounds(x, bottom - 22, 20, 20).build());
@@ -113,15 +133,20 @@ public final class PresetsScreen extends Screen {
         int w = Math.min(width - 8, 300);
         int x = (width - w) / 2;
         int listTop = 50;
-        int rows = Math.max(1, (height - 28 - listTop - 16) / ROW_H);
-        for (int i = 0; i < rows; i++) {
-            int idx = page * rows + i;
-            if (idx >= names.size()) {
+        int perPage = Math.max(1, (height - 28 - listTop - 16) / ROW_H);
+        for (int i = 0; i < perPage; i++) {
+            int idx = page * perPage + i;
+            if (idx >= rows.size()) {
                 break;
             }
-            g.text(font, font.plainSubstrByWidth(names.get(idx), w - 130), x + 2, listTop + i * ROW_H + 6, 0xFFE0E0E0);
+            Row row = rows.get(idx);
+            String label = row.builtin()
+                ? row.name() + "  [" + tr("bedray.presets.builtin", "built-in").getString() + "]"
+                : row.name();
+            g.text(font, font.plainSubstrByWidth(label, w - 130), x + 2, listTop + i * ROW_H + 6,
+                row.builtin() ? 0xFF9CDCFE : 0xFFE0E0E0);
         }
-        if (names.isEmpty()) {
+        if (rows.isEmpty()) {
             g.text(font, tr("bedray.presets.none", "No presets yet. Set the options you like and save them here."), x + 2, listTop + 6, 0xFF909090);
         }
         g.text(font, status, x, height - 24 - 26 - 10 < listTop ? height - 10 : height - 28 - 22 - 11, 0xFFFFD866);
