@@ -481,6 +481,14 @@ public final class RtFrameRenderer {
                 levelState != null ? levelState.playerRenderState : null);
         }
         io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().endFrame();
+        if (RtGeometryGate.irisActive()) {
+            // The Iris raster host owns this frame's geometry and draws its own gbuffers/shadow/composite passes. Native rays
+            // must never mix with them, so release any native RT world and return; the captured geometry stays for the host.
+            if (world != null) {
+                shutdown("iris_host");
+            }
+            return;
+        }
         if (RtGeometryGate.failure() != null) {
             return; // failed this session (RtGeometryGate.markFailed), retried only after the user toggles RT
         }

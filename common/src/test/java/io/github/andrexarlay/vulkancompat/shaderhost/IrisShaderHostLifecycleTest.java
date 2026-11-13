@@ -135,6 +135,29 @@ class IrisShaderHostLifecycleTest {
     }
 
     @Test
+    void tinyTestpackAlsoBuildsFullRasterGraph() throws IOException {
+        Path tinySrc = findTinyTestpack();
+        Path dest = gameDir.resolve("shaderpacks").resolve("tiny-testpack");
+        copyDirectory(tinySrc, dest);
+
+        System.setProperty(IrisPackChoice.PACK_PROPERTY, "tiny-testpack");
+        ShaderHostStatus status = host.probe(ShaderHostContext.beforeDevice(gameDir));
+        assertEquals(ShaderHostState.READY, status.state());
+
+        IrisPassGraph.FullResult full = host.activeFullGraph();
+        assertNotNull(full, "activeFullGraph must be built best-effort alongside activeGraph on READY");
+        assertTrue(full.success());
+        assertNotNull(host.activeSettings(), "activeSettings must be built alongside activeFullGraph for the forward executor");
+        assertEquals(2, full.passes().size(), "tiny-testpack has composite + final");
+        assertEquals("composite", full.passes().get(0).name());
+        assertEquals("final", full.passes().get(1).name());
+        assertTrue(full.passes().get(0).fullscreen());
+        assertTrue(full.passes().get(1).fullscreen());
+        assertNotNull(full.passes().get(0).fragmentSpirv());
+        assertNotNull(full.passes().get(1).fragmentSpirv());
+    }
+
+    @Test
     void teardownClearsActiveGraphAndLastReport() throws IOException {
         Path tinySrc = findTinyTestpack();
         Path dest = gameDir.resolve("shaderpacks").resolve("tiny-testpack");
@@ -149,30 +172,34 @@ class IrisShaderHostLifecycleTest {
 
         host.teardown();
         assertNull(host.activeGraph(), "activeGraph must be null after teardown");
+        assertNull(host.activeFullGraph(), "activeFullGraph must be null after teardown");
+        assertNull(host.activeSettings(), "activeSettings must be null after teardown");
         assertNull(host.lastReport(), "lastReport must be null after teardown");
     }
 
     @Test
-    void packWithShadowPassReturnsUnsupportedPackFeatures() throws IOException {
+    void packWithShadowPassBuildsRasterCore() throws IOException {
         writeZip("ShadowPack.zip",
             "shaders/composite.fsh", "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n",
             "shaders/final.fsh", "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n",
-            "shaders/shadow.fsh", "#version 120\nvoid main() {}\n"
+            "shaders/shadow.fsh", "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n"
         );
 
         System.setProperty(IrisPackChoice.PACK_PROPERTY, "ShadowPack.zip");
 
         ShaderHostStatus status = host.probe(ShaderHostContext.beforeDevice(gameDir));
-        assertEquals(ShaderHostState.UNSUPPORTED_PACK_FEATURES, status.state());
-        assertTrue(status.detail().contains("unsupported"), status.detail());
-        assertNull(host.activeGraph(), "activeGraph must be null when features are unsupported");
+        assertEquals(ShaderHostState.READY, status.state(), status.detail());
+        assertNotNull(host.activeFullGraph(), "the raster core supports shadow passes");
+        assertTrue(host.activeFullGraph().passes().stream().anyMatch(p -> p.name().equals("shadow")),
+            "shadow pass must be compiled into the raster graph");
+        assertNotNull(host.activeSettings());
     }
 
     @Test
-    void packWithGbuffersReturnsUnsupportedPackFeatures() throws IOException {
+    void packWithGbuffersBuildsRasterCore() throws IOException {
         writeZip("GbuffersPack.zip",
             "shaders/gbuffers_terrain.vsh", "#version 120\nvoid main() { gl_Position = ftransform(); }\n",
-            "shaders/gbuffers_terrain.fsh", "#version 120\nvoid main() {}\n",
+            "shaders/gbuffers_terrain.fsh", "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n",
             "shaders/composite.fsh", "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n",
             "shaders/final.fsh", "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n"
         );
@@ -180,9 +207,11 @@ class IrisShaderHostLifecycleTest {
         System.setProperty(IrisPackChoice.PACK_PROPERTY, "GbuffersPack.zip");
 
         ShaderHostStatus status = host.probe(ShaderHostContext.beforeDevice(gameDir));
-        assertEquals(ShaderHostState.UNSUPPORTED_PACK_FEATURES, status.state());
-        assertTrue(status.detail().contains("unsupported programs"), status.detail());
-        assertNull(host.activeGraph());
+        assertEquals(ShaderHostState.READY, status.state(), status.detail());
+        assertNotNull(host.activeFullGraph(), "the raster core supports gbuffers passes");
+        assertTrue(host.activeFullGraph().passes().stream().anyMatch(p -> p.name().equals("gbuffers_terrain")),
+            "gbuffers_terrain pass must be compiled into the raster graph");
+        assertNotNull(host.activeSettings());
     }
 
     @Test
