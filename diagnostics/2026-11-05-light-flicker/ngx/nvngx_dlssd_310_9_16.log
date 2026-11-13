@@ -1,4 +1,4 @@
-[2026-11-05 00:22:25] [tid:30492][util::setLogFilename:284] Logging to requested file (%USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\logs\vkb_dlss//nvngx_dlssd_310_9_16.log) enabled successfully
+[2026-11-05 00:22:25] [tid:30492][util::setLogFilename:284] Logging to requested file (<game-dir>\logs\vkb_dlss//nvngx_dlssd_310_9_16.log) enabled successfully
 [2026-11-05 00:22:25] [tid:30492][NGXInitLog:208] App logging hooks successfully initialized
 [2026-11-05 00:22:25] [tid:30492][NGXInitLog:214] Build v310.9.16 CL 39061540
 [2026-11-05 00:22:25] [tid:30492][NGXInitLog:216] Built with APP_NAME = app_dlssd_nvapp_override

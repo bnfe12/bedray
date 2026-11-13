@@ -164,10 +164,12 @@ public final class NativesManagerScreen extends Screen {
             rebuildWidgets();
         }).bounds(x + btnW + 6, bottom, btnW, 20).build());
 
-        // Button 3: View Roadmap
-        addRenderableWidget(Button.builder(tr("bedray.natives.roadmap", "Roadmap"), b -> {
-            Minecraft.getInstance().gui.setScreen(new BedrayRoadmapScreen(this));
-        }).bounds(x + (btnW + 6) * 2, bottom, btnW, 20).build());
+        // User-requested browser navigation; Bedray does not download files itself.
+        addRenderableWidget(Button.builder(tr("bedray.natives.downloads", "Download DLLs"), b -> openDownloadGuide())
+            .bounds(x + (btnW + 6) * 2, bottom, btnW, 20)
+            .tooltip(net.minecraft.client.gui.components.Tooltip.create(
+                tr("bedray.natives.downloads.tip", "Official DLL downloads and import instructions in your browser")))
+            .build());
 
         // Button 4: Done
         addRenderableWidget(Button.builder(tr("gui.done", "Done"), b -> onClose())
@@ -188,6 +190,22 @@ public final class NativesManagerScreen extends Screen {
                 }
             } catch (Throwable ignored) {
             }
+        }
+    }
+
+    private void openDownloadGuide() {
+        try {
+            if (!java.awt.Desktop.isDesktopSupported()
+                    || !java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.BROWSE)) {
+                throw new UnsupportedOperationException("desktop browser unavailable");
+            }
+            java.awt.Desktop.getDesktop().browse(java.net.URI.create("https://bnfe12.github.io/bedray/DOWNLOADS.html"));
+            status = tr("bedray.natives.downloads.opened", "Download page opened. Drop the downloaded ZIP or DLL here, then restart.");
+            statusColor = 0xFFE0E0E0;
+        } catch (java.io.IOException | SecurityException | UnsupportedOperationException e) {
+            LOGGER.warn("[VKB-NATIVES] cannot open download guide: {}", e.getClass().getSimpleName());
+            status = tr("bedray.natives.downloads.failed", "Open DLL downloads from the Bedray project page.");
+            statusColor = 0xFFFF7777;
         }
     }
 

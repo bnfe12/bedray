@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Choose a Bedray graphics feature and download its DLLs directly from the official vendor. Includes installation steps, versions and licence links.">
+  <meta name="theme-color" content="#0d1a1b">
+  <title>DLL downloads · Bedray</title>
+  <link rel="icon" href="images/bedray-logo.png" type="image/png">
+  <link rel="stylesheet" href="site.css">
+  <link rel="stylesheet" href="downloads.css">
+  <script src="downloads.js" defer></script>
+</head>
+<body class="downloads-page">
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="masthead wrap">
+    <a class="brand" href="./"><img src="images/bedray-logo.png" width="36" height="36" alt=""><span>Bedray</span></a>
+    <nav aria-label="Main navigation">
+      <a href="DOWNLOADS.html" aria-current="page">DLL downloads</a>
+      <a href="GPU_GUIDE.html">GPU guide</a>
+      <a href="https://github.com/bnfe12/bedray/releases">Mod releases</a>
+      <a href="https://github.com/bnfe12/bedray">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main" class="wrap download-main">
+    <section class="download-intro" aria-labelledby="page-title">
+      <div>
+        <h1 id="page-title">Get the DLLs you need.</h1>
+        <p>Choose a graphics feature. Download its official files. Import them into Bedray.</p>
+        <p class="bundle-note">Using a matching <code>-all-natives.jar</code>? Check the library manager first: the files may already be included.</p>
+      </div>
+      <img src="images/bedray-logo.png" width="136" height="136" alt="Bedray reflected-ray voxel mark">
+    </section>
+
+    <section class="library-picker" aria-labelledby="picker-title">
+      <div class="picker-controls">
+        <h2 id="picker-title">What do you want to use?</h2>
+        <label for="feature">Graphics feature</label>
+        <select id="feature" name="feature">
+          <optgroup label="NVIDIA">
+            <option value="dlss">DLSS Super Resolution / DLAA</option>
+            <option value="rr">DLSS Ray Reconstruction</option>
+            <option value="framegen">DLSS Frame Generation + Reflex</option>
+            <option value="nrd">NRD denoising</option>
+            <option value="dlss5">DLSS 5 — experimental setup</option>
+          </optgroup>
+          <optgroup label="AMD and Intel">
+            <option value="fsr4">FSR 4 / 3.1 / 2.x (SDK 2.4)</option>
+            <option value="fsr">FSR 3.1 / 2.x (FidelityFX 1.1.4)</option>
+            <option value="xess">XeSS Super Resolution</option>
+          </optgroup>
+          <optgroup label="No extra DLL">
+            <option value="builtin">Bilinear / FSR 1 / NIS</option>
+          </optgroup>
+          <optgroup label="Not integrated in Bedray">
+            <option value="xessfg">XeSS Frame Generation + XeLL</option>
+            <option value="amdrr">AMD Ray Regeneration</option>
+            <option value="nrc">NVIDIA Neural Radiance Cache</option>
+            <option value="amdcache">AMD Radiance Caching</option>
+          </optgroup>
+        </select>
+        <p class="picker-help">Files come from AMD, Intel or NVIDIA. No DLL mirror, account or installer is needed to use this page.</p>
+        <a href="GPU_GUIDE.html">Not sure which to choose?</a>
+        <p class="version-hint">Use the set for your exact Bedray build. These manual links target development 0.2.0-alpha; follow release notes for the earlier 0.1 alpha.</p>
+      </div>
+
+      <div id="selection" class="selection" aria-live="polite" aria-atomic="false">
+        <span id="feature-status" class="availability">Choose a feature</span>
+        <h2 id="feature-title">Official runtime downloads</h2>
+        <p id="feature-description">The selected feature will show its direct downloads and installation requirements here.</p>
+        <div id="download-actions" class="download-actions"></div>
+        <p id="feature-note" class="selection-note"></p>
+        <details class="file-details">
+          <summary>Files this feature needs</summary>
+          <ul id="required-files"></ul>
+        </details>
+        <div id="license-links" class="license-links"></div>
+        <a class="install-link" href="#install">How to install these files</a>
+      </div>
+      <noscript><p>JavaScript is disabled. Use the <a href="RUNTIME_LIBRARIES.html">official download table</a>; every link works without JavaScript.</p></noscript>
+    </section>
+
+    <section id="install" class="install-steps" aria-labelledby="install-title">
+      <h2 id="install-title">Download. Drop. Restart.</h2>
+      <ol>
+        <li><strong>Download the official DLL or ZIP.</strong><span>Keep the vendor's licence and use the version matched to your build.</span></li>
+        <li><strong>Open Bedray Settings → Runtime libraries.</strong><span>Drop the downloaded DLL or ZIP onto that screen. The importer handles recognised files and their folders.</span></li>
+        <li><strong>Restart Minecraft.</strong><span>Check the feature's runtime status. File presence and successful initialisation are separate checks.</span></li>
+      </ol>
+      <p class="manual-help">For manual installation, use <code>bedray/natives/</code>; Streamline files go in <code>bedray/natives/streamline/</code>.
+        <a href="DLL_REFERENCE.html">See every file and destination.</a></p>
+    </section>
+
+    <details class="download-details">
+      <summary>My build is missing a Bedray wrapper</summary>
+      <p><code>vkb_dlss.dll</code>, <code>vkb_nrd.dll</code> and <code>vkb_sl.dll</code> are Bedray integration libraries, not files supplied by those vendor links.
+        Use a matching Bedray package that contains them, or <a href="BUILDING.html">build the matching wrappers</a>.
+        There is no separately published, player-ready wrapper download for the new renderer yet.</p>
+      <p>A vendor DLL cannot replace a missing wrapper. Public distribution of SDK-linked objects follows the <a href="NATIVES_LICENSES.html">per-component licence policy</a>.</p>
+    </details>
+
+    <div class="download-footer-links">
+      <a href="DLL_REFERENCE.html">All 50 DLL names</a>
+      <a href="TECHNOLOGIES.html">Technology support</a>
+      <a href="NATIVES_LICENSES.html">Licence details</a>
+      <a href="https://github.com/bnfe12/bedray/releases">Download the mod itself</a>
+    </div>
+  </main>
+  <footer class="wrap"><p>Bedray is an unofficial Minecraft mod. Native integrations are in alpha.</p><a href="./">Project home</a></footer>
+</body>
+</html>

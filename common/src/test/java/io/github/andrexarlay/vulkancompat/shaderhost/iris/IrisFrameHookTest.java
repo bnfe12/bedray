@@ -148,6 +148,19 @@ class IrisFrameHookTest {
         assertFalse(IrisRenderBridge.isInitialized());
     }
 
+    @Test
+    void runtimeFailurePublishesNativeFallbackAndTearsDownTheExecutor() {
+        selectIris();
+        IrisRenderBridge.setExecutorForTesting(IrisPostExecutor.createForTesting(), "tiny-testpack");
+
+        IrisFrameHook.disableForSession("recording failed");
+
+        assertEquals(ShaderHostKind.NATIVE, ShaderHosts.active());
+        assertEquals(ShaderHostState.DISABLED_FOR_SESSION, ShaderHosts.selection().requestedStatus().state());
+        assertTrue(selector.isDisabledForSession(ShaderHostKind.IRIS));
+        assertFalse(IrisRenderBridge.isInitialized());
+    }
+
     // --- Teardown ---
 
     @Test

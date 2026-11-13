@@ -264,10 +264,8 @@ bool addressed = rcSegmentIndex(layout, capacity, cascade, probeIndex,
 
 ## Typed store
 
-[`segment_store.slang`](segment_store.slang) is a facade over
-[`segment_record.slang`](segment_record.slang) and
-[`probe_resolve.slang`](probe_resolve.slang).  It exposes whole-record
-operations:
+The original interval atlas used a facade over its segment and probe modules.
+The finite-window field replaced those modules. The historical operations were:
 
 ```slang
 RCSegment rcReadSegment(StructuredBuffer<RCSegment> records, ...);
@@ -419,28 +417,6 @@ records from different cascades cannot be zipped or composed by index.
 
 ## Verification
 
-Compile harnesses:
-
-- `common/src/test/resources/shaders/slang/verify_rc_typed.slang`
-- `common/src/test/resources/shaders/slang/verify_rc_environment.slang`
-- `common/src/test/resources/shaders/slang/verify_rc_trace_api.slang`
-- `common/src/test/resources/shaders/slang/verify_bedray_roots.slang`
-
-The first real typed-RC consumer is
-`common/src/main/resources/shaders/slang/passes/rc_probe_trace.slang`: one
-dispatch item decodes to one probe ray, calls `traceCascadeDispatch`, and writes
-both typed records plus an `RCTraceEntryStatus`.  It is host-agnostic and
-compile-only validated; it does not prove a GPU dispatch, a binding set or a
-visual result.
-
-Command:
-
-```powershell
-slangc -target spirv -profile cs_6_5 -entry main `
-  -matrix-layout-column-major -I common/src/main/resources/shaders/slang `
-  -o "$env:TEMP\verify_rc_trace_api.spv" `
-  common/src/test/resources/shaders/slang/verify_rc_trace_api.slang
-```
-
-A green run is L1 only.  GPU execution, reflected stride validation and visual
-parity remain open.
+The interval-atlas compile harnesses described in the historical verification log
+have been retired with the API they exercised. The current field is reached
+through the entry passes documented in the [RC reconstruction plan](../../../../../../../docs/RC_RECONSTRUCTION_PLAN.md).

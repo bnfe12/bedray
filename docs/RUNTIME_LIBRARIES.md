@@ -1,5 +1,7 @@
 # Runtime library downloads
 
+**[Open DLL downloads →](DOWNLOADS.html)** Choose a graphics feature to get direct official DLL links and installation steps.
+
 [Installation](INSTALL.md) · [Every DLL](DLL_REFERENCE.md) · [GPU recommendations](GPU_GUIDE.md) · [Library licences](NATIVES_LICENSES.md)
 
 Use the instructions for your **exact Bedray build**. The published `0.1.0-alpha.1` and development `0.2.0-alpha`
@@ -15,6 +17,7 @@ Check the release contents before downloading another copy.
 
 | Feature | Official download | What Bedray needs |
 | :--- | :--- | :--- |
+| **FSR Upscaling 4.1.2** | [AMD FSR SDK 2.4.0](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v2.4.0) · [AMD GPUOpen](https://gpuopen.com/amd-fsr-sdk/) | Both signed Vulkan DLLs from `Kits/FidelityFX/signedbin/`: `amd_fidelityfx_loader_vk.dll` and `amd_fidelityfx_upscaler_vk.dll`. |
 | **FSR 3.1 / 2.x** | [FidelityFX SDK 1.1.4](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4) · [Windows archive](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip) | The unmodified `PrebuiltSignedDLL/amd_fidelityfx_vk.dll`; reviewed release builds can include it. |
 | **XeSS** | [XeSS SDK 3.0.2](https://github.com/intel/xess/releases/tag/v3.0.2) · [Windows archive](https://github.com/intel/xess/releases/download/v3.0.2/XeSS_SDK_3.0.2.zip) | `bin/libxess.dll`; reviewed release builds can include it. |
 | **DLSS Super Resolution / Ray Reconstruction** | [DLSS SDK 310.9.16](https://github.com/NVIDIA/DLSS/tree/9981c6350dc58c0ce21f024fd65e31e851c31689) · [Release DLL folder](https://github.com/NVIDIA/DLSS/tree/9981c6350dc58c0ce21f024fd65e31e851c31689/lib/Windows_x86_64/rel) | `nvngx_dlss.dll`, optionally `nvngx_dlssd.dll`, and a matching Bedray `vkb_dlss.dll` build. |
@@ -22,7 +25,7 @@ Check the release contents before downloading another copy.
 | **NRD denoising** | [NRD 4.18.0 sources](https://github.com/NVIDIA-RTX/NRD/tree/8f12a22fc90e6a3c7f5da4c9c3103633c842963a) | Build `NRD.dll` with SPIR-V support and the matching `vkb_nrd.dll`; see [building](BUILDING.md). This link is source code, not a ready DLL download. |
 | **Experimental DLSS 5** | [Experimental setup](experiments/dlss5.md) | Separate SDK and wrapper requirements. Public DLSS files are not a substitute for any restricted SDK access required by your build. |
 
-For **FSR 4, XeSS Frame Generation / XeLL, AMD Ray Regeneration and NVIDIA NRC**, check
+For **XeSS Frame Generation / XeLL, AMD Ray Regeneration and NVIDIA NRC**, check
 [technology support](TECHNOLOGIES.md) before downloading. Their SDK files are listed individually in the
 [DLL reference](DLL_REFERENCE.md); most of these paths still need Bedray integration, and some vendor APIs are DirectX 12 only.
 

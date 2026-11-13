@@ -15,4 +15,4 @@ Derived work: ../../src/vkb_nrd.cpp is adapted from nrd_wrapper.cpp / nrd_wrappe
   - added SIGMA_SHADOW support and a dynamic-offset constant buffer.
 
 NRD itself (NVIDIA Real-Time Denoisers) is NOT part of this repository and is covered by the NVIDIA RTX SDKs LICENSE;
-see docs/LICENSING.md.
+see docs/NATIVES_LICENSES.md.

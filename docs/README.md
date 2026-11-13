@@ -15,7 +15,8 @@ the published `0.1.0-alpha.1` uses the earlier renderer and has its own release 
 | Guide | What you will find |
 | :--- | :--- |
 | [Installation](INSTALL.md) | Requirements, loader setup, renderer core and optional libraries |
-| [Runtime library downloads](RUNTIME_LIBRARIES.md) | Official sources, compatible packages and local import |
+| [DLL download picker](DOWNLOADS.html) | Choose a feature and download its official files directly |
+| [Runtime library setup](RUNTIME_LIBRARIES.md) | Compatible packages and local import |
 | [User guide](USER_GUIDE.md) | First start, renderer modes and diagnostics |
 | [Settings reference](SETTINGS_REFERENCE.md) | Available controls and their trade-offs |
 | [GPU recommendations](GPU_GUIDE.md) | Starting points by GPU family and dated vendor advice |
@@ -38,7 +39,7 @@ the published `0.1.0-alpha.1` uses the earlier renderer and has its own release 
 
 - [Roadmap](https://github.com/bnfe12/bedray/blob/main/ROADMAP.md) and [changelog](https://github.com/bnfe12/bedray/blob/main/CHANGELOG.md)
 - [Feature status and evidence levels](FEATURE_MATRIX.md)
-- [Legacy screenshot gallery](GALLERY.md) — captures of the earlier renderer
+- [Legacy screenshot gallery](https://github.com/bnfe12/bedray/blob/main/docs/GALLERY.md) — captures of the earlier renderer
 - [Brand assets](BRAND.md) — logo, banner and animation
 
 <details>
@@ -46,15 +47,15 @@ the published `0.1.0-alpha.1` uses the earlier renderer and has its own release 
 
 ### Build and validate
 
-[Building](BUILDING.md) · [Contributing](https://github.com/bnfe12/bedray/blob/main/CONTRIBUTING.md) · [Branch layout](BRANCH_LAYOUT.md) · [Add-on settings API](ADDON_SETTINGS_API.md) ·
-[Release checklist](RELEASE_CHECKLIST.md) · [Verification log](VERIFICATION_LOG.md)
+[Building](BUILDING.md) · [Contributing](https://github.com/bnfe12/bedray/blob/main/CONTRIBUTING.md) · [Branch layout](https://github.com/bnfe12/bedray/blob/main/docs/BRANCH_LAYOUT.md) · [Add-on settings API](https://github.com/bnfe12/bedray/blob/main/docs/ADDON_SETTINGS_API.md) ·
+[Release checklist](RELEASE_CHECKLIST.md) · [Verification log](https://github.com/bnfe12/bedray/blob/main/docs/VERIFICATION_LOG.md)
 
 [Native library licences and delivery](NATIVES_LICENSES.md)
 
 ### Renderer
 
-[Architecture](ARCHITECTURE_MANIFESTO.md) · [Slang migration](SLANG_MIGRATION.md) ·
-[Transparent materials](TRANSPARENT_MATERIALS.md) · [Shader cache](SHADER_CACHE.md) · [DXGI presentation](DXGI_PRESENT.md)
+[Architecture](https://github.com/bnfe12/bedray/blob/main/docs/ARCHITECTURE_MANIFESTO.md) · [Slang migration](https://github.com/bnfe12/bedray/blob/main/docs/SLANG_MIGRATION.md) ·
+[Transparent materials](TRANSPARENT_MATERIALS.md) · [Shader cache](https://github.com/bnfe12/bedray/blob/main/docs/SHADER_CACHE.md) · [DXGI presentation](https://github.com/bnfe12/bedray/blob/main/docs/DXGI_PRESENT.md)
 
 ### Experimental integrations
 
@@ -63,7 +64,7 @@ the published `0.1.0-alpha.1` uses the earlier renderer and has its own release 
 
 ### Measurements and remaining work
 
-[GI stack report](measurements/GI_STACK_REPORT.md) · [Reproduction guide](measurements/L5_REPRO.md) ·
-[Native 1080p audit](NATIVE_1080P_60_AUDIT.md) · [Implementation plan](STACK_IMPLEMENTATION_PLAN.md)
+[GI stack report](https://github.com/bnfe12/bedray/blob/main/docs/measurements/GI_STACK_REPORT.md) · [Reproduction guide](https://github.com/bnfe12/bedray/blob/main/docs/measurements/L5_REPRO.md) ·
+[Native 1080p audit](https://github.com/bnfe12/bedray/blob/main/docs/NATIVE_1080P_60_AUDIT.md) · [Implementation plan](https://github.com/bnfe12/bedray/blob/main/docs/STACK_IMPLEMENTATION_PLAN.md)
 
 </details>

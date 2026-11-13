@@ -1,7 +1,7 @@
 @echo off
 rem Builds NRD.dll (NVIDIA Real-Time Denoisers) from sources that live OUTSIDE this repository.
 rem NRD is under the "NVIDIA RTX SDKs LICENSE": its sources/binaries must not be committed or redistributed
-rem (see docs/LICENSING.md). Everything is written to native\nrd_bridge\build\ (gitignored).
+rem (see docs/NATIVES_LICENSES.md). Everything is written to native\nrd_bridge\build\ (gitignored).
 rem
 rem Environment overrides (defaults in brackets):
 rem   VKB_NRD_SRC   NRD 4.17.x or 4.18.x source checkout [required, no default]

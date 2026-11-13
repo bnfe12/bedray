@@ -41,7 +41,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.TreeSet;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Diagnostics report for bug reports ({@code /bedray report} on NeoForge, the "Copy diagnostics report" button of the settings page
@@ -233,38 +232,22 @@ public final class Diagnostics {
     }
 
     private static String cpuModel() {
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        try {
-            if (os.contains("win")) {
-                String out = run(5, "reg", "query", "HKLM\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", "/v", "ProcessorNameString");
-                for (String line : out.split("\r?\n")) {
-                    int i = line.indexOf("REG_SZ");
-                    if (i >= 0) {
-                        return line.substring(i + 6).trim();
-                    }
-                }
-            } else if (Files.isReadable(Path.of("/proc/cpuinfo"))) {
-                for (String line : Files.readAllLines(Path.of("/proc/cpuinfo"))) {
-                    if (line.startsWith("model name")) {
-                        return line.substring(line.indexOf(':') + 1).trim();
-                    }
+        // Windows supplies a CPU identifier without a registry subprocess on the render thread.
+        if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) {
+            Path cpuInfo = Path.of("/proc/cpuinfo");
+            if (Files.isReadable(cpuInfo)) {
+                try (var lines = Files.lines(cpuInfo)) {
+                    String model = lines.filter(line -> line.startsWith("model name") && line.contains(":"))
+                        .map(line -> line.substring(line.indexOf(':') + 1).trim())
+                        .findFirst().orElse(null);
+                    if (model != null) return model;
+                } catch (IOException | RuntimeException error) {
+                    LOGGER.debug("[VKB-DIAG] cpu model not read\n{}", LogPaths.stack(error));
                 }
             }
-        } catch (IOException | InterruptedException | RuntimeException e) {
-            LOGGER.debug("[VKB-DIAG] cpu model not read\n{}", LogPaths.stack(e));
         }
         String id = System.getenv("PROCESSOR_IDENTIFIER");
-        return id == null ? "unknown" : id;
-    }
-
-    /** Runs a fixed command (no shell) with a timeout and returns its output. */
-    private static String run(int seconds, String... cmd) throws IOException, InterruptedException {
-        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-        byte[] data = p.getInputStream().readNBytes(16384);
-        if (!p.waitFor(seconds, TimeUnit.SECONDS)) {
-            p.destroyForcibly();
-        }
-        return new String(data, StandardCharsets.UTF_8);
+        return id == null || id.isBlank() ? "unknown" : id;
     }
 
     private static List<String> gpu() {

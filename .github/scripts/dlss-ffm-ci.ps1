@@ -32,6 +32,7 @@ $sources = @(
     'core/src/main/java/io/github/andrexarlay/vulkanbridge/platform/LogPaths.java',
     ($base + 'rtx/config/UpscalerMode.java'),
     ($base + 'rtx/upscaler/dlss/DlssQuality.java'),
+    ($base + 'rtx/upscaler/dlss/DlssSrPreset.java'),
     ($base + 'rtx/upscaler/dlss/DlssLayouts.java'),
     ($base + 'rtx/upscaler/dlss/DlssNativeException.java'),
     ($base + 'rtx/upscaler/dlss/DlssNative.java'),

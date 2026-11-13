@@ -202,6 +202,9 @@ typedef struct VkbDlssEvalInfo {
  * `outFeature` receives an opaque handle (NOT an NGX pointer).
  */
 VKB_DLSS_API int32_t vkb_dlss_create_feature(uint64_t commandBuffer, const VkbDlssCreateInfo* info, uint64_t* outFeature);
+/* Optional SR model hint. Preset 0 uses the SDK default; 10..13 select J through M. */
+VKB_DLSS_API int32_t vkb_dlss_create_feature_with_preset(uint64_t commandBuffer, const VkbDlssCreateInfo* info,
+                                                      int32_t preset, uint64_t* outFeature);
 VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t commandBuffer, uint64_t feature, const VkbDlssEvalInfo* info);
 VKB_DLSS_API int32_t vkb_dlss_release_feature(uint64_t feature);  /* GPU must no longer use the feature */
 

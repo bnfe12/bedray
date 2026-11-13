@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkanbridge.core;
 
+import io.github.andrexarlay.vulkanbridge.api.LibraryDescriptor;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,12 +30,15 @@ public final class NativeBundle {
     public static final String INDEX = RESOURCE_DIR + "bundle.properties";
     private static final List<String> OPTIONAL_RUNTIME = List.of("bedray_core.dll", "vkb_dlss.dll", "nvngx_dlss.dll",
         "nvngx_dlssd.dll", "nvngx_dlssnr.dll", "NRD.dll", "vkb_nrd.dll",
+        LibraryDescriptor.FSR4_LOADER, LibraryDescriptor.FSR4_UPSCALER,
         "streamline/vkb_sl.dll", "streamline/sl.interposer.dll", "streamline/sl.common.dll", "streamline/sl.dlss.dll",
         "streamline/sl.dlss_d.dll", "streamline/sl.dlss_g.dll", "streamline/sl.reflex.dll", "streamline/sl.pcl.dll",
         "streamline/nvngx_dlss.dll", "streamline/nvngx_dlssd.dll", "streamline/nvngx_dlssg.dll", "streamline/NvLowLatencyVk.dll");
     /** Licence files shipped for each bundled DLL (also copied next to the DLLs, as the licences require). */
     static final Map<String, List<String>> LICENSE_FILES = Map.of(
         "amd_fidelityfx_vk.dll", List.of("LICENSE.txt"),
+        LibraryDescriptor.FSR4_LOADER, List.of("LICENSE.txt"),
+        LibraryDescriptor.FSR4_UPSCALER, List.of("LICENSE.txt"),
         "libxess.dll", List.of("LICENSE.txt", "third-party-programs.txt"));
 
     private NativeBundle() {}

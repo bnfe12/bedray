@@ -25,7 +25,7 @@ minute. The historical crash reports are included separately below.
 - GPU: NVIDIA GeForce RTX 5060 Ti 8 GB, driver 621.01 (32.0.16.2101),
   Windows 11 10.0.26100.
 - Minecraft 26.3, NeoForge 26.3.0.76, Sodium 0.9.2, Iris 1.11.7.
-- Instance: `Vulkan Experimental RT 26.3`, world `RTX Test World`.
+- Instance: `<instance>`, world `<world>`.
 
 ## Settings from `config-bedray.toml`
 
@@ -102,5 +102,4 @@ from 2026-10-24/25. They are not from `73f450a`.
 - `ngx/` — NGX/DLSS logs written by the rebuilt bridge.
 - `crashes/` — the last five client crash reports (24-26 October).
 
-Personal paths and the player name were replaced with `%USERPROFILE%` and
-`<player>` before publishing.
+Personal paths, player, launcher, instance and world names were anonymized before sharing.

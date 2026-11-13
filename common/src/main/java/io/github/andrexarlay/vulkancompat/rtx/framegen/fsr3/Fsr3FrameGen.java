@@ -37,7 +37,7 @@ import java.nio.file.Paths;
 
 /**
  * AMD FSR 3 frame generation (ffx-api of {@code amd_fidelityfx_vk.dll}, FidelityFX SDK v1.1.4), the second implementation next to NVIDIA
- * DLSS-G. Used only when {@link FrameGenProvider#amd()}. Contract: docs/framegen/FSR3_FINDINGS.md. Render thread only.
+ * DLSS-G. Used only when {@link FrameGenProvider#amd()}. Render thread only.
  * <ul>
  * <li><b>Swapchain</b>: while this provider is active the engine's swapchain calls (create, destroy, get images, acquire, present of
  *     {@code VulkanGpuSurface}) are redirected here by {@code MixinVulkanGpuSurfaceFsr3}; the first create makes the frame interpolation swapchain
@@ -127,12 +127,8 @@ public final class Fsr3FrameGen {
     }
 
     private static boolean ensureNative(VulkanDevice device) {
-        if (nat != null) {
-            return true;
-        }
-        if (swapchainFailed) {
-            return false;
-        }
+        if (swapchainFailed) return false;
+        if (nat != null) return true;
         Path dll = resolveDll();
         if (dll == null) {
             swapchainFail("library", dllNote);
@@ -161,7 +157,7 @@ public final class Fsr3FrameGen {
         swapchainFailed = true;
         failed = true;
         failure = stage + ": " + detail;
-        LOGGER.error("[VKB-FG] fsr3=FAILED stage={} {} (the swapchain stays the engine's own)", stage, detail);
+        LOGGER.error("[VKB-FG] fsr3=FAILED stage={} {}", stage, detail);
     }
 
     private static boolean swapchainActive() {
@@ -170,28 +166,16 @@ public final class Fsr3FrameGen {
 
     /** Redirect of {@code KHRSwapchain.vkCreateSwapchainKHR} in VulkanGpuSurface.configure. */
     public static int createSwapchain(VulkanDevice device, VkDevice vk, VkSwapchainCreateInfoKHR ci, LongBuffer out) {
-        if (!FrameGenProvider.amd() || swapchainFailed || !ensureNative(device)) {
+        if (!FrameGenProvider.amd() || (sc == null && !ensureNative(device))) {
             return KHRSwapchain.vkCreateSwapchainKHR(vk, ci, null, out);
+        }
+        if (sc != null && repl == null) {
+            // The SDK still owns an unpublished swapchain whose destruction failed.
+            return VK10.VK_ERROR_INITIALIZATION_FAILED;
         }
         try {
             if (sc == null) {
-                FfxFgNative.Created c = nat.createSwapchainContext(vk.getPhysicalDevice().address(), vk.address(), 0L, ci.address(),
-                    device.graphicsQueue().vkQueue().address(), device.graphicsQueue().queueFamilyIndex(),
-                    Fsr3Queues.presentQueue().address(), Fsr3Queues.family(), Fsr3Queues.acquireQueue().address(), Fsr3Queues.family());
-                if (c.result() != 0 || c.context().handle() == 0L || c.swapchain() == 0L) {
-                    swapchainFail("create_swapchain_context", "ffxCreateContext returned " + c.result());
-                    return KHRSwapchain.vkCreateSwapchainKHR(vk, ci, null, out);
-                }
-                sc = c.context();
-                scHandle = c.context().handle();
-                repl = nat.queryReplacement(sc);
-                lastPresentCountFn = repl.getLastPresentCount();
-                scSwapchain = c.swapchain();
-                out.put(out.position(), c.swapchain());
-                LOGGER.info("[VKB-FG] [VKB-AUTOTEST] fsr3=swapchain_context_created result=0 extent={}x{} present_mode={} queues=game(family {}) present/acquire(family {}) dll={} ({})",
-                    ci.imageExtent().width(), ci.imageExtent().height(), ci.presentMode(), device.graphicsQueue().queueFamilyIndex(),
-                    Fsr3Queues.family(), LogPaths.show(nat.libraryPath()), dllNote);
-                return VK10.VK_SUCCESS;
+                return createInitialSwapchain(device, vk, ci, out);
             }
             int r = nat.createSwapchain(repl.createSwapchain(), vk.address(), ci.address(), MemoryUtil.memAddress(out), scHandle);
             if (r == VK10.VK_SUCCESS) {
@@ -205,6 +189,48 @@ public final class Fsr3FrameGen {
             swapchainFail("create_swapchain", e.toString());
             return VK10.VK_ERROR_INITIALIZATION_FAILED;
         }
+    }
+
+    private static int createInitialSwapchain(VulkanDevice device, VkDevice vk, VkSwapchainCreateInfoKHR ci, LongBuffer out) {
+        if (ci.oldSwapchain() != 0L) {
+            swapchainFail("create_swapchain_context", "the surface already has an engine swapchain");
+            return KHRSwapchain.vkCreateSwapchainKHR(vk, ci, null, out);
+        }
+        FfxFgNative.Created candidate = nat.createSwapchainContext(vk.getPhysicalDevice().address(), vk.address(), 0L, ci.address(),
+            device.graphicsQueue().vkQueue().address(), device.graphicsQueue().queueFamilyIndex(),
+            Fsr3Queues.presentQueue().address(), Fsr3Queues.family(), Fsr3Queues.acquireQueue().address(), Fsr3Queues.family());
+        long contextHandle = candidate.context().handle();
+        boolean created = candidate.result() == 0 && contextHandle != 0L && candidate.swapchain() != 0L;
+        FfxFgNative.Replacement replacement;
+        try {
+            if (!created) {
+                throw new IllegalStateException("ffxCreateContext returned " + candidate.result()
+                    + ", context=" + (contextHandle != 0L) + ", swapchain=" + (candidate.swapchain() != 0L));
+            }
+            replacement = nat.queryReplacement(candidate.context());
+        } catch (RuntimeException | LinkageError failure) {
+            swapchainFail(created ? "query_swapchain_replacement" : "create_swapchain_context", LogPaths.show(failure));
+            if (contextHandle != 0L) {
+                // No frame used this context. The SDK releases its interpolation swapchain with the context.
+                // Keep the context for device shutdown if destruction fails.
+                sc = candidate.context();
+                check(nat.destroy(sc), "unpublished swapchain context destroy");
+                sc = null;
+            } else if (candidate.swapchain() != 0L) {
+                return VK10.VK_ERROR_INITIALIZATION_FAILED;
+            }
+            return KHRSwapchain.vkCreateSwapchainKHR(vk, ci, null, out);
+        }
+        out.put(out.position(), candidate.swapchain());
+        sc = candidate.context();
+        scHandle = contextHandle;
+        repl = replacement;
+        lastPresentCountFn = replacement.getLastPresentCount();
+        scSwapchain = candidate.swapchain();
+        LOGGER.info("[VKB-FG] [VKB-AUTOTEST] fsr3=swapchain_context_created result=0 extent={}x{} present_mode={} queues=game(family {}) present/acquire(family {}) dll={} ({})",
+            ci.imageExtent().width(), ci.imageExtent().height(), ci.presentMode(), device.graphicsQueue().queueFamilyIndex(),
+            Fsr3Queues.family(), LogPaths.show(nat.libraryPath()), dllNote);
+        return VK10.VK_SUCCESS;
     }
 
     /** Redirect of {@code KHRSwapchain.vkDestroySwapchainKHR} (VulkanGpuSurface.destroySwapchain). */
