@@ -103,8 +103,11 @@ Localization of the see-through triangle (2026-11-12, agent testbed, native scen
   (renderDistance is already 16 = RT's 256 blocks); it is not ghost geometry.
 
 Conclusion: the "one triangle see-through" is a misreading of normal lit-tread/shadowed-riser stair shading at distance,
-not missing geometry and not reconstruction. Evidence: `C:/Temp/ab-triangle/{denoiser-off,legacy-scene,close-cam,raster-ref}/02_world_c.png`
+not missing geometry and not reconstruction. Evidence: `C:/Temp/ab-triangle/{denoiser-off,restir-off,close-cam,raster-ref}/02_world_c.png`
 and `cmp_center_*.png`. The triangle sub-issue is localized; murky water / sky / lighting remain open.
+Note: the restir-off run was initially mislabeled "legacy-scene"; `-Dvkbridge.rt.nativeScene=false` only disables the
+optional native GPU scene object (RtConfig default false) and does not select a legacy scene — both runs traced
+`path_trace_scene`. No legacy-scene comparison is claimed.
 
 The source gap behind the missing textured sky is addressed by `d9b671c`: the typed `FrameSky` adapter now reads the
 resource-pack atlas through bounded modules. Display equations come from the former GLSL path. L1/L2 checks pass;

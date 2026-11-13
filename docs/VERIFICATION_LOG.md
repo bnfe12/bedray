@@ -4464,7 +4464,7 @@ Screenshots + `latest.log` archived under `C:/Temp/ab-triangle/<run>/`.
 | run | config | result |
 | --- | --- | --- |
 | denoiser-off | path, spp 8, denoiser=off, ReSTIR on | light/dark "one triangle" pattern present |
-| legacy-scene | path, spp 8, denoiser=off, ReSTIR di/pt/spatial=off | pattern present -> ReSTIR reconstruction ruled out |
+| restir-off | path, spp 8, denoiser=off, ReSTIR di/pt/spatial=off | pattern present -> ReSTIR reconstruction ruled out |
 | close-cam | as legacy-scene + camera (-52.1, 84, -8.1) | every face a complete shaded rectangle up close -> missing/degenerate triangle and per-triangle shading defect ruled out |
 | raster-ref | rt=off (vanilla raster), same camera | clean steps; far hill absent only from chunk-mesh build latency at shot time |
 
