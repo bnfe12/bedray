@@ -135,6 +135,12 @@ public final class WorldTargetManager {
         if (!VulkanBridge.isVulkan()) {
             return false;
         }
+        // The Iris host owns the frame end-to-end at engine resolution; the native world target, camera jitter and
+        // temporal upscale must never run alongside its passes over the same colour image (never mix native + iris in
+        // one frame) — doing so lost the Vulkan device. Suppress the native world phase while iris is active.
+        if (io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.irisActive()) {
+            return false;
+        }
         // The RT path renders into the isolated world target; the gate (RtActivation) is off while RT is blocked or failed,
         // so a blocked RT no longer forces the extra world target + blit at 100%.
         if (io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.enabled()) {

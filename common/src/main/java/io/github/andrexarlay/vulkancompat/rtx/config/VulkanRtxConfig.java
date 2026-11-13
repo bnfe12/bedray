@@ -709,6 +709,7 @@ public final class VulkanRtxConfig {
                 }
                 case "experimental_rays" -> experimentalRays = Boolean.parseBoolean(val);
                 case "ui_expert" -> uiExpert = Boolean.parseBoolean(val);
+                case "shader_host" -> io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostConfig.applyValue(val);
                 // RT mode settings; false = a key of an older config file that no longer exists (ignored on purpose)
                 default -> {
                     if (key.startsWith("atm_")) {
@@ -871,6 +872,7 @@ public final class VulkanRtxConfig {
             writer.write("ui_expert = " + uiExpert + "\n");
             RtSettings.write(writer);
             io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.write(writer);
+            io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostConfig.write(writer);
         }
     }
 }

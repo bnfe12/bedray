@@ -95,9 +95,12 @@ public final class RtParticleLayer {
     private RtParticleLayer() {
     }
 
-    /** Setting on, RT image displayed, no failure: the layer is wanted this frame. */
+    /** Setting on, RT image displayed, no failure, native host owns the frame: the layer is wanted this frame. */
     public static boolean capturing() {
-        return !failed && RtSettings.particles() && RtGeometryGate.enabled() && RtGeometryGate.failure() == null && RtConfig.displayed();
+        // The replay is issued from MixinGameRenderer before RtFrameRenderer.render's iris early-return, so the native
+        // particle/weather draws must be suppressed here while the Iris raster host owns the frame (never mix native + iris).
+        return !failed && RtSettings.particles() && RtGeometryGate.enabled() && !RtGeometryGate.irisActive()
+            && RtGeometryGate.failure() == null && RtConfig.displayed();
     }
 
     /** Head of {@code GameRenderer.render()}: forgets the previous frame. */

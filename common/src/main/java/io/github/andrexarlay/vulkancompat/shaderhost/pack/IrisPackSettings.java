@@ -22,12 +22,19 @@ public final class IrisPackSettings {
     private final Set<String> dimensionFolders;
     private final String profile;
     private final Map<String, String> options;
+    private final Map<String, IrisCustomTextures.Pixels> customTextures;
 
     private IrisPackSettings(PackProperties props, Set<String> dimensionFolders, String profile, Map<String, String> options) {
+        this(props, dimensionFolders, profile, options, Map.of());
+    }
+
+    private IrisPackSettings(PackProperties props, Set<String> dimensionFolders, String profile, Map<String, String> options,
+                             Map<String, IrisCustomTextures.Pixels> customTextures) {
         this.props = props;
         this.dimensionFolders = dimensionFolders;
         this.profile = profile;
         this.options = options;
+        this.customTextures = Map.copyOf(customTextures);
     }
 
     public static IrisPackSettings parse(PackProperties props, Set<String> dimensionFolders) {
@@ -50,7 +57,9 @@ public final class IrisPackSettings {
         PackProperties props = src.entries().contains(entry)
             ? PackProperties.parse(new String(src.read(entry), StandardCharsets.UTF_8))
             : PackProperties.empty();
-        return parse(props, report.dimensions().keySet(), scanOptionDefaults(src, optionNames(props)));
+        IrisPackSettings base = parse(props, report.dimensions().keySet(), scanOptionDefaults(src, optionNames(props)));
+        Map<String, IrisCustomTextures.Pixels> textures = IrisCustomTextures.load(src, report.shadersRoot(), base);
+        return new IrisPackSettings(base.props, base.dimensionFolders, base.profile, base.options, textures);
     }
 
     private static void applyProfile(PackProperties props, String name, Map<String, String> options, int depth) {
@@ -181,6 +190,11 @@ public final class IrisPackSettings {
             }
         }
         return names;
+    }
+
+    /** Decoded RGBA8 pixels of a pack custom texture, or null when its file is missing/undecodable (executor binds white). */
+    public IrisCustomTextures.Pixels customTexturePixels(String sampler) {
+        return customTextures.get(sampler);
     }
 
     public String colortexFormat(int index) {

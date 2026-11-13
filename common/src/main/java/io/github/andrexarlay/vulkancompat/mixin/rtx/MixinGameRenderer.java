@@ -78,6 +78,9 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
     @Inject(method = "render()V", at = @At("HEAD"))
     private void onRenderBegin(CallbackInfo ci) {
         if (VulkanBridge.isVulkan()) {
+            // #35: apply a pending live shader_host switch at the frame boundary, before any host reads the selection,
+            // so the whole frame uses one host (never mix native + iris). Cheap null-check when nothing is pending.
+            io.github.andrexarlay.vulkancompat.shaderhost.ShaderHosts.applyPendingRequest();
             io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrRuntime.probeProviders();
             PerfMonitor.frameBegin();
             io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.beginFrame(this.minecraft.level);
