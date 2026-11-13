@@ -13,6 +13,7 @@ import tonemap_curve;
 // module off the optional shaderStorageImageRead/WriteWithoutFormat features.
 [[vk::image_format("rgba8")]] [[vk::binding(2, 0)]] RWTexture2D<float4> finalImg;
 [[vk::binding(3, 0)]] Sampler2D depthTex;
+[[vk::binding(4, 0)]] Sampler2D hdrSourceTex;
 
 [[vk::push_constant]] BloomPush pc;
 
@@ -53,9 +54,17 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
     float4 c = finalImg[p];
     float3 delta;
-    if (pc.p1.x > 0.5) {
+    if (bloomSourceMode(pc) == 2u) {
+        float3 base = bloomSanitize(hdrSourceTex.Load(int3(p, 0)).rgb) * max(pc.p0.w, 0.0);
+        uint mode = bloomToneMode(pc);
+        delta = tonemapColorMode(base + add, mode) - tonemapColorMode(base, mode);
+    } else if (bloomSourceMode(pc) != 0u && bloomToneMode(pc) == TM_MODE_PEAK) {
         float3 lin = tonemapInverse(c.rgb);
         delta = tonemapColor(lin + add) - tonemapColor(lin);
+    } else if (bloomSourceMode(pc) != 0u) {
+        // A denoiser without an HDR export keeps a bounded display-linear approximation.
+        float3 base = tmDecodeSrgb(c.rgb);
+        delta = tmEncodeSrgb(1.0 - (1.0 - base) * exp(-add)) - c.rgb;
     } else {
         delta = add;
     }

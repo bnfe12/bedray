@@ -598,6 +598,9 @@ public final class RtSlangPathPass implements RtPass {
         if (backend.discardRecording(commandBuffer)) resetHistory();
     }
     @Override public void releaseRecording(long commandBuffer) { backend.releaseRecording(commandBuffer); }
+    @Override public boolean exportHdr(VkCommandBuffer command, long outputView, int width, int height) {
+        return backend.exportHdr(command.address(), outputView, width, height);
+    }
     @Override public void releaseRecordingsAfterHostDrain() { backend.releaseRecordingsAfterHostDrain(); }
     @Override public void destroy() {
         if (destroyed) return;

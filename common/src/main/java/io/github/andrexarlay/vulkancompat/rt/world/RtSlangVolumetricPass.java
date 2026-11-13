@@ -86,7 +86,8 @@ final class RtSlangVolumetricPass implements AutoCloseable {
         march.putFloat(60, (float) p.cameraY).putFloat(64, 0.01f).putInt(68, steps);
         march.putInt(72, p.frame).putInt(76, 0).putInt(80, p.flipY ? 1 : 0).putInt(84, 1);
         march.putInt(88, 0).putInt(92, 0);
-        apply.putFloat(0, exposure).putFloat(4, range).putInt(8, 1).putInt(12, p.frame).putInt(16, 0).putInt(20, 0);
+        apply.putFloat(0, exposure).putFloat(4, range).putInt(8, 1).putInt(12, p.frame)
+            .putInt(16, io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.tonemapper().ordinal()).putInt(20, 0);
     }
 
     void resetHistory() { reset = true; }

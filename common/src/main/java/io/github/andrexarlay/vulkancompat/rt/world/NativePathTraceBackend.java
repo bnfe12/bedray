@@ -14,6 +14,7 @@ import java.util.Set;
 final class NativePathTraceBackend implements PathTraceBackend {
     private final SlangRuntime runtime;
     private final BedrayPathTraceNative pass;
+    private final long hdrExportProgram;
     private final boolean spatial;
     private final String sceneTraceName;
     private final Set<Long> recordings = new LinkedHashSet<>();
@@ -56,6 +57,12 @@ final class NativePathTraceBackend implements PathTraceBackend {
         pass = new BedrayPathTraceNative(runtime, scene.nativeHandle(), reuse == null ? 0 : reuse.nativeHandle(),
             display.nativeHandle(), stats, runtime.atlasSampler(), builder == null ? 0 : builder.nativeHandle(),
             ptSpatial == null ? 0 : ptSpatial.nativeHandle());
+        hdrExportProgram = pass.supportsHdrExport() ? runtime.program("path_hdr_export")
+            .map(program -> {
+                if (!java.util.Arrays.equals(program.manifest().threadGroupSize(), new int[]{8, 8, 1}))
+                    throw new IllegalStateException("native HDR export requires an 8x8x1 compute group");
+                return program.nativeHandle();
+            }).orElse(0L) : 0L;
     }
 
     @Override public void prepare(int width, int height) {
@@ -85,6 +92,15 @@ final class NativePathTraceBackend implements PathTraceBackend {
      * The NATIVE_PT bits of one frame: ownership whenever the core has a ring, its reset when the controller asked for
      * one, and the spatial stage only for a frame that runs PT on a table the core has the stage for.
      */
+    @Override public boolean supportsHdrExport() { return hdrExportProgram != 0L; }
+
+    @Override public boolean exportHdr(long command, long view, int width, int height) {
+        if (!supportsHdrExport()) return false;
+        if (closed || !recordings.contains(command)) throw new IllegalStateException("HDR export needs the pending frame recording");
+        pass.exportHdr(command, hdrExportProgram, view, width, height);
+        return true;
+    }
+
     private int ptFlags(Frame frame) {
         if (!pass.nativePt()) return 0;
         int flags = BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_PT;

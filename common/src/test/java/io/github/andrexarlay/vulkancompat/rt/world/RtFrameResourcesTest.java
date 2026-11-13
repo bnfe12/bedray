@@ -15,15 +15,20 @@ class RtFrameResourcesTest {
         assertEquals(16, resources.composite().width);
         assertEquals(16, resources.displayDepth().width);
         assertNotSame(resources.depth(), resources.displayDepth());
-        assertEquals(5, allocator.images.size());
+        assertEquals(8, resources.postHdr().width);
+        assertEquals(4, resources.postHdr().height);
+        assertEquals(org.lwjgl.vulkan.VK10.VK_FORMAT_R16G16B16A16_SFLOAT, allocator.hdrFormat);
+        assertEquals(org.lwjgl.vulkan.VK10.VK_IMAGE_USAGE_STORAGE_BIT | org.lwjgl.vulkan.VK10.VK_IMAGE_USAGE_SAMPLED_BIT,
+            allocator.hdrUsage);
+        assertEquals(6, allocator.images.size());
         var transitions = new AtomicInteger();
         resources.prepare(31, image -> transitions.incrementAndGet());
-        assertEquals(5, transitions.get());
+        assertEquals(6, transitions.get());
         assertThrows(IllegalStateException.class, () -> resources.ensureOutput(8, 4));
         resources.releaseRecording(31);
         resources.ensureOutput(8, 4);
         assertSame(resources.depth(), resources.displayDepth());
-        assertEquals(4, allocator.images.size());
+        assertEquals(5, allocator.images.size());
         resources.close();
         assertTrue(allocator.images.isEmpty());
     }
@@ -36,15 +41,17 @@ class RtFrameResourcesTest {
         allocator.failImageCall = allocator.imageCalls + 4;
         assertThrows(OutOfMemoryError.class, () -> resources.ensureOutput(8, 4, 16, 8));
         assertSame(before, resources.output());
-        assertEquals(4, allocator.images.size(), "output, depth, composite and the local tone map block image");
+        assertEquals(5, allocator.images.size(), "output, depth, composite, local luminance and exported HDR");
         resources.close();
     }
     static final class Allocator implements RtFrameResources.Allocator {
         long serial;
         int imageCalls, motionCalls, failImageCall;
+        int hdrFormat, hdrUsage;
         final Set<Long> images = new HashSet<>(), buffers = new HashSet<>(), failedDestroy = new HashSet<>();
         public RtMemory.Img image(String name, int w, int h, int format, int usage) {
             if (++imageCalls == failImageCall) throw new OutOfMemoryError("injected image allocation");
+            if (name.equals("rt_post_hdr")) { hdrFormat = format; hdrUsage = usage; }
             long id = ++serial;
             images.add(id);
             return new RtMemory.Img(id, id, 0, w, h, (long) w * h * 4);
@@ -72,11 +79,11 @@ class RtFrameResourcesTest {
         var resources = new RtFrameResources(allocator);
         resources.ensureOutput(64, 32);
         resources.ensureMotion(64, 32);
-        assertEquals(4, allocator.images.size(), "output, depth, composite and the local tone map block image");
+        assertEquals(5, allocator.images.size(), "output, depth, composite, local luminance and exported HDR");
         assertEquals(1, allocator.buffers.size());
         resources.ensureOutput(64, 32);
         resources.ensureMotion(32, 16);
-        assertEquals(4, allocator.imageCalls);
+        assertEquals(5, allocator.imageCalls);
         assertEquals(1, allocator.motionCalls);
         resources.close(); resources.close();
         assertTrue(allocator.images.isEmpty());
@@ -91,11 +98,11 @@ class RtFrameResourcesTest {
         allocator.failImageCall = allocator.imageCalls + 2;
         assertThrows(OutOfMemoryError.class, () -> resources.ensureOutput(16, 16));
         assertSame(output, resources.output()); assertSame(depth, resources.depth()); assertSame(composite, resources.composite());
-        assertEquals(4, allocator.images.size());
+        assertEquals(5, allocator.images.size());
         allocator.failImageCall = 0;
         resources.ensureOutput(16, 16);
         assertNotSame(output, resources.output());
-        assertEquals(4, allocator.images.size());
+        assertEquals(5, allocator.images.size());
         resources.close();
         assertTrue(allocator.images.isEmpty());
     }
@@ -110,7 +117,7 @@ class RtFrameResourcesTest {
         var failure = assertThrows(OutOfMemoryError.class, () -> resources.ensureOutput(16, 16));
         assertEquals("injected image allocation", failure.getMessage());
         assertEquals(2, failure.getSuppressed().length);
-        assertEquals(6, allocator.images.size());
+        assertEquals(7, allocator.images.size());
         assertThrows(IllegalStateException.class, resources::close);
         allocator.failedDestroy.clear();
         resources.close();
@@ -122,7 +129,7 @@ class RtFrameResourcesTest {
         resources.ensureOutput(8, 8);
         var transitions = new AtomicInteger();
         resources.prepare(17, image -> transitions.incrementAndGet());
-        assertEquals(4, transitions.get());
+        assertEquals(5, transitions.get());
         assertThrows(IllegalStateException.class, () -> resources.prepare(29, image -> fail("initializer unproven")));
         assertThrows(IllegalStateException.class, () -> resources.ensureOutput(16, 16));
         resources.releaseRecording(17);
@@ -141,7 +148,7 @@ class RtFrameResourcesTest {
         }));
         resources.discardRecording(17);
         resources.prepare(29, image -> calls.incrementAndGet());
-        assertEquals(6, calls.get());
+        assertEquals(7, calls.get());
         resources.releaseRecording(29);
         resources.close();
     }

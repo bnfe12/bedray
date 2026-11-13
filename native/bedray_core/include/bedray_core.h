@@ -465,6 +465,15 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_record_path_trace_stats(
     uint64_t stats_offset, uint64_t stats_bytes, uint32_t frame_index,
     BedrayError* error);
 
+/* Copies the exact recording's accumulated linear HDR through the borrowed
+ * path_hdr_export AOT program into a host-owned RGBA16F storage image. Call
+ * after render, before submission, with the same extent and command buffer.
+ * The host retains the output through completion/discard; native history
+ * handles never escape. No submission, waiting or history mutation. */
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_record_path_trace_hdr(
+    BedrayCore* core, uint64_t command_buffer, uint64_t program, uint64_t output_view,
+    uint32_t width, uint32_t height, BedrayError* error);
+
 /* Lends the scene's ReSTIR PT spatial stage (zero disables it). The first program slot is
  * reserved and must be zero. Call after configure_path_trace and before recording. */
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace_pt(

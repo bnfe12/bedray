@@ -205,6 +205,12 @@ final class BedrayPathTraceNative implements AutoCloseable {
         }
     }
 
+    boolean supportsHdrExport() { return library.hasHdrExport(); }
+
+    void exportHdr(long command, long program, long outputView, int width, int height) {
+        library.recordPathTraceHdr(core, command, program, outputView, width, height);
+    }
+
     private void fill(MemorySegment desc, FrameInput input) {
         RtPathTraceSlangPass.Frame frame = input.frame();
         RtPathTraceSlangPass.Dispatch dispatch = input.dispatch();

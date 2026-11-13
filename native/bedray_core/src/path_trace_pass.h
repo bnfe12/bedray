@@ -60,6 +60,9 @@ public:
         std::uint64_t stats_offset, std::uint64_t stats_bytes, std::uint32_t frame_index,
         BedrayError* error);
 
+    BedrayStatus record_hdr(std::uint64_t command_buffer, std::uint64_t program,
+        std::uint64_t output_view, std::uint32_t width, std::uint32_t height, BedrayError* error);
+
     // Idempotent for an unknown command buffer. Completes the pass's own
     // image/buffer uses for that recording and then collects retired objects.
     void discard_recording(std::uint64_t command_buffer) noexcept;
@@ -100,6 +103,7 @@ private:
         std::uint64_t depth_view = 0;
         std::uint32_t width = 0;
         std::uint32_t height = 0;
+        bool discarded = false;
     };
 
     BedrayStatus ensure_images(std::uint32_t width, std::uint32_t height, BedrayError* error);

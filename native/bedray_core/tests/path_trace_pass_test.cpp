@@ -97,6 +97,7 @@ constexpr std::uint64_t kDisplayProgram = 0x1004;
 constexpr std::uint64_t kRCTraceProgram = 0x1005;
 constexpr std::uint64_t kRCBuildProgram = 0x1006;
 constexpr std::uint64_t kStatsProgram = 0x1007;
+constexpr std::uint64_t kHdrProgram = 0x1008;
 
 constexpr std::uint64_t kBadTraceCount = 0x2001;
 constexpr std::uint64_t kBadTracePush = 0x2002;
@@ -209,6 +210,8 @@ void install_valid_programs() {
     register_program(kSpatialProgram, 64, kSpatialBindings, std::size(kSpatialBindings));
     register_program(kDisplayProgram, 32, kDisplayBindings, std::size(kDisplayBindings));
     register_program(kStatsProgram, 8, kStatsBindings, std::size(kStatsBindings));
+    const ProgramBinding hdr_bindings[] = {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}};
+    register_program(kHdrProgram, 0, hdr_bindings, std::size(hdr_bindings));
     auto field_trace = trace;
     field_trace.push_back({34, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER});
     field_trace.push_back({35, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
@@ -1990,7 +1993,35 @@ void test_ray_generation_launch_dimensions_preserve_compute_postprocessing() {
     }
 }
 
+void test_hdr_export_uses_the_recording_snapshot_and_exact_lifetime() {
+    Fixture fixture;
+    auto first = valid_frame(0x1801);
+    CHECK_STATUS(fixture.render(first), BEDRAY_OK);
+    const auto first_mean = resource_handle(fake::render_calls.back().resources, 1);
+    auto second = valid_frame(0x1802);
+    second.camera.width = second.camera.display_width = 128;
+    CHECK_STATUS(fixture.render(second), BEDRAY_OK);
+    const auto second_mean = resource_handle(fake::render_calls.back().resources, 1);
+    CHECK(first_mean != second_mean);
+    CHECK_STATUS(fixture.pass.record_hdr(first.command_buffer, kHdrProgram, 0x9901, 64, 64, &g_error), BEDRAY_OK);
+    const auto exported = fake::render_calls.back();
+    CHECK(exported.command_buffer == first.command_buffer && exported.program == kHdrProgram);
+    CHECK(exported.resources.size() == 2 && exported.push_bytes == 0);
+    CHECK(resource_handle(exported.resources, 0) == first_mean);
+    CHECK(resource_handle(exported.resources, 1) == 0x9901);
+    CHECK(exported.group_x == 8 && exported.group_y == 8 && exported.group_z == 1);
+    CHECK_STATUS(fixture.pass.record_hdr(first.command_buffer, kHdrProgram, 0x9901, 128, 64, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK_STATUS(fixture.pass.record_hdr(first.command_buffer, kDisplayProgram, 0x9901, 64, 64, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK_STATUS(fixture.pass.record_hdr(first.command_buffer, kHdrProgram, first_mean, 64, 64, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK(fixture.release(first.command_buffer) == BEDRAY_OK);
+    CHECK_STATUS(fixture.pass.record_hdr(first.command_buffer, kHdrProgram, 0x9901, 64, 64, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    fixture.pass.discard_recording(second.command_buffer);
+    CHECK_STATUS(fixture.pass.record_hdr(second.command_buffer, kHdrProgram, 0x9901, 128, 64, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK(fixture.release(second.command_buffer) == BEDRAY_OK);
+}
+
 int main() {
+    test_hdr_export_uses_the_recording_snapshot_and_exact_lifetime();
     test_ray_generation_launch_dimensions_preserve_compute_postprocessing();
     test_configure_validation();
     test_render_validation();

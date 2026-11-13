@@ -6,6 +6,7 @@
 // next to a dark wall does not darken the wall (no halo) and the pixel keeps its ratio to its base (texture survives).
 
 import "post/local_tonemap.slang";
+import post_cinema;
 
 [[vk::image_format("rgba16f")]] [[vk::binding(0, 0)]] RWTexture2D<float4> hdrColor;
 [[vk::image_format("rgba16f")]] [[vk::binding(1, 0)]] RWTexture2D<float4> blockLum;
@@ -56,5 +57,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // A pixel far brighter than its own neighbourhood (a flame, a lamp face) keeps its brightness: compressed with the
     // pool around it, it stopped reaching the bloom (torch halo +15 -> +10 of 255, audit of 2026-11-12).
     gain = lerp(gain, max(gain, 1.0), smoothstep(1.5, 3.0, own - localBase));
-    outputColor[p] = float4(tonemapColor(c * gain), 1.0);
+    float3 display = tonemapColorMode(c * gain, pc.toneMode);
+    if ((pc.postFlags & (1u << 10u)) != 0u) display = postVibrant(display, 1.30, 1.12);
+    if ((pc.postFlags & (1u << 8u)) != 0u) display = postVignette(display, (float2(p) + 0.5) / float2(pc.size), 0.40);
+    if ((pc.postFlags & (1u << 9u)) != 0u) display = postFilmGrain(display, int2(p), pc.frameIndex, 0.06);
+    outputColor[p] = float4(saturate(display), 1.0);
 }

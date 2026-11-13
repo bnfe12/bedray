@@ -5,9 +5,15 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import org.joml.Matrix4f;
+import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * The sun glare reads the sun's visibility from the frame before any glow is added. bloom_apply used to sample the final
@@ -17,6 +23,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the apply stage reads it.
  */
 class RtBloomSunVisibilityTest {
+    @Test void thePackedCurveCannotChangeTheSourceMode() {
+        var previous = RtSettings.tonemapper;
+        try {
+            for (var mode : RtSettings.Tonemapper.values()) {
+                RtSettings.tonemapper = mode;
+                for (int source = 0; source <= 2; source++) {
+                    var params = new RtBloomPass.Params(new Matrix4f(), new float[]{0, 1, 0}, 0,
+                        0, 0, 0, false, source != 0, 2, 0.7f, 0.35f, 0.75f, 0, 0, 0, source == 2 ? 71 : 0, 1);
+                    var bytes = ByteBuffer.allocateDirect(128).order(ByteOrder.nativeOrder());
+                    if (source == 0 && mode == RtSettings.Tonemapper.PEAK) {
+                        assertThrows(IllegalArgumentException.class,
+                            () -> RtBloomPass.fillPushConstants(ByteBuffer.allocate(128), params, true));
+                    }
+                    RtBloomPass.fillPushConstants(bytes, params, true);
+                    int flags = (int) bytes.getFloat(112);
+                    assertEquals(source, flags & 3, "shader source-mode lane");
+                    assertEquals(mode.ordinal(), flags >>> 2 & 7, "shader tone-mode lane");
+                }
+            }
+        } finally {
+            RtSettings.tonemapper = previous;
+        }
+    }
+
     private static final Path SHADERS = Path.of("src/main/resources/shaders/slang");
 
     private static String read(String relative) throws IOException {

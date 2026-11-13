@@ -6,14 +6,14 @@
 struct BedrayCore {};
 namespace bedray::core {
 bool program_contract(BedrayCore*, std::uint64_t handle, ProgramContract& out) noexcept {
-    if (handle < 1 || handle > 4) return false;
-    out = {128, handle == 1 || handle == 4 ? 3u : 2u};
+    if (handle < 1 || handle > 5) return false;
+    out = {128, handle == 5 ? 4u : handle == 1 || handle == 4 ? 3u : 2u};
     return true;
 }
 bool program_has_binding(BedrayCore*, std::uint64_t handle, std::uint32_t binding, std::uint32_t type) noexcept {
-    const auto dst = handle == 4 ? 2u : 1u;
+    const auto dst = handle >= 4 ? 2u : 1u;
     if (binding == dst) return type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    if (binding == 0 || (binding == 3 && (handle == 1 || handle == 4)))
+    if (binding == 0 || (binding == 3 && (handle == 1 || handle >= 4)) || (binding == 4 && handle == 5))
         return type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     return false;
 }
@@ -40,7 +40,7 @@ void chain_and_validation() {
     CHECK(BloomPass::mip_size(1, 5) == 1); CHECK(BloomPass::mip_size(1081, 0) == 541);
     for (const std::uint32_t size : {1u, 7u, 640u, 1080u, 3840u}) {
         auto previous = size;
-        for (std::uint32_t level = 0; level < 6; ++level) {
+        for (std::uint32_t level = 0; level < 8; ++level) {
             auto current = BloomPass::mip_size(size, level);
             CHECK(current >= 1 && current <= (previous + 1) / 2);
             previous = current;
@@ -69,17 +69,17 @@ void chain_and_validation() {
     CHECK(pass.render(input, &error) == BEDRAY_OK);
     CHECK(fake::images.size() == 8); CHECK(fake::render_calls.size() == 16); CHECK(fake::barriers == 25);
     CHECK(fake::render_calls.front().program == 1); CHECK(fake::render_calls.back().program == 4);
-    const std::uint32_t widths[] = {10,5,3,2,1,1,1,2,3,5,10,19};
-    const std::uint32_t heights[] = {6,3,2,1,1,1,1,1,2,3,6,11};
+    const std::uint32_t widths[] = {10,5,3,2,1,1,1,1,1,1,1,2,3,5,10,19};
+    const std::uint32_t heights[] = {6,3,2,1,1,1,1,1,1,1,1,1,2,3,6,11};
     for (std::size_t i = 0; i < fake::render_calls.size(); ++i) {
         const auto& call = fake::render_calls[i];
         CHECK(call.push == std::vector<unsigned char>(push.begin(), push.end()));
         CHECK(call.group_x == (widths[i] + 7) / 8); CHECK(call.group_y == (heights[i] + 7) / 8);
         CHECK(call.group_z == 1); CHECK(call.push_bytes == 128);
-        if (i > 0 && i < 6) CHECK(call.program == 2);
-        if (i >= 6 && i < 11) CHECK(call.program == 3);
-        CHECK(call.resources.size() == (i == 0 || i == 11 ? 3u : 2u));
-        CHECK(call.resources[1].binding == (i == 11 ? 2u : 1u));
+        if (i > 0 && i < 8) CHECK(call.program == 2);
+        if (i >= 8 && i < 15) CHECK(call.program == 3);
+        CHECK(call.resources.size() == (i == 0 || i == 15 ? 3u : 2u));
+        CHECK(call.resources[1].binding == (i == 15 ? 2u : 1u));
         for (auto resource : call.resources) CHECK(resource.image_layout == VK_IMAGE_LAYOUT_GENERAL);
     }
     CHECK(pass.render(input, &error) == BEDRAY_ERROR_IN_USE);
@@ -91,14 +91,14 @@ void chain_and_validation() {
     // Glare without bloom: the prefilter still runs, it measures the sun on the frame before the apply stage writes it.
     auto calls = fake::render_calls.size();
     CHECK(pass.render(frame(1, push.data(), false), &error) == BEDRAY_OK);
-    CHECK(fake::render_calls.size() == calls + 2); CHECK(fake::barriers == 22);
+    CHECK(fake::render_calls.size() == calls + 2); CHECK(fake::barriers == 28);
     CHECK(fake::render_calls[calls].program == 1 && fake::render_calls[calls + 1].program == 4);
     CHECK(pass.release_recording(1) == BEDRAY_OK);
     // Neither bloom nor glare: the apply stage alone, which adds nothing.
     std::memset(push.data() + 76, 0, 4);
     calls = fake::render_calls.size();
     CHECK(pass.render(frame(1, push.data(), false), &error) == BEDRAY_OK);
-    CHECK(fake::render_calls.size() == calls + 1); CHECK(fake::barriers == 24);
+    CHECK(fake::render_calls.size() == calls + 1); CHECK(fake::barriers == 30);
     CHECK(fake::render_calls.back().program == 4);
     CHECK(pass.release_recording(1) == BEDRAY_OK);
     CHECK(pass.destroy() == BEDRAY_OK); CHECK(pass.destroy() == BEDRAY_OK); clean();
@@ -116,15 +116,15 @@ void resize_discard_and_partial_failure() {
     CHECK(pass.render(resized, &error) == BEDRAY_ERROR_OUT_OF_MEMORY);
     CHECK(fake::images.size() == 8);
     CHECK(pass.render(resized, &error) == BEDRAY_OK);
-    CHECK(fake::images.size() == 12);
+    CHECK(fake::images.size() == 16);
     pass.discard_recording(1); // An old generation must not invalidate the current images.
     resized.command_buffer = 3;
-    CHECK(pass.render(resized, &error) == BEDRAY_OK); CHECK(fake::images.size() == 12);
+    CHECK(pass.render(resized, &error) == BEDRAY_OK); CHECK(fake::images.size() == 16);
     pass.discard_recording(2);
     CHECK(pass.release_recording(2) == BEDRAY_OK);
     resized.command_buffer = 4;
-    CHECK(pass.render(resized, &error) == BEDRAY_OK); CHECK(fake::images.size() == 18);
-    CHECK(pass.release_recording(1) == BEDRAY_OK); CHECK(fake::images.size() == 12);
+    CHECK(pass.render(resized, &error) == BEDRAY_OK); CHECK(fake::images.size() == 24);
+    CHECK(pass.release_recording(1) == BEDRAY_OK); CHECK(fake::images.size() == 16);
     CHECK(pass.release_recording(3) == BEDRAY_OK); CHECK(fake::images.size() == 8);
     CHECK(pass.release_recording(4) == BEDRAY_OK);
     fake::fail_render_at(3, BEDRAY_ERROR_VULKAN);
@@ -159,7 +159,30 @@ void device_loss_keeps_other_recordings_until_proof() {
     CHECK(pass.destroy() == BEDRAY_OK); clean();
 }
 }
+void hdr_base_reaches_the_apply_stage() {
+    fake::reset();
+    BedrayCore core;
+    BedrayError error{};
+    bedray::core::BloomPass pass;
+    auto config = configuration();
+    config.programs[3] = 5;
+    CHECK(pass.configure(&core, make_device_fns(), config, &error) == BEDRAY_OK);
+    std::array<unsigned char,128> push{};
+    auto input = frame(17, push.data());
+    input.source_view = 777;
+    CHECK(pass.render(input, &error) == BEDRAY_OK);
+    const auto& apply = fake::render_calls.back();
+    CHECK(apply.program == 5 && apply.resources.size() == 4);
+    CHECK(apply.resources[3].binding == 4 && apply.resources[3].handle == 777);
+    CHECK(apply.resources[3].sampler == 101);
+    CHECK(apply.resources[3].descriptor_type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+    CHECK(pass.release_recording(17) == BEDRAY_OK);
+    CHECK(pass.destroy() == BEDRAY_OK);
+    clean();
+}
+
 int main() {
+    hdr_base_reaches_the_apply_stage();
     chain_and_validation(); resize_discard_and_partial_failure(); device_loss_keeps_other_recordings_until_proof();
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

@@ -47,6 +47,7 @@ final class RtBloomPass {
     private static final Expected DST = new Expected("dstImg", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
     private static final Expected FINAL = new Expected("finalImg", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
     private static final Expected DEPTH = new Expected("depthTex", BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+    private static final Expected HDR_SOURCE = new Expected("hdrSourceTex", BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
 
     /** Everything the apply stage needs per frame (all but {@code strength} are inputs of the sun glare). */
     record Params(Matrix4f invViewProj, float[] sunDir, float glareStrength, float camX, float camY, float camZ,
@@ -91,6 +92,7 @@ final class RtBloomPass {
             return null;
         }
         try {
+            if (!runtime.library().hasHdrExport()) throw new IllegalStateException("bloom HDR composite requires a matching updated native core");
             SlangProgram[] programs = new SlangProgram[STAGES];
             for (int s = 0; s < STAGES; s++) {
                 Optional<SlangProgram> pass = runtime.program(SLANG_NAMES[s]);
@@ -102,7 +104,7 @@ final class RtBloomPass {
             require(programs[0], SRC, DST, DEPTH);
             require(programs[1], SRC, DST);
             require(programs[2], SRC, DST);
-            require(programs[3], SRC, FINAL, DEPTH);
+            require(programs[3], SRC, FINAL, DEPTH, HDR_SOURCE);
             return programs;
         } catch (RuntimeException e) {
             LOGGER.warn("[VKB-ATMO] bloom Slang path unavailable: {}", e.getMessage());
@@ -149,7 +151,11 @@ final class RtBloomPass {
     }
 
     /** The 128-byte block of the legacy push constant range; both implementations read it at the same offsets. */
-    private static void fillPushConstants(ByteBuffer pc, Params pr, boolean bloom) {
+    static void fillPushConstants(ByteBuffer pc, Params pr, boolean bloom) {
+        // JOML's native matrix writer requires an addressable buffer; a heap buffer can crash the VM before Java throws.
+        if (!pc.isDirect() || pc.capacity() < PUSH_BYTES || pc.order() != java.nio.ByteOrder.nativeOrder()) {
+            throw new IllegalArgumentException("bloom push constants need a direct native-order 128-byte buffer");
+        }
         pc.clear();
         pr.invViewProj.get(0, pc);
         pc.putFloat(64, pr.sunDir[0]).putFloat(68, pr.sunDir[1]).putFloat(72, pr.sunDir[2]).putFloat(76, pr.glareStrength);
@@ -158,7 +164,9 @@ final class RtBloomPass {
         pc.putFloat(96, pr.threshold).putFloat(100, pr.knee)
             .putFloat(104, bloom ? pr.strength * (pr.hdrSource() ? HDR_STRENGTH_GAIN : 1f) : 0f)
             .putFloat(108, pr.hdrSource() ? pr.hdrExposure : pr.darkness);
-        pc.putFloat(112, pr.hdrSource() ? 2f : pr.tonemapped ? 1f : 0f).putFloat(116, pr.scatter).putFloat(120, pr.sunNdcX).putFloat(124, pr.sunNdcY);
+        int sourceMode = pr.hdrSource() ? 2 : pr.tonemapped ? 1 : 0;
+        int displayFlags = sourceMode | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.tonemapper().ordinal() << 2);
+        pc.putFloat(112, displayFlags).putFloat(116, pr.scatter).putFloat(120, pr.sunNdcX).putFloat(124, pr.sunNdcY);
     }
 
     /** Host drained submissions; the exact host tickets must already have released this pass. */

@@ -203,6 +203,11 @@ float3 tmEncodeSrgb(float3 c) {
     return float3(tmSrgbChannel(c.r), tmSrgbChannel(c.g), tmSrgbChannel(c.b));
 }
 
+float3 tmDecodeSrgb(float3 c) {
+    c = saturate(c);
+    return select(c <= 0.04045, c / 12.92, pow((c + 0.055) / 1.055, float3(2.4)));
+}
+
 float3 tmAgx(float3 c) {
     c = tmSanitize(c);
     float minEv = -12.47393;

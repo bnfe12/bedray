@@ -26,6 +26,9 @@ interface PathTraceBackend extends AutoCloseable {
 
     void prepare(int width, int height);
     void record(Frame frame);
+    default boolean supportsHdrExport() { return false; }
+    /** Borrowed output retained by the host under the same recording proof; no native handle escapes. */
+    default boolean exportHdr(long command, long view, int width, int height) { return false; }
     boolean spatialAvailable();
     default String traceProgramName() { return ""; }
     default boolean displaySkyAvailable() { return true; }

@@ -189,11 +189,18 @@ float shaftHistoryTolerance(float tEnd) {
 // re-quantised.  `tonemapped` must be false for a linear display target, where
 // the scattering is added directly.
 float3 shaftDisplayComposite(float3 displayRgb, float3 scatter, float exposure,
-        bool tonemapped) {
+        bool tonemapped, uint toneMode) {
     float3 delta = scatter;
-    if (tonemapped) {
+    if (tonemapped && toneMode == TM_MODE_PEAK) {
         float3 linear = tonemapInverse(displayRgb);
         delta = tonemapColor(linear + scatter * exposure) - tonemapColor(linear);
+    } else if (tonemapped) {
+        // This pass has no scene-HDR base. Add bounded display-linear scattering
+        // rather than applying the unrelated PEAK inverse to a standard curve.
+        float3 added = max(scatter * exposure, float3(0.0));
+        if (all(added == float3(0.0))) return float3(0.0);
+        float3 base = tmDecodeSrgb(displayRgb);
+        delta = tmEncodeSrgb(1.0 - (1.0 - base) * exp(-added)) - displayRgb;
     } else {
         delta = scatter * exposure;
     }

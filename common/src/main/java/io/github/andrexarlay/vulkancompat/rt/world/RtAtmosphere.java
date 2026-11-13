@@ -32,6 +32,7 @@ final class RtAtmosphere {
     private boolean slangUnavailableLogged;
     /** Set once the volumetric passes refuse to register, so the frame loop stops asking. */
     private boolean shaftsUnavailable;
+    private boolean bloomUnavailableLogged;
     private RtGpuTimer timer;
     private String lastLogged = "";
     /**
@@ -81,6 +82,14 @@ final class RtAtmosphere {
         SlangRuntime runtime = slangRuntime(vulkanDevice);
         if (runtime == null) {
             return;
+        }
+        if ((glow || glare) && !runtime.library().hasHdrExport()) {
+            if (!bloomUnavailableLogged) {
+                bloomUnavailableLogged = true;
+                LOGGER.warn("[VKB-ATMO] event=feature_unavailable feature=hdr_bloom action=skip_bloom_and_glare reason=matching_native_core_required");
+            }
+            glow = false;
+            glare = false;
         }
         if (RtGpuTimer.ENABLED && timer == null) {
             try {
@@ -244,6 +253,7 @@ final class RtAtmosphere {
         }
         slangRuntime = null;
         slangUnavailableLogged = false;
+        bloomUnavailableLogged = false;
         if (timer != null) {
             timer.destroy();
             timer = null;

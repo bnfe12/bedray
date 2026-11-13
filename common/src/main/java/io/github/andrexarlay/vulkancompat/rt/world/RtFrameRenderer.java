@@ -1364,7 +1364,8 @@ public final class RtFrameRenderer {
             gpuTimer.stamp(cmd, SPAN_RAYS, true);
         }
         statsReadbacks.written(statsLease, new StatsMetadata(
-            (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.accumCount > 0,
+            // Native profiles own their display flags; the pass's count requests reuse and stats[3] measures acceptance.
+            params.accumCount > 0,
             (params.flags & RtFrameParams.FLAG_TRANSPARENCY_STATS) != 0, params.key.day, dispatchCounter,
             System.nanoTime(), w, h, params.frame));
         dispatchCounter++;
@@ -1449,6 +1450,12 @@ public final class RtFrameRenderer {
         }
 
         RtMemory.Img presented = frameOutput(), presentedDepth = frameDepth();
+        // Only raw presentation needs this export; a successful denoiser has its own signal.
+        boolean rawHdrExported = !frameColorTemporallyResolved
+            && (RtAtmosphereSettings.bloom() || RtAtmosphereSettings.sunGlare())
+            && frameResources.postHdr().width == presented.width && frameResources.postHdr().height == presented.height
+            && pass.exportHdr(cmd, frameResources.postHdr().view, w, h);
+        if (rawHdrExported) VkBarriers.fullMemoryBarrier(cmd);
         if (WorldTargetManager.rrResolvesOutput()) {
             outputResolve.record(cmd, params, frameResources, rrColorResolved);
             VkBarriers.fullMemoryBarrier(cmd);
@@ -1461,7 +1468,7 @@ public final class RtFrameRenderer {
                 && dlssRrDenoiser.outDiffuse() != null && frameResources.localLum() != null
                 && dlssRrDenoiser.outDiffuse().width == presented.width && dlssRrDenoiser.outDiffuse().height == presented.height) {
             localTonemap.record(cmd, dlssRrDenoiser.outDiffuse(), presented, frameResources.localLum(), presentedDepth,
-                params.exposure);
+                params.exposure, params.frame);
             VkBarriers.fullMemoryBarrier(cmd);
         }
         // Raster particles/weather and world depth match the presentation grid and stay outside RR.
@@ -1476,7 +1483,10 @@ public final class RtFrameRenderer {
         // The bloom reads the denoiser's HDR resolve when it has the presented extent (DLSS RR at its output size).
         boolean hdrBloom = rrColorResolved && dlssRrDenoiser != null && dlssRrDenoiser.outDiffuse() != null
             && dlssRrDenoiser.outDiffuse().width == presented.width && dlssRrDenoiser.outDiffuse().height == presented.height;
-        atmosphere.bloomSource(hdrBloom ? dlssRrDenoiser.outDiffuse().view : 0L, params.exposure);
+        RtMemory.Img postHdr = hdrBloom ? dlssRrDenoiser.outDiffuse() : !frameColorTemporallyResolved && rawHdrExported
+            && frameResources.postHdr().width == presented.width && frameResources.postHdr().height == presented.height
+            ? frameResources.postHdr() : null;
+        atmosphere.bloomSource(postHdr != null ? postHdr.view : 0L, params.exposure);
         atmosphere.record(cmd, vulkanDevice, world.memory(), params, curViewProj,
             new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), presented.view, atlasView, materials.materialView(),
                 materials.normalView(), 0L, null, presentedDepth.view, lightmapView),

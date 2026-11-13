@@ -22,7 +22,7 @@ import java.util.Set;
  * {@code -Dvkrtx.rt.localTonemap.shadows=0..2} (default 0).
  */
 public final class RtLocalTonemap {
-    static final int PUSH_BYTES = 32;
+    static final int PUSH_BYTES = 48;
     /** Exposed luminance the operator leaves unchanged: the knee of the global curve (TM_KNEE 0.6 / TM_GAIN 1.2). */
     static final float PIVOT_LOG2 = -1.0f;
 
@@ -55,7 +55,7 @@ public final class RtLocalTonemap {
 
     /** Overwrites {@code output} from {@code hdr} (same size); {@code exposure} is the factor the compose pass applied. */
     void record(VkCommandBuffer command, RtMemory.Img hdr, RtMemory.Img output, RtMemory.Img blockLum, RtMemory.Img depth,
-                float exposure) {
+                float exposure, int frameIndex) {
         if (hdr.width != output.width || hdr.height != output.height)
             throw new IllegalStateException("local tone map: HDR " + hdr.width + "x" + hdr.height + " != output "
                 + output.width + "x" + output.height);
@@ -63,6 +63,8 @@ public final class RtLocalTonemap {
             ByteBuffer push = stack.malloc(PUSH_BYTES).order(ByteOrder.nativeOrder());
             push.putInt(0, output.width).putInt(4, output.height).putInt(8, blockLum.width).putInt(12, blockLum.height);
             push.putFloat(16, exposure).putFloat(20, highlights).putFloat(24, shadows).putFloat(28, PIVOT_LOG2);
+            push.putInt(32, io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.tonemapper().ordinal())
+                .putInt(36, RtSlangPathPass.postCinemaBits() | RtSlangPathPass.vibrantBit()).putInt(40, frameIndex).putInt(44, 0);
             recordings.add(command.address()); // retain even when native recording fails partway
             lum.dispatch(command.address(), (blockLum.width + 7) / 8, (blockLum.height + 7) / 8, 1,
                 List.of(SlangProgram.Resource.storageImage("hdrColor", hdr.view),
