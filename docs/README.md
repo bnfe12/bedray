@@ -18,6 +18,9 @@ the published `0.1.0-alpha.1` uses the earlier renderer and has its own release 
 | [Runtime library downloads](RUNTIME_LIBRARIES.md) | Official sources, compatible packages and local import |
 | [User guide](USER_GUIDE.md) | First start, renderer modes and diagnostics |
 | [Settings reference](SETTINGS_REFERENCE.md) | Available controls and their trade-offs |
+| [GPU recommendations](GPU_GUIDE.md) | Starting points by GPU family and dated vendor advice |
+| [Rendering technologies](TECHNOLOGIES.md) | DLSS, FSR 4, XeSS-FG, denoisers and radiance caches |
+| [DLL reference](DLL_REFERENCE.md) | Each runtime file, its role and current integration status |
 | [Upscalers](UPSCALERS.md) | Resolution scaling and hardware-dependent integrations |
 | [Frame generation](FRAME_GENERATION.md) | Setup, requirements and limitations |
 | [Experimental DLSS 5](experiments/dlss5.md) | Source-build setup and current validation limits |

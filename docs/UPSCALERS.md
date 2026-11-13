@@ -1,5 +1,8 @@
 # Upscalers
 
+See [GPU recommendations](GPU_GUIDE.md), [technology support](TECHNOLOGIES.md) and the [DLL reference](DLL_REFERENCE.md)
+for current vendor requirements and the distinction between SDK availability and Bedray integration.
+
 An upscaler lets the game draw the 3D world at a lower resolution and bring it up to the window size. The GUI always stays at full
 resolution. Choose it under **Video Settings, Bedray ALPHA: Upscaling, Upscaler**. Evidence levels are explained in
 [FEATURE_MATRIX.md](FEATURE_MATRIX.md). Image quality has **not** been compared systematically in this alpha.

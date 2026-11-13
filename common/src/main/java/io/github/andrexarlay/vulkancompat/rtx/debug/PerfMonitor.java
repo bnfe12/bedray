@@ -240,7 +240,12 @@ public final class PerfMonitor {
         int r = VK10.vkGetQueryPoolResults(vkDevice, vkPool, base, MARKS, results, 16L,
             VK10.VK_QUERY_RESULT_64_BIT | VK10.VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
         if (r != VK10.VK_SUCCESS && r != VK10.VK_NOT_READY) {
-            throw new IllegalStateException("vkGetQueryPoolResults failed: " + r);
+            String checkpoints = io.github.andrexarlay.vulkancompat.rt.world.RtComputeCheckpoints.readback(
+                VulkanCapabilityChecker.getVulkanDevice());
+            LOGGER.error("[VKB-PERF] vkGetQueryPoolResults failed: {} (GPU device loss; reached checkpoints below)\n{}",
+                r, checkpoints);
+            throw new IllegalStateException("vkGetQueryPoolResults failed: " + r
+                + (checkpoints.isEmpty() ? "" : "\n" + checkpoints));
         }
         for (int i = 0; i < MARKS; i++) {
             int q = base + i;
