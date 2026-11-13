@@ -21,6 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CameraMatrixGuardTest {
     private static final Path WORLD_TARGET_MANAGER = Path.of("src/main/java/io/github/andrexarlay/"
         + "vulkancompat/rtx/WorldTargetManager.java");
+    private static final Path WORLD_CAMERA_HISTORY = Path.of("src/main/java/io/github/andrexarlay/"
+        + "vulkancompat/rtx/WorldCameraHistory.java");
 
     private static Matrix4f perspective() {
         return new Matrix4f().setPerspective((float) java.lang.Math.toRadians(70), 2560f / 1369f, 512f, 0.05f, true);
@@ -132,7 +134,8 @@ class CameraMatrixGuardTest {
             "recordXess must return false without calling executeFailed");
         assertTrue(source.contains("if (!computeMatrices()) {\n            return;\n        }\n        final Vec3 camDelta = cameraDelta();"),
             "motion-vectors-only must skip the same frame");
-        assertTrue(source.contains("if (cameraMatricesValidThisFrame) {"),
+        String history = Files.readString(WORLD_CAMERA_HISTORY).replace("\r\n", "\n");
+        assertTrue(history.contains("if (cameraMatricesValidThisFrame) {"),
             "advanceFrameHistory must not promote a skipped or degenerate frame");
     }
 }
