@@ -274,6 +274,32 @@ public final class RtSky {
     }
 
     /**
+     * Authored ambient palettes for skyless dimensions, in the same units as {@link #skyLight}. The Nether uses a
+     * weak biome-fog tint on a neutral base, so a red fog does not flatten crimson bark and cyan growth to red.
+     * The End has a cool lilac environment. Local emitters and the visible sky keep their own colours.
+     */
+    public static void dimensionSkyLight(boolean isEnd, boolean isNether, float[] fogColor, SkyLight out) {
+        if (isEnd) {
+            out.zenith[0] = 0.13f; out.zenith[1] = 0.11f; out.zenith[2] = 0.18f;
+            out.horizon[0] = 0.12f; out.horizon[1] = 0.10f; out.horizon[2] = 0.16f;
+            out.ground[0] = 0.065f; out.ground[1] = 0.055f; out.ground[2] = 0.080f;
+        } else if (isNether) {
+            float peak = 0f;
+            for (int i = 0; i < 3; i++) {
+                if (Float.isFinite(fogColor[i])) peak = Math.max(peak, Math.max(fogColor[i], 0f));
+            }
+            for (int i = 0; i < 3; i++) {
+                float channel = Float.isFinite(fogColor[i]) ? Math.max(fogColor[i], 0f) : 0f;
+                float hue = peak > 1e-6f ? Math.min(channel / peak, 1f) : 1f;
+                float ambient = 0.145f * (0.85f + 0.15f * hue);
+                out.horizon[i] = ambient;
+                out.zenith[i] = ambient * 0.95f;
+                out.ground[i] = ambient * 0.5f;
+            }
+        }
+    }
+
+    /**
      * Hemisphere ambient for a surface normal with vertical component {@code ny}
      * (same expression as {@code hemisphereAmbient} in the shader, overworld sky).
      */

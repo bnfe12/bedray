@@ -28,6 +28,8 @@ import java.util.Locale;
  *   <li>{@code T}: an enchanting table;</li>
  *   <li>{@code H}: the player holds {@code item=<id>} two blocks from a wall with a wall torch and a glowstone block
  *       ({@code cam=3}: third person from the front).</li>
+ *   <li>{@code C}/{@code F}: crimson/warped growth emitting into a closed room without other lamps;</li>
+ *   <li>{@code X}: living/dead chorus flowers against End stone and purpur, without an end rod filling the room.</li>
  * </ul>
  * Modifiers: {@code item=<id>}, {@code cam=3}, {@code t<N>} (time, default 18000), {@code b<N>} (bounces), {@code f<N>} (frames before the
  * shot, default 400), {@code aim=<yaw>_<pitch>}, {@code cx=<dx>}, {@code cz=<dz>}.
@@ -36,7 +38,7 @@ import java.util.Locale;
 public final class MaterialsScenario implements AutotestScenario {
     public static final String STEPS_PROPERTY = "vkrtx.autotest.materialSteps";
     public static final String DEFAULT_STEPS = "D:path,N:path,G:path,T:path,H:path+item=iron_ingot";
-    private static final String SCENES = "DNGTHSEBKRW";
+    private static final String SCENES = "DNGTHSEBKRWCFX";
 
     public record Step(String scene, RtMode mode, List<String> mods, String raw) {
         int frames() {
@@ -84,7 +86,7 @@ public final class MaterialsScenario implements AutotestScenario {
             }
             String[] sm = item.split(":", 2);
             if (sm.length != 2 || sm[0].length() != 1 || SCENES.indexOf(sm[0].charAt(0)) < 0) {
-                throw new IllegalArgumentException("step '" + item + "': expected D:, N:, G:, T:, H:, S:, E:, B:, K:, R: or W:<mode>");
+                throw new IllegalArgumentException("step '" + item + "': expected D:, N:, G:, T:, H:, S:, E:, B:, K:, R:, W:, C:, F: or X:<mode>");
             }
             String[] parts = sm[1].split("\\+");
             RtMode mode = RtMode.parse(parts[0]);
@@ -161,6 +163,7 @@ public final class MaterialsScenario implements AutotestScenario {
         List<String> c = new ArrayList<>();
         c.add("gamerule send_command_feedback false");
         c.add("gamerule advance_time false");
+        c.add("gamerule random_tick_speed 0");
         c.add("weather clear");
         c.add("gamemode creative @a");
         c.add("difficulty peaceful");
@@ -190,7 +193,39 @@ public final class MaterialsScenario implements AutotestScenario {
         c.add(set(h + 7, 2, ROOM_Z + 10, "glowstone"));
         c.add(set(h + 8, 0, ROOM_Z + 8, "lantern"));
         addMatfixScenes(c);
+        addDimensionMaterials(c);
         return c;
+    }
+
+    /** Closed reference rooms isolate emission from Nether/End growth without a torch or sky filling the masks. */
+    private void addDimensionMaterials(List<String> commands) {
+        for (String scene : new String[] {"C", "F"}) {
+            boolean crimson = scene.equals("C");
+            String family = crimson ? "crimson" : "warped";
+            String canopy = crimson ? "nether_wart_block" : "warped_wart_block";
+            int x = roomX(scene), z = roomZ(scene);
+            commands.add(fill(x + 1, -1, z + 1, x + 9, -1, z + 9, family + "_nylium"));
+            for (int trunk : new int[] {x + 2, x + 8}) {
+                commands.add(fill(trunk, 0, z + 8, trunk, 3, z + 8, family + "_stem[axis=y]"));
+                commands.add(fill(trunk - 1, 4, z + 7, trunk + 1, 4, z + 9, canopy));
+            }
+            commands.add(setAt(x + 3, 0, z + 5, family + "_fungus"));
+            commands.add(setAt(x + 7, 0, z + 5, family + "_roots"));
+            if (crimson) {
+                commands.add(setAt(x + 1, 3, z + 8, "weeping_vines_plant"));
+                commands.add(setAt(x + 1, 2, z + 8, "weeping_vines"));
+            } else {
+                commands.add(setAt(x + 1, 0, z + 7, "twisting_vines"));
+                commands.add(setAt(x + 5, 0, z + 7, "nether_sprouts"));
+            }
+        }
+        int x = roomX("X"), z = roomZ("X");
+        commands.add(fill(x + 1, -1, z + 1, x + 9, -1, z + 9, "end_stone"));
+        commands.add(fill(x + 1, 0, z + 8, x + 3, 2, z + 8, "purpur_block"));
+        commands.add(setAt(x + 5, 0, z + 7, "chorus_plant[down=true,up=true]"));
+        commands.add(setAt(x + 5, 1, z + 7, "chorus_flower"));
+        commands.add(setAt(x + 7, 0, z + 7, "chorus_plant[down=true,up=true]"));
+        commands.add(setAt(x + 7, 1, z + 7, "chorus_flower[age=5]"));
     }
 
     private static final String[][] STAND = {
@@ -315,6 +350,10 @@ public final class MaterialsScenario implements AutotestScenario {
         int z0 = roomZ(s.scene());
         aimYaw = 0f;
         switch (s.scene()) {
+            case "C", "F", "X" -> {
+                z = bz + z0 + 1.5;
+                aimPitch = 8f;
+            }
             case "D" -> {
                 z = bz + ROOM_Z + 2.5;
                 aimPitch = 38f;

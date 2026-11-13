@@ -161,6 +161,19 @@ public final class AutoPbr {
         if (n.equals("respawn_anchor_top_off")) {
             return new Material(0.6f, 0.04f, false, 0f, Emission.NONE, "uncharged_anchor");
         }
+        if (n.equals("amethyst_cluster") || n.endsWith("_amethyst_bud") || n.equals("calibrated_sculk_sensor_amethyst")) {
+            return new Material(0.24f, 0.05f, false, 0.35f, Emission.BRIGHT, RULE_CRYSTAL);
+        }
+        if (n.equals("sculk") || n.equals("sculk_vein") || n.startsWith("sculk_catalyst_")
+            || n.startsWith("sculk_sensor_") || n.startsWith("sculk_shrieker_")) {
+            float strength = n.contains("bloom") || n.endsWith("tendril_active") || n.contains("can_summon") ? 0.4f : 0.18f;
+            return new Material(0.86f, 0.04f, false, strength, Emission.BRIGHT, RULE_SCULK);
+        }
+        if (n.equals("creaking_heart_awake") || n.equals("creaking_heart_top_awake")
+            || (n.startsWith("trial_spawner_") && (n.contains("_active") || n.contains("ejecting_reward")))
+            || (n.startsWith("vault_") && (n.contains("_on") || n.contains("ejecting")))) {
+            return new Material(0.72f, 0.04f, false, 0.55f, Emission.BRIGHT, RULE_MAGIC_CORE);
+        }
 
         // ---- emissive, whole sprite ----
         if (n.equals("glowstone") || n.equals("sea_lantern") || n.equals("beacon")
@@ -247,9 +260,11 @@ public final class AutoPbr {
             || n.startsWith("copper_door") || n.startsWith("copper_trapdoor")) {
             return new Material(0.3f, 0.04f, true, 0f, Emission.NONE, "metal_copper");
         }
-        if (n.startsWith("exposed_copper") || n.startsWith("exposed_cut_copper") || n.startsWith("weathered_copper")
-            || n.startsWith("weathered_cut_copper")) {
-            return new Material(0.55f, 0.04f, true, 0f, Emission.NONE, "metal_copper_weathered");
+        if ((n.startsWith("exposed_") || n.startsWith("weathered_") || n.startsWith("oxidized_")) && n.contains("copper")) {
+            return new Material(0.62f, 0.04f, false, 0f, Emission.NONE, "copper_patina");
+        }
+        if (n.equals("copper_bars") || n.equals("copper_chain")) {
+            return new Material(0.35f, 0.04f, true, 0f, Emission.NONE, "metal_copper");
         }
         // ---- smooth dielectrics ----
         if (n.startsWith("water_")) {
@@ -273,6 +288,24 @@ public final class AutoPbr {
         if (n.equals("diamond_block") || n.equals("emerald_block") || n.equals("amethyst_block") || n.equals("obsidian")
             || n.equals("honey_block_side") || n.equals("slime_block") || n.endsWith("_glazed_terracotta")) {
             return new Material(0.15f, 0.05f, false, 0f, Emission.NONE, "smooth_dielectric");
+        }
+        // Texture families keep their own surface character when no resource pack provides material maps.
+        if (n.endsWith("_wool") || n.endsWith("_concrete_powder") || n.equals("sand") || n.equals("red_sand")
+            || n.equals("gravel") || n.endsWith("_sponge") || n.equals("sponge")) {
+            return new Material(0.98f, 0.04f, false, 0f, Emission.NONE, "porous_fibre_or_grain");
+        }
+        if (n.endsWith("_log") || n.endsWith("_log_top") || n.endsWith("_stem") || n.endsWith("_stem_top")) {
+            return new Material(n.startsWith("stripped_") ? 0.76f : 0.93f, 0.04f, false, 0f, Emission.NONE, "wood_grain");
+        }
+        if (n.endsWith("_planks") || n.equals("bamboo_mosaic")) {
+            return new Material(0.76f, 0.04f, false, 0f, Emission.NONE, "wood_planks");
+        }
+        if (n.endsWith("_leaves") || n.endsWith("_roots") || n.endsWith("_grass") || n.equals("moss_block")
+            || n.equals("moss_carpet") || n.equals("pale_moss_block")) {
+            return new Material(0.92f, 0.04f, false, 0f, Emission.NONE, "vegetation");
+        }
+        if (n.endsWith("_terracotta") || n.equals("terracotta") || n.endsWith("_concrete")) {
+            return new Material(0.84f, 0.04f, false, 0f, Emission.NONE, "matte_mineral");
         }
         if (n.startsWith("quartz_block") || n.startsWith("polished_") || n.startsWith("smooth_") || n.equals("calcite")
             || n.startsWith("prismarine") || n.startsWith("dark_prismarine") || n.endsWith("_concrete") || n.equals("lapis_block")
@@ -378,6 +411,9 @@ public final class AutoPbr {
     public static final String RULE_CHORUS_FLOWER = "chorus_flower";
     public static final String RULE_PURPLE_VEINS = "purple_veins";
     public static final String RULE_END_EYE = "end_eye";
+    public static final String RULE_CRYSTAL = "crystal_tips";
+    public static final String RULE_SCULK = "sculk_speckles";
+    public static final String RULE_MAGIC_CORE = "magic_core";
 
     /** Resolves BRIGHT masks identically for block baking and entity/item atlases. Inputs are unlit sRGB texels. */
     public static float pixelEmission(Material material, int argb) {
@@ -407,6 +443,13 @@ public final class AutoPbr {
             case RULE_CHORUS_FLOWER -> b >= r * 0.9f && r >= g * 0.95f ? smoothstep(175f, 245f, g) : 0f;
             case RULE_PURPLE_VEINS -> smoothstep(85f, 225f, b) * smoothstep(0.50f, 0.80f, (b - g) / (float) Math.max(b, 1));
             case RULE_END_EYE -> g >= r && g >= b ? smoothstep(115f, 210f, g) : 0f;
+            case RULE_CRYSTAL -> b >= g && r >= g ? smoothstep(145f, 235f, Math.min(r, b)) : 0f;
+            case RULE_SCULK -> g > r * 2f && b > r * 2f
+                ? smoothstep(45f, 130f, Math.max(g, b)) : 0f;
+            case RULE_MAGIC_CORE -> (Math.min(r, Math.min(g, b)) >= 225
+                || (r >= 180 && g >= 55 && r > g * 1.1f && g > b * 1.25f)
+                || (Math.min(g, b) >= 100 && r < Math.min(g, b) * 0.6f))
+                ? flameEmission(r, g, b, a) : 0f;
             default -> brightPixelEmission(r, g, b, a);
         };
         return material.emission() * mask;
@@ -506,7 +549,8 @@ public final class AutoPbr {
         IRON_BARS,
         CHAIN,
         CHEST,
-        COPPER_LANTERN
+        COPPER_LANTERN,
+        COPPER_PATINA
     }
 
     public static MixedKind mixedKind(String spritePath) {
@@ -534,6 +578,9 @@ public final class AutoPbr {
         }
         if (n.contains("redstone_lamp")) {
             return MixedKind.REDSTONE_LAMP;
+        }
+        if ((n.startsWith("exposed_") || n.startsWith("weathered_") || n.startsWith("oxidized_")) && n.contains("copper")) {
+            return MixedKind.COPPER_PATINA;
         }
         if (n.startsWith("cauldron")) {
             return MixedKind.CAULDRON;
@@ -579,6 +626,9 @@ public final class AutoPbr {
             case COPPER_LANTERN:
                 // everything that does not glow is copper casing / chain (the green flame is excluded by isEmissiveTexel)
                 return !isEmissiveTexel(argb, kind);
+            case COPPER_PATINA:
+                // Bare reddish copper reflects as metal; green/blue corrosion is a rough dielectric coating.
+                return r > g * 1.12f && g > b * 1.05f && sat > 0.18f;
             case COPPER_BULB:
                 // Copper casing (reddish-orange or weathered/oxidized turquoise) or dark metal border
                 boolean isCopper = (r > g && g >= b * 0.75f && sat > 0.18f)
