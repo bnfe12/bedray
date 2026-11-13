@@ -17,10 +17,8 @@ import org.lwjgl.vulkan.VkAccelerationStructureCreateInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureDeviceAddressInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureGeometryKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureTrianglesOpacityMicromapEXT;
-import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkMemoryBarrier;
 import org.lwjgl.vulkan.VkMicromapUsageEXT;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -643,11 +641,7 @@ public final class RtWorld {
     }
 
     private static void copyBuffer(VkCommandBuffer cmd, long src, long srcOffset, long dst, long dstOffset, long size) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
-            region.get(0).srcOffset(srcOffset).dstOffset(dstOffset).size(size);
-            VK10.vkCmdCopyBuffer(cmd, src, dst, region);
-        }
+        RtWorldVkPrimitives.copyBuffer(cmd, src, srcOffset, dst, dstOffset, size);
     }
 
     /** Returned by tryBuildSection for a section that can never be built: the caller skips it and continues. */
@@ -998,19 +992,7 @@ public final class RtWorld {
 
     private static void fillTriangleGeometry(VkAccelerationStructureGeometryKHR geom, int pass, int quadCount,
                                              long vertexAddress, long indexAddress, long opacityMicromapPNext) {
-        geom.sType$Default()
-            .geometryType(KHRAccelerationStructure.VK_GEOMETRY_TYPE_TRIANGLES_KHR)
-            .flags(pass == DecodedSection.PASS_SOLID ? KHRAccelerationStructure.VK_GEOMETRY_OPAQUE_BIT_KHR : 0);
-        var triangles = geom.geometry().triangles().sType$Default()
-            .vertexFormat(VK10.VK_FORMAT_R32G32B32_SFLOAT)
-            .vertexStride(12)
-            .maxVertex(quadCount * 4 - 1)
-            .indexType(VK10.VK_INDEX_TYPE_UINT32);
-        if (opacityMicromapPNext != 0L) {
-            triangles.pNext(opacityMicromapPNext);
-        }
-        triangles.vertexData().deviceAddress(vertexAddress);
-        triangles.indexData().deviceAddress(indexAddress);
+        RtWorldVkPrimitives.fillTriangleGeometry(geom, pass, quadCount, vertexAddress, indexAddress, opacityMicromapPNext);
     }
 
     /**
@@ -1138,11 +1120,7 @@ public final class RtWorld {
     }
 
     private static void barrier(VkCommandBuffer cmd, int srcStage, int srcAccess, int dstStage, int dstAccess) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkMemoryBarrier.Buffer b = VkMemoryBarrier.calloc(1, stack);
-            b.get(0).sType$Default().srcAccessMask(srcAccess).dstAccessMask(dstAccess);
-            VK10.vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, b, null, null);
-        }
+        RtWorldVkPrimitives.barrier(cmd, srcStage, srcAccess, dstStage, dstAccess);
     }
 
     // --------------------------------------------------------------------------------------------- release
