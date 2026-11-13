@@ -1,0 +1,44 @@
+[
+  {
+    "version": "mc26.3-0.9.2-neoforge",
+    "id": "VHtnT9Q4",
+    "url": "https://cdn.modrinth.com/data/AANobbMI/versions/VHtnT9Q4/sodium-neoforge-0.9.2%2Bmc26.3.jar",
+    "sha512": "f5b62730bbee7d116a83c765b8e7cdb660da97ab7f122f180293eda3e56b5ca4d701b0bf18c36f087e9a7349f8ec113f1f8c0d462a8893c551a2f3e163bd0cb8"
+  },
+  {
+    "version": "mc26.3-0.9.3-alpha.1-neoforge",
+    "id": "NM9w06Kr",
+    "url": "https://cdn.modrinth.com/data/AANobbMI/versions/NM9w06Kr/sodium-neoforge-0.9.3-alpha.1%2Bmc26.3.jar",
+    "sha512": "5f58b37b13e2496b0ac42b94d6475fe72d6462019dee11064dce3d498ac15966e63f9b53b6d1bae82fdc7ceac73fa206d2aef2c67e97871de928b721ea222e06"
+  },
+  {
+    "version": "mc26.3-0.9.3-beta.1-neoforge",
+    "id": "SS023RVV",
+    "url": "https://cdn.modrinth.com/data/AANobbMI/versions/SS023RVV/sodium-neoforge-0.9.3-beta.1%2Bmc26.3.jar",
+    "sha512": "92cdb344cb8049993685e3d81498411d4e6965a8f054c912a297bfe550937ed4792b7c1cb4efea5b5ac9c0e6c32aea777389207e481f008ce6f176b5ae6aab93"
+  },
+  {
+    "version": "mc26.3-0.9.3-beta.2-neoforge",
+    "id": "V4VWv3Mk",
+    "url": "https://cdn.modrinth.com/data/AANobbMI/versions/V4VWv3Mk/sodium-neoforge-0.9.3-beta.2%2Bmc26.3.jar",
+    "sha512": "db8ac9161a187a8b274c2389dab35f2af1b216d06132823f98e34c4f62ae56080a81597688d5e2f4dafbf3c75fb6edf5bd2ba5d96be50396071d1be12d7d4ff3"
+  },
+  {
+    "version": "mc26.3-0.9.3-beta.3-neoforge",
+    "id": "Sx1xfT5Y",
+    "url": "https://cdn.modrinth.com/data/AANobbMI/versions/Sx1xfT5Y/sodium-neoforge-0.9.3-beta.3%2Bmc26.3.jar",
+    "sha512": "ff31a4fd45e25bb05e098fe56db87ebba3efd3731f1f6934d3f9a1b19e3bab9baeab9486a9eee7e85a5be0b2b088b1b81deb6233c4b2242b12cf3079929e475c"
+  },
+  {
+    "version": "mc26.3-0.9.3-beta.4-neoforge",
+    "id": "zqgcaQxE",
+    "url": "https://cdn.modrinth.com/data/AANobbMI/versions/zqgcaQxE/sodium-neoforge-0.9.3-beta.4%2Bmc26.3.jar",
+    "sha512": "fce763fac0a8feb035275585c7a9facd3aea8ad181d0a09106d93d2be49c20a930d649434379bb8872c7e9475f3db72068aabe9890846592cf50440a900dec1f"
+  },
+  {
+    "version": "mc26.3-0.9.3-beta.5-neoforge",
+    "id": "CT6qQx01",
+    "url": "https://cdn.modrinth.com/data/AANobbMI/versions/CT6qQx01/sodium-neoforge-0.9.3-beta.5%2Bmc26.3.jar",
+    "sha512": "a460d7542dca8ea461d16d2f172bfde93bede9550fc076d4910419b8a62c1dc6c157af73c82775ff7cc895904ba83eeac16089240beec6badeb53cf0fda45f67"
+  }
+]

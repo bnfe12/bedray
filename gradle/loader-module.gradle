@@ -35,7 +35,15 @@ repositories {
 
 dependencies {
     // Local Minecraft 26.3 client jar (RenderPearl Vulkan classes) and Sodium. libs/ is gitignored (jars are not redistributed).
-    compileOnly fileTree(dir: rootProject.file('libs'), include: ['*.jar'])
+    def sodiumOverride = rootProject.findProperty('sodiumJar')
+    if (sodiumOverride) {
+        def selectedSodium = rootProject.file(sodiumOverride)
+        if (!selectedSodium.isFile()) throw new GradleException("Sodium override does not exist: ${selectedSodium}")
+        compileOnly fileTree(dir: rootProject.file('libs'), include: ['*.jar'], exclude: ['*sodium*.jar'])
+        compileOnly files(selectedSodium)
+    } else {
+        compileOnly fileTree(dir: rootProject.file('libs'), include: ['*.jar'])
+    }
 
     // LWJGL core, OpenGL, Vulkan bindings
     compileOnly "org.lwjgl:lwjgl:${rootProject.lwjgl_version}"

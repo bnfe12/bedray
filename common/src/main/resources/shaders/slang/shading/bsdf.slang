@@ -4,7 +4,7 @@
 //
 //   * a Lambert diffuse lobe for dielectric / rough surfaces
 //   * a GGX specular lobe for metals and dielectric reflections
-//   * a diffuse transmission lobe for thin translucent panes
+//   * a straight delta transmission lobe for thin translucent panes
 //   * a Fresnel-selected specular transmission lobe for optical interfaces
 //
 // `bsdfEvaluate` returns f * cos(theta), the quantity a path tracer multiplies
