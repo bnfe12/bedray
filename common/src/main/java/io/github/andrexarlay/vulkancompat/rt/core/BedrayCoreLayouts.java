@@ -106,6 +106,8 @@ public final class BedrayCoreLayouts {
     public static final int PATH_TRACE_FEATURE_FRAME_STATS = 1 << 6;
     public static final int PATH_TRACE_FEATURE_NATIVE_PT = 1 << 7;
     public static final int PATH_TRACE_FEATURE_STATS_SLOT = 1 << 8;
+    public static final int PATH_TRACE_FEATURE_NATIVE_SCENE_ONLY = 1 << 9;
+    public static final int PATH_TRACE_FEATURE_COMPACT_RR_PACK = 1 << 10;
 
     /** {@code BEDRAY_PATH_DISPLAY_*} bits; the pass adds the ones it derives itself. */
     public static final int PATH_DISPLAY_ACCUMULATE = 1 << 0;
@@ -334,7 +336,7 @@ public final class BedrayCoreLayouts {
     public static final StructLayout PT_DESC = MemoryLayout.structLayout(
         ValueLayout.JAVA_INT.withName("abi_version"),
         ValueLayout.JAVA_INT.withName("flags"),
-        ValueLayout.JAVA_LONG.withName("program_trace"),
+        ValueLayout.JAVA_LONG.withName("retired_trace_slot"),
         ValueLayout.JAVA_LONG.withName("program_spatial"),
         ValueLayout.JAVA_LONG.withName("program_display"),
         ValueLayout.JAVA_LONG.withName("image_budget_bytes"),
@@ -522,7 +524,9 @@ public final class BedrayCoreLayouts {
     public static final long PTP_ENTITY_STATE = PT_PATH.byteOffset(groupElement("entity_state"));
 
     public static final long PTD_ABI_VERSION = PT_DESC.byteOffset(groupElement("abi_version"));
-    public static final long PTD_PROGRAM_TRACE = PT_DESC.byteOffset(groupElement("program_trace"));
+    public static final long PTD_FLAGS = PT_DESC.byteOffset(groupElement("flags"));
+    public static final int PATH_TRACE_CONFIG_TILE_STATS = 1;
+    private static final long PTD_RETIRED_TRACE_SLOT = PT_DESC.byteOffset(groupElement("retired_trace_slot"));
     public static final long PTD_PROGRAM_SPATIAL = PT_DESC.byteOffset(groupElement("program_spatial"));
     public static final long PTD_PROGRAM_DISPLAY = PT_DESC.byteOffset(groupElement("program_display"));
     public static final long PTD_IMAGE_BUDGET_BYTES = PT_DESC.byteOffset(groupElement("image_budget_bytes"));
@@ -573,6 +577,7 @@ public final class BedrayCoreLayouts {
         require("BedrayPathTraceFrameDesc", PT_FRAME_DESC.byteSize(), 1072);
         require("BedrayPathTraceDesc", PT_DESC.byteSize(), 80);
         require("BedrayPathTraceDesc.program_stats", PTD_PROGRAM_STATS, 56);
+        require("BedrayPathTraceDesc.retired_trace_slot", PTD_RETIRED_TRACE_SLOT, 8);
         require("BedrayPathTraceDesc.program_trace_scene", PTD_PROGRAM_TRACE_SCENE, 64);
         require("BedrayFgPrepareFrameDesc", FG_PREPARE_DESC.byteSize(), 104);
         require("BedrayFgPrepareFrameDesc.command_buffer", FGP_COMMAND_BUFFER, 8);

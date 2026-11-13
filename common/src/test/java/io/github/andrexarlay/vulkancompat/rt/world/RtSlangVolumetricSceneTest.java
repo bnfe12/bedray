@@ -15,7 +15,7 @@ import java.util.HexFormat;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Native/legacy binding adapters share one march/store body; coordinate updates preserve its transport arithmetic. */
+/** Native scene bindings and the march/store transport contract. */
 class RtSlangVolumetricSceneTest {
     private static final String ROOT = "src/main/resources/shaders/slang/";
     private static final String KERNEL = "light/volumetric_march_entry.slang";
@@ -34,34 +34,20 @@ class RtSlangVolumetricSceneTest {
         assertEquals("ba61272bb63ed18c8f5a875e2268919251e496a42b5d6d7fc301105d60087355", fingerprint,
             "an interface extraction must not silently change the ray, history or accumulation math");
         assertFalse(read(KERNEL).contains("[[vk::binding("), "the shared kernel has no descriptor ownership");
-        assertFalse(read(KERNEL).contains("LegacySectionTraversal"));
         assertFalse(read(KERNEL).contains("HardwareTraversal"));
     }
 
-    @Test void onlyTheSectionProviderChangesAtTheTwoBindingBoundaries() {
-        String legacy = read("passes/volumetric_march.slang");
+    @Test void marchBindsTheNativeWorldTraversal() {
         String scene = read("passes/volumetric_march_scene.slang");
-        for (String entry : new String[]{legacy, scene}) {
-            assertEquals(5, entry.split("\\[\\[vk::binding\\(", -1).length - 1);
-            assertTrue(entry.contains("[[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;"));
-            assertTrue(entry.contains("[[vk::image_format(\"r32f\")]] [[vk::binding(12, 0)]] RWTexture2D<float> outDepth;"));
-            assertTrue(entry.contains("[[vk::image_format(\"rgba32f\")]] [[vk::binding(11, 0)]] RWTexture2D<float4> accumImage;"));
-            assertTrue(entry.contains("[[vk::binding(16, 0)]] ConstantBuffer<FrameConstants> frame;"));
-            assertTrue(entry.contains("[[vk::push_constant]] VolumetricMarchPush pc;"));
-            assertTrue(entry.contains("[numthreads(8, 8, 1)]"));
-            assertTrue(entry.contains("volumetricMarchEntry(traversal, dispatchThreadID, outDepth, accumImage, frame, pc);"));
-            assertFalse(entry.contains("marchLightShaft("), "march/store arithmetic must not be duplicated");
-        }
-        assertTrue(legacy.contains("[[vk::binding(2, 0)]] StructuredBuffer<LegacySection> sections;"));
-        assertTrue(legacy.contains("traversal.sections = sections;"));
-        assertTrue(legacy.contains("traversal.instanceMask = pc.instanceMask;"));
-        // The march has no entity binding, so it must not name the traversal that
-        // carries an EntityGeometry field: Slang lowers the unassigned handle to an
-        // OpUndef descriptor pointer and the NVIDIA driver faults on it.
-        assertTrue(legacy.contains("LegacySectionWorldTraversal traversal;"),
-            "volumetric_march must take the world-only traversal");
-        assertFalse(legacy.contains("LegacySectionTraversal traversal;"));
-        assertFalse(legacy.contains("entities"));
+        assertEquals(5, scene.split("\\[\\[vk::binding\\(", -1).length - 1);
+        assertTrue(scene.contains("[[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;"));
+        assertTrue(scene.contains("[[vk::image_format(\"r32f\")]] [[vk::binding(12, 0)]] RWTexture2D<float> outDepth;"));
+        assertTrue(scene.contains("[[vk::image_format(\"rgba32f\")]] [[vk::binding(11, 0)]] RWTexture2D<float4> accumImage;"));
+        assertTrue(scene.contains("[[vk::binding(16, 0)]] ConstantBuffer<FrameConstants> frame;"));
+        assertTrue(scene.contains("[[vk::push_constant]] VolumetricMarchPush pc;"));
+        assertTrue(scene.contains("[numthreads(8, 8, 1)]"));
+        assertTrue(scene.contains("volumetricMarchEntry(traversal, dispatchThreadID, outDepth, accumImage, frame, pc);"));
+        assertFalse(scene.contains("marchLightShaft("), "march/store arithmetic belongs to the kernel");
         assertTrue(scene.contains("[[vk::binding(2, 0)]] StructuredBuffer<GeometrySection> sections;"));
         assertTrue(scene.contains("GeometryProvider geometry;"));
         assertTrue(scene.contains("geometry.sections = sections;"));
@@ -72,14 +58,10 @@ class RtSlangVolumetricSceneTest {
         assertFalse(scene.contains("entities ="));
     }
 
-    @Test void nativeSectionIdentityComesFromItsFieldsRatherThanTheEqualByteSize() {
+    @Test void nativeSectionIdentityComesFromItsFields() {
         String nativeSection = withoutComments(block(read("contracts/geometry.slang"), "struct GeometrySection {"))
             .replaceAll("\\s+", "");
         assertEquals("{int4origin;uint4meta;uint64_tvertexAddress;GeometryRangeranges[MAX_SECTION_GEOMETRIES];}", nativeSection);
-        String legacySection = withoutComments(block(read("traversal/legacy_section_traversal.slang"), "struct LegacySection {"))
-            .replaceAll("\\s+", "");
-        assertEquals("{uint64_tposAddr;uint64_tuvAddr;uint64_tcolAddr;uint64_tlightAddr;uint4quadStart;int4origin;}", legacySection);
-        assertNotEquals(nativeSection, legacySection, "both are 64 B but their addresses/origin/identity are incompatible");
         String hardware = read("traversal/hardware_traversal.slang");
         assertTrue(hardware.contains("static const uint HARDWARE_INSTANCE_MASK_WORLD    = 0x01u;"));
         assertTrue(hardware.contains("geometry.sections[instanceId]"));
@@ -95,22 +77,20 @@ class RtSlangVolumetricSceneTest {
             "same 96-byte size alone would not detect a reordered scalar in the host push contract");
     }
 
-    @Test void compiledMarchManifestsKeepTheSamePushResourceAndCapabilityContract() {
-        Assumptions.assumeTrue(SlangPassLibrary.available("volumetric_march")
-            && SlangPassLibrary.available("volumetric_march_scene"), "both volumetric entries were not selected for this build");
-        for (String name : new String[]{"volumetric_march", "volumetric_march_scene"}) {
-            var manifest = SlangPassLibrary.load(name).orElseThrow().manifest();
-            assertEquals(96, manifest.pushConstantBytes());
-            assertArrayEquals(new int[]{8, 8, 1}, manifest.threadGroupSize());
-            assertEquals(5, manifest.bindings().size());
-            requireBinding(manifest, "tlas", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 0);
-            requireBinding(manifest, "sections", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER, 64);
-            requireBinding(manifest, "accumImage", 11, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE, 0);
-            requireBinding(manifest, "outDepth", 12, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE, 0);
-            requireBinding(manifest, "frame", 16, BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER, 608);
-            assertEquals(BedrayCoreLayouts.CAP_RAY_QUERY | BedrayCoreLayouts.CAP_BUFFER_DEVICE_ADDRESS
-                | BedrayCoreLayouts.CAP_SHADER_INT64, manifest.requiredCapabilities());
-        }
+    @Test void theCompiledMarchManifestMatchesTheNativeResourceContract() {
+        String name = "volumetric_march_scene";
+        Assumptions.assumeTrue(SlangPassLibrary.available(name), "native volumetric march was not compiled");
+        var manifest = SlangPassLibrary.load(name).orElseThrow().manifest();
+        assertEquals(96, manifest.pushConstantBytes());
+        assertArrayEquals(new int[]{8, 8, 1}, manifest.threadGroupSize());
+        assertEquals(5, manifest.bindings().size());
+        requireBinding(manifest, "tlas", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 0);
+        requireBinding(manifest, "sections", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER, 64);
+        requireBinding(manifest, "accumImage", 11, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE, 0);
+        requireBinding(manifest, "outDepth", 12, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE, 0);
+        requireBinding(manifest, "frame", 16, BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER, 608);
+        assertEquals(BedrayCoreLayouts.CAP_RAY_QUERY | BedrayCoreLayouts.CAP_BUFFER_DEVICE_ADDRESS
+            | BedrayCoreLayouts.CAP_SHADER_INT64, manifest.requiredCapabilities());
     }
 
     private static void requireBinding(SlangPassManifest manifest, String name, int index, int type, int bytes) {

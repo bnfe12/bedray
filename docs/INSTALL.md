@@ -7,12 +7,12 @@ Use a **clean test instance**, not your main world or a large modpack.
 
 * Windows, a GPU with Vulkan 1.3 or 1.4 and ray query support (NVIDIA RTX, AMD RDNA 2 or newer, Intel Arc), a current driver.
 * Java 25 (the Minecraft 26.3 launcher normally provides it).
-* Ray tracing needs several GB of VRAM. With 8 GB use a render distance of about 12 chunks or less and keep the default "RT Memory Budget".
+* Ray tracing needs several GB of VRAM. With 8 GB, start at about 12 chunks of render distance or less.
 
 ## 2. Install the mods
 
 Create an instance with **Minecraft 26.3** and **NeoForge 26.3.0.x** or **Fabric** (fabric-loader 0.19.5 or newer). Put these jars into the
-instance's `mods` folder. Bedray is **one self-contained jar**; no other library mod is needed:
+instance's `mods` folder:
 
 1. **Sodium 0.9.x** for your loader (tested with 0.9.2). Download it from Modrinth or CurseForge.
 2. The **Bedray jar** for your loader: `bedray-neoforge-mc26.3.0-<version>.jar` or `bedray-fabric-mc26.3-<version>.jar`.
@@ -22,13 +22,17 @@ Development alpha.13 includes Bedray Compute inside that Bedray JAR. Remove an o
 `bedray-compute-*.jar` when updating to this distribution; the loader discovers the included provider
 as `bedray_compute`. The `-host-only.jar` artifact is intended for developers, not this installation.
 
+Copy the **matching `bedray_core.dll`** from the same build to `bedray/natives/` inside the instance's game folder.
+The renderer DLL contains the native GPU scene and is required for ray tracing and path tracing.
+See the [Windows distribution instructions](../native/bedray_core/DISTRIBUTION.md) to build this pair from source.
+
 Do not install the NeoForge and the Fabric jar together. Start the game once. If everything is right, **Options, Video Settings**
 shows the pages **Bedray ALPHA: Upscaling, Ray Tracing, Advanced and Experimental**, and the F3 screen has "Bedray" sections (overview, load, quality, libraries; two more can be enabled in the F3+F6 screen).
 The first start creates `config/bedray.toml`. If you used a pre-release build, your old `config/vulkan_rtx.toml` is copied once
 (the old file is left in place).
 
-At this point the **built-in upscalers (Bilinear, FSR 1, NIS)** and ray / path tracing with accumulation already work. Everything
-below is optional.
+The matching core and loader JAR supply ray tracing and path tracing with accumulation and the
+**built-in upscalers (Bilinear, FSR 1, NIS)**. The additional libraries below enable vendor features.
 
 ## 3. Included and optional native libraries
 
@@ -65,7 +69,7 @@ and `native/*/build.bat` (the scripts read the SDK locations from environment va
   files appear after the game has started (the page says "restart required").
 * **FSR:** the DLL must be the official build. The mod checks its SHA-256 against the known official file
   (`a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78` for `PrebuiltSignedDLL/amd_fidelityfx_vk.dll` of v1.1.4). Other builds
-  are refused ("library missing" on the page). FSR 4 is not available on Vulkan.
+  are refused ("library missing" on the page). Bedray currently uses the FSR 3.1/2.x integration. AMD provides FSR 4 for Vulkan in the [FSR SDK](https://gpuopen.com/amd-fsr-sdk/).
 * **XeSS:** `libxess.dll` only. Release jars include the approved SDK 3.0.2 binary and notices.
 * **Frame generation:** `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.reflex.dll`, `sl.pcl.dll`, `nvngx_dlssg.dll` (from the
   Streamline release; use a 2.14.x release, the mod was developed against 2.14.1) and `vkb_sl.dll`.
@@ -80,6 +84,7 @@ Open `logs/latest.log` after starting the game and search for these lines:
 
 | Feature | Good sign | Bad sign |
 |---|---|---|
+| Native GPU scene | `[VKB-RT] native scene ready` | `bedray_core.dll is not installed` or an error initializing the native scene |
 | DLSS | `ngx_init code=0` | `[VKB-DLSS]` with `FAILED` or "library missing" |
 | FSR | `[VKB-FSR] library usable=true` | `usable=false reason=...` |
 | XeSS | `xess=lib_loaded` | `xess=FAILED ... dll_missing` |
@@ -90,5 +95,5 @@ The settings page also shows "library missing" next to a backend whose files are
 
 ## Updating and removing
 
-Replace the Bedray jar; delete `config/bedray.toml` if settings look wrong (it is recreated). To remove Bedray delete its jar, the
-the folders you created above. Vendor DLLs are not removed automatically.
+Update the Bedray JAR and `bedray_core.dll` together from the same build. Close Minecraft before replacing either file.
+To remove Bedray, delete its JAR and the files installed for it.

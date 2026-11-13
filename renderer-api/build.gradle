@@ -1,4 +1,5 @@
 apply from: rootProject.file('gradle/loader-module.gradle')
+apply from: rootProject.file('gradle/build-provenance.gradle')
 
 base { archivesName = 'bedray-renderer-api' }
 java { withSourcesJar() }

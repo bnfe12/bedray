@@ -7,7 +7,7 @@
 // This pass traces no rays and shades nothing: it only rewrites reservoirs, which the next frame's temporal import and
 // this frame's display both read through the shading pass.
 //
-// Bindings mirror `passes/path_trace.slang` for every resource the two share, so the host binds the same views twice
+// Bindings mirror `passes/path_trace_scene.slang` for every resource the two share, so the host binds the same views twice
 // instead of repacking them:
 //   3  albedoAtlas      combined image sampler
 //   9  materialAtlas    combined image sampler (LabPBR _s)
@@ -18,7 +18,7 @@
 //  23  entityRects      StructuredBuffer<uint4> - the captured entity atlas slot table
 //  24  entityTexels     StructuredBuffer<uint>  - the captured entity atlas, packed bytes
 //
-// 23 and 24 are the buffers `passes/path_trace.slang` already binds: a pooled record can belong to an entity emitter
+// 23 and 24 are the buffers `passes/path_trace_scene.slang` already binds: a pooled record can belong to an entity emitter
 // (the list carries `atlasSlotPlus1` and a tint), so re-evaluating it without the atlas would read storage this pass
 // never bound.  An empty atlas is still a real one-element binding and `atlasSize == 0` makes `entityTexel` fall back.
 

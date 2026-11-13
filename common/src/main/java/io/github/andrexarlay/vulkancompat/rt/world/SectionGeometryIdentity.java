@@ -3,7 +3,7 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 import io.github.andrexarlay.vulkancompat.rt.sodium.DecodedSection;
 import java.util.Arrays;
 
-/** Shared CPU identity rules for reference and native scene captures. */
+/** CPU identity rules for native scene captures. */
 final class SectionGeometryIdentity {
     private SectionGeometryIdentity() {}
 
@@ -15,11 +15,11 @@ final class SectionGeometryIdentity {
         return Arrays.equals(a.rawWords, b.rawWords);
     }
 
-    static long lightHash(int[] words, int[] quadFlags, int count) {
+    static long tagHash(int[] quadFlags, int count) {
+        if (quadFlags == null) return 0;
         long hash = 0xcbf29ce484222325L;
         for (int i = 0; i < count; i++) {
-            int word = words[i] | (quadFlags == null ? 0 : quadFlags[i >> 2]);
-            hash = (hash ^ (word & 0xFFFFFFFFL)) * 0x100000001b3L;
+            hash = (hash ^ quadFlags[i]) * 0x100000001b3L;
         }
         return hash;
     }

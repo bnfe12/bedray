@@ -7,7 +7,6 @@
 #include "ray_generation_pipeline.h"
 #include "bloom_pass.h"
 #include "particles_pass.h"
-#include "sodium_pass.h"
 #include "velocity_pass.h"
 #include "nrd_pack_pass.h"
 #include "fg_prepare_pass.h"
@@ -65,6 +64,7 @@ static_assert(sizeof(BedrayPathTraceDesc) == 80, "path-trace ABI: configure desc
  * layout and every neighbour offset below are unchanged; the Java host mirrors
  * these four numbers. */
 static_assert(offsetof(BedrayPathTraceDesc, program_stats) == 56, "path-trace ABI: desc.program_stats offset");
+static_assert(offsetof(BedrayPathTraceDesc, retired_trace_slot) == 8, "path-trace ABI: retired slot offset");
 static_assert(offsetof(BedrayPathTraceDesc, program_trace_scene) == 64, "path-trace ABI: desc.program_trace_scene offset");
 static_assert(offsetof(BedrayPathTraceDesc, reserved) == 72, "path-trace ABI: desc.reserved offset");
 static_assert(offsetof(BedrayPathTraceFrameDesc, frame_index) == 1032, "path-trace ABI: frame.frame_index offset");
@@ -362,7 +362,8 @@ BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void) try {
     return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI | BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS | BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS | BEDRAY_PATH_TRACE_FEATURE_NRD_MOTION
         | BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER | BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL
         | BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS | BEDRAY_PATH_TRACE_FEATURE_NATIVE_PT
-        | BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT;
+        | BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT | BEDRAY_PATH_TRACE_FEATURE_NATIVE_SCENE_ONLY
+        | BEDRAY_PATH_TRACE_FEATURE_COMPACT_RR_PACK;
 } catch (...) {
     return 0;
 }
@@ -1475,7 +1476,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_ext(
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace_pt(
-    BedrayCore* core, uint64_t program_pt_spatial, uint64_t program_pt_spatial_scene, BedrayError* error) try {
+    BedrayCore* core, uint64_t retired_program, uint64_t program_pt_spatial_scene, BedrayError* error) try {
     clear_error(error);
     if (core == nullptr || !core->path_trace)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "ReSTIR PT needs a configured path-trace pass");
@@ -1483,7 +1484,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace_pt(
     if (core->frame_graph && core->frame_graph->has_recordings())
         return fail(error, BEDRAY_ERROR_IN_USE, "native graph recordings must be released before reconfiguration");
 #endif
-    return core->path_trace->configure_pt(program_pt_spatial, program_pt_spatial_scene, error);
+    return core->path_trace->configure_pt(retired_program, program_pt_spatial_scene, error);
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring ReSTIR PT");
 }
@@ -1693,23 +1694,6 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_fg_prepare(
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate FG producer recording");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording FG producer");
-}
-
-BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_decode_sodium(
-    BedrayCore* core, const BedraySodiumDecodeDesc* desc, BedrayError* error) try {
-    clear_error(error);
-    if (!core || !desc) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/Sodium decode desc is null");
-    if (desc->abi_version != BEDRAY_CORE_ABI_VERSION || desc->struct_size != sizeof(*desc))
-        return fail(error, BEDRAY_ERROR_ABI_MISMATCH, "Sodium decode ABI/size mismatch");
-    constexpr auto required = BEDRAY_CAP_BUFFER_DEVICE_ADDRESS | BEDRAY_CAP_SHADER_INT64;
-    if ((core->capabilities & required) != required)
-        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "Sodium decode requires enabled BDA/Int64");
-    return bedray::core::record_sodium(core, core->cmd_pipeline_barrier,
-        core->properties.limits.maxComputeWorkGroupCount[0], *desc, error);
-} catch (const std::bad_alloc&) {
-    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate Sodium decode recording");
-} catch (...) {
-    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording Sodium decode");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_bloom(

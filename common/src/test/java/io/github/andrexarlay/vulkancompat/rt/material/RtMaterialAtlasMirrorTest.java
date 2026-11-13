@@ -12,7 +12,7 @@ public class RtMaterialAtlasMirrorTest {
         for (int i = 0; i < material.length; i++) {
             material[i] = (emission << 16) | 0x0000FF;
         }
-        return new MaterialAtlasBaker.SpriteBake(x0, y0, w, h, material, new int[w * h], null, false,
+        return new MaterialAtlasBaker.SpriteBake(x0, y0, w, h, material, new int[w * h],
             false, false, false, emission > 0 ? w * h : 0, false);
     }
 

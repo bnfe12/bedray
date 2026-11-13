@@ -94,7 +94,7 @@ public final class LightScenario implements AutotestScenario {
             List<String> mods = new ArrayList<>();
             for (int i = 1; i < parts.length; i++) {
                 String m = parts[i].trim().toLowerCase(Locale.ROOT);
-                if (!(m.startsWith("item=") || m.startsWith("drop=") || m.equals("cam=3") || m.equals("close") || m.equals("near") || m.equals("nrd")
+                if (!(m.startsWith("item=") || m.startsWith("drop=") || m.equals("cam=3") || m.equals("close") || m.equals("near") || m.equals("nrd") || m.equals("rr")
                     || m.matches("cx=-?\\d+(\\.\\d+)?") || m.matches("[tbf]\\d+") || m.matches("aim=-?\\d+_-?\\d+"))) {
                     throw new IllegalArgumentException("step '" + item + "': unknown modifier " + m);
                 }
@@ -264,6 +264,8 @@ public final class LightScenario implements AutotestScenario {
         for (String m : s.mods()) {
             if (m.equals("nrd")) {
                 RtSettings.pathDenoiser = RtSettings.PathDenoiser.NRD;
+            } else if (m.equals("rr")) {
+                RtSettings.pathDenoiser = RtSettings.PathDenoiser.DLSS_RR; // the owner's mode
             } else if (m.matches("b\\d+")) {
                 RtSettings.pathBounces = Integer.parseInt(m.substring(1));
             }

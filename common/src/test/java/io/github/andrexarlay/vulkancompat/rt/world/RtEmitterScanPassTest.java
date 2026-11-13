@@ -113,4 +113,43 @@ public class RtEmitterScanPassTest {
         assertEquals(16.0, RtEmitters.passAbortDistance(32f), 1e-9, "a short range keeps a usable floor");
         assertEquals(16.0, RtEmitters.passAbortDistance(0f), 1e-9, "a zero range must not abort on the first step");
     }
+
+    @Test void changedAtlasIdentityInvalidatesAnInFlightScanBeforeItCanContinue() {
+        record Atlas(int revision) {}
+        Object atlas = new Atlas(1);
+        var pass = new RtEmitters.ScanPass<>(List.of(0, 1), 1, CX, CY, CZ, ABORT,
+            new EmitterScanConfiguration(atlas, 128, 512));
+        assertTrue(pass.usableFor(CX, CY, CZ, atlas, 128, 512));
+        assertFalse(pass.usableFor(CX, CY, CZ, new Atlas(1), 128, 512),
+            "even equal atlas metadata cannot prove that old UV captures refer to the new atlas storage");
+    }
+
+    @Test void rangeAndBudgetChangesRequireANewScanButStreamingDoesNot() {
+        Object atlas = new Object();
+        var pass = new RtEmitters.ScanPass<>(List.of(0, 1, 2), 1, CX, CY, CZ, ABORT,
+            new EmitterScanConfiguration(atlas, 128, 512));
+        List<Integer> steps = new ArrayList<>();
+        assertFalse(pass.advance(expiredDeadline(), steps::add));
+        pass.noteVersion(2);
+        assertTrue(pass.usableFor(CX + 1, CY, CZ, atlas, 128, 512));
+        assertFalse(pass.usableFor(CX, CY, CZ, atlas, 64, 512));
+        assertFalse(pass.usableFor(CX, CY, CZ, atlas, 128, 256));
+        assertTrue(pass.advance(Long.MAX_VALUE, steps::add));
+        assertEquals(List.of(0, 1, 2), steps);
+    }
+
+    @Test void invalidatedCaptureRestartsFromTheNewSnapshotInsteadOfFinishingTheOldOne() {
+        Object oldAtlas = new Object(), nextAtlas = new Object();
+        var oldPass = new RtEmitters.ScanPass<>(List.of(1, 2, 3), 1, CX, CY, CZ, ABORT,
+            new EmitterScanConfiguration(oldAtlas, 128, 512));
+        List<Integer> oldSteps = new ArrayList<>();
+        assertFalse(oldPass.advance(expiredDeadline(), oldSteps::add));
+        assertFalse(oldPass.usableFor(CX, CY, CZ, nextAtlas, 128, 512));
+        var replacement = new RtEmitters.ScanPass<>(List.of(4, 5), 2, CX, CY, CZ, ABORT,
+            new EmitterScanConfiguration(nextAtlas, 128, 512));
+        List<Integer> nextSteps = new ArrayList<>();
+        assertTrue(replacement.advance(Long.MAX_VALUE, nextSteps::add));
+        assertEquals(List.of(1), oldSteps);
+        assertEquals(List.of(4, 5), nextSteps);
+    }
 }

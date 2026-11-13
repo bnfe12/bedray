@@ -21,12 +21,11 @@ final class RtSlangVolumetricPass implements AutoCloseable {
 
     RtSlangVolumetricPass(SlangRuntime runtime) {
         this.runtime = runtime;
-        var legacy = runtime.program("volumetric_march").orElseThrow();
         var scene = runtime.program("volumetric_march_scene").orElseThrow();
         var apply = runtime.program("volumetric_apply").orElseThrow();
-        require(legacy, true); require(scene, true); require(apply, false);
+        require(scene, true); require(apply, false);
         long bytes = runtime.capabilities().deviceMemoryBytes();
-        pass = new BedrayVolumetricNative(runtime.library(), runtime.core(), legacy.nativeHandle(), scene.nativeHandle(),
+        pass = new BedrayVolumetricNative(runtime.library(), runtime.core(), scene.nativeHandle(),
             apply.nativeHandle(), bytes > 0 ? Math.min(256L << 20, bytes / 8) : 128L << 20, 16L << 20);
     }
 
@@ -65,9 +64,9 @@ final class RtSlangVolumetricPass implements AutoCloseable {
             var apply = stack.calloc(BedrayVolumetricNative.APPLY_BYTES);
             frame.writeTo(constants);
             fillPush(march, apply, p, steps, strength, range);
-            int flags = (views.table().sceneOwned ? BedrayVolumetricNative.NATIVE_SCENE : 0)
+            int flags = BedrayVolumetricNative.NATIVE_SCENE
                 | (reset || settingsHash != hash ? BedrayVolumetricNative.RESET_HISTORY : 0);
-            pass.record(cmd.address(), views.output(), views.depth(), views.tlas(), views.table().handle, views.table().size,
+            pass.record(cmd.address(), views.output(), views.depth(), views.tlas(), views.table().handle(), views.table().bytes(),
                 width, height, flags, p.frame, constants, march, apply);
         }
         reset = false; settingsHash = hash;

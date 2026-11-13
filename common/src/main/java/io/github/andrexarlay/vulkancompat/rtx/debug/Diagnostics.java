@@ -395,7 +395,7 @@ public final class Diagnostics {
         } else {
             l.add("TLAS instances: " + s.instances() + " (" + String.format(Locale.ROOT, "%.2f", s.tlasMs()) + " ms)");
             l.add("BLAS sections: " + s.totalSections() + ", built this frame: " + s.builtThisFrame() + ", pending: " + s.pending()
-                + ", failed: " + s.failedSections() + ", total built: " + RtFrameRenderer.blasBuiltTotal());
+                + ", total built: " + RtFrameRenderer.blasBuiltTotal());
             l.add("RT memory: " + (s.vramBytes() >> 20) + " MB");
         }
         l.add("Light list (emitters): " + RtFrameRenderer.lightTelemetry());

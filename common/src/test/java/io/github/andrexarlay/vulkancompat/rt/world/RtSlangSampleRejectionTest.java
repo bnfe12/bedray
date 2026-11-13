@@ -25,7 +25,7 @@ class RtSlangSampleRejectionTest {
     private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String TRACER = "src/main/resources/shaders/slang/pathtrace/path_tracer.slang";
     private static final String BSDF = "src/main/resources/shaders/slang/shading/bsdf.slang";
-    private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
+    private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace_scene.slang";
     private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
     private static final String DISPLAY = "src/main/resources/shaders/slang/passes/path_display.slang";
     private static final String STATS = "src/main/resources/shaders/slang/passes/frame_stats.slang";
@@ -158,8 +158,8 @@ class RtSlangSampleRejectionTest {
             "and the alpha lane carries that one answer");
         assertFalse(entry.contains("float4(result.radiance, 1.0)"),
             "a hardcoded 1.0 would make the whole rejection chain dead code");
-        assertTrue(pass.contains("//   1  outImage") && pass.contains("a = 0 for a"),
-            "and the binding table says the lane carries the verdict, so a later consumer is not surprised");
+        assertTrue(pass.contains("[[vk::binding(1, 0)]] RWTexture2D<float4> outImage;"),
+            "the native scene entry exposes all four radiance channels at binding 1");
     }
 
     /** A rejected sample must change neither the mean nor the count. */

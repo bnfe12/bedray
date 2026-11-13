@@ -4,8 +4,6 @@ import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserConfig;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserMode;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DlssRrDenoiser;
 import io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer;
-import io.github.andrexarlay.vulkancompat.rt.world.RtFrameParams;
-import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssLayouts;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssNative;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssQuality;
@@ -31,7 +29,7 @@ public final class DlssRrChecks {
         denoiserModeAndConfig();
         dlssRrDenoiserContracts();
         rtFrameRendererIntegration();
-        geometricNormalsAndRoughnessPacking();
+        shadingNormalsAndRoughnessPacking();
         horizonBendingAndReflectionContinuity();
         velocityMotionVectorIntegration();
         dllPresence();
@@ -299,9 +297,9 @@ public final class DlssRrChecks {
             check(DlssRayReconstruction.isDlssdDllPresent(tmp), "dlssd file present: true");
             Files.deleteIfExists(mockDlssd);
 
-            Path mockDlssnr = tmp.resolve(DlssRayReconstruction.NGX_DLSSNR_DLL);
+            Path mockDlssnr = tmp.resolve("nvngx_dlssnr.dll");
             Files.writeString(mockDlssnr, "mock");
-            check(DlssRayReconstruction.isDlssdDllPresent(tmp), "dlssnr file present: true");
+            check(!DlssRayReconstruction.isDlssdDllPresent(tmp), "a Neural Rendering file cannot satisfy Ray Reconstruction");
             Files.deleteIfExists(mockDlssnr);
         } finally {
             Files.deleteIfExists(tmp);
@@ -336,59 +334,27 @@ public final class DlssRrChecks {
     }
 
 
-    /**
-     * The CPU mirror of the normal/roughness guide the RR denoiser is fed: which normal the toggle selects, the bit the
-     * host pushes, and the ranges the pack must stay inside. The shader half of this check went with the GLSL renderer;
-     * the Slang writer of the same channels is pinned by RtSlangGbufferGuidesTest.
-     */
-    public static void geometricNormalsAndRoughnessPacking() {
-        // 1. Setting defaults, toggles and ADVANCED_KEYS
-        check(RtSettings.dlssRrGeometricNormals, "dlssRrGeometricNormals default true");
-        check(RtSettings.dlssRrGeometricNormals(), "dlssRrGeometricNormals() returns true");
-        check(RtSettings.ADVANCED_KEYS.contains("dlss_rr_geometric_normals"), "ADVANCED_KEYS contains dlss_rr_geometric_normals");
-
-        RtSettings.applyKeyValue("dlss_rr_geometric_normals", "false");
-        check(!RtSettings.dlssRrGeometricNormals(), "dlssRrGeometricNormals false after applyKeyValue");
-        RtSettings.applyKeyValue("dlss_rr_geometric_normals", "true");
-        check(RtSettings.dlssRrGeometricNormals(), "dlssRrGeometricNormals true after applyKeyValue");
-
-        // 2. FLAG_GEOMETRIC_NORMALS bit validation
-        check(RtFrameParams.FLAG_GEOMETRIC_NORMALS == (1 << 11), "FLAG_GEOMETRIC_NORMALS == 1 << 11 (2048)");
-        int allFlags = RtFrameParams.FLAG_SHADOWS | RtFrameParams.FLAG_SOFT_SHADOWS | RtFrameParams.FLAG_REFLECTIONS
-            | RtFrameParams.FLAG_AO | RtFrameParams.FLAG_EMISSIVE | RtFrameParams.FLAG_MATERIALS
-            | RtFrameParams.FLAG_ACCUMULATE | RtFrameParams.FLAG_NORMAL_MAPS | RtFrameParams.FLAG_AUTO_EXPOSURE
-            | RtFrameParams.FLAG_GI | RtFrameParams.FLAG_AUTO_NORMALS;
-        check((allFlags & RtFrameParams.FLAG_GEOMETRIC_NORMALS) == 0, "FLAG_GEOMETRIC_NORMALS does not collide with existing flags");
-
-        // 3. Normal & roughness ranges and packing contracts
+    /** CPU reference for the Slang writer's normalized shading normal and packed linear roughness. */
+    public static void shadingNormalsAndRoughnessPacking() {
         check(DlssRrParams.ROUGHNESS_PACKED == 1, "ROUGHNESS_PACKED == 1");
-        float[] ng = {0.0f, 1.0f, 0.0f}; // flat cube top face
-        float[] ns = {0.1f, 0.98f, 0.1f}; // perturbed texture shading normal
-        float[] packedWithGeom = packNormalRoughness(true, ng, ns, 0.2f);
-        check(packedWithGeom[0] == 0.0f && packedWithGeom[1] == 1.0f && packedWithGeom[2] == 0.0f, "geom normals output ng exactly");
-        check(Math.abs(packedWithGeom[3] - 0.2f) < 1e-5f, "roughness packed in w channel");
-
-        float[] packedWithShading = packNormalRoughness(false, ng, ns, 0.05f);
-        check(packedWithShading[0] != 0.0f, "shading normals output perturbed normal");
-        check(Math.abs(packedWithShading[3] - 0.05f) < 1e-5f, "roughness 0.05 preserved");
-
-        // Roughness clamping validation: must stay in [0.0, 1.0]
-        float[] clampedLow = packNormalRoughness(true, ng, ns, -0.5f);
-        check(clampedLow[3] == 0.0f, "negative roughness clamped to 0.0");
-        float[] clampedHigh = packNormalRoughness(true, ng, ns, 1.5f);
-        check(clampedHigh[3] == 1.0f, "excess roughness clamped to 1.0");
+        float[] normal = {0.1f, 0.98f, 0.1f};
+        float[] packed = packNormalRoughness(normal, 0.05f);
+        check(packed[0] > 0.0f && packed[2] > 0.0f, "the guide preserves shading normal direction");
+        check(Math.abs(packed[0] * packed[0] + packed[1] * packed[1] + packed[2] * packed[2] - 1.0f) < 1e-5f,
+            "the shading normal is normalized");
+        check(Math.abs(packed[3] - 0.05f) < 1e-5f, "roughness is preserved in the w channel");
+        check(packNormalRoughness(normal, -0.5f)[3] == 0.0f, "negative roughness clamped to 0.0");
+        check(packNormalRoughness(normal, 1.5f)[3] == 1.0f, "excess roughness clamped to 1.0");
     }
 
-    private static float[] packNormalRoughness(boolean geometricNormals, float[] ng, float[] ns, float roughness) {
-        float[] nOut = geometricNormals ? ng : ns;
-        float len = (float) Math.sqrt(nOut[0] * nOut[0] + nOut[1] * nOut[1] + nOut[2] * nOut[2]);
-        float nx = len > 1e-4f ? nOut[0] / len : 0.0f;
-        float ny = len > 1e-4f ? nOut[1] / len : 0.0f;
-        float nz = len > 1e-4f ? nOut[2] / len : 1.0f;
+    private static float[] packNormalRoughness(float[] normal, float roughness) {
+        float len = (float) Math.sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+        float nx = len > 1e-4f ? normal[0] / len : 0.0f;
+        float ny = len > 1e-4f ? normal[1] / len : 0.0f;
+        float nz = len > 1e-4f ? normal[2] / len : 1.0f;
         float r = Math.max(0.0f, Math.min(1.0f, roughness));
         return new float[] {nx, ny, nz, r};
     }
-
 
     /**
      * Horizon bending is the CPU reference the reflection ray builder is written against: a reflection that would dip

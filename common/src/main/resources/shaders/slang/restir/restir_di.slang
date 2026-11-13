@@ -246,7 +246,8 @@ DIReservoir restirDiSpatial<S : ILightSampler>(S sampler,
     if (neighbor.stats.x <= 0.0) return current;
 
     LightSample neighborSample = reservoirLightSample(neighbor, receiver.position);
-    LightEvaluation evaluation = sampler.evaluate(receiver, neighborSample);
+    // Only p^ is merged: the source density (a light-tree walk) is not needed.
+    LightEvaluation evaluation = sampler.evaluateTarget(receiver, neighborSample);
     if (!evaluation.valid || evaluation.targetPdf <= 0.0) return current;
 
     return mergeReservoirs(current, neighbor, evaluation.targetPdf,

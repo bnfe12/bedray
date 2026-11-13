@@ -97,8 +97,9 @@ public record LibraryDescriptor(String id, String displayName, String vendor, Li
             List.of("nvngx_dlss.dll"), List.of("vkb_dlss.dll"), NVIDIA_LICENSE, "https://github.com/NVIDIA/DLSS");
     public static final LibraryDescriptor DLSS_G = of("dlss_g", "NVIDIA DLSS Frame Generation", "NVIDIA",
             List.of("nvngx_dlssg.dll"), List.of(), NVIDIA_LICENSE, "https://github.com/NVIDIA/DLSS");
+    public static final String DLSS_RR_DLL = "nvngx_dlssd.dll";
     public static final LibraryDescriptor DLSS_RR = of("dlss_rr", "NVIDIA DLSS Ray Reconstruction", "NVIDIA",
-            List.of("nvngx_dlssd.dll"), List.of(), NVIDIA_LICENSE, "https://github.com/NVIDIA/DLSS");
+            List.of(DLSS_RR_DLL), List.of(), NVIDIA_LICENSE, "https://github.com/NVIDIA/DLSS");
     public static final LibraryDescriptor STREAMLINE = of("streamline", "NVIDIA Streamline", "NVIDIA",
             List.of("sl.interposer.dll", "sl.common.dll"),
             List.of("sl.dlss.dll", "sl.dlss_d.dll", "sl.dlss_g.dll", "sl.reflex.dll", "sl.pcl.dll", "NvLowLatencyVk.dll"),

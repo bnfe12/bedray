@@ -34,10 +34,13 @@ class NativeSectionCaptureTest {
         }
     }
     private static DecodedSection section(long key, int x, int y) {
-        return SodiumMeshDecoder.decode(key, x, y, 0, new ByteBuffer[]{ByteBuffer.allocate(4 * 20), null, null});
+        return section(key, x, y, 1);
+    }
+    private static DecodedSection section(long key, int x, int y, int quads) {
+        return SodiumMeshDecoder.decode(key, x, y, 0, new ByteBuffer[]{ByteBuffer.allocate(quads * 4 * 20), null, null});
     }
     private static NativeSectionCapture capture(Source source, Sink sink) {
-        return new NativeSectionCapture(source, sink, ignored -> null, () -> 0, 1);
+        return new NativeSectionCapture(source, sink, ignored -> null, () -> 0, 1, 100);
     }
 
     @Test void nearestFirstOrderAndQuotaAreDeterministic() {
@@ -75,11 +78,43 @@ class NativeSectionCaptureTest {
         assertEquals(List.of(1L), sink.built);
     }
 
+    @Test void capacityKeepsTheNearestSectionsAndReclaimsSlotsBeforeBuilding() {
+        Source source = new Source();
+        Sink sink = new Sink();
+        source.put(section(1, 0, 0));
+        source.put(section(2, 1, 0));
+        source.put(section(3, 2, 0));
+        NativeSectionCapture capture = new NativeSectionCapture(source, sink, ignored -> null, () -> 0, 1, 2);
+        var first = capture.update(0, 0, 0, 2, 2, 1, 1_000);
+        assertEquals(List.of(1L), sink.built);
+        assertEquals(1, first.pending());
+        assertEquals(1, first.omittedByCapacity());
+        capture.update(0, 0, 0, 2, 2, 4, 1_000);
+        assertEquals(List.of(1L, 2L), sink.built);
+
+        sink.failRemoval = true;
+        assertThrows(IllegalStateException.class, () -> capture.update(2, 0, 0, 2, 2, 4, 1_000));
+        assertEquals(List.of(1L, 2L), sink.built);
+        sink.failRemoval = false;
+        var moved = capture.update(2, 0, 0, 2, 2, 4, 1_000);
+        assertEquals(List.of(1L), sink.removed);
+        assertEquals(List.of(1L, 2L, 3L), sink.built);
+        assertEquals(1, moved.omittedByCapacity());
+        List<Long> active = new ArrayList<>();
+        capture.forEach(section -> active.add(section.key));
+        assertEquals(List.of(2L, 3L), active.stream().sorted().toList());
+
+        source.remove(2);
+        var shrunk = capture.update(2, 0, 0, 2, 2, 4, 1_000);
+        assertEquals(0, shrunk.omittedByCapacity());
+        assertEquals(List.of(1L, 2L, 3L, 1L), sink.built);
+    }
+
     @Test void identicalRemeshKeepsHistoryButDifferentTagsRequireAnUpdate() {
         Source source = new Source();
         Sink sink = new Sink();
         int[] flags = {0};
-        NativeSectionCapture capture = new NativeSectionCapture(source, sink, ignored -> flags, () -> 0, 0);
+        NativeSectionCapture capture = new NativeSectionCapture(source, sink, ignored -> flags, () -> 0, 0, 100);
         source.put(section(1, 0, 0));
         capture.update(0, 0, 0, 2, 2, 4, 1_000);
         DecodedSection replacement = section(1, 0, 0);
@@ -90,10 +125,46 @@ class NativeSectionCaptureTest {
         List<DecodedSection> accepted = new ArrayList<>();
         capture.forEach(accepted::add);
         assertSame(replacement, accepted.getFirst());
-        flags[0] = RtWorld.VEGETATION_BIT;
+        flags[0] = BedraySceneGeometry.VERTEX_FLAG_VEGETATION;
         source.put(section(1, 0, 0));
         assertEquals(1, capture.update(0, 0, 0, 2, 2, 4, 1_000).queued());
         assertEquals(2, capture.structureVersion());
+    }
+
+    @Test void oversizedReplacementPreservesThePreviousMeshAndDoesNotBlockOtherSections() {
+        Source source = new Source();
+        Sink sink = new Sink();
+        DecodedSection original = section(1, 0, 0);
+        source.put(original);
+        NativeSectionCapture capture = capture(source, sink);
+        capture.update(0, 0, 0, 2, 2, 1, 1_000);
+
+        int quads = BedraySceneGeometry.MAX_SECTION_QUADS + 1;
+        source.put(section(1, 0, 0, quads));
+        source.put(section(2, 1, 0));
+        var rejected = capture.update(0, 0, 0, 2, 2, 1, 1_000);
+        assertEquals(List.of(1L, 2L), sink.built);
+        assertTrue(sink.removed.isEmpty());
+        assertEquals(0, rejected.pending());
+        assertEquals(1, rejected.oversizedSections());
+        assertEquals(quads, rejected.largestOversizedQuads());
+        assertEquals(1, rejected.largestOversizedSection());
+        List<DecodedSection> accepted = new ArrayList<>();
+        capture.forEach(accepted::add);
+        assertTrue(accepted.contains(original));
+        var unchanged = capture.update(0, 0, 0, 2, 2, 1, 1_000);
+        assertFalse(unchanged.rescanned());
+        assertEquals(0, unchanged.queued());
+
+        DecodedSection recovered = section(1, 0, 0, 2);
+        source.put(recovered);
+        var repaired = capture.update(0, 0, 0, 2, 2, 1, 1_000);
+        assertEquals(List.of(1L, 2L, 1L), sink.built);
+        assertEquals(0, repaired.oversizedSections());
+        accepted.clear();
+        capture.forEach(accepted::add);
+        assertTrue(accepted.contains(recovered));
+        assertFalse(accepted.contains(original));
     }
 
     @Test void staleQueuedCapturesAreNotSentAndCanBeRescanned() {
@@ -133,7 +204,7 @@ class NativeSectionCaptureTest {
         Source source = new Source();
         Sink sink = new Sink();
         long[] clock = {0};
-        NativeSectionCapture capture = new NativeSectionCapture(source, sink, ignored -> null, () -> clock[0]++, 0);
+        NativeSectionCapture capture = new NativeSectionCapture(source, sink, ignored -> null, () -> clock[0]++, 0, 100);
         source.put(section(1, 0, 0));
         source.put(section(2, 1, 0));
         assertEquals(1, capture.update(0, 0, 0, 4, 4, 8, 1).pending());

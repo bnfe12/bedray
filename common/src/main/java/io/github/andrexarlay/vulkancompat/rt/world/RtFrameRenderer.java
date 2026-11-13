@@ -131,6 +131,9 @@ public final class RtFrameRenderer {
     private static long lastStatsSequence = -1;
     private static long dispatchCounter = 0;
     private static long passFrames = 0;
+    private static RtTraceTelemetry lastTraceTelemetry;
+    private static StatsMetadata lastStatsMetadata;
+    private static long lastStatsTrustedPixels;
     private static double lastHitPct = -1.0;
     /** Share of the metered pixels the tracer refused; -1 until a counter slot carries a measurement. */
     private static double lastRejectedPct = -1.0;
@@ -176,11 +179,28 @@ public final class RtFrameRenderer {
     private static RtOutputResolve outputResolve;
     private static RrHardwareDepth rrHardwareDepth;
 
-    /** A live RR instance can own output reconstruction next frame. FG keeps its existing producer path. */
+    /**
+     * RR owns output reconstruction this frame. Decided from intent (setting, library, session failure), not from whether
+     * the RR object exists yet: the plan is frozen in beginWorldPhase, before prepareFrameResources creates RR, so the old
+     * `dlssRrDenoiser != null` test made the first world frame, and every frame after a drop or creation retry, take the
+     * two-stage chain - RR denoising at render size, then DLSS-SR stretching that resolved image again with zero jitter,
+     * the blur the owner saw - and each flip resized the targets and reset RR's history. A frame on the combined plan
+     * whose RR did not record presents the raw trace through RtOutputResolve instead. A permanent failure
+     * (dlssRrFailed) switches the plan back to the upscaler once.
+     */
     public static boolean rrOutputReady() {
         return RtGeometryGate.enabled() && RtConfig.displayed() && RtConfig.effectiveMode() == RtConfig.MODE_LIT
-            && RtConfig.mode() == RtMode.PATH_TRACED && RtSettings.denoiser() == RtSettings.PathDenoiser.DLSS_RR
-            && dlssRrDenoiser != null && !dropDlssRrDenoiserNext && !dlssRrFailed;
+            && RtConfig.mode() == RtMode.PATH_TRACED && rrIntended();
+    }
+
+    /** DLSS-RR will be the denoiser: same conditions as DenoiserResolution's DLSS_RR branch, without side effects. */
+    static boolean rrIntended() {
+        if (RtSettings.denoiser() != RtSettings.PathDenoiser.DLSS_RR || dlssRrFailed) return false;
+        DlssAvailability.Library lib = DlssAvailability.library();
+        if (lib == null || !lib.usable()) return false;
+        boolean frameGenOwnsNgx = io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.isReady()
+            && !io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.rrViaStreamline();
+        return !frameGenOwnsNgx;
     }
     private static boolean dropDlssRrDenoiserNext = false;
     private static boolean dropDlssRrByError = false;
@@ -278,6 +298,11 @@ public final class RtFrameRenderer {
     /** Statistics of the last RT frame (null before the first one or after a shutdown). */
     public static RtWorld.FrameStats lastStats() {
         return lastStats;
+    }
+
+    /** Last trace accepted for submission, or null before the first accepted trace. */
+    public static RtTraceTelemetry lastTraceTelemetry() {
+        return lastTraceTelemetry;
     }
 
     /** BLAS built since the game started (monotonic, for a per-second rate). */
@@ -483,12 +508,40 @@ public final class RtFrameRenderer {
         try {
             frame(camera, target, levelState);
         } catch (RtDenoiserFrameDiscard discarded) {
-            if (discarded.getSuppressed().length != 0) fail("rr_discard", "retirement_failed", discarded);
-            else LOGGER.warn("[VKB-RT] frame_skipped reason=rr_recording_discarded recovery=next_frame_preflight");
+            recoverDiscardedDenoiserFrame(discarded);
         } catch (RtFailure f) {
             fail(f.stage(), f.result(), f.getCause() != null ? f.getCause() : f);
         } catch (RuntimeException | LinkageError e) {
             fail("frame", e.getClass().getSimpleName() + ": " + LogPaths.show(e.getMessage()), e);
+        }
+    }
+
+    private static void recoverDiscardedDenoiserFrame(RtDenoiserFrameDiscard discarded) {
+        if (discarded.getSuppressed().length != 0) {
+            fail("rr_discard", "retirement_failed", discarded);
+            return;
+        }
+        try {
+            if (world != null && world.needsSceneRebuild()) {
+                drainHostSubmissions(world.memory().device(), "scene_discard_recovery_drain");
+                if (recordingCompletion.pendingCount() != 0)
+                    throw new IllegalStateException("scene recovery still has outstanding recording tickets");
+                world.rebuildSceneAfterHostDrain(pathSlangRuntime);
+                if (emitters != null) {
+                    emitters.destroy();
+                    emitters = null;
+                }
+                // Completed readbacks describe the retired scene. Keep them out of the new exposure history.
+                for (var lease : statsReadbacks.ready()) statsReadbacks.consume(lease);
+                lastStats = null;
+                LOGGER.info("[VKB-RT] native_scene_recreated reason=discarded_recording");
+            }
+            havePrevCamera = false;
+            resetHistory();
+            WorldTargetManager.requestResetHistory();
+            LOGGER.warn("[VKB-RT] frame_skipped reason=rr_recording_discarded recovery=next_frame_preflight");
+        } catch (RuntimeException | LinkageError recovery) {
+            fail("scene_discard_recovery", recovery.getMessage(), recovery);
         }
     }
 
@@ -505,7 +558,8 @@ public final class RtFrameRenderer {
         }
         if (world == null) {
             requireRayTracingDevice(device);
-            world = new RtWorld(device, pathSlangRuntime(vulkanDevice));
+            SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
+            world = new RtWorld(device, runtime);
             // The leaf transmission is a plant property, not a render-pass one: tag the cutout quads while they are staged.
             world.setBlockLookup(VegetationBlocks::foliageKindAt);
             if (RtGpuTimer.ENABLED) {
@@ -550,9 +604,12 @@ public final class RtFrameRenderer {
         int curBounces = RtSettings.bounces();
         int curSpp = RtSettings.spp();
         boolean curAutoExposure = RtSettings.autoExposure();
+        // What a shadow ray sees: transparent filters, and (bits 3-4) whether the first-person body occludes. Switching
+        // self_shadow without a reset blended the old shadow into the new mode for the whole accumulation window.
         int curTransparencyPolicy = (RtSettings.opticalMaterials() ? 1 : 0)
             | (RtSettings.directTranslucentShadows() ? 2 : 0)
-            | (RtSettings.indirectTranslucentShadows() ? 4 : 0);
+            | (RtSettings.indirectTranslucentShadows() ? 4 : 0)
+            | ((RtSettings.selfShadow & 3) << 3);
         // ReSTIR is a per-technique switch, and every one of them changes what a stored record means: turning reuse on or
         // off, or pooling neighbours on top of it, must not continue an accumulation that was built without it.
         int curReusePolicy = (RtSettings.restirTemporal() ? 1 : 0) | (RtSettings.restirSpatial() ? 2 : 0)
@@ -619,10 +676,6 @@ public final class RtFrameRenderer {
             drainHostSubmissions(device, "stats_slots_drain");
             consumeCompletedStats();
             if (!statsReadbacks.hasFreeSlot()) throw new RtFailure("stats_slots", "completion proof unavailable; stats slots retained");
-        }
-        if (world.requiresLegacyHostDrain()) {
-            drainHostSubmissions(device, "legacy_world_inputs_drain");
-            world.prepareLegacyFrameAfterHostDrain();
         }
         if (target != null && target.width > 0 && target.height > 0
             && camera.projectionMatrix != null && camera.viewRotationMatrix != null) {
@@ -693,7 +746,8 @@ public final class RtFrameRenderer {
             }
             lastStats = stats;
             blasBuiltTotal += stats.builtThisFrame();
-            if (stats.instances() > 0 && camera.projectionMatrix != null && camera.viewRotationMatrix != null && target != null) {
+            if (recordingWorld.tlasHandle() != 0L && camera.projectionMatrix != null
+                && camera.viewRotationMatrix != null && target != null) {
                 recordPrimaryRays(cmd, vulkanDevice, camera, target, levelState,
                     world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ, statsLease, denoiserProof);
                 traced = true;
@@ -729,6 +783,10 @@ public final class RtFrameRenderer {
             long tracedNs = System.nanoTime();
             double dtMs = lastTracedNs == 0L ? 0.0 : (tracedNs - lastTracedNs) / 1.0e6;
             lastTracedNs = tracedNs;
+            RtMemory.Img tracedOutput = frameOutput();
+            lastTraceTelemetry = new RtTraceTelemetry(tracedOutput.width, tracedOutput.height, target.width, target.height,
+                pass.mode() == RtMode.PATH_TRACED ? params.spp : 1,
+                pass.mode() == RtMode.PATH_TRACED ? params.bounces : 0);
             passFrames++;
             passFramesInWindow++;
             passMsInWindow += (tracedNs - frameStart) / 1.0e6;
@@ -751,6 +809,9 @@ public final class RtFrameRenderer {
                 long base = statsBuf.mapped + (long) lease.slot() * STATS_STRIDE;
                 int hits = MemoryUtil.memGetInt(base + RtStatsLayout.HITS);
                 int samples = MemoryUtil.memGetInt(base + RtStatsLayout.SAMPLES);
+                lastStatsMetadata = metadata;
+                lastStatsTrustedPixels = Integer.toUnsignedLong(samples);
+                lastHitPct = RtStatsMetering.hitPct(metadata.width(), metadata.height(), metadata.frameIndex(), hits, samples);
                 // The counter pass only adds the samples it trusts, so this slot's own extent and rotation say how
                 // many pixels it weighed: the difference is the share the tracer refused, which no other word carries.
                 lastRejectedPct = RtStatsMetering.rejectedPct(metadata.width(), metadata.height(),
@@ -771,7 +832,9 @@ public final class RtFrameRenderer {
                     Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_DIRECT_SHADOWS)),
                     Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_INDIRECT_SHADOWS)))
                     : "[RT-TRANSPARENCY] counters=WAITING";
-                if (hits > 0) {
+                lastHistPct = -1.0;
+                lastLeafPct = -1.0;
+                if (lastHitPct >= 0.0 && hits > 0) {
                     // Without the accumulating variant histAccepted is never incremented, and the share used to print as a
                     // plausible 0% ("history rejected every pixel") in exactly the sessions that have no history at all.
                     lastHistPct = RtAccumulation.acceptedPct(MemoryUtil.memGetInt(base + RtStatsLayout.HIST_ACCEPTED), hits,
@@ -781,10 +844,9 @@ public final class RtFrameRenderer {
                     // so a zero here is the absence of a measurement, not a share of 0%: -1 is what the F3 line prints
                     // as n/a.
                     int leafBacklit = MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT);
-                    lastLeafPct = leafBacklit > 0 ? 100.0 * leafBacklit / hits : -1.0;
+                    lastLeafPct = leafBacklit > 0 && leafBacklit <= hits ? 100.0 * leafBacklit / hits : -1.0;
                 }
                 if (samples > 0) {
-                    lastHitPct = 100.0 * hits / samples;
                     exposure.setMax(RtSkyState.maxExposure(metadata.day()));
                     long expNow = metadata.recordedNanos();
                     exposure.observe(Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.LUM_LOG_SUM)), samples,
@@ -938,11 +1000,6 @@ public final class RtFrameRenderer {
         }
         if (materials == null) {
             materials = new RtMaterialAtlas(world.memory());
-            // Without this the atlas keeps no texel states, intern() returns ST_RETRY forever and the micromaps are
-            // inert: the feature reports "enabled" while every BLAS triangle stays fully unknown.
-            if (world.ommCache() != null) {
-                materials.setMicromapSink(world.ommCache());
-            }
         }
         materials.ensure(cmd, (TextureAtlas) atlasTexture, atlasW, atlasH, Minecraft.getInstance().getResourceManager());
         pass.prepare(cmd, world.memory(), w, h);
@@ -1008,7 +1065,6 @@ public final class RtFrameRenderer {
         // invViewProj must stay strictly unjittered so forward, viewZ, and motion vectors are jitter-free.
         InstanceMath.inverseViewProjection(frameProjection, camera.viewRotationMatrix, params.invViewProjStable);
         params.invViewProj.set(params.invViewProjStable);
-        params.statsAddress = statsBuf.address + writeOffset;
         // The same slot as a descriptor, for the pass that fills its counters: a device address reaches only the
         // shaders that take one, and the statistics pass binds the sixteen-byte head like any other buffer.
         params.statsBuffer = statsBuf.handle;
@@ -1237,7 +1293,7 @@ public final class RtFrameRenderer {
                     if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure)
                         throw nativeFailure; // partial coarse recording requires whole-command discard
                     if (e instanceof io.github.andrexarlay.vulkancompat.rt.denoise.RrFeatureCreationRetry) {
-                        LOGGER.warn("[DLSS-RR] creation_retry whole_recording=discarded next_frame=quality_fallback reason={}", e.getMessage());
+                        LOGGER.warn("[DLSS-RR] creation_retry whole_recording=discarded next_frame=quality_fallback reason={}", LogPaths.show(e.getMessage()));
                         throw new RtDenoiserFrameDiscard("DLSS-RR creation retry requires a fresh recording", e);
                     }
                     denoiserRuntimeFailure = "dlss_rr_record: " + LogPaths.show(e.getMessage());
@@ -1718,26 +1774,34 @@ public final class RtFrameRenderer {
             lastStatusNs = now;
             // F3-style status line (one line, every 5 s)
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] status mode=%s lights=%d sun=(%.2f,%.2f,%.2f)x%.2f day=%.2f key=%s radius=%d/%d sections=%d blas_mb=%d budget_mb=%d sun_size_deg=%.2f",
+                "[VKB-RT] status mode=%s lights=%d sun=(%.2f,%.2f,%.2f)x%.2f day=%.2f key=%s radius=%d/%d sections=%d scene_vram_mb=%d sun_size_deg=%.2f",
                 RtConfig.mode().logName(), emitters != null ? emitters.count() : 0, params.key.dir[0], params.key.dir[1],
                 params.key.dir[2], params.key.color[0], params.key.day, params.key.isMoon ? "moon" : "sun", lastRadiusXz, lastRadiusY,
-                s.instances(), s.vramBytes() >> 20, RtConfig.vramBudgetBytes() >> 20,
+                s.totalSections(), s.vramBytes() >> 20,
                 io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.sunSizeTenths / 10.0));
         }
         if (changed) {
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] blas built=%d total=%d build_ms=%.2f tlas instances=%d tlas_ms=%.2f vram_mb=%d pending=%d failed=%d identical_skipped=%d veg_sections=%d veg_quads=%d",
+                "[VKB-RT] blas built=%d total=%d build_ms=%.2f tlas instances=%d tlas_ms=%.2f vram_mb=%d pending=%d identical_skipped=%d veg_sections=%d veg_quads=%d",
                 builtInWindow, s.totalSections(), buildMsInWindow, s.instances(), s.tlasMs(), s.vramBytes() >> 20,
-                s.pending(), s.failedSections(), world != null ? world.identicalSkipped() : 0L,
+                s.pending(), world != null ? world.identicalSkipped() : 0L,
                 world != null ? world.vegetationSections() : 0L, world != null ? world.vegetationQuads() : 0L));
         }
         if (passFramesInWindow > 0) {
             int userSpp = RtSettings.spp();
             int userBounces = RtSettings.bounces();
             double budget = RtSettings.adaptiveBudgetMs();
+            RtTraceTelemetry submitted = lastTraceTelemetry;
+            StatsMetadata metered = lastStatsMetadata;
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s reject_pct=%s invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
-                passFrames, target != null ? (long) target.width * target.height : 0L,
+                "[VKB-RT] rt_pass ok frames=%d trace=%s output=%s trace_pixels=%d output_pixels=%d primary_samples=%d stats_trace=%s stats_sequence=%d stats_frame=%d stats_metered_pixels=%d stats_trusted_pixels=%d hit_pct=%s reject_pct=%s invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f record_wall_ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
+                passFrames, submitted == null ? "n/a" : submitted.traceExtent(), submitted == null ? "n/a" : submitted.outputExtent(),
+                submitted == null ? 0L : submitted.tracePixels(), submitted == null ? 0L : submitted.outputPixels(),
+                submitted == null ? 0L : submitted.primarySamples(),
+                metered == null ? "n/a" : metered.width() + "x" + metered.height(),
+                metered == null ? -1L : metered.sequence(), metered == null ? -1 : metered.frameIndex(),
+                metered == null ? 0L : RtStatsMetering.meteredPixels(metered.width(), metered.height(), metered.frameIndex()),
+                lastStatsTrustedPixels,
                 lastHitPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHitPct),
                 lastRejectedPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectedPct),
                 lastRejectSplit == null ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectSplit.invalidPct()),
@@ -1746,7 +1810,8 @@ public final class RtFrameRenderer {
                 lastHistPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHistPct),
                 lastLeafPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastLeafPct),
                 passMsInWindow / passFramesInWindow,
-                RtAdaptiveQuality.spp(userSpp), RtAdaptiveQuality.bounces(userSpp, userBounces),
+                passMsInWindow / passFramesInWindow, // ms is retained for existing log consumers; both are recording wall time.
+                submitted == null ? 0 : submitted.spp(), submitted == null ? 0 : submitted.bounces(),
                 // work_ms: the rays and the denoiser, i.e. what the governor compares with the budget; pass_ms: the whole RT
                 // command buffer (chunk build, atmosphere, the copy), i.e. what the frame actually pays for ray tracing
                 msOrNa(gpuTimer == null ? -1.0 : gpuTimer.recentMs(SPAN_RAYS, SPAN_DENOISE)),
@@ -1756,12 +1821,6 @@ public final class RtFrameRenderer {
                 RtConfig.displayed(), RtConfig.effectiveModeName()));
         } else if (s.instances() == 0 && s.pending() > 0) {
             LOGGER.info("[VKB-RT] rt_pass waiting instances=0 pending={}", s.pending());
-        }
-        if (world != null) {
-            OpacityMicromapCache omm = world.ommCache();
-            if (omm != null) {
-                omm.logStatsIfDue(now);
-            }
         }
         passMsInWindow = 0.0;
         passFramesInWindow = 0;
@@ -1944,6 +2003,9 @@ public final class RtFrameRenderer {
         dropDenoiserNext = false;
         statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
         lastStatsSequence = -1;
+        lastTraceTelemetry = null;
+        lastStatsMetadata = null;
+        lastStatsTrustedPixels = 0L;
         lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
 
     }

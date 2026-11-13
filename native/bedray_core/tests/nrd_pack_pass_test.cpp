@@ -91,11 +91,12 @@ int main() {
         check(resource.handle == frame.views[resource.binding] && resource.image_layout == VK_IMAGE_LAYOUT_GENERAL);
         check(resource.descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE && !resource.sampler);
     }
-    frame.views[0] = 100; frame.normal_encoding = 0; frame.denoiser = 2; contract.binding_count = 10;
-    check(render(frame) == BEDRAY_OK && records.back().resources.size() == 10 && !records.back().push.motion);
+    frame.views[0] = 100; frame.normal_encoding = 0; frame.denoiser = 2; contract.binding_count = 8;
+    frame.views[1] = 0; frame.views[5] = 0;
+    check(render(frame) == BEDRAY_OK && records.back().resources.size() == 8 && !records.back().push.motion);
     bool has_distance = false;
     for (const auto& resource : records.back().resources) {
-        check(resource.binding != 3);
+        check(resource.binding != 1 && resource.binding != 3 && resource.binding != 5);
         if (resource.binding == 12) { has_distance = true; check(resource.handle == frame.views[12]); }
     }
     check(has_distance);

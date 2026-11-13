@@ -1,10 +1,7 @@
-﻿// Shared body of the path-tracing entry points.
+// Shared body of the path-tracing entry points.
 //
-// `path_trace_pass` (LegacySection table) and `path_trace_scene_pass`
-// (native GeometrySection table) differ only in binding 2 and in the traversal
-// backend; the integration, material decode, ReSTIR and output contract are
-// identical.  Keeping the body here means a fix cannot land in one entry and
-// silently miss the other.
+// Native-scene path tracing and Radiance Cascades share the integrator,
+// material decode, ReSTIR stages and output contract.
 public module path_trace_entry;
 
 __exported import "contracts/contracts.slang";
@@ -21,6 +18,9 @@ __exported import "surface/surface.slang";
 import "surface/water.slang";
 __exported import "traversal/entity_geometry.slang";
 import "traversal/traversal.slang";
+
+// Depth from which the screen pass plays Russian roulette (the defaults keep 3 for the other callers).
+static const uint PATH_TRACE_ENTRY_MIN_RUSSIAN_DEPTH = 2u;
 
 // Bits of PathTracePush.diState.x.  The reservoir branch is one code path gated by a flag, not a second shader: the host
 // can A/B ReSTIR DI against plain per-frame RIS in the same frame graph.
@@ -465,6 +465,10 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
 
     PathTraceOptions options = defaultPathTraceOptions();
     options.maxDepth = max(pc.maxDepth, 1u);
+    // Roulette from depth 2: with the default 3 bounces a start at 3 never ran (the depth limit breaks first).  Paths
+    // that already lost most of their throughput after two diffuse bounces stop early; survivors are divided by the
+    // survival probability, so the estimate stays unbiased.
+    options.minRussianDepth = PATH_TRACE_ENTRY_MIN_RUSSIAN_DEPTH;
     options.maxSurfaceSteps = max(pc.maxSurfaceSteps, 1u);
     options.rayBias = max(pc.rayBias, 0.0);
     options.alphaCutoff = pc.alphaCutoff;
@@ -480,6 +484,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // The reach this frame's emitter list was collected over: the distant block-light handover starts where the list
     // stops being complete, so the tracer reads the same range the sampler windows its candidates with.
     options.emitterListRange = emitterSampler.maxDistance;
+    options.emitterNeeAvailable = lights.emitterProbability > 0.0 && blockEmitterCount(emitters) > 0u;
     // The ray profile's own bounce distances.  A 0 word is the path profile's older host and keeps the ray far plane,
     // so the two words change nothing for a dispatch that does not fill them.
     options.diffuseDistance = asfloat(pc.diState.z) > 0.0 ? asfloat(pc.diState.z) : options.maxDistance;
@@ -491,6 +496,9 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // waves focus the beam that got through.  The style switch is the surface decoder's wave mix below, because a
     // style changes how much the face tilts and never what the medium does to the light.
     options.waterCaustics = frameWaterCaustics(f);
+    // Scene-referred ceiling of the indirect sum (path_tracer.slang): a shader constant, not an exposure-driven value,
+    // because the 112-byte push block has no free lane.
+    options.indirectMaxLuminance = PATH_TRACE_INDIRECT_MAX_LUMINANCE;
 
     MaterialSamplingOptions materialOptions = pathTraceMaterialOptions(f, pc);
 

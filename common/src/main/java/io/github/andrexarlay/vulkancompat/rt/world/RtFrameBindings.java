@@ -10,8 +10,6 @@ package io.github.andrexarlay.vulkancompat.rt.world;
  * handed the same images, and NRD and DLSS-RR still have to hand back exactly {@link #GBUFFER_VIEWS} of them.
  */
 public final class RtFrameBindings {
-    /** Push-constant block of a render pass. */
-    public static final int PUSH_BYTES = RtFrameParams.BYTES;
     /** Number of G-buffer storage images (bindings 4..8) of the denoiser variant: viewZ, normal+roughness, diffuse, albedo, direct. */
     public static final int GBUFFER_IMAGES = 5;
     /** Specular radiance + hit distance of the denoiser variant (binding 13, after the material/normal/accum/depth slots). */
@@ -29,24 +27,33 @@ public final class RtFrameBindings {
     private RtFrameBindings() {
     }
 
+    /** Read-only view borrowed from the native scene through recording completion. */
+    public record SectionTable(long handle, long bytes) {
+        public SectionTable {
+            if (handle == 0 || bytes <= 0 || bytes % 64 != 0) {
+                throw new IllegalArgumentException("native scene table requires a buffer and whole 64-byte sections");
+            }
+        }
+    }
+
     /**
      * Views bound for one frame; {@code gbuffer} non-null exactly for the denoiser variant, {@code accum} != 0 exactly
      * when a pass writes the accumulation image. {@code motion} is NRD's {@code IN_MV} buffer (one vec4 per pixel),
      * non-zero only when the NRD layout is selected.
      */
-    public record Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum,
+    public record Views(long tlas, SectionTable table, long output, long atlas, long material, long normal, long accum,
                         long[] gbuffer, long depth, long lightmap, long motion) {
-        public Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum,
+        public Views(long tlas, SectionTable table, long output, long atlas, long material, long normal, long accum,
                      long[] gbuffer) {
             this(tlas, table, output, atlas, material, normal, accum, gbuffer, 0L, 0L, 0L);
         }
 
-        public Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum,
+        public Views(long tlas, SectionTable table, long output, long atlas, long material, long normal, long accum,
                      long[] gbuffer, long depth) {
             this(tlas, table, output, atlas, material, normal, accum, gbuffer, depth, 0L, 0L);
         }
 
-        public Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum,
+        public Views(long tlas, SectionTable table, long output, long atlas, long material, long normal, long accum,
                      long[] gbuffer, long depth, long lightmap) {
             this(tlas, table, output, atlas, material, normal, accum, gbuffer, depth, lightmap, 0L);
         }

@@ -1,5 +1,7 @@
 # Sodium decode recording
 
+> Historical record of the removed Java scene's GPU decoder. The native scene receives captured CPU meshes.
+
 `bedray_core_decode_sodium` is an additive 56-byte ABI-v2 call. Java supplies
 borrowed input/output addresses, quad count, registered program and the host
 command buffer. Native validates the unsigned, aligned, nonwrapping, disjoint

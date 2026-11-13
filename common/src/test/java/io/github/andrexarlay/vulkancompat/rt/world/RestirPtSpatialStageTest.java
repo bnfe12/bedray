@@ -40,7 +40,6 @@ class RestirPtSpatialStageTest {
     private static final Path SHADERS = Path.of("src/main/resources/shaders/slang");
     private static final Path STAGE = SHADERS.resolve("restir/pt_spatial.slang");
     private static final Path TEMPORAL = SHADERS.resolve("restir/pt_temporal.slang");
-    private static final Path ROOT = SHADERS.resolve("passes/restir_pt_spatial.slang");
     private static final Path SCENE_ROOT = SHADERS.resolve("passes/restir_pt_spatial_scene.slang");
     private static final Path JAVA = Path.of("src/main/java/io/github/andrexarlay/vulkancompat");
     private static final Path BACKEND = JAVA.resolve("rt/world/ReferencePathTraceBackend.java");
@@ -135,42 +134,33 @@ class RestirPtSpatialStageTest {
     }
 
     @Test
-    void bothRootsShareTheTraceBindingsAndPushBlock() throws IOException {
-        for (Path root : new Path[] {ROOT, SCENE_ROOT}) {
-            String source = read(root);
-            assertTrue(source.contains("[[vk::binding(36, 0)]] RWStructuredBuffer<RestirPtReservoir> ptReservoirs;"),
-                root + ": the ring at the trace pass's own binding");
-            assertTrue(source.contains("[[vk::push_constant]] PathTracePush pc;"),
-                root + ": the trace pass's own push block, so the host pushes the same 112 bytes twice");
-            assertTrue(source.contains("pathTracePtSpatialEntry(traversal, entities, tid,"),
-                root + ": the shared body");
-        }
+    void theSpatialPassSharesTheTraceBindingsAndPushBlock() throws IOException {
+        String source = read(SCENE_ROOT);
+        assertTrue(source.contains("[[vk::binding(36, 0)]] RWStructuredBuffer<RestirPtReservoir> ptReservoirs;"));
+        assertTrue(source.contains("[[vk::push_constant]] PathTracePush pc;"));
+        assertTrue(source.contains("pathTracePtSpatialEntry(traversal, entities, tid,"));
         String entry = read(SHADERS.resolve("pathtrace/path_trace_entry.slang"));
         assertTrue(entry.contains("ptSpatialStage(traversal, atlas, table, materialOptions, max(pc.rayBias, 0.0), ptReservoirs,"),
             "the entry hands the stage the trace's own bias and material options");
         assertEquals(2, count(entry, "MaterialSamplingOptions materialOptions = pathTraceMaterialOptions(f, pc);"),
             "one definition of the filtered walk's options for the trace and the spatial stage");
-        Assumptions.assumeTrue(SlangPassLibrary.available("restir_pt_spatial")
-            && SlangPassLibrary.available("restir_pt_spatial_scene")
-            && SlangPassLibrary.available("path_trace"), "the spatial passes were not compiled");
-        SlangPassManifest trace = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
-        SlangPassManifest traceScene = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
-        for (String[] pair : new String[][] {{"restir_pt_spatial", "legacy"}, {"restir_pt_spatial_scene", "scene"}}) {
-            SlangPassManifest manifest = SlangPassLibrary.load(pair[0]).orElseThrow().manifest();
-            SlangPassManifest twin = pair[1].equals("scene") ? traceScene : trace;
-            assertEquals(14, manifest.bindings().size(), pair[0] + ": binding count");
-            assertEquals(twin.pushConstantBytes(), manifest.pushConstantBytes(), pair[0] + ": push block");
-            for (SlangPassManifest.Binding binding : manifest.bindings()) {
-                SlangPassManifest.Binding same = twin.binding(binding.name());
-                assertNotNull(same, pair[0] + ": '" + binding.name() + "' is not a trace binding");
-                assertEquals(same.binding(), binding.binding(), pair[0] + ": binding of " + binding.name());
-                assertEquals(same.descriptorType(), binding.descriptorType(), pair[0] + ": type of " + binding.name());
-                assertEquals(same.elementBytes(), binding.elementBytes(), pair[0] + ": element of " + binding.name());
-            }
-            RtPathTraceSlangPass.requirePtSpatialManifest(manifest);
-            assertTrue(SlangPassDriverGate.permits(pair[0], SlangPassLibrary.load(pair[0]).orElseThrow().spirv()),
-                pair[0] + ": no descriptor handle may be an OpUndef pointer, or the NVIDIA driver faults on the pipeline");
+        String passName = "restir_pt_spatial_scene";
+        Assumptions.assumeTrue(SlangPassLibrary.available(passName)
+            && SlangPassLibrary.available("path_trace_scene"), "the trace and spatial passes were not compiled");
+        SlangPassManifest trace = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
+        var spatial = SlangPassLibrary.load(passName).orElseThrow();
+        SlangPassManifest manifest = spatial.manifest();
+        assertEquals(14, manifest.bindings().size(), "binding count");
+        assertEquals(trace.pushConstantBytes(), manifest.pushConstantBytes(), "push block");
+        for (SlangPassManifest.Binding binding : manifest.bindings()) {
+            SlangPassManifest.Binding same = trace.binding(binding.name());
+            assertNotNull(same, binding.name() + " is not a trace binding");
+            assertEquals(same.binding(), binding.binding(), binding.name());
+            assertEquals(same.descriptorType(), binding.descriptorType(), binding.name());
+            assertEquals(same.elementBytes(), binding.elementBytes(), binding.name());
         }
+        RtPathTraceSlangPass.requirePtSpatialManifest(manifest);
+        assertTrue(SlangPassDriverGate.permits(passName, spatial.spirv()), "all descriptor handles are assigned");
     }
 
     // ---- host ---------------------------------------------------------------------------------------------------------
@@ -199,7 +189,7 @@ class RestirPtSpatialStageTest {
     @Test
     void theBackendRunsTheSpatialStageOnlyBehindTheTemporalOne() throws IOException {
         String backend = read(BACKEND);
-        assertTrue(backend.contains("boolean ptSpatialRan = ptFlags != 0 && input.ptSpatial() && trace.ptSpatialAvailable(scene);"),
+        assertTrue(backend.contains("boolean ptSpatialRan = ptFlags != 0 && input.ptSpatial() && trace.ptSpatialAvailable();"),
             "no ring, no temporal stage, no spatial stage: it only ever pools what this frame's trace wrote");
         assertTrue(backend.contains("trace.recordPtSpatial(cmd, scene, atlases, ptRange, capturedEntities, frame, dispatch);"),
             "the same atlases, ring, entities, frame block and push word the trace dispatch used");
@@ -209,9 +199,7 @@ class RestirPtSpatialStageTest {
         assertTrue(backend.contains("return pt.mode(true, ptReservoirs != null, ptSpatialLast);"),
             "the mode log says whether the stage ran");
         String host = read(TRACE_HOST);
-        assertTrue(host.contains("static final String PT_SPATIAL_PASS_NAME = \"restir_pt_spatial\";")
-                && host.contains("static final String PT_SPATIAL_SCENE_PASS_NAME = \"restir_pt_spatial_scene\";"),
-            "one program per traversal backend, like the trace pass");
+        assertTrue(host.contains("static final String PT_SPATIAL_PASS_NAME = \"restir_pt_spatial_scene\";"));
         String spatial = block(host, "void recordPtSpatial(");
         assertTrue(spatial.contains("dispatch.writeTo(push);"), "the trace pass's own push bytes");
         assertTrue(spatial.contains("VkBarriers.fullMemoryBarrier(cmd);"),

@@ -60,8 +60,10 @@ final class SettingsDraft {
             Option option = config.getOption(id(path));
             if (option instanceof StatefulOption<?> value) {
                 String description = Component.translatableWithFallback("bedray.opt." + path + ".desc", info.desc()).getString();
-                entries.add(new Entry(path, info, value, category(path),
-                    (value.getName().getString() + " " + description + " " + info.name() + " " + path).toLowerCase(Locale.ROOT)));
+                Category category = category(path);
+                String searchText = SettingsSearch.index(String.join(" ", value.getName().getString(), description,
+                    info.name(), info.desc(), info.requires(), category.title().getString(), path));
+                entries.add(new Entry(path, info, value, category, searchText));
             }
         });
     }
@@ -145,6 +147,11 @@ final class SettingsDraft {
     void customize() { stage(voxel() ? "voxel_quality_profile" : "path_quality_profile", VulkanSodiumConfig.QualityProfile.CUSTOM); }
     void revert() { imported.clear(); config.resetAllOptionsFromBindings(); }
     void reset() { imported.clear(); entries.stream().filter(e -> !SESSION.contains(e.path())).forEach(e -> e.option().resetToDefault()); }
+    void reset(Entry entry) {
+        if (!entry.option().isEnabled() || !editable(entry)) return;
+        entry.option().resetToDefault();
+        if (entry.option().getValidatedValue() instanceof Enum<?> value) choose(entry, value);
+    }
     void apply() {
         Map<String, String> decoded = new LinkedHashMap<>();
         imported.forEach((key, value) -> decoded.put(key, unquote(value)));

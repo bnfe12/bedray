@@ -163,5 +163,9 @@ public class RtSkyAndLightingTest {
         assertEquals(0.0f, before.color[2], 1e-3f, "Sun light must be zero at crossover");
         assertEquals(0.0f, after.color[2], 1e-3f, "Moon light must ramp smoothly from zero at crossover");
         assertTrue(RtSkyState.maxExposure(0.0f) < 2.5f, "Night max exposure must stay clamped so night stays dark");
+        assertTrue(RtSkyState.maxExposure(0.0f) >= RtExposure.FIXED,
+            "but a night may reach at least the fixed exposure: a ceiling of 0.03 turned torch-lit rooms black");
+        for (float day = 0f; day <= 1f; day += 0.25f)
+            assertTrue(RtSkyState.maxExposure(day) >= RtExposure.FIXED && RtSkyState.maxExposure(day) <= RtExposure.MAX, "day " + day);
     }
 }

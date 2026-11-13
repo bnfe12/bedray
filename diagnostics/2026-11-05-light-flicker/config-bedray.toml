@@ -1,0 +1,172 @@
+# Bedray configuration
+
+[super_resolution]
+# BILINEAR, FSR1, NIS (built-in, any GPU), XESS (needs libxess.dll), DLSS (needs nvngx_dlss.dll + vkb_dlss.dll (see docs/INSTALL.md) and an NVIDIA RTX GPU)
+# or FSR (needs the official AMD amd_fidelityfx_vk.dll of FidelityFX SDK v1.1.4 (see docs/INSTALL.md)).
+# XESS/DLSS/FSR switch live in the settings page; only when their Vulkan device requirements were not registered at startup (library missing then, or -Dvkrtx.upscaler.preregister=false) the choice applies after a restart.
+active_backend = "DLSS"
+# XeSS mode: ULTRA_QUALITY_PLUS, ULTRA_QUALITY, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE
+xess_mode = "PERFORMANCE"
+# DLSS mode: DLAA, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE (the render size is asked from NGX)
+dlss_mode = "PERFORMANCE"
+# FSR mode: NATIVE_AA, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE (the render size is asked from the FidelityFX DLL)
+fsr_mode = "BALANCED"
+# FSR version: AUTO (newest provider in the DLL), FSR_3_1 or FSR_2. FSR 4 has no Vulkan build from AMD.
+fsr_version = "FSR_3_1"
+# FSR RCAS sharpening 0.0 (off) .. 1.0
+fsr_sharpness = 1.0
+# Built-in spatial upscalers (no DLL, any GPU): FSR1 (AMD FSR 1 EASU+RCAS) and NIS (NVIDIA Image Scaling).
+# FSR 1 mode: ULTRA_QUALITY (1.3x), QUALITY (1.5x), BALANCED (1.7x), PERFORMANCE (2.0x), CUSTOM. NIS is always CUSTOM (50..100%).
+fsr1_mode = "QUALITY"
+# FSR 1 RCAS sharpening 0.0 (pass off) .. 1.0; NIS sharpness 0.0 .. 1.0 (NIS SDK slider)
+fsr1_sharpness = 0.8
+nis_sharpness = 0.5
+# Render scale in percent used when the mode of that upscaler is CUSTOM (25..100; NIS 50..100).
+# DLSS/XeSS clamp it into the dynamic range their library reports (logged).
+xess_custom_scale = 67
+dlss_custom_scale = 67
+fsr_custom_scale = 67
+fsr1_custom_scale = 67
+nis_custom_scale = 67
+# Presets: ULTRA_PERFORMANCE (33.3%), PERFORMANCE (50%), BALANCED (66.7%), QUALITY (77%), NATIVE (100%), CUSTOM
+# Below 100% the 3D world is rendered smaller and stretched with a bilinear blit
+quality_preset = "QUALITY"
+custom_scale = 100
+# Auto texture mipmap LOD bias: negative bias based on upscaler scale eliminates DLSS/FSR/XeSS blurriness
+auto_texture_lod_bias = true
+texture_lod_bias_offset = -0.2
+manual_texture_lod_bias = 0.0
+point_sampling_sharpness = false
+resource_pack_resolution = 16
+
+[ray_tracing]
+# HARDWARE_RT keeps the rt_mode preference. VOXEL_LIVE_DEBUG requires the matching separate Bedray Compute add-on: bounded textured models and world light without RT cores, with raster preservation. Physical GI, reflections and temporal guides remain pending.
+renderer = "HARDWARE_RT"
+# Voxel coverage follows loaded Minecraft chunks by default; custom distance is bounded by Minecraft.
+voxel_distance_auto = true
+voxel_distance_chunks = 12
+voxel_memory_budget_mib = 128
+voxel_quality_profile = "FAST"
+path_quality_profile = "FAST"
+voxel_diffuse_bounce = false
+voxel_translucent_optics = false
+# [EXPERIMENTAL] Hardware ray tracing (requires VK_KHR_ray_query). rt_mode: off, rays (Ray Tracing: shadows, reflections, AO, emissive lights) or path (Path Tracing: full light transport)
+rt_mode = "path"
+# Hidden in this release: Ray Tracing (Fast) is in development. true unlocks rt_mode = "rays" and its settings.
+experimental_rays = false
+# Legacy key kept for older versions (ignored when rt_mode is present)
+enable_hardware_ray_tracing = true
+# Light and atmosphere: light shafts (atm_godrays 0=off 1=post 2=inline), bloom, sun glare, haze
+atm_godrays = 1.0
+atm_godrays_strength = 1.0
+atm_bloom = 1.0
+atm_bloom_strength = 0.25
+atm_sunglare = 1.0
+atm_fog_aerial = 1.0
+atm_fog_vanilla = 1.0
+atm_chunk_fade = 1.5
+atm_godrays_quality = 2.0
+atm_godrays_range = 32.0
+atm_bloom_threshold = 6.0
+atm_bloom_scatter = 0.699999988079071
+atm_sunglare_strength = 1.0
+ui_expert = false
+# Ray Tracing quality preset (LOW, MEDIUM, HIGH, ULTRA or CUSTOM)
+rt_preset = "CUSTOM"
+# --- Ray Tracing mode (rt_mode = "rays"): each effect has a switch, a quality (rays per pixel) and a distance (blocks)
+# normal maps generated from the albedo for textures without LabPBR _n (strength in percent, 0..400)
+auto_normals = true
+# RT distance: as in game (render distance) or manual chunks; BLAS memory budget (MB); sun disk diameter (0.1 deg)
+rt_distance_auto = true
+rt_distance_chunks = 8
+rt_vram_budget_mb = 2048
+sun_size_tenths = 5
+# tilt of the sun/moon arc towards the south in degrees (0 = vanilla: the sun passes the zenith, no noon shadows)
+sun_tilt_deg = 24
+# Baked vanilla light fill, 0..100 percent, rays mode only (0 = off: sky light through rays, block light through emitters)
+baked_light_fill_pct = 0
+rt_light_budget = 512
+rt_show_advanced = true
+rt_show_expert = false
+auto_normal_strength = 100
+# Volumetric / Distance Fog
+volumetric_fog_enabled = true
+fog_density = 1.0
+fog_in_scattering = 1.0
+fog_distance_scale = 1.0
+rt_fog = true
+rt_fog_density = 100
+rt_fog_in_scattering = 100
+# Water style: 0 = Vanilla, 1 = Realistic
+water_style = 1
+waving_foliage = false
+waving_foliage_strength = 100
+# Vibrant Visuals (Mojang vibrant palette)
+vibrant_visuals = false
+rays_direct_translucent_shadows = true
+rays_optical_materials = true
+rays_indirect_translucent_shadows = true
+rays_cull_shared_glass = true
+rays_transparency_stats = false
+rays_shadows = true
+rays_soft_shadows = true
+rays_pixel_shadows = false
+rays_reflections = true
+rays_ao = true
+rays_emissive = true
+rays_gi = true
+rays_accumulate = true
+rays_restir_temporal = true
+rays_restir_spatial = true
+# 1..16
+rays_pixel_shadow_size = 1
+# 16..512
+rays_reflection_distance = 256
+# 1..8
+rays_ao_radius = 3
+# 1..8
+rays_emissive_quality = 4
+# 8..64
+rays_emissive_distance = 48
+# 16..256
+rays_gi_distance = 128
+
+[path_tracing]
+# Path Tracing mode (rt_mode = "path"): full light transport
+# PT quality: FAST, QUALITY or CUSTOM
+pt_preset = "CUSTOM"
+# 1..8
+path_bounces = 2
+# 1..8
+path_spp = 1
+# 16..512
+path_distance = 256
+# -40..40
+path_exposure_ev = 0
+path_accumulate = true
+path_restir_di = true
+path_restir_spatial = true
+path_restir_pt = false
+path_restir_pt_spatial = true
+path_auto_exposure = true
+path_caustics = true
+# OFF, NRD or DLSS_RR (DLSS_RR uses NVIDIA DLSS Ray Reconstruction)
+path_denoiser = "DLSS_RR"
+# Adaptive quality: OFF, FPS30, FPS45, FPS60, FPS90 or FPS120 - the RT pass lowers rays per pixel, then bounces,
+# below the values above to fit 70% of a frame of that rate (never above them)
+adaptive_quality = "OFF"
+# DLSS Ray Reconstruction: flat voxel geometric normals (ng) for sharp block edges (true), or smooth/perturbed (false)
+dlss_rr_geometric_normals = true
+
+[frame_generation]
+# NVIDIA DLSS Frame Generation through Streamline (needs the Streamline binaries, see docs/framegen/FINDINGS.md, an RTX 40/50 GPU,
+# a temporal upscaler (FSR/DLSS/XeSS) and a game restart to load Streamline; the mode below switches live).
+# framegen_mode: OFF, X2, X3, X4 (X3/X4 = Multi Frame Generation, RTX 50 only). JVM property -Dvkrtx.framegen=off|2x|3x|4x overrides it.
+framegen_mode = "OFF"
+# framegen_provider: AUTO, NVIDIA (DLSS-G through Streamline), AMD (FSR 3 frame generation, any GPU, 2x only; not tested on AMD/Intel hardware).
+# Changing the provider needs a game restart (both replace the swapchain). JVM property -Dvkrtx.framegen.provider overrides it.
+framegen_provider = "AUTO"
+# reflex_mode: OFF, ON, BOOST (NVIDIA Reflex low latency; frame generation needs the Reflex markers in every case)
+reflex_mode = "BOOST"
+# presented frames per second cap through Reflex, 0 = off
+framegen_frame_limit = 0

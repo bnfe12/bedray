@@ -5,7 +5,7 @@
 // march takes an `ISceneTracer` for the shaft's shadow rays and the host passes
 // every input explicitly (there are no bindings and no global state here).
 // The two compute entries that drive it live in
-// `passes/volumetric_march.slang` (half resolution march + temporal store) and
+// `passes/volumetric_march_scene.slang` (half resolution march + temporal store) and
 // `passes/volumetric_apply.slang` (depth-aware bilateral upsample, scene-space
 // additive composite).
 //
@@ -34,6 +34,14 @@ import "contracts/hit.slang";
 import "contracts/math.slang";
 import "tonemap_curve.slang";
 import "traversal/traversal.slang";
+
+// Length of god-ray march steps for short rays, in blocks.
+static const float VOLUMETRIC_STEP_BLOCKS = 3.0;
+
+uint volumetricStepCount(float tEnd, uint qualitySteps) {
+    uint maxSteps = clamp(qualitySteps, 2u, 48u);
+    return clamp(uint(ceil(max(tEnd, 0.0) / VOLUMETRIC_STEP_BLOCKS)), 2u, maxSteps);
+}
 
 static const float VOLUMETRIC_SIGMA_S = 0.012;          // scattering per block at full density
 static const float VOLUMETRIC_HEIGHT_BASE = 62.0;       // legacy: sea level where the profile starts to fall
@@ -117,7 +125,9 @@ float3 marchLightShaft<T : ISceneTracer>(T traversal, float3 origin, float3 dir,
     if (L.y <= -0.02) return float3(0.0);          // key light below the horizon
     if (tEnd <= 0.5) return float3(0.0);           // legacy: shafts start half a block out
     if (densityMul <= 0.0) return float3(0.0);
-    uint n = clamp(steps, 2u, 48u);
+    // Steps follow the ray length (one per VOLUMETRIC_STEP_BLOCKS, at most the quality's count): a shaft ending on a
+    // wall 3 blocks away no longer pays the full march.  The per-pixel jitter and the history keep it unbiased.
+    uint n = volumetricStepCount(tEnd, steps);
     float dt = tEnd / float(n);
 
     float transmittance = 1.0;

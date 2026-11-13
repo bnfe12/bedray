@@ -177,7 +177,7 @@ static const float RESTIR_PT_FRESH_ANCHOR_DISTANCE = 1.0e-3;
 
 // ---- Record layout ----------------------------------------------------------
 //
-// Measured from the generated reflection of passes/path_trace.slang (v5; the
+// Measured from the generated reflection of passes/path_trace_scene.slang (v5; the
 // record is a RWStructuredBuffer element, so it is laid out std430 and every
 // float3 starts on a 16-byte boundary):
 //

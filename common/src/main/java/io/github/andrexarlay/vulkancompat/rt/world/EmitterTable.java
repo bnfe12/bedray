@@ -36,8 +36,23 @@ final class EmitterTable {
 
     record Publication(ByteBuffer data, Map<Key, List<Integer>> identities, long nextId,
                        long revision, int count, int retained, int added, int removed, int maxProbe,
-                       int[] spatialOrder, int bvhDepth, boolean topologyReused) {
+                       int[] spatialOrder, int bvhDepth, boolean topologyReused,
+                       int originX, int originY, int originZ, int materialRevision) {
         float globalFraction() { return count == 0 ? 1 : data.getFloat(24); }
+
+        boolean matchesPayload(float[][] records, int count, int x, int y, int z, int material) {
+            if (this.count != count || count > records.length || originX != x || originY != y
+                    || originZ != z || materialRevision != material) return false;
+            for (int i = 0; i < count; i++) {
+                float[] record = records[i];
+                if (record == null || record.length < RtEmitters.FLOATS) return false;
+                int at = HEADER_BYTES + i * RECORD_BYTES;
+                for (int word = 0; word < RtEmitters.FLOATS; word++) {
+                    if (data.getInt(at + word * Float.BYTES) != Float.floatToRawIntBits(record[word])) return false;
+                }
+            }
+            return true;
+        }
     }
 
     Publication prepare(float[][] records, int count, int originX, int originY, int originZ) {
@@ -98,7 +113,8 @@ final class EmitterTable {
         }
         long version = revision + (added != 0 || removed != 0 ? 1 : 0);
         return new Publication(data.asReadOnlyBuffer().order(ByteOrder.nativeOrder()), selected, next,
-            version, count, retained, added, removed, maxProbe, orderedIds, tree.depth(), reuseTopology);
+            version, count, retained, added, removed, maxProbe, orderedIds, tree.depth(), reuseTopology,
+            originX, originY, originZ, materialRevision);
     }
 
     void commit(Publication publication) {

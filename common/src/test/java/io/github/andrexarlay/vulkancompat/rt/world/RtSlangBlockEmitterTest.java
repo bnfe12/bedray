@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RtSlangBlockEmitterTest {
 
     private static final String EMITTERS = "src/main/resources/shaders/slang/light/block_emitters.slang";
-    private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
+    private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace_scene.slang";
     private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
     private static final String TRACER = "src/main/resources/shaders/slang/pathtrace/path_tracer.slang";
     private static final String CONTRACT = "src/main/resources/shaders/slang/contracts/light.slang";
@@ -163,9 +163,13 @@ class RtSlangBlockEmitterTest {
     void theBranchProbabilityIsFoldedIntoTheDensity() {
         String slang = read(EMITTERS);
         String composite = block(slang, "struct SunAndBlockEmitterSampler : ILightSampler {");
-        assertTrue(composite.contains("emitterSample.sourcePdf *= emitterProbability;"),
+        // Since 2026-11-08 the shares depend on the receiver (indoor key-light share shrinks); still one share per branch.
+        assertTrue(composite.contains("emitterSample.sourcePdf *= emitterShare;")
+                && composite.contains("sunSample.sourcePdf *= keyShare;")
+                && composite.contains("float emitterShare = 1.0 - keyShare;"),
             "the composite picks the branch, so the density of the sample is the branch density times the branch share");
-        assertTrue(composite.contains("sunSample.sourcePdf *= 1.0 - emitterProbability;"), "the sun side needs it too");
+        assertTrue(composite.contains("float keyShare = (1.0 - emitterProbability) * indoorKeyLightProbability(receiver);"),
+            "the sun side needs it too: its share is the key-light share, indoors scaled down");
         assertFalse(composite.contains("sourcePdf /= emitterProbability"));
         assertTrue(composite.contains("return emitters.sample(receiver, seed);"), "a sole active branch has probability one");
         for (double q : new double[]{0.1, 0.25, 0.5, 0.9}) {

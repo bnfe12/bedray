@@ -5,6 +5,7 @@ import io.github.andrexarlay.vulkancompat.rt.sodium.SectionGeometryRegistry;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -24,7 +25,8 @@ final class NativeSectionCapture {
         void sectionBuilt(DecodedSection section, int[] quadFlags);
         void sectionRemoved(long key);
     }
-    record Result(int queued, int pending, long nearestSq, boolean rescanned) {}
+    record Result(int queued, int pending, long nearestSq, boolean rescanned, int omittedByCapacity,
+                  int oversizedSections, int largestOversizedQuads, long largestOversizedSection) {}
     private record Focus(int x, int y, int z, int radiusXz, int radiusY) {}
     private record Capture(DecodedSection section, long tagHash) {}
 
@@ -33,9 +35,14 @@ final class NativeSectionCapture {
     private final Function<DecodedSection, int[]> tagger;
     private final LongSupplier clock;
     private final int evictionMargin;
+    private final int maxSections;
     private final Map<Long, Capture> accepted = new HashMap<>();
     private List<DecodedSection> pending = List.of();
     private int cursor;
+    private int omittedByCapacity;
+    private int oversizedSections;
+    private int largestOversizedQuads;
+    private long largestOversizedSection;
     private Focus focus;
     private long sourceVersion = -1;
     private long structureVersion;
@@ -46,17 +53,19 @@ final class NativeSectionCapture {
             public long version() { return registry.version(); }
             public DecodedSection get(long key) { return registry.get(key); }
             public void forEach(Consumer<DecodedSection> visitor) { registry.forEachSection(visitor); }
-        }, sink, tagger, System::nanoTime, RtConfig.EVICT_MARGIN);
+        }, sink, tagger, System::nanoTime, RtConfig.EVICT_MARGIN, NativeSceneBridge.MAX_SECTIONS);
     }
 
     NativeSectionCapture(Source source, Sink sink, Function<DecodedSection, int[]> tagger,
-                         LongSupplier clock, int evictionMargin) {
+                         LongSupplier clock, int evictionMargin, int maxSections) {
         if (evictionMargin < 0) throw new IllegalArgumentException("negative eviction margin");
+        if (maxSections <= 0) throw new IllegalArgumentException("scene section capacity must be positive");
         this.source = Objects.requireNonNull(source);
         this.sink = Objects.requireNonNull(sink);
         this.tagger = Objects.requireNonNull(tagger);
         this.clock = Objects.requireNonNull(clock);
         this.evictionMargin = evictionMargin;
+        this.maxSections = maxSections;
     }
 
     Result update(int x, int y, int z, int radiusXz, int radiusY, int limit, long budgetNanos) {
@@ -84,7 +93,7 @@ final class NativeSectionCapture {
                 continue;
             }
             int[] flags = tagger.apply(section);
-            long hash = SectionGeometryIdentity.lightHash(section.light, flags, section.totalQuads() * 4);
+            long hash = SectionGeometryIdentity.tagHash(flags, section.totalQuads());
             Capture previous = accepted.get(section.key);
             if (previous != null && previous.tagHash() == hash
                     && SectionGeometryIdentity.same(previous.section(), section)) {
@@ -100,7 +109,8 @@ final class NativeSectionCapture {
             }
             cursor++;
         }
-        return new Result(queued, pending.size() - cursor, nearest, rescan);
+        return new Result(queued, pending.size() - cursor, nearest, rescan, omittedByCapacity,
+            oversizedSections, largestOversizedQuads, largestOversizedSection);
     }
 
     private void rescan(Focus next) {
@@ -115,15 +125,61 @@ final class NativeSectionCapture {
             }
         }
         ArrayList<DecodedSection> queue = new ArrayList<>();
+        oversizedSections = 0;
+        largestOversizedQuads = 0;
+        largestOversizedSection = 0;
         source.forEach(section -> {
             Capture old = accepted.get(section.key);
-            if ((old == null || old.section() != section)
-                    && inRadius(section, next, next.radiusXz(), next.radiusY())) queue.add(section);
+            if (old != null && old.section() == section) return;
+            if (!inRadius(section, next, next.radiusXz(), next.radiusY())) return;
+            int quads = section.totalQuads();
+            if (quads > BedraySceneGeometry.MAX_SECTION_QUADS) {
+                // Keep the last representable mesh, if any, until another capture replaces it or the section unloads.
+                oversizedSections++;
+                if (quads > largestOversizedQuads) {
+                    largestOversizedQuads = quads;
+                    largestOversizedSection = section.key;
+                }
+                return;
+            }
+            queue.add(section);
         });
-        queue.sort(Comparator.<DecodedSection>comparingLong(section -> distanceSq(section, next, 2))
-            .thenComparingLong(section -> section.key));
+        Comparator<DecodedSection> nearestFirst = Comparator
+            .<DecodedSection>comparingLong(section -> distanceSq(section, next, 2))
+            .thenComparingLong(section -> section.key);
+        omittedByCapacity = enforceCapacity(next, queue, nearestFirst);
+        queue.sort(nearestFirst);
         pending = queue;
         cursor = 0;
+    }
+
+    private int enforceCapacity(Focus next, List<DecodedSection> queue, Comparator<DecodedSection> nearestFirst) {
+        int total = accepted.size();
+        for (DecodedSection section : queue) {
+            if (!accepted.containsKey(section.key)) total++;
+        }
+        if (total <= maxSections) return 0;
+
+        List<DecodedSection> candidates = new ArrayList<>(total);
+        for (Capture old : accepted.values()) candidates.add(old.section());
+        for (DecodedSection section : queue) {
+            if (!accepted.containsKey(section.key)) candidates.add(section);
+        }
+        // Prefer captures in the active radius. Keep the eviction margin while there is room for it.
+        candidates.sort(Comparator.<DecodedSection>comparingInt(
+                section -> inRadius(section, next, next.radiusXz(), next.radiusY()) ? 0 : 1)
+            .thenComparing(nearestFirst));
+        var omitted = new HashSet<Long>();
+        for (DecodedSection section : candidates.subList(maxSections, total)) {
+            if (accepted.containsKey(section.key)) {
+                sink.sectionRemoved(section.key);
+                accepted.remove(section.key);
+                structureVersion++;
+            }
+            omitted.add(section.key);
+        }
+        queue.removeIf(section -> omitted.contains(section.key));
+        return total - maxSections;
     }
 
     private static boolean inRadius(DecodedSection section, Focus focus, int radiusXz, int radiusY) {
@@ -146,6 +202,10 @@ final class NativeSectionCapture {
         accepted.clear();
         pending = List.of();
         cursor = 0;
+        omittedByCapacity = 0;
+        oversizedSections = 0;
+        largestOversizedQuads = 0;
+        largestOversizedSection = 0;
         focus = null;
         sourceVersion = -1;
     }

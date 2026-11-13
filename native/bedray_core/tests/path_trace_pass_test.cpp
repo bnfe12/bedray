@@ -10,9 +10,7 @@
 //
 // Covered contracts:
 //   - configure rejects missing, unregistered and contract-mismatched programs;
-//   - a native-scene frame needs program_trace_scene and a 64-byte table;
-//   - program_trace_scene is selected only when BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE
-//     is set, and the host-only flag never reaches the shader push block;
+//   - only native-scene frames with a complete 64-byte section table can dispatch;
 //   - the spatial stage runs only with a registered program, the frame flag,
 //     ReSTIR DI enabled, a non-zero emitter count and a bound reservoir ring;
 //   - every frame validation error happens before a pin is taken;
@@ -90,7 +88,6 @@ struct ProgramInfo {
 
 std::map<std::uint64_t, ProgramInfo> g_programs;
 
-constexpr std::uint64_t kTraceProgram = 0x1001;
 constexpr std::uint64_t kTraceSceneProgram = 0x1002;
 constexpr std::uint64_t kSpatialProgram = 0x1003;
 constexpr std::uint64_t kDisplayProgram = 0x1004;
@@ -204,7 +201,6 @@ std::vector<ProgramBinding> altered_copy(const ProgramBinding* table, std::size_
 
 void install_valid_programs() {
     const std::vector<ProgramBinding> trace = trace_bindings(7, true);
-    register_program(kTraceProgram, 112, trace.data(), trace.size());
     register_program(kTraceSceneProgram, 112, trace.data(), trace.size());
     register_program(kSpatialProgram, 64, kSpatialBindings, std::size(kSpatialBindings));
     register_program(kDisplayProgram, 32, kDisplayBindings, std::size(kDisplayBindings));
@@ -295,7 +291,6 @@ BedrayPathTraceDesc make_config(std::uint64_t scene_program = kTraceSceneProgram
     std::uint64_t spatial_program = kSpatialProgram, std::uint64_t stats_program = kStatsProgram) {
     BedrayPathTraceDesc desc{};
     desc.abi_version = BEDRAY_CORE_ABI_VERSION;
-    desc.program_trace = kTraceProgram;
     desc.program_trace_scene = scene_program;
     desc.program_spatial = spatial_program;
     desc.program_display = kDisplayProgram;
@@ -307,6 +302,7 @@ BedrayPathTraceFrameDesc valid_frame(std::uint64_t command_buffer) {
     BedrayPathTraceFrameDesc desc{};
     desc.abi_version = BEDRAY_CORE_ABI_VERSION;
     desc.command_buffer = command_buffer;
+    desc.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
     desc.output_view = 0x3001;
     desc.depth_view = 0x3002;
     desc.scene.tlas = 0x3003;
@@ -406,11 +402,13 @@ struct Fixture {
     std::set<std::uint64_t> attempted;
 
     explicit Fixture(std::uint64_t scene_program = kTraceSceneProgram,
-        std::uint64_t spatial_program = kSpatialProgram, std::uint64_t stats_program = kStatsProgram) {
+        std::uint64_t spatial_program = kSpatialProgram, std::uint64_t stats_program = kStatsProgram,
+        std::uint32_t config_flags = 0) {
         reset_all();
         BedrayError error{};
-        const BedrayStatus status = pass.configure(&core, make_device_fns(),
-            make_config(scene_program, spatial_program, stats_program), &error);
+        auto config = make_config(scene_program, spatial_program, stats_program);
+        config.flags = config_flags;
+        const BedrayStatus status = pass.configure(&core, make_device_fns(), config, &error);
         g_error = error;
         if (status != BEDRAY_OK) {
             std::fprintf(stderr, "FAIL fixture configure: %d (%s)\n",
@@ -481,7 +479,7 @@ void test_configure_validation() {
     {
         PathTracePass pass;
         BedrayPathTraceDesc desc = make_config(kTraceSceneProgram, kSpatialProgram);
-        desc.program_trace = 0;
+        desc.program_trace_scene = 0;
         CHECK_STATUS(pass.configure(&core, make_device_fns(), desc, &g_error),
             BEDRAY_ERROR_INVALID_ARGUMENT);
     }
@@ -495,28 +493,28 @@ void test_configure_validation() {
     {
         PathTracePass pass;
         BedrayPathTraceDesc desc = make_config(kTraceSceneProgram, kSpatialProgram);
-        desc.program_trace = 0x9999;
+        desc.program_trace_scene = 0x9999;
         CHECK_STATUS(pass.configure(&core, make_device_fns(), desc, &g_error),
             BEDRAY_ERROR_INVALID_ARGUMENT);
     }
     {
         PathTracePass pass;
         BedrayPathTraceDesc desc = make_config(kTraceSceneProgram, kSpatialProgram);
-        desc.program_trace = kBadTraceCount;
+        desc.program_trace_scene = kBadTraceCount;
         CHECK_STATUS(pass.configure(&core, make_device_fns(), desc, &g_error),
             BEDRAY_ERROR_INVALID_ARGUMENT);
     }
     {
         PathTracePass pass;
         BedrayPathTraceDesc desc = make_config(kTraceSceneProgram, kSpatialProgram);
-        desc.program_trace = kBadTracePush;
+        desc.program_trace_scene = kBadTracePush;
         CHECK_STATUS(pass.configure(&core, make_device_fns(), desc, &g_error),
             BEDRAY_ERROR_INVALID_ARGUMENT);
     }
     {
         PathTracePass pass;
         BedrayPathTraceDesc desc = make_config(kTraceSceneProgram, kSpatialProgram);
-        desc.program_trace = kBadTraceBinding;
+        desc.program_trace_scene = kBadTraceBinding;
         CHECK_STATUS(pass.configure(&core, make_device_fns(), desc, &g_error),
             BEDRAY_ERROR_INVALID_ARGUMENT);
     }
@@ -574,7 +572,6 @@ void test_configure_validation() {
     {
         PathTracePass pass;
         CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
-        CHECK(pass.uses_program(kTraceProgram));
         CHECK(pass.uses_program(kTraceSceneProgram));
         CHECK(pass.uses_program(kSpatialProgram));
         CHECK(pass.uses_program(kDisplayProgram));
@@ -587,7 +584,6 @@ void test_configure_validation() {
         CHECK(fake::buffers.size() == 5);
         CHECK(pass.destroy() == BEDRAY_OK);
         CHECK(fake::buffers.empty());
-        CHECK(!pass.uses_program(kTraceProgram));
     }
 }
 
@@ -657,30 +653,11 @@ void test_render_validation() {
             frame.path.di_state[0] = BEDRAY_PATH_TRACE_DI_ENABLED;
         });
 
-        // A legacy section table is opaque: only the native-scene flag promises
-        // 64-byte records, so a non-multiple size must still pass here.
-        BedrayPathTraceFrameDesc legacy = valid_frame(0x22FF);
-        legacy.scene.sections.bytes = 65;
-        CHECK_STATUS(fixture.render(legacy), BEDRAY_OK);
-        CHECK(fixture.release(legacy.command_buffer) == BEDRAY_OK);
-    }
-
-    {
-        // Without path_trace_scene.slang a native-scene frame must be rejected,
-        // while the legacy program still serves frames without the flag.
-        Fixture plain(0);
-        BedrayPathTraceFrameDesc native = valid_frame(0x2301);
-        native.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
-        CHECK_STATUS(plain.render(native), BEDRAY_ERROR_INVALID_ARGUMENT);
-        CHECK(!plain.pass.has_recordings());
-
-        const BedrayPathTraceFrameDesc legacy = valid_frame(0x2302);
-        CHECK_STATUS(plain.render(legacy), BEDRAY_OK);
-        CHECK(fake::render_calls.size() == 2);
-        if (fake::render_calls.size() == 2) {
-            CHECK(fake::render_calls[0].program == kTraceProgram);
-        }
-        CHECK(plain.release(legacy.command_buffer) == BEDRAY_OK);
+        auto retired = valid_frame(0x22FF);
+        retired.flags = 0;
+        CHECK_STATUS(fixture.render(retired), BEDRAY_ERROR_UNSUPPORTED);
+        CHECK(!fixture.pass.has_recordings());
+        CHECK(fake::render_calls.empty());
     }
 
     {
@@ -721,7 +698,7 @@ void test_successful_frames_and_payloads() {
     if (fake::render_calls.size() == 2) {
         const fake::RenderCall& trace = fake::render_calls[0];
         CHECK(trace.command_buffer == frame.command_buffer);
-        CHECK(trace.program == kTraceProgram);
+        CHECK(trace.program == kTraceSceneProgram);
         CHECK(trace.resources.size() == 26);
         CHECK(trace.push.size() == 112);
         CHECK(trace.push_bytes == 112);
@@ -773,7 +750,7 @@ void test_successful_frames_and_payloads() {
 
     // The second frame has history, so display reprojects and forwards flags.
     BedrayPathTraceFrameDesc second = valid_frame(0xC002);
-    second.flags = BEDRAY_PATH_TRACE_FRAME_ACCUMULATE
+    second.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_ACCUMULATE
         | BEDRAY_PATH_TRACE_FRAME_CAMERA_STATIC
         | BEDRAY_PATH_TRACE_FRAME_FLIP_Y;
     CHECK_STATUS(fixture.render(second), BEDRAY_OK);
@@ -801,7 +778,7 @@ void test_successful_frames_and_payloads() {
     // beside the history bit and without disturbing it. An unknown bit stays rejected: the host may not invent a
     // mapping the core has not declared.
     BedrayPathTraceFrameDesc swimmer = valid_frame(0xC003);
-    swimmer.flags = BEDRAY_PATH_TRACE_FRAME_ACCUMULATE | BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER;
+    swimmer.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_ACCUMULATE | BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER;
     CHECK_STATUS(fixture.render(swimmer), BEDRAY_OK);
     if (fake::render_calls.size() == 6) {
         std::vector<unsigned char> constants;
@@ -816,7 +793,7 @@ void test_successful_frames_and_payloads() {
     // screen to read.  Both have to land in the frame word beside the medium bit and the history bit, and a frame that
     // carries neither has to keep working, because that is what every host before these bits sent.
     BedrayPathTraceFrameDesc ripples = valid_frame(0xC005);
-    ripples.flags = BEDRAY_PATH_TRACE_FRAME_ACCUMULATE | BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER
+    ripples.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_ACCUMULATE | BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER
         | BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC | BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS;
     CHECK_STATUS(fixture.render(ripples), BEDRAY_OK);
     CHECK(fake::render_calls.size() == 8);
@@ -828,7 +805,7 @@ void test_successful_frames_and_payloads() {
     CHECK(fixture.release(ripples.command_buffer) == BEDRAY_OK);
 
     BedrayPathTraceFrameDesc flat = valid_frame(0xC006);
-    flat.flags = BEDRAY_PATH_TRACE_FRAME_ACCUMULATE;
+    flat.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_ACCUMULATE;
     CHECK_STATUS(fixture.render(flat), BEDRAY_OK);
     CHECK(fake::render_calls.size() == 10);
     std::vector<unsigned char> unbent;
@@ -839,7 +816,7 @@ void test_successful_frames_and_payloads() {
     CHECK(fixture.release(flat.command_buffer) == BEDRAY_OK);
 
     BedrayPathTraceFrameDesc unknown = valid_frame(0xC004);
-    unknown.flags = BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER | (1u << 30);
+    unknown.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER | (1u << 30);
     CHECK_STATUS(fixture.render(unknown), BEDRAY_ERROR_INVALID_ARGUMENT);
     CHECK(!fixture.pass.has_recordings());
 }
@@ -849,7 +826,7 @@ void test_spatial_stage() {
         Fixture fixture;
         BedrayPathTraceFrameDesc frame = valid_frame(0xE001);
         frame.frame_index = 7;
-        frame.flags = BEDRAY_PATH_TRACE_FRAME_SPATIAL;
+        frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_SPATIAL;
         frame.path.di_state[0] = BEDRAY_PATH_TRACE_DI_ENABLED;
         frame.path.di_state[1] = 1;
         frame.path.emitter_count = 3;
@@ -888,7 +865,7 @@ void test_spatial_stage() {
 
         // The frame flag alone does not run the spatial stage.
         BedrayPathTraceFrameDesc no_di = valid_frame(0xE002);
-        no_di.flags = BEDRAY_PATH_TRACE_FRAME_SPATIAL;
+        no_di.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_SPATIAL;
         CHECK_STATUS(fixture.render(no_di), BEDRAY_OK);
         CHECK(fake::phase_calls.size() == 1);
         CHECK(fake::render_calls.size() == 4);
@@ -896,7 +873,7 @@ void test_spatial_stage() {
 
         // ReSTIR DI with no emitters has nothing to pool.
         BedrayPathTraceFrameDesc no_emitters = valid_frame(0xE003);
-        no_emitters.flags = BEDRAY_PATH_TRACE_FRAME_SPATIAL;
+        no_emitters.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_SPATIAL;
         no_emitters.path.di_state[0] = BEDRAY_PATH_TRACE_DI_ENABLED;
         no_emitters.path.di_state[1] = 1;
         no_emitters.scene.reservoirs.handle = 0x5005;
@@ -911,7 +888,7 @@ void test_spatial_stage() {
         // even when every other spatial precondition holds.
         Fixture plain(kTraceSceneProgram, 0);
         BedrayPathTraceFrameDesc spatial = valid_frame(0xE101);
-        spatial.flags = BEDRAY_PATH_TRACE_FRAME_SPATIAL;
+        spatial.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_SPATIAL;
         spatial.path.di_state[0] = BEDRAY_PATH_TRACE_DI_ENABLED;
         spatial.path.di_state[1] = 1;
         spatial.path.emitter_count = 1;
@@ -929,7 +906,7 @@ void test_spatial_stage() {
 void test_native_reservoir_owner() {
     Fixture fixture;
     auto frame = valid_frame(0xD001);
-    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_DI;
+    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_NATIVE_DI;
     frame.path.di_state[0] = BEDRAY_PATH_TRACE_DI_ENABLED | BEDRAY_PATH_TRACE_DI_HISTORY;
     frame.path.emitter_count = 1;
     frame.scene.emitters.handle = 0x7001;
@@ -1061,7 +1038,6 @@ void test_recording_lifetime() {
 
     // A destroyed pass rejects frames and owns no program.
     CHECK_STATUS(fixture.render(valid_frame(0xF003)), BEDRAY_ERROR_INVALID_ARGUMENT);
-    CHECK(!fixture.pass.uses_program(kTraceProgram));
     CHECK(!fixture.pass.uses_program(kTraceSceneProgram));
     CHECK(!fixture.pass.uses_program(kSpatialProgram));
     CHECK(!fixture.pass.uses_program(kDisplayProgram));
@@ -1093,7 +1069,7 @@ void test_failure_after_dispatch_keeps_pins() {
     fake::fail_render_at(-1, BEDRAY_OK);
     fake::fail_phase_call = true;
     BedrayPathTraceFrameDesc phase_failure = valid_frame(0x1103);
-    phase_failure.flags = BEDRAY_PATH_TRACE_FRAME_SPATIAL;
+    phase_failure.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_SPATIAL;
     phase_failure.path.di_state[0] = BEDRAY_PATH_TRACE_DI_ENABLED;
     phase_failure.path.di_state[1] = 1;
     phase_failure.path.emitter_count = 1;
@@ -1168,15 +1144,14 @@ void test_guide_aware_program_contract() {
     std::vector<ProgramBinding> bindings(std::begin(kTraceBindings), std::end(kTraceBindings));
     for (std::uint32_t binding = 26; binding <= 32; ++binding)
         bindings.push_back({binding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
-    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
     register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
     BedrayCore core{};
     PathTracePass pass;
     // A 25-binding declaration does not excuse a missing/wrong guide type.
-    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    g_programs[kTraceSceneProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
     CHECK(fake::images.empty()); CHECK(fake::buffers.empty());
-    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    g_programs[kTraceSceneProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     // Four buffer dummies, then one image succeeds and the next allocation fails.
     fake::fail_allocate_after = 5;
     CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_ERROR_OUT_OF_MEMORY);
@@ -1231,15 +1206,14 @@ void test_restir_pt_binding_is_a_stand_in() {
     reset_all();
     auto bindings = trace_bindings(7, true);
     bindings.push_back({36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
-    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
     register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
     BedrayCore core{};
     PathTracePass pass;
     // A 27-binding program whose binding 36 is not a storage buffer is a manifest drift, not a PT ring.
-    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    g_programs[kTraceSceneProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
     CHECK(fake::buffers.empty());
-    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    g_programs[kTraceSceneProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
     auto frame = valid_frame(1);
     const std::uint32_t pt_bits = (1u << 17u) | (1u << 18u) | (1u << 19u) | (1u << 20u) | (1u << 21u);
@@ -1271,14 +1245,13 @@ void test_path_stats_binding_is_a_stand_in() {
     auto bindings = trace_bindings(7, true);
     bindings.push_back({36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
     bindings.push_back({37, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
-    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
     register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
     BedrayCore core{};
     PathTracePass pass;
-    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    g_programs[kTraceSceneProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
     CHECK(fake::buffers.empty());
-    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    g_programs[kTraceSceneProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
     auto frame = valid_frame(1);
     CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
@@ -1302,7 +1275,6 @@ void test_real_guide_outputs() {
     std::vector<ProgramBinding> bindings(std::begin(kTraceBindings), std::end(kTraceBindings));
     for (std::uint32_t binding = 26; binding <= 32; ++binding)
         bindings.push_back({binding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
-    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
     register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
     BedrayCore core{};
     PathTracePass pass;
@@ -1346,8 +1318,7 @@ void test_real_guide_outputs() {
         CHECK(fake::view_images.contains(resource_handle(inactive.resources, 26 + i)));
     CHECK_STATUS(pass.release_recording(12), BEDRAY_OK);
 
-    // The native-scene variant forwards the same seven views; a partial failure
-    // retains the recording until the host discards it.
+    // A partial failure retains the recording until the host discards it.
     frame.command_buffer = 13;
     frame.path.flags = 1;
     frame.flags |= BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
@@ -1360,7 +1331,7 @@ void test_real_guide_outputs() {
     CHECK_STATUS(pass.release_recording(13), BEDRAY_OK);
     fake::fail_render_at(-1, BEDRAY_OK);
 
-    // A legacy program cannot accept real guides even if its sibling can.
+    // A trace program without guide bindings cannot accept real guides.
     register_program(kTraceSceneProgram, 112, kTraceBindings, std::size(kTraceBindings));
     CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
     frame.command_buffer = 14;
@@ -1375,7 +1346,6 @@ void test_real_guide_outputs() {
 void test_real_nrd_motion_output() {
     reset_all();
     auto bindings = trace_bindings(7, true);
-    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
     register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
     BedrayCore core{}; PathTracePass pass;
     CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
@@ -1477,6 +1447,22 @@ void test_statistics_dispatch_follows_display() {
 // The statistics program must be free until the host calls for it: the same
 // frame on a pass that holds the program and on a pass that does not records
 // the same two dispatches, barriers, images and buffers.
+void test_statistics_tile_grid_covers_odd_extents() {
+    Fixture fixture(kTraceSceneProgram, kSpatialProgram, kStatsProgram, BEDRAY_PATH_TRACE_CONFIG_TILE_STATS);
+    auto frame = valid_frame(0x1603);
+    frame.camera.width = 65;
+    frame.camera.height = 33;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK_STATUS(fixture.stats(frame.command_buffer, kStatsBuffer, 0, 16, frame.frame_index), BEDRAY_OK);
+    CHECK(fake::render_calls.size() == 3);
+    if (fake::render_calls.size() == 3) {
+        const auto& display = fake::render_calls[1];
+        const auto& stats = fake::render_calls[2];
+        CHECK(display.group_x == 9 && display.group_y == 5);
+        CHECK(stats.group_x == 3 && stats.group_y == 2 && stats.group_z == 1);
+    }
+}
+
 void test_statistics_program_costs_nothing_until_called() {
     // Each half gets its own scope: a second Fixture in the same one would reset
     // the fake driver while the first pass still owns resources to tear down.
@@ -1701,8 +1687,9 @@ void test_statistics_stage_shares_the_recording_lifetime() {
 void test_rc_configuration_requires_native_field_program() {
     reset_all(); BedrayCore core{}; PathTracePass pass;
     CHECK_STATUS(pass.configure_rc(rc_config(), 65535, &g_error), BEDRAY_ERROR_UNSUPPORTED);
-    auto legacy = make_config(); legacy.program_trace = kRCTraceProgram;
-    CHECK_STATUS(pass.configure(&core, make_device_fns(), legacy, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    auto retired = make_config();
+    retired.retired_trace_slot = kRCTraceProgram;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), retired, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
     CHECK(fake::buffers.empty() && fake::images.empty());
     auto config = make_config(kRCTraceProgram);
     g_programs[kRCTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -1862,7 +1849,6 @@ void install_native_pt_trace_programs() {
     auto bindings = trace_bindings(7, true);
     bindings.push_back({36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
     bindings.push_back({37, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
-    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
     register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
 }
 
@@ -1882,24 +1868,23 @@ void test_native_pt_owner() {
     BedrayCore core{};
     PathTracePass pass;
     CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
-    CHECK_STATUS(pass.configure_pt(kBadPtSpatialPush, 0, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
-    CHECK_STATUS(pass.configure_pt(kPtSpatialProgram, 0, &g_error), BEDRAY_OK);
-    CHECK(pass.uses_program(kPtSpatialProgram));
+    CHECK_STATUS(pass.configure_pt(kPtSpatialProgram, 0, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK_STATUS(pass.configure_pt(0, kBadPtSpatialPush, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
 
     auto frame = valid_frame(0xE001);
-    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_PT | BEDRAY_PATH_TRACE_FRAME_PT_SPATIAL;
+    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_NATIVE_PT | BEDRAY_PATH_TRACE_FRAME_PT_SPATIAL;
     frame.path.flags |= kPtOption | kPtStaticBit | (1u << 22u) | (1u << 23u);
     auto invalid = frame;
     invalid.path.flags |= kPtHistoryBit;                       // the core owns history
     CHECK_STATUS(pass.render(invalid, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
     invalid = frame;
-    invalid.flags = BEDRAY_PATH_TRACE_FRAME_RESET_PT;           // a reset of a ring the core does not own
+    invalid.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_RESET_PT;           // a reset of a ring the core does not own
     CHECK_STATUS(pass.render(invalid, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
-    invalid = frame;
-    invalid.flags |= BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;      // no spatial stage lent for the scene table
-    CHECK_STATUS(pass.render(invalid, &g_error), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_ERROR_UNSUPPORTED); // No spatial stage is configured yet.
     CHECK(fake::render_calls.empty() && fake::fills == 0);
 
+    CHECK_STATUS(pass.configure_pt(0, kPtSpatialProgram, &g_error), BEDRAY_OK);
+    CHECK(pass.uses_program(kPtSpatialProgram));
     const std::uint64_t ring_bytes = 64ull * 64ull * 2ull * 144ull;
     CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
     CHECK(fake::fills == 0);
@@ -1927,7 +1912,7 @@ void test_native_pt_owner() {
     CHECK((push_u32(fake::render_calls[3].push, 16) & kPtParityBit) == 0);
     // Without the spatial stage only the trace moves it.
     frame.command_buffer = 0xE003;
-    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_PT;
+    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_NATIVE_PT;
     CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
     CHECK(fake::render_calls.size() == 8);
     CHECK((push_u32(fake::render_calls[6].push, 16) & kPtParityBit) == 0);
@@ -1943,7 +1928,7 @@ void test_native_pt_owner() {
     // A discarded recording never ran: nothing it would have published may be read.
     pass.discard_recording(0xE005);
     frame.command_buffer = 0xE006;
-    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_PT;
+    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_NATIVE_PT;
     CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
     CHECK(fake::fills == 0);
     CHECK((push_u32(fake::render_calls[12].push, 16) & (kPtHistoryBit | kPtParityBit)) == 0);
@@ -1975,7 +1960,7 @@ void test_native_pt_shutdown_does_not_require_an_off_frame() {
     PathTracePass pass;
     CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
     auto frame = valid_frame(0xE101);
-    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_PT;
+    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_NATIVE_PT;
     frame.path.flags |= kPtOption;
     CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
     const auto ring = resource_handle(fake::render_calls.front().resources, 36);
@@ -1994,22 +1979,17 @@ void test_native_pt_shutdown_does_not_require_an_off_frame() {
 
 void test_ray_generation_launch_dimensions_preserve_compute_postprocessing() {
     Fixture fixture;
-    g_programs[kTraceProgram].ray_generation = true;
     g_programs[kTraceSceneProgram].ray_generation = true;
-    for (bool native_scene : {false, true}) {
-        BedrayPathTraceFrameDesc frame = valid_frame(native_scene ? 0x9912 : 0x9911);
-        frame.camera.width = 65;
-        frame.camera.height = 41;
-        if (native_scene) frame.flags |= BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
-        const auto before = fake::render_calls.size();
-        CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
-        CHECK(fake::render_calls.size() == before + 2);
-        const auto& trace = fake::render_calls[before];
-        CHECK(trace.group_x == 65 && trace.group_y == 41 && trace.group_z == 1);
-        const auto& display = fake::render_calls[before + 1];
-        CHECK(display.group_x == 9 && display.group_y == 6 && display.group_z == 1);
-        CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK);
-    }
+    auto frame = valid_frame(0x9911);
+    frame.camera.width = 65;
+    frame.camera.height = 41;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK(fake::render_calls.size() == 2);
+    const auto& trace = fake::render_calls[0];
+    CHECK(trace.group_x == 65 && trace.group_y == 41 && trace.group_z == 1);
+    const auto& display = fake::render_calls[1];
+    CHECK(display.group_x == 9 && display.group_y == 6 && display.group_z == 1);
+    CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK);
 }
 
 int main() {
@@ -2032,6 +2012,7 @@ int main() {
     test_real_guide_outputs();
     test_real_nrd_motion_output();
     test_statistics_dispatch_follows_display();
+    test_statistics_tile_grid_covers_odd_extents();
     test_statistics_program_costs_nothing_until_called();
     test_statistics_stage_reads_its_own_recording();
     test_statistics_stage_groups_follow_the_extent();

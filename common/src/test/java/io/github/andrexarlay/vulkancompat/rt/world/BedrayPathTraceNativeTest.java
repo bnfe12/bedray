@@ -62,7 +62,9 @@ class BedrayPathTraceNativeTest {
             BedrayPathTraceNative.fillPath(out, dispatch(256, 10, 20), RtPathTraceSlangPass.Entities.NONE);
             assertEquals(0, out.get(JAVA_INT, BedrayCoreLayouts.PTP_ENTITY_STATE));
             assertEquals(0, out.get(JAVA_INT, BedrayCoreLayouts.PTP_ENTITY_STATE + 4));
-            assertEquals(0, out.get(JAVA_INT, BedrayCoreLayouts.PTP_ENTITY_STATE + 8));
+            assertEquals(0, out.get(JAVA_INT, BedrayCoreLayouts.PTP_ENTITY_STATE + 8) & 0x3FFFFFFF, "no avatar triangles");
+            assertEquals(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.selfShadow,
+                out.get(JAVA_INT, BedrayCoreLayouts.PTP_ENTITY_STATE + 8) >>> 30, "self_shadow mode in the top two bits");
             assertEquals(1.25f, out.get(JAVA_FLOAT, BedrayCoreLayouts.PTP_ENTITY_STATE + 12));
             assertThrows(IllegalArgumentException.class,
                 () -> BedrayPathTraceNative.fillPath(out.asSlice(0, 111), dispatch(0, 0, 0), RtPathTraceSlangPass.Entities.NONE));

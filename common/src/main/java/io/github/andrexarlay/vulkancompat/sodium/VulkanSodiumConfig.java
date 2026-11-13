@@ -76,6 +76,8 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/SodiumPage");
 
     public enum WaterStyle { VANILLA, REALISTIC }
+    /** Ordinals match {@code RtSettings.SELF_SHADOW_*}. */
+    public enum SelfShadow { FULL, NO_FOOTPRINT, OFF }
     public enum RendererStatus { STATUS }
     public enum QualityProfile { FAST, BEAUTIFUL, CUSTOM }
 
@@ -401,6 +403,19 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                 () -> RtSettings.waterStyle == RtSettings.WATER_STYLE_VANILLA ? WaterStyle.VANILLA : WaterStyle.REALISTIC)
             .setImpact(OptionImpact.LOW).setStorageHandler(st);
         rt.addOption(track("water_style", water));
+        EnumOptionBuilder<SelfShadow> selfShadow = builder.createEnumOption(id("self_shadow"), SelfShadow.class);
+        selfShadow.setName(nameOf("self_shadow")).setTooltip(v -> tipOf("self_shadow")).setDefaultValue(SelfShadow.NO_FOOTPRINT)
+            .setAllowedValues(EnumSet.allOf(SelfShadow.class))
+            .setElementNameProvider(v -> switch (v) {
+                case FULL -> tr("bedray.self_shadow.full", "Full");
+                case NO_FOOTPRINT -> tr("bedray.self_shadow.no_footprint", "No blot underfoot");
+                case OFF -> tr("bedray.self_shadow.off", "Off");
+            })
+            .setEnabledProvider(anyRt, dMode).setControlHiddenWhenDisabled(false)
+            .setBinding(v -> RtSettings.selfShadow = v.ordinal(),
+                () -> SelfShadow.values()[Math.max(0, Math.min(2, RtSettings.selfShadow))])
+            .setImpact(OptionImpact.LOW).setStorageHandler(st);
+        rt.addOption(track("self_shadow", selfShadow));
         rt.addOption(boolOpt(builder, "rays_optical_materials", true, v -> RtSettings.opticalMaterials = v,
             () -> RtSettings.opticalMaterials, anyRt, dMode, Mark.NONE, OptionImpact.MEDIUM, false, st));
         rt.addOption(boolOpt(builder, "rays_direct_translucent_shadows", true, v -> RtSettings.directTranslucentShadows = v,
@@ -676,11 +691,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         pt.addOption(track("adaptive_quality", aq));
         pt.addOption(boolOpt(builder, "path_caustics", true, v -> RtSettings.caustics = v, () -> RtSettings.caustics,
             pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
-        Identifier denId = id("path_denoiser");
-        pt.addOption(boolOpt(builder, "dlss_rr_geometric_normals", true, v -> RtSettings.dlssRrGeometricNormals = v,
-            () -> RtSettings.dlssRrGeometricNormals,
-            s -> anyRt.apply(s) && s.readEnumOption(denId, RtSettings.PathDenoiser.class) == RtSettings.PathDenoiser.DLSS_RR,
-            rtDependencies(modeId, denId), Mark.NONE, OptionImpact.LOW, true, st));
         endGroup(builder, page, pt, "adv_pt");
 
         // ---- Light and atmosphere
@@ -925,9 +935,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         ex.addOption(intOpt(builder, "rt_distance_chunks", 8, 2, 32, 1, unit(" chunks"), v -> RtSettings.rtDistanceChunks = v,
             () -> RtSettings.rtDistanceChunks, s -> anyRt.apply(s) && !s.readBooleanOption(distAutoId), rtDependencies(modeId, distAutoId),
             Mark.RT, OptionImpact.MEDIUM, true, st));
-        ex.addOption(intOpt(builder, "rt_vram_budget_mb", 2048, 256, 16384, 256, unit(" MB"), v -> RtSettings.vramBudgetMb = v,
-            () -> RtSettings.vramBudgetMb, anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
-        ex.addOption(intOpt(builder, "rt_light_budget", 512, 16, 8192, 16, unit(""), v -> RtSettings.lightBudget = v,
+        ex.addOption(intOpt(builder, "rt_light_budget", 2048, 16, 8192, 16, unit(""), v -> RtSettings.lightBudget = v,
             () -> RtSettings.lightBudget, anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
         ex.addOption(intOpt(builder, "sun_size_tenths", 5, 1, 50, 1, unit(""), v -> RtSettings.sunSizeTenths = v,
             () -> RtSettings.sunSizeTenths, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
@@ -1108,7 +1116,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         RtSettings.fogInScattering = 1.0f;
         RtSettings.rtFogInScattering = 100;
         RtSettings.fogDistanceScale = 1.0f;
-        RtSettings.dlssRrGeometricNormals = true;
         RtConfig.setDebugView("");
         for (RtAtmosphereSettings.Option o : RtAtmosphereSettings.options()) {
             RtAtmosphereSettings.set(o.key(), o.def());

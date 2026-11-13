@@ -9,10 +9,9 @@
 // own first surface may instead be served from a cross-frame reservoir (the
 // IReuseSampler branch); the loop then shades both branches it owns and reports
 // the shadow outcome back to the record, without knowing what a reservoir is.
-// Indirect lighting uses BSDF sampling.  Emission is added on every accepted
-// hit, so a caller whose sampler also draws surface emitters must restore the
-// "previous bounce was delta" gate and use MIS, or an emitter hit would be
-// counted twice.
+// Indirect lighting uses BSDF sampling. When the screen pass has emitter NEE,
+// diffuse paths use that estimate for emitter lighting. A path without
+// emitter NEE still gathers emission from its BSDF hits.
 //
 // A horizontal fluid face is also a medium boundary.  The path keeps the water
 // body it is currently in: a refracted transmission through the face enters or
@@ -59,6 +58,15 @@ static const uint PATH_TRACE_FLAG_SURFACE_LIMIT    = 1u << 4u;
 // precision margin: 1e-4 plus a share of the distance, 1.1e-3 at 512 blocks.
 static const float PATH_TRACE_HOLE_STEP_MIN = 1.0e-4;
 static const float PATH_TRACE_HOLE_STEP_PER_BLOCK = 2.0e-6;
+
+// Scene-referred luminance ceiling of what a path gathers after its first non-delta surface (that surface's own emission
+// and next-event term are never capped).  Bounce vertices draw plain RIS with white-noise seeds, so a diffuse bounce
+// that lands next to a torch returned tens of times display white and DLSS-RR smeared it into crawling blotches; the
+// 64x per-component clamp at the tail let those through.  The cap scales the whole indirect sum by one factor, so its
+// hue survives.  Fixed in scene units, never tied to exposure: a cap that followed exposure would change the integrand
+// from frame to frame.  Basis: emitter peak 6.6 / d2 floor 0.25 * 0.8/pi is ~6.7 radiance on a wall touching a torch,
+// so real one-bounce torch light passes and the 20-60x outliers do not.
+static const float PATH_TRACE_INDIRECT_MAX_LUMINANCE = 10.0;
 
 float pathTraceHoleStep(float distance) {
     return PATH_TRACE_HOLE_STEP_MIN + abs(distance) * PATH_TRACE_HOLE_STEP_PER_BLOCK;
@@ -223,7 +231,23 @@ struct PathTraceOptions {
     // reach of the camera, so past `emitterListRange - EMITTER_RADIUS` it is no longer complete for a receiver and the
     // distant handover starts.  0 is an older host and keeps the whole ray far plane.
     float emitterListRange;
+    // Luminance ceiling of the contribution gathered after the first non-delta continuation (0 = off).  The entry sets
+    // PATH_TRACE_INDIRECT_MAX_LUMINANCE; the RC field and any other default-option caller keep the old transport.
+    float indirectMaxLuminance;
+    bool emitterNeeAvailable;
 };
+
+// Preserve BSDF-hit emission when the path has no emitter proposal.
+bool pathSeesEmission(uint surfaceHits, bool previousLobeNotDiffuse, bool emitterNeeAvailable) {
+    return surfaceHits == 1u || previousLobeNotDiffuse || !emitterNeeAvailable;
+}
+
+// Allow for the launch bias and the source quad offset (0.08 blocks for two-sided horizontal emitters).
+bool pathEmitterOutsideNeeRadius(PathTraceOptions options, float distanceFromLaunch, float3 direction) {
+    float listRange = options.emitterListRange > 0.0 ? options.emitterListRange : options.maxDistance;
+    float bound = min(listRange, EMITTER_RADIUS) + abs(options.rayBias) + 0.1;
+    return distanceFromLaunch * distanceFromLaunch * dot(direction, direction) > bound * bound;
+}
 
 PathTraceOptions defaultPathTraceOptions() {
     PathTraceOptions options;
@@ -244,6 +268,8 @@ PathTraceOptions defaultPathTraceOptions() {
     options.frameIndex = 0u;
     options.sampleWord = 0u;
     options.emitterListRange = 0.0;
+    options.indirectMaxLuminance = 0.0;
+    options.emitterNeeAvailable = false;
     return options;
 }
 
@@ -585,9 +611,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     // The previous continuation was an ambient-only (AO) bounce: the next opaque surface it reaches blocks the sky
     // light this ray carries, so the path ends there without shading that surface.
     bool ambientOnlyPending = false;
-    // Cutout holes move the origin along the current ray. Keep the displacement
-    // of the primary ray only, so a later hit is measured from the camera.
-    float primaryAdvance = 0.0;
+    // Keep the displacement within this segment when cutouts and panes advance its ray origin.
+    float segmentAdvance = 0.0;
     uint step = 0u;
     // The diffuse continuation of the primary vertex is in flight and its first vertex is not recorded yet.
     bool ptArmed = false;
@@ -631,6 +656,11 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     // A glossy reflection or a transmission sees the visible dome (minus the discs, which its NEE sampled); only a
     // diffuse bounce receives the sky light. Without this, rippled water reflected the dim sky light and went black.
     bool glossyEscape = false;
+    // The indirect window: opened by the first non-delta continuation (or the RC field's incoming term).  Everything
+    // added before it - camera water, sky, the first non-delta surface's emission and NEE, and anything seen through
+    // delta glass/water/mirrors on the way there - is camera-like and never capped.
+    bool indirectStarted = false;
+    float3 radianceAtFirstBounce = float3(0.0);
     for (; step < options.maxSurfaceSteps; ++step) {
         // A non-finite interval cannot be traced at all; an empty one is a path cut short by the cutout advances.
         if (!isFinite(ray.tMax)) {
@@ -647,8 +677,10 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         // through the body's own skin keeps looking past it, and only the first
         // accepted surface starts the bounces that must see the body - it is
         // geometry a light has to cross.
+        // After the first surface only a mirror ray (glossy or transmission
+        // lobe) may see the first-person body; diffuse bounces skip it.
         SurfaceHit hit = result.surfaceHits == 0u ? traversal.tracePrimary(ray)
-                                                  : traversal.traceClosest(ray);
+                         : glossyEscape ? traversal.traceMirror(ray) : traversal.traceClosest(ray);
         if (!hit.hit) {
             if (wantDenoiserGeometry) pathDenoiserMiss(denoiserContinuation);
             // A ray inside the body that finds no surface still crossed water:
@@ -731,12 +763,11 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             // the candidate without spending a scattering event.
             float holeStep = pathTraceHoleStep(hit.t);
             float advance = hit.t + holeStep;
-            if (!isFinite(advance) || advance <= 0.0 ||
-                (!firstSurfaceAccepted && !isFinite(primaryAdvance + advance))) {
+            if (!isFinite(advance) || advance <= 0.0 || !isFinite(segmentAdvance + advance)) {
                 result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
                 break;
             }
-            if (!firstSurfaceAccepted) primaryAdvance += advance;
+            segmentAdvance += advance;
             float3 advancedOrigin = ray.origin + ray.direction * advance;
             if (!isFinite(advancedOrigin)) {
                 result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
@@ -760,12 +791,12 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         }
 
         if (!firstSurfaceAccepted) {
-            if (!isFinite(primaryAdvance + hit.t)) {
+            if (!isFinite(segmentAdvance + hit.t)) {
                 result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
                 break;
             }
             firstSurfaceAccepted = true;
-            result.firstHitDistance = primaryAdvance + hit.t;
+            result.firstHitDistance = segmentAdvance + hit.t;
             // What the accumulator needs is not this frame's surface but the same
             // surface as the previous frame saw it, so the question goes to the
             // backend that owns the geometry and stops here for every other ray.
@@ -794,10 +825,17 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
 
         // The face of a glowing block is seen as its own emission, and the light it casts on other surfaces comes from
         // NEE; a sampler that reads the emitter list rejects the receiver's own quad through LightReceiver.emission.
-        result.radiance += throughput * surface.material.emission;
+        // With an emitter proposal, use NEE for diffuse emitter transport and keep BSDF emission along the eye and
+        // non-diffuse paths. A BSDF hit beyond the proposal's reach is also the only source of that emission.
+        if (pathSeesEmission(result.surfaceHits, glossyEscape, options.emitterNeeAvailable)
+            || (any(surface.material.emission > 0.0)
+                && pathEmitterOutsideNeeRadius(options, segmentAdvance + hit.t, ray.direction))) {
+            result.radiance += throughput * surface.material.emission;
+        }
 
         // ---- Next-event estimation ----
         LightReceiver receiver = lightReceiver(hit.position, normal, surface.material.emissionMask);
+        receiver.skyLight = hit.light.y;
         // Only the pixel's own first surface owns the screen-space record; a deeper vertex would write someone else's
         // receiver into it and drag that light across the screen.
         receiver.primary = result.surfaceHits == 1u;
@@ -861,9 +899,10 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
                 reused, options, materialOptions, medium, receiver.primary, reusedTraced, reusedOccluded, result.flags)
                 * (1.0 - emitterFar);
-            // A sample this receiver could not even shade has not been proven visible either: decaying it lets a record
-            // that lost its light fade out instead of sitting at full weight until the surface changes.
-            reuse.reuseConfirm(!reusedTraced || reusedOccluded);
+            // Only a traced and blocked shadow ray proves occlusion.  A sample this receiver could not shade (back
+            // facing after a normal map, BSDF zero) is not occluded; a record whose light is gone already fails the
+            // next re-evaluation and falls back to the fresh batch.
+            reuse.reuseConfirm(reusedTraced && reusedOccluded);
             bool keyTraced;
             bool keyOccluded;
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
@@ -952,6 +991,11 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 break;
             }
             if (incoming.status == DIFFUSE_FIELD_VALID) {
+                // The field's incoming term is this vertex's indirect light: it opens the window like a traced bounce.
+                if (!indirectStarted) {
+                    indirectStarted = true;
+                    radianceAtFirstBounce = result.radiance;
+                }
                 result.radiance += throughput * bsdf.weight * incoming.cosineMean;
                 result.flags |= PATH_TRACE_FLAG_RC_FINITE_WINDOW;
                 if (incoming.terminalKnown) result.flags |= PATH_TRACE_FLAG_RC_TERMINAL;
@@ -1045,6 +1089,12 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         float3 bounceNormal = safeNormalize(surface.hit.geometricNormal, normal);
         float3 origin = hit.position
             + bounceNormal * (dot(bsdf.direction, bounceNormal) >= 0.0 ? options.rayBias : -options.rayBias);
+        // The first non-delta continuation leaves now: from here on the path gathers indirect light.  Taken before the
+        // ReSTIR PT and denoiser snapshots below, so on the primary diffuse launch all three hold the same radiance.
+        if (!indirectStarted && !bsdf.delta) {
+            indirectStarted = true;
+            radianceAtFirstBounce = result.radiance;
+        }
         if (result.pt.status == PATH_PT_RECORD_ATTEMPT && result.surfaceHits == 1u
                 && bsdf.lobe == BSDF_LOBE_DIFFUSE && !continuationAmbientOnly && !medium.inside) {
             // The continuation the reservoir may own leaves now.  Everything the path adds from here on is its suffix.
@@ -1060,6 +1110,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 wantDenoiserSignals ? result.radiance : float3(0.0), hit.position);
         }
         ray = makeRay(origin, bsdf.direction, 0.0, continuationDistance);
+        segmentAdvance = 0.0;
         ambientOnlyPending = continuationAmbientOnly;
         // The new origin sits one bias off the interaction along the face; the segment starts there (the legacy path
         // ignored this offset too).
@@ -1076,6 +1127,16 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         reuse.reuseClear();
     }
 
+    // Hue-preserving cap of the indirect sum.  Before the NaN guard, the ReSTIR PT suffix and radianceBeforeClamp, so
+    // the reservoir, the denoiser split and the 64x clamp all see the capped value and diffuse + specular + bypass stays
+    // equal to radiance.  A non-finite sum is left to the guard below, which zeroes and tags it as before.
+    if (indirectStarted && options.indirectMaxLuminance > 0.0 && isFinite(result.radiance)) {
+        float3 indirect = max(result.radiance - radianceAtFirstBounce, float3(0.0));
+        float indirectLuminance = luminance(indirect);
+        if (indirectLuminance > options.indirectMaxLuminance) {
+            result.radiance = radianceAtFirstBounce + indirect * (options.indirectMaxLuminance / indirectLuminance);
+        }
+    }
     result.throughput = throughput;
     if (!isFinite(result.radiance)) {
         result.radiance = float3(0.0);

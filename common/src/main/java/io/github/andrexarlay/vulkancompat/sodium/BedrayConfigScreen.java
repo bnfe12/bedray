@@ -1,6 +1,7 @@
 package io.github.andrexarlay.vulkancompat.sodium;
 
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
+import io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import net.caffeinemc.mods.sodium.client.config.structure.EnumOption;
 import net.caffeinemc.mods.sodium.client.config.structure.IntegerOption;
@@ -19,7 +20,9 @@ import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
+
+import static com.mojang.blaze3d.platform.InputConstants.KEY_ESCAPE;
+import static com.mojang.blaze3d.platform.InputConstants.KEY_F;
 
 /** The single Bedray settings interface. Only Apply commits its private option state. */
 public final class BedrayConfigScreen extends Screen {
@@ -29,6 +32,7 @@ public final class BedrayConfigScreen extends Screen {
     private SettingsDraft draft;
     private SettingsDraft.Category category = SettingsDraft.Category.OVERVIEW;
     private String query = "";
+    private EditBox search;
     private int scroll, maxScroll, contentX, contentWidth, listTop, listBottom, detailsX, detailsWidth;
     private final List<AbstractWidget> rowWidgets = new ArrayList<>();
     private final List<SettingsDraft.Entry> rows = new ArrayList<>();
@@ -62,7 +66,7 @@ public final class BedrayConfigScreen extends Screen {
         contentWidth = layout.contentWidth();
         listTop = layout.listTop();
         listBottom = layout.listBottom();
-        EditBox search = new EditBox(font, 12, SettingsLayout.SEARCH_Y, width - 24, 20, tr("bedray.settings.search", "Search settings"));
+        search = new EditBox(font, 12, SettingsLayout.SEARCH_Y, width - 24, 20, tr("bedray.settings.search", "Search settings"));
         search.setHint(tr("bedray.settings.search", "Search settings")); search.setMaxLength(80); search.setValue(query);
         search.setResponder(text -> { query = text; scroll = 0; rebuildRows(); }); addRenderableWidget(search);
         navigation.clear();
@@ -90,8 +94,16 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     private void selectCategory(SettingsDraft.Category value) {
-        category = value; scroll = 0;
-        if (!layout.sidebar()) rebuildWidgets(); else rebuildRows();
+        category = value;
+        scroll = 0;
+        if (!layout.sidebar()) {
+            query = "";
+            rebuildWidgets();
+        } else if (!query.isEmpty()) {
+            search.setValue("");
+        } else {
+            rebuildRows();
+        }
     }
 
     void rebuildRows() {
@@ -100,7 +112,8 @@ public final class BedrayConfigScreen extends Screen {
         // A failed predicate must not leave entries without matching widgets for tick/render.
         List<SettingsDraft.Entry> nextRows = new ArrayList<>();
         List<AbstractWidget> nextWidgets = new ArrayList<>();
-        String filter = query.trim().toLowerCase(Locale.ROOT);
+        boolean searching = !query.isBlank();
+        List<String> terms = SettingsSearch.terms(query);
         // One broken option predicate (e.g. Sodium's "not a declared dependency") used to throw out of the first row it
         // reached and leave the whole screen empty with no option name in the log. Every row is evaluated, every failure
         // is logged with its option, and the screen still fails loudly afterwards: the error is reported, never hidden.
@@ -118,7 +131,7 @@ public final class BedrayConfigScreen extends Screen {
                 continue;
             }
             if (!visible) continue;
-            if (filter.isEmpty() ? entry.category() != category : !entry.searchText().contains(filter)) continue;
+            if (searching ? !SettingsSearch.matches(entry.searchText(), terms) : entry.category() != category) continue;
             nextRows.add(entry);
         }
         if (firstFailure != null) {
@@ -143,7 +156,7 @@ public final class BedrayConfigScreen extends Screen {
         rows.addAll(nextRows);
         for (AbstractWidget widget : nextWidgets) rowWidgets.add(addRenderableWidget(widget));
         if (!rows.contains(selected)) selected = rows.isEmpty() ? null : rows.getFirst();
-        if (filter.isEmpty() && category == SettingsDraft.Category.PRESETS) {
+        if (!searching && category == SettingsDraft.Category.PRESETS) {
             addAction(tr("bedray.settings.experience_library", "Rendering experiences..."),
                 () -> openExperiences(contentX, listTop, contentWidth - 6));
             addAction(tr("bedray.settings.presets_manage", "Manage presets..."), () -> minecraft.gui.setScreen(new PresetsScreen(this, draft)));
@@ -153,9 +166,10 @@ public final class BedrayConfigScreen extends Screen {
                 runtime = tr("bedray.settings.preset_staged", "%s preset values staged. Apply to commit.", count); rebuildRows();
             });
         }
-        if (filter.isEmpty() && category == SettingsDraft.Category.OVERVIEW && draft.hasQualityProfile())
+        if (!searching && category == SettingsDraft.Category.OVERVIEW && draft.hasQualityProfile())
             addAction(tr("bedray.settings.customize", "Customize current quality"), () -> { draft.customize(); rebuildRows(); });
-        if (filter.isEmpty() && category == SettingsDraft.Category.SYSTEM) {
+        if (!searching && category == SettingsDraft.Category.SYSTEM) {
+            addAction(tr("bedray.settings.addons", "Add-on settings…"), () -> minecraft.gui.setScreen(new AddonSettingsScreen(this)));
             captureButton = addAction(tr("bedray.settings.capture_profile", "Record 30 s gameplay profile"),
                 io.github.andrexarlay.vulkancompat.rtx.debug.GameplayCapture::start);
             captureButton.setTooltip(Tooltip.create(tr("bedray.settings.capture_profile_hint",
@@ -248,7 +262,14 @@ public final class BedrayConfigScreen extends Screen {
                 status.usedGpuBytes() / (1024 * 1024), status.budgetGpuBytes() / (1024 * 1024),
                 status.memoryLimited() ? tr("bedray.settings.memory_limited", " (memory limited)").getString() : "")
                 : Component.literal(GraphicsBackendRegistry.status());
-        } else runtime = Component.literal(VulkanSodiumConfig.rendererStatus());
+        } else {
+            var trace = RtFrameRenderer.lastTraceTelemetry();
+            var mode = RtFrameRenderer.lastPassMode();
+            runtime = trace == null || mode == null || !RtFrameRenderer.worldReady()
+                ? Component.literal(VulkanSodiumConfig.rendererStatus())
+                : tr("bedray.settings.trace_runtime", "Last trace · %s · %s → %s · %s spp · %s bounces",
+                    mode.logName(), trace.traceExtent(), trace.outputExtent(), trace.spp(), trace.bounces());
+        }
     }
 
     private void openChoices(List<Component> labels, java.util.function.IntConsumer choose, int anchorX, int anchorY, int requestedWidth) {
@@ -297,26 +318,46 @@ public final class BedrayConfigScreen extends Screen {
             for (Button b : List.copyOf(popupButtons)) if (b.visible && b.mouseClicked(event, twice)) return true;
             closeChoices(); return true;
         }
-        if (event.button() == 0 && PreviewPanel.click(event.x(), event.y())) { rebuildControlMessages(); return true; }
+        if (event.button() == 0 && PreviewPanel.click(event.x(), event.y(), this::resetSelected)) return true;
         if (event.x() >= contentX && event.x() < contentX + contentWidth && event.y() >= listTop && event.y() < listBottom) {
             int index = ((int)event.y() - listTop + scroll) / ROW_HEIGHT;
             if (index >= 0 && index < rows.size()) select(rows.get(index));
         }
         return super.mouseClicked(event, twice);
     }
-    private void rebuildControlMessages() {
-        for (int i = 0; i < rows.size(); i++) rowWidgets.get(i).setMessage(rows.get(i).path().equals("renderer")
-            ? draft.experienceTitle() : valueText(rows.get(i).option())); updateButtons();
+    private void resetSelected() {
+        if (selected == null) return;
+        var entry = selected;
+        boolean modal = PreviewPanel.isModalOpen();
+        int previousIndex = rows.indexOf(entry);
+        boolean restoreFocus = previousIndex >= 0 && rowWidgets.get(previousIndex).isFocused();
+        draft.reset(entry);
+        rebuildRows();
+        int index = rows.indexOf(entry);
+        if (modal && selected == entry) PreviewPanel.openModal(entry.option());
+        if (restoreFocus && index >= 0 && rowWidgets.get(index).visible) setFocused(rowWidgets.get(index));
     }
     @Override public boolean keyPressed(KeyEvent event) {
         if (!popupButtons.isEmpty()) {
-            if (event.key() == 256) { closeChoices(); return true; }
+            if (event.key() == KEY_ESCAPE) { closeChoices(); return true; }
             if (event.key() == 264 || event.key() == 265 || event.key() == 258) {
                 popupFocus = Math.floorMod(popupFocus + (event.key() == 265 ? -1 : 1), popupButtons.size());
                 popupScroll = Math.max(0, popupFocus * 22 - popupHeight + 32); positionChoices(); setFocused(popupButtons.get(popupFocus)); return true;
             }
         }
-        if (event.key() == 256 && PreviewPanel.isModalOpen()) { PreviewPanel.closeModal(); return true; }
+        if (PreviewPanel.isModalOpen()) {
+            if (event.key() == KEY_ESCAPE) PreviewPanel.closeModal();
+            return true;
+        }
+        if (event.key() == KEY_F && event.hasControlDown()) {
+            setFocused(search);
+            return true;
+        }
+        if (event.key() == KEY_ESCAPE && !query.isEmpty()) {
+            search.setValue("");
+            setFocused(search);
+            return true;
+        }
         return super.keyPressed(event);
     }
 
@@ -349,7 +390,7 @@ public final class BedrayConfigScreen extends Screen {
             g.text(font, font.plainSubstrByWidth(subtitle, labelWidth), contentX + 5, y + 12,
                 row.option().hasChanged() ? SettingsChrome.PENDING : SettingsChrome.MUTED);
         }
-        if (rows.isEmpty() && category != SettingsDraft.Category.PRESETS && category != SettingsDraft.Category.SYSTEM) {
+        if (rowWidgets.isEmpty()) {
             Component empty = draft.voxel() && query.isBlank() ? tr("bedray.settings.voxel_unrelated", "These settings belong to the hardware renderer. Choose another category.")
                 : tr("bedray.settings.empty", "No matching settings.");
             int y = listTop; for (var line : font.split(empty, contentWidth - 8)) { g.text(font, line, contentX + 2, y, 0xFFB0B0B0); y += 11; }
@@ -361,7 +402,7 @@ public final class BedrayConfigScreen extends Screen {
         }
         g.text(font, font.plainSubstrByWidth(runtime.getString(), width - 16), 8, height - 40, 0xFFB6D4E8);
         if (selected != null && (detailsWidth > 0 || PreviewPanel.isModalOpen())) {
-            PreviewPanel.setResetAllowed(draft.editable(selected));
+            PreviewPanel.setResetAllowed(selected.option().isEnabled() && draft.editable(selected));
             PreviewPanel.render(g, font, new Dim2i(detailsX, listTop, detailsWidth, listBottom - listTop), listBottom,
                 selected.option(), selected.info(), mx, my);
         }

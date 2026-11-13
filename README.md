@@ -6,8 +6,7 @@
 > Tested only on an **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, NVIDIA driver 617.42**. Other graphics cards have not been checked.
 > **Looking for testers with AMD Radeon (RDNA 2 or newer) and Intel Arc GPUs.** See [Help us test](#help-us-test).
 
-> **Current `main`: Slang AOT/native renderer integration.** The complete previous Java/GLSL project
-> (0.1.1-alpha.13) is preserved unchanged in [`legacy`](https://github.com/bnfe12/bedray/tree/legacy).
+> **Current `main` uses Slang AOT shaders and the native GPU scene.**
 > Build and CPU/native contract checks do not establish RTX visual quality or native 1080p/60 FPS.
 > Earlier screenshots and game evidence describe earlier builds. See [branch ownership](docs/BRANCH_LAYOUT.md)
 > and the [remaining implementation work](docs/STACK_IMPLEMENTATION_PLAN.md).
@@ -67,7 +66,8 @@ multi-GPU performance and fresh live-game acceptance remain pending. See [COMPUT
 | Driver | Vulkan 1.3 or 1.4 |
 | Game | Minecraft 26.3 with the Vulkan graphics backend |
 | Loader | NeoForge 26.3.0.x, or Fabric (fabric-loader 0.19.5 or newer). Fabric has less testing than NeoForge. |
-| Required mods | Sodium 0.9.x (tested with 0.9.2). Bedray is a single jar; nothing else is needed |
+| Required mods | Sodium 0.9.x (tested with 0.9.2) and the Bedray JAR for your loader |
+| Renderer library | Matching `bedray_core.dll` for ray tracing and path tracing |
 | Java | 25 |
 
 Bedray is client-side only and switches the game to the Vulkan backend in `options.txt`.
@@ -77,12 +77,13 @@ Bedray is client-side only and switches the game to the Vulkan backend in `optio
 Short version (full guide: **[docs/INSTALL.md](docs/INSTALL.md)**):
 
 1. Use a clean instance: Minecraft 26.3 with NeoForge or Fabric.
-2. Put these files into `mods/`: Sodium 0.9.x and the Bedray jar for your loader (one jar, no extra library mod).
-3. Start the game, open **Options, Video Settings → Bedray Settings** and choose the renderer. The development
+2. Put Sodium 0.9.x and the Bedray JAR for your loader into `mods/`.
+3. Copy the matching `bedray_core.dll` into `bedray/natives/` in the same instance. The DLL includes the GPU scene.
+4. Start the game, open **Options, Video Settings → Bedray Settings** and choose the renderer. The development
    screen separates renderer, lighting, materials, upscaling, presets and diagnostics; pending changes require Apply.
 
 The release jars include the exact redistributable AMD FidelityFX Vulkan runtime and Intel XeSS runtime, and extract them on first start.
-Without extra files, the built-in upscalers (Bilinear, FSR 1, NIS), XeSS, FSR 3.1 and ray / path tracing with accumulation work.
+Ray tracing and path tracing with accumulation use the matching renderer core without a vendor denoiser.
 DLSS, NRD, NVIDIA frame generation and Reflex need vendor files that are **not included**; download those from the vendor.
 Do it by hand with [docs/INSTALL.md](docs/INSTALL.md), or let an AI assistant do the careful part with
 [docs/INSTALL_NATIVES_WITH_AI.md](docs/INSTALL_NATIVES_WITH_AI.md).
@@ -98,7 +99,7 @@ Do it by hand with [docs/INSTALL.md](docs/INSTALL.md), or let an AI assistant do
 | [FRAME_GENERATION](docs/FRAME_GENERATION.md) | DLSS frame generation and Reflex |
 | [TROUBLESHOOTING](docs/TROUBLESHOOTING.md), [FAQ](docs/FAQ.md), [KNOWN_ISSUES](docs/KNOWN_ISSUES.md) | When something is wrong |
 | [ROADMAP](ROADMAP.md) | Long-term plan, priorities and acceptance gates |
-| [SHADER_CACHE](docs/SHADER_CACHE.md) | SPIR-V warmup and Vulkan pipeline-cache behavior |
+| [SHADER_CACHE](docs/SHADER_CACHE.md) | AOT SPIR-V and Vulkan pipeline-cache behavior |
 | [DXGI_PRESENT](docs/DXGI_PRESENT.md) | Minecraft's native DXGI presentation option and Bedray compatibility |
 | [FEATURE_MATRIX](docs/FEATURE_MATRIX.md) | Status and evidence level of every feature |
 | [TESTING](docs/TESTING.md) | How to test and report |
@@ -126,8 +127,8 @@ needed); XeSS (Intel library needed); Path Tracing with the NRD denoiser. The ex
 ## What is not included
 
 * General Iris / "Dirt RT" shaderpack compatibility. The implemented opt-in post subset has explicit unsupported features.
-* DLSS 5 / neural rendering: **not implemented**. The settings page shows a disabled line.
-* AMD FSR frame generation, FSR 4 (not available on Vulkan).
+* DLSS 5 Neural Rendering requires the NVIDIA partner SDK. The Natives Manager reports local file presence for diagnostics.
+* AMD FSR frame generation and [FSR 4 on Vulkan](https://gpuopen.com/amd-fsr-sdk/) are not integrated in Bedray.
 * Complete particle transport in reflections and shadows; physical closed-volume refraction through glass.
 * Linux and macOS.
 

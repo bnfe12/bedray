@@ -9,22 +9,9 @@ import java.nio.ByteOrder;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * The leaf transmission of the surface layer is gated by {@link RtWorld#VEGETATION_BIT}, a per-quad tag the
- * renderer writes from the block state while a section is staged. Before it, every cutout quad (bars, fences, panes,
- * ladders, rails, doors) took the leaf term: each back-lit one glowed warm, and the one-block shadow start of a leaf
- * block could step past a thin pane into a lit cell. The bit must therefore mark exactly the plants and leaves, and it
- * must live in the free byte of the light word without touching the vanilla light.
- *
- * <p>{@link RtWorld#LEAF_CUBE_BIT} then separates a full leaf cube (one block of caster, the shadow ray starts on its
- * sun-side face) from a thin card (1 cm along the sun is enough). An axis-aligned normal cannot make that call: a wall
- * vine has one too.
- */
+/** Cutout foliage classification and the native vertex flag contract. */
 public class RtVegetationTagTest {
 
 
@@ -35,7 +22,7 @@ public class RtVegetationTagTest {
         DecodedSection d = section(
             new float[][] {up(8, 9, 8)},
             new float[][] {up(2, 4, 2), up(5, 7, 5), up(11, 12, 11)});
-        int[] out = new int[d.totalQuads() * 4];
+        int[] out = new int[d.totalQuads()];
         int tagged = RtWorld.tagVegetation(d, out, (x, y, z) -> {
             if (x == 2 && y == 3 && z == 2) {
                 return RtWorld.FOLIAGE_CARD;
@@ -52,30 +39,26 @@ public class RtVegetationTagTest {
         assertNoBit(out, 2, "cutout quad of iron bars");
         assertBit(out, 3, "cutout quad of the leaf block");
         assertCubeBit(out, 3, true, "a leaf block is a full cube");
-        for (int v = 0; v < d.totalQuads() * 4; v++) {
-            assertEquals(0, d.light[v] & (RtWorld.VEGETATION_BIT | RtWorld.LEAF_CUBE_BIT),
-                "the decoded section is shared with the registry and must not be modified");
-        }
     }
 
     @Test
     public void cubeBitNeverComesWithoutTheVegetationBit() {
         // the shader gates the cube step on the foliage flag, but a stray bit 25 must not survive on its own either
         DecodedSection d = section(new float[][] {}, new float[][] {up(2, 4, 2)});
-        int[] out = new int[d.totalQuads() * 4];
+        int[] out = new int[d.totalQuads()];
         assertTrue(RtWorld.tagVegetation(d, out, (x, y, z) -> RtWorld.FOLIAGE_CUBE) > 0);
-        assertEquals(RtWorld.VEGETATION_BIT | RtWorld.LEAF_CUBE_BIT, out[0] & (RtWorld.VEGETATION_BIT | RtWorld.LEAF_CUBE_BIT));
-        assertEquals(0, RtWorld.tagVegetation(d, new int[d.totalQuads() * 4], (x, y, z) -> RtWorld.FOLIAGE_NONE));
+        assertEquals(BedraySceneGeometry.VERTEX_FLAG_VEGETATION | BedraySceneGeometry.VERTEX_FLAG_LEAF_CUBE, out[0] & (BedraySceneGeometry.VERTEX_FLAG_VEGETATION | BedraySceneGeometry.VERTEX_FLAG_LEAF_CUBE));
+        assertEquals(0, RtWorld.tagVegetation(d, new int[d.totalQuads()], (x, y, z) -> RtWorld.FOLIAGE_NONE));
     }
 
     @Test
-    public void bitSurvivesTheStagingCopy() {
+    public void taggingLeavesTheDecodedLightUnchanged() {
         DecodedSection d = section(new float[][] {}, new float[][] {up(2, 4, 2)});
-        int[] out = new int[d.totalQuads() * 4];
-        assertTrue(RtWorld.tagVegetation(d, out, (x, y, z) -> RtWorld.FOLIAGE_CARD) > 0);
-        assertEquals(RtWorld.VEGETATION_BIT, out[0] & RtWorld.VEGETATION_BIT);
-        assertEquals(d.light[0] & 0x00FFFFFF, out[0] & 0x00FFFFFF,
-            "the vanilla light bytes stay as the decoder wrote them");
+        int[] originalLight = d.light.clone();
+        int[] out = new int[d.totalQuads()];
+        assertEquals(1, RtWorld.tagVegetation(d, out, (x, y, z) -> RtWorld.FOLIAGE_CARD));
+        assertBit(out, 0, "native foliage flag");
+        assertArrayEquals(originalLight, d.light, "decoded light is shared with the registry");
     }
 
     @Test
@@ -84,7 +67,7 @@ public class RtVegetationTagTest {
         // cell above the block, where the block state is the neighbour's, and leaves would lose their tag
         DecodedSection d = section(new float[][] {}, new float[][] {up(2, 4, 2)});
         int[] hits = new int[3];
-        RtWorld.tagVegetation(d, new int[d.totalQuads() * 4], (x, y, z) -> {
+        RtWorld.tagVegetation(d, new int[d.totalQuads()], (x, y, z) -> {
             hits[0] = x;
             hits[1] = y;
             hits[2] = z;
@@ -96,24 +79,21 @@ public class RtVegetationTagTest {
     @Test
     public void noLookupLeavesEveryQuadUntagged() {
         DecodedSection cutout = section(new float[][] {}, new float[][] {up(2, 4, 2)});
-        assertSame(cutout.light, stagedLight(cutout, null),
-            "without a lookup no copy is made and the shader sees no foliage at all (the pre-tag behaviour)");
-        DecodedSection empty = section(new float[][] {}, new float[][] {});
-        assertNull(tagged(empty, (x, y, z) -> RtWorld.FOLIAGE_CARD),
-            "a section without cutout quads stages the decoded words");
+        int[] flags = {BedraySceneGeometry.VERTEX_FLAG_VEGETATION};
+        assertEquals(0, RtWorld.tagVegetation(cutout, flags, null));
+        assertNoBit(flags, 0, "no block lookup");
     }
 
     @Test
     public void scratchArrayDoesNotLeakBetweenSections() {
-        // both sections share the staging scratch array; the second must be a fresh copy of its own light words
         DecodedSection a = section(new float[][] {}, new float[][] {up(2, 4, 2)});
         DecodedSection b = section(new float[][] {}, new float[][] {up(5, 7, 5)});
-        int[] out = new int[a.totalQuads() * 4];
-        assertTrue(RtWorld.tagVegetation(a, out, (x, y, z) -> x == 2 ? RtWorld.FOLIAGE_CARD : RtWorld.FOLIAGE_NONE) > 0);
-        assertEquals(32, out[0] & 0xFF, "block light byte of the quad at x = 2");
-        assertTrue(RtWorld.tagVegetation(b, out, (x, y, z) -> x == 5 ? RtWorld.FOLIAGE_CARD : RtWorld.FOLIAGE_NONE) > 0);
-        assertEquals(80, out[0] & 0xFF, "the quad at x = 5 must bring its own light, not the previous section's");
-        assertEquals(RtWorld.VEGETATION_BIT, out[0] & RtWorld.VEGETATION_BIT);
+        int[] out = new int[a.totalQuads()];
+        RtWorld.BlockLookup onlyFirst = (x, y, z) -> x == 2 ? RtWorld.FOLIAGE_CARD : RtWorld.FOLIAGE_NONE;
+        assertEquals(1, RtWorld.tagVegetation(a, out, onlyFirst));
+        assertBit(out, 0, "first section's foliage");
+        assertEquals(0, RtWorld.tagVegetation(b, out, onlyFirst));
+        assertNoBit(out, 0, "second section has no foliage");
     }
 
     @Test
@@ -123,7 +103,7 @@ public class RtVegetationTagTest {
         DecodedSection d = section(new float[][] {},
             new float[][] {up(2, 4, 2), down(7, 3, 7), east(11, 3, 4), west(4, 3, 9)});
         StringBuilder asked = new StringBuilder();
-        int tagged = RtWorld.tagVegetation(d, new int[d.totalQuads() * 4], (x, y, z) -> {
+        int tagged = RtWorld.tagVegetation(d, new int[d.totalQuads()], (x, y, z) -> {
             asked.append(x).append(',').append(y).append(',').append(z).append(';');
             return RtWorld.FOLIAGE_CARD;
         });
@@ -133,7 +113,7 @@ public class RtVegetationTagTest {
         DecodedSection negative = SodiumMeshDecoder.decode(1L, -1, 0, -2, passes(
             new float[][] {}, new float[][] {up(0, 4, 0)}));
         int[] hit = new int[3];
-        RtWorld.tagVegetation(negative, new int[negative.totalQuads() * 4], (x, y, z) -> {
+        RtWorld.tagVegetation(negative, new int[negative.totalQuads()], (x, y, z) -> {
             hit[0] = x;
             hit[1] = y;
             hit[2] = z;
@@ -148,7 +128,7 @@ public class RtVegetationTagTest {
         DecodedSection d = section(new float[][] {}, new float[][] {
             up(2, 4, 2), down(2, 3, 2), east(3, 3, 2), west(2, 3, 2)});
         int[] calls = new int[1];
-        int tagged = RtWorld.tagVegetation(d, new int[d.totalQuads() * 4], (x, y, z) -> {
+        int tagged = RtWorld.tagVegetation(d, new int[d.totalQuads()], (x, y, z) -> {
             calls[0]++;
             return RtWorld.FOLIAGE_CUBE;
         });
@@ -161,7 +141,7 @@ public class RtVegetationTagTest {
         // a resource pack that draws LeavesBlock as a cross: the block class says "cube", the quad geometry says "card", and a
         // one-block step along the diagonal normal would leave the caster cell on the wrong side
         DecodedSection d = section(new float[][] {}, new float[][] {diagonal(2, 4, 2)});
-        int[] out = new int[d.totalQuads() * 4];
+        int[] out = new int[d.totalQuads()];
         assertEquals(1, RtWorld.tagVegetation(d, out, (x, y, z) -> RtWorld.FOLIAGE_CUBE));
         assertBit(out, 0, "a diagonal leaf quad is still foliage");
         assertCubeBit(out, 0, false, "no one-block caster step for a diagonal quad");
@@ -169,60 +149,31 @@ public class RtVegetationTagTest {
 
 
 
-    /**
-     * The tag is only worth writing if the shader reads the same bit. The section traversal decodes it into the two hit
-     * flags the surface layer consumes, so the Java constant and the shader constant have to stay one number.
-     */
     @Test
-    public void theTraversalReadsTheSameBitsAsJava() throws java.io.IOException {
-        assertEquals(0x01000000, RtWorld.VEGETATION_BIT, "bit 24 of the light word");
-        assertEquals(0x02000000, RtWorld.LEAF_CUBE_BIT, "bit 25 of the light word");
-        String traversal = java.nio.file.Files.readString(
-            java.nio.file.Path.of("src/main/resources/shaders/slang/traversal/legacy_section_traversal.slang"),
-            java.nio.charset.StandardCharsets.UTF_8).replace("\r\n", "\n");
-        assertTrue(traversal.contains("static const uint LEGACY_VERT_FLAG_VEGETATION   = 0x01000000u;"),
-            "the shader constant must equal RtWorld.VEGETATION_BIT");
-        assertTrue(traversal.contains("static const uint LEGACY_VERT_FLAG_LEAF_CUBE    = 0x02000000u;"),
-            "the shader constant must equal RtWorld.LEAF_CUBE_BIT");
-        assertTrue(traversal.contains("(light0 & LEGACY_VERT_FLAG_VEGETATION) != 0u) result.flags |= HIT_FLAG_FOLIAGE;"),
-            "foliage is the per-quad tag, not the cutout pass: bars, panes, ladders and rails must not glow warm when back-lit");
-        assertTrue(traversal.contains("(light0 & LEGACY_VERT_FLAG_LEAF_CUBE) != 0u) result.flags |= HIT_FLAG_LEAF_CUBE;"),
-            "the one-block shadow caster step belongs to full leaf cubes only");
+    public void theTraversalReadsTheNativeVertexFlags() throws java.io.IOException {
+        assertEquals(1, BedraySceneGeometry.VERTEX_FLAG_VEGETATION);
+        assertEquals(2, BedraySceneGeometry.VERTEX_FLAG_LEAF_CUBE);
+        java.nio.file.Path shaders = java.nio.file.Path.of("src/main/resources/shaders/slang");
+        String geometry = java.nio.file.Files.readString(shaders.resolve("contracts/geometry.slang"));
+        String traversal = java.nio.file.Files.readString(shaders.resolve("traversal/hardware_traversal.slang"));
+        assertTrue(geometry.contains("GEOMETRY_VERTEX_FLAG_VEGETATION = 1u << 0u"));
+        assertTrue(geometry.contains("GEOMETRY_VERTEX_FLAG_LEAF_CUBE  = 1u << 1u"));
+        assertTrue(traversal.contains("(vertexFlags & GEOMETRY_VERTEX_FLAG_VEGETATION) != 0u) result.flags |= HIT_FLAG_FOLIAGE;"));
+        assertTrue(traversal.contains("(vertexFlags & GEOMETRY_VERTEX_FLAG_LEAF_CUBE) != 0u) result.flags |= HIT_FLAG_LEAF_CUBE;"));
     }
 
-    // ---- synthetic section builders (compact vertex layout, see SodiumMeshDecoder) ----
-
-
-    private static int[] stagedLight(DecodedSection d, RtWorld.BlockLookup lookup) {
-        if (lookup == null) {
-            return d.light;
-        }
-        int[] out = new int[d.totalQuads() * 4];
-        return RtWorld.tagVegetation(d, out, lookup) > 0 ? out : d.light;
+    private static void assertBit(int[] flags, int quad, String message) {
+        assertEquals(BedraySceneGeometry.VERTEX_FLAG_VEGETATION,
+            flags[quad] & BedraySceneGeometry.VERTEX_FLAG_VEGETATION, message);
     }
 
-    private static int[] tagged(DecodedSection d, RtWorld.BlockLookup lookup) {
-        int[] out = new int[d.totalQuads() * 4];
-        return RtWorld.tagVegetation(d, out, lookup) > 0 ? out : null;
+    private static void assertNoBit(int[] flags, int quad, String message) {
+        assertEquals(0, flags[quad] & BedraySceneGeometry.VERTEX_FLAG_VEGETATION, message);
     }
 
-    private static void assertBit(int[] words, int quad, String what) {
-        for (int v = 0; v < 4; v++) {
-            assertEquals(RtWorld.VEGETATION_BIT, words[quad * 4 + v] & RtWorld.VEGETATION_BIT, what + " vertex " + v);
-        }
-    }
-
-    private static void assertNoBit(int[] words, int quad, String what) {
-        for (int v = 0; v < 4; v++) {
-            assertEquals(0, words[quad * 4 + v] & RtWorld.VEGETATION_BIT, what + " vertex " + v);
-        }
-    }
-
-    private static void assertCubeBit(int[] words, int quad, boolean expected, String what) {
-        for (int v = 0; v < 4; v++) {
-            int want = expected ? RtWorld.LEAF_CUBE_BIT : 0;
-            assertEquals(want, words[quad * 4 + v] & RtWorld.LEAF_CUBE_BIT, what + " vertex " + v);
-        }
+    private static void assertCubeBit(int[] flags, int quad, boolean expected, String message) {
+        assertEquals(expected ? BedraySceneGeometry.VERTEX_FLAG_LEAF_CUBE : 0,
+            flags[quad] & BedraySceneGeometry.VERTEX_FLAG_LEAF_CUBE, message);
     }
 
     /** Upward face of the block below {@code (x, y, z)}: the quad plane is at {@code y}, over that block. */

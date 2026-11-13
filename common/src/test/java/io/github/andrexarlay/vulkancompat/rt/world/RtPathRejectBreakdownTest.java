@@ -54,10 +54,13 @@ class RtPathRejectBreakdownTest {
     void theTraceMetersTheTilesFrameStatsMeters() throws IOException {
         String entry = read(ENTRY);
         String stats = read(FRAME_STATS);
-        assertTrue(stats.contains("uint site = (uint(p.x) >> 2u) + (uint(p.y) >> 2u) * tilesPerRow + pc.frameIndex;"));
+        assertTrue(stats.contains("uint2 tile = tid.xy;")
+                && stats.contains("uint2 p = tile * 4u;")
+                && stats.contains("uint site = tile.x + tile.y * tilesPerRow + pc.frameIndex;"));
         assertTrue(entry.contains("uint site = (uint(p.x) >> 2u) + (uint(p.y) >> 2u) * tilesPerRow + frameIndex;"),
             "the same tile walk, so metered can be compared with RtStatsMetering and with reject_pct");
         assertTrue(entry.contains("static const uint PATH_REJECT_TILES_PER_SAMPLE = " + RtStatsMetering.TILES_PER_SAMPLE + "u;"));
+        assertTrue(stats.contains("static const uint PATH_STATS_TILES_PER_SAMPLE = " + RtStatsMetering.TILES_PER_SAMPLE + "u;"));
         assertTrue(entry.contains("pathTraceCountRejects(outPathStats, p, size, f.frame.x, sampleTrusted, total.flags);"),
             "the frame word is the index frame_stats is pushed (RtSlangFrameData writes frame.frameIndex to both)");
     }
@@ -96,14 +99,14 @@ class RtPathRejectBreakdownTest {
 
     @Test
     void everyTraceRootDeclaresTheSlotAtThirtySeven() throws IOException {
-        for (String root : new String[] {"passes/path_trace.slang", "passes/path_trace_scene.slang",
+        for (String root : new String[] {"passes/path_trace_scene.slang",
                 "passes/rc_path_trace_scene.slang"}) {
             assertTrue(read(SHADERS.resolve(root)).contains(
                     "[[vk::binding(37, 0)]] RWStructuredBuffer<uint> outPathStats;"),
                 root + " shares the entry body, so it declares the stats slot (or the native stand-in) too");
         }
-        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
-        SlangPassManifest manifest = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
+        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace_scene"), "path_trace_scene.slang was not compiled");
+        SlangPassManifest manifest = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
         SlangPassManifest.Binding binding = manifest.binding("outPathStats");
         assertNotNull(binding);
         assertEquals(37, binding.binding());

@@ -23,12 +23,12 @@ class RtSlangEntityTest {
     private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String SHADERS = "src/main/resources/shaders/slang";
     private static final String ENTITY = SHADERS + "/traversal/entity_geometry.slang";
-    private static final String TRAVERSAL = SHADERS + "/traversal/legacy_section_traversal.slang";
+    private static final String TRAVERSAL = SHADERS + "/traversal/scene_traversal.slang";
     private static final String CONTRACT_TRAVERSAL = SHADERS + "/contracts/scene_tracer.slang";
     private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
     private static final String DISPLAY = SHADERS + "/passes/path_display.slang";
     private static final String SURFACE = SHADERS + "/surface/surface.slang";
-    private static final String PASS = SHADERS + "/passes/path_trace.slang";
+    private static final String PASS = SHADERS + "/passes/path_trace_scene.slang";
     private static final String ENTRY = SHADERS + "/pathtrace/path_trace_entry.slang";
     private static final String HOST_PASS =
         "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java";
@@ -66,10 +66,12 @@ class RtSlangEntityTest {
         assertTrue(decode.contains("if (entityInstance(instanceId)) {"), "the entity ring is decoded before the section table");
         assertTrue(decode.contains("return entityHitToSurface(entities, cameraAnchor, ray, instanceId, primitiveId, bary, t);"),
             "through the entity decoder, which never indexes a section");
-        String sectionDecode = block(traversal,
-            "SurfaceHit legacyHitToSurface(StructuredBuffer<LegacySection> sections, Ray ray,");
-        assertTrue(sectionDecode.contains("if (entityInstance(instanceId)) return result;"),
-            "and the section decoder refuses an entity id, so a routing bug reads a freed table entry instead of writing one");
+        String sectionDecode = block(read(SHADERS + "/traversal/hardware_traversal.slang"),
+            "SurfaceHit hardwareHitToSurface(GeometryProvider geometry, Ray ray,");
+        assertTrue(sectionDecode.indexOf("if (instanceId >= sectionCount) return result;") >= 0
+                && sectionDecode.indexOf("if (instanceId >= sectionCount) return result;")
+                    < sectionDecode.indexOf("geometry.sections[instanceId]"),
+            "the section decoder checks the bound table before indexing it");
     }
 
     /**
@@ -97,20 +99,19 @@ class RtSlangEntityTest {
     @Test
     void theSelfAvatarIsSkippedByPrimaryRaysOnly() {
         String traversal = read(TRAVERSAL);
-        assertTrue(traversal.contains("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, true);"),
+        assertTrue(traversal.contains("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, SELF_SHADOW_OFF);"),
             "the primary ray looks past the body");
-        assertTrue(traversal.contains("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, false);"),
-            "a bounce ray does not: the avatar is geometry the light crosses");
-        String visibility = block(traversal, "VisibilityResult traceVisibility(Ray ray) {");
-        assertTrue(!visibility.contains("selfAvatarPrimitive"),
-            "and neither does a shadow ray - an emitters-only skip would light the body through itself");
+        assertTrue(traversal.contains("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, selfShadowMode);"),
+            "a diffuse bounce follows the self_shadow setting");
+        assertTrue(traversal.contains("override SurfaceHit traceMirror(Ray ray) {\n        return traceNearest(ray, SELF_SHADOW_FULL);"),
+            "only a mirror ray sees it, so water and glass reflect the player");
         String skip = read(SHADERS + "/contracts/triangle_intersection.slang");
         assertTrue(skip.contains("primary && entity && count != 0u"),
             "a count of 0 (third person, or the option off) skips nothing at all");
 
         String pass = read(PASS);
         assertTrue(pass.contains("traversal.selfAvatarTriStart = pc.entityState.y;"), "the range comes from the push");
-        assertTrue(pass.contains("traversal.selfAvatarTriCount = pc.entityState.z;"));
+        assertTrue(pass.contains("traversal.selfAvatarTriCount = pc.entityState.z & 0x3FFFFFFFu;"));
     }
 
     /**

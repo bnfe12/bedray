@@ -535,15 +535,12 @@ public final class F3Sections {
 
         b = sb().append("BLAS build: ").append(VAL);
         ms(b, s.buildMs()).append(" ms").append(R).append(" +").append(s.builtThisFrame()).append(" | pending ")
-            .append(s.pending() > 0 ? WARN : OFF).append(s.pending()).append(R).append(" | failed ")
-            .append(s.failedSections() > 0 ? ERR : OFF).append(s.failedSections()).append(R);
+            .append(s.pending() > 0 ? WARN : OFF).append(s.pending()).append(R);
         out.add(b.toString());
 
         long mb = s.vramBytes() >> 20;
-        long budgetMb = RtConfig.vramBudgetBytes() >> 20;
-        String memColor = budgetMb <= 0 ? VAL : mb * 10 >= budgetMb * 9 ? ERR : mb * 4 >= budgetMb * 3 ? WARN : VAL;
         SectionGeometryRegistry reg = SectionGeometryRegistry.INSTANCE;
-        b = sb().append("RT mem: ").append(memColor).append(mb).append(R).append(" / ").append(budgetMb).append(" MB | geo ")
+        b = sb().append("RT mem: ").append(VAL).append(mb).append(R).append(" MB | geo ")
             .append(VAL).append(reg.sectionCount()).append(R).append(" sec ").append(VAL);
         mega(b, reg.totalQuads()).append(R).append(" quads");
         out.add(b.toString());

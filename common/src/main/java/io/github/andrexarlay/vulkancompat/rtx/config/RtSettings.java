@@ -105,8 +105,6 @@ public final class RtSettings {
     public static boolean rtDistanceAuto = true;
     /** Manual RT distance in chunks (sections) when {@link #rtDistanceAuto} is off. */
     public static int rtDistanceChunks = 8;
-    /** GPU memory for BLAS + geometry; above it the farthest sections are not built (nearest first). */
-    public static int vramBudgetMb = 2048;
     /** Angular diameter of the sun/moon disk for soft shadows, tenths of a degree (5 = 0.5 deg = the real sun; 14 = a widened artistic disk, 1.4 deg: a visible but still crisp penumbra). */
     public static int sunSizeTenths = 5;
     /** Tilt of the sun/moon/star arc towards the south in degrees (0 = vanilla: sun through the zenith, no noon shadows). */
@@ -118,7 +116,9 @@ public final class RtSettings {
      */
     public static int bakedLightFillPct = 0;
     /** Most important emissive quads (emission * area / distance^2 around the camera) kept in the light list. */
-    public static int lightBudget = 512;
+    // 2048, not 512: the light BVH samples in O(log n), and at 512 a room with 531 emissive faces in range swapped 365 of
+    // them per publish (testbed 2026-11-07), dropping their NEE and DI history - light near them jumped.
+    public static int lightBudget = 2048;
     /** Settings page layout: show the advanced / expert RT controls. */
     public static boolean showAdvanced = false;
     public static boolean showExpert = false;
@@ -128,6 +128,16 @@ public final class RtSettings {
     public static boolean autoNormals = true;
     /** Strength of the generated normal maps in percent (100 = AutoNormals.BASE_STRENGTH). */
     public static int autoNormalStrength = 100;
+
+    // ---- First-person body shadow ----
+    /** The body casts its shadow like any other geometry, also onto the floor patch its own (unseen) feet cover. */
+    public static final int SELF_SHADOW_FULL = 0;
+    /** The body casts its shadow, but rays leaving the floor inside its own column ignore it (no black blot underfoot). */
+    public static final int SELF_SHADOW_NO_FOOTPRINT = 1;
+    /** The body never occludes light; only mirror rays still see it. */
+    public static final int SELF_SHADOW_OFF = 2;
+    /** First-person body shadow ({@code self_shadow}); third person always uses the full model. */
+    public static int selfShadow = SELF_SHADOW_NO_FOOTPRINT;
 
     // ---- Water & Liquids ----
     public static final int WATER_STYLE_VANILLA = 0;
@@ -196,12 +206,6 @@ public final class RtSettings {
     public static boolean pathAutoExposure = true;
     /** Exposure compensation in tenths of EV (-40..+40, 0 = none). Auto exposure on: added to the adapted value; off: fixed exposure 1.1 * 2^EV. */
     public static int pathExposureEvTenths = 0;
-    /**
-     * DLSS Ray Reconstruction: feed flat voxel geometric normals (ng) to DLSS-RR
-     * instead of perturbed texture shading normals (ns) to preserve sharp block edges and avoid neural blurring.
-     * When off, perturbed shading normals (ns) are fed, giving a smooth/curved appearance to voxel corners.
-     */
-    public static boolean dlssRrGeometricNormals = true;
     /** Path tracing water caustics simulation focusing sunlight and light under water. */
     public static boolean caustics = false;
     /** Vibrant Visuals style: rich grass and water tones, high color contrast, soft bloom and cinematic ACES. */
@@ -270,7 +274,6 @@ public final class RtSettings {
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("path_auto_exposure", () -> pathAutoExposure, v -> pathAutoExposure = v);
         integer("path_exposure_ev", () -> pathExposureEvTenths, v -> pathExposureEvTenths = v, -40, 40);
-        bool("dlss_rr_geometric_normals", () -> dlssRrGeometricNormals, v -> dlssRrGeometricNormals = v);
         bool("path_caustics", () -> caustics, v -> caustics = v);
         bool("caustics", () -> caustics, v -> caustics = v);
         bool("vibrant_visuals", () -> vibrantVisuals, v -> vibrantVisuals = v);
@@ -279,7 +282,6 @@ public final class RtSettings {
         bool("auto_normals", () -> autoNormals, v -> autoNormals = v);
         bool("rt_distance_auto", () -> rtDistanceAuto, v -> rtDistanceAuto = v);
         integer("rt_distance_chunks", () -> rtDistanceChunks, v -> rtDistanceChunks = v, 2, 32);
-        integer("rt_vram_budget_mb", () -> vramBudgetMb, v -> vramBudgetMb = v, 256, 16384);
         integer("sun_size_tenths", () -> sunSizeTenths, v -> sunSizeTenths = v, 1, 50);
         integer("sun_tilt_deg", () -> sunTiltDeg, v -> sunTiltDeg = v, 0, 45);
         integer("baked_light_fill_pct", () -> bakedLightFillPct, v -> bakedLightFillPct = v, 0, 100);
@@ -294,6 +296,7 @@ public final class RtSettings {
         bool("rt_show_expert", () -> showExpert, v -> showExpert = v);
         integer("auto_normal_strength", () -> autoNormalStrength, v -> autoNormalStrength = v, 0, 400);
         integer("water_style", () -> waterStyle, v -> waterStyle = v, 0, 1);
+        integer("self_shadow", () -> selfShadow, v -> selfShadow = v, SELF_SHADOW_FULL, SELF_SHADOW_OFF);
         bool("waving_foliage", () -> wavingFoliage, v -> wavingFoliage = v);
         integer("waving_foliage_strength", () -> wavingFoliageStrength, v -> wavingFoliageStrength = v, 0, 200);
         bool("rt_fog", () -> volumetricFogEnabled, v -> { volumetricFogEnabled = v; rtFog = v; });
@@ -456,7 +459,6 @@ public final class RtSettings {
     public static int pathMaxDistance() { return i("path_distance"); }
     public static boolean autoExposure() { return b("path_auto_exposure"); }
     public static int exposureEvTenths() { return i("path_exposure_ev"); }
-    public static boolean dlssRrGeometricNormals() { return b("dlss_rr_geometric_normals"); }
     public static boolean caustics() { return b("path_caustics") || b("caustics"); }
     public static boolean vibrantVisuals() { return b("vibrant_visuals"); }
     public static boolean particles() { return b("rt_particles"); }
@@ -469,7 +471,6 @@ public final class RtSettings {
     public static boolean autoNormalsOn() { return b("auto_normals"); }
     public static boolean rtDistanceAuto() { return b("rt_distance_auto"); }
     public static int rtDistanceChunks() { return i("rt_distance_chunks"); }
-    public static int vramBudgetMb() { return i("rt_vram_budget_mb"); }
     public static int lightBudget() { return i("rt_light_budget"); }
     /** Angular radius of the sun/moon disk in radians. */
     public static float sunRadiusRad() { return (float) Math.toRadians(i("sun_size_tenths") / 20.0); }
@@ -707,7 +708,7 @@ public final class RtSettings {
     /** Boolean keys shown in the Advanced level (all integer keys belong to Expert). */
     public static final java.util.Set<String> ADVANCED_KEYS = java.util.Set.of("rays_shadows", "rays_soft_shadows", "rays_pixel_shadows", "rays_reflections",
         "rays_ao", "rays_gi", "rays_emissive", "rays_accumulate", "rt_distance_auto", "auto_normals", "path_accumulate",
-        "path_auto_exposure", "dlss_rr_geometric_normals", "rt_fog", "volumetric_fog_enabled", "path_caustics", "caustics", "vibrant_visuals",
+        "path_auto_exposure", "rt_fog", "volumetric_fog_enabled", "path_caustics", "caustics", "vibrant_visuals",
         "waving_foliage");
 
     /**
@@ -908,7 +909,6 @@ public final class RtSettings {
         w.write("# RT distance: as in game (render distance) or manual chunks; BLAS memory budget (MB); sun disk diameter (0.1 deg)\n");
         w.write("rt_distance_auto = " + rtDistanceAuto + "\n");
         w.write("rt_distance_chunks = " + rtDistanceChunks + "\n");
-        w.write("rt_vram_budget_mb = " + vramBudgetMb + "\n");
         w.write("sun_size_tenths = " + sunSizeTenths + "\n");
         w.write("# tilt of the sun/moon arc towards the south in degrees (0 = vanilla: the sun passes the zenith, no noon shadows)\n");
         w.write("sun_tilt_deg = " + sunTiltDeg + "\n");
@@ -963,7 +963,5 @@ public final class RtSettings {
         w.write("# Adaptive quality: OFF, FPS30, FPS45, FPS60, FPS90 or FPS120 - the RT pass lowers rays per pixel, then bounces,\n");
         w.write("# below the values above to fit 70% of a frame of that rate (never above them)\n");
         w.write("adaptive_quality = \"" + (adaptiveQuality != null ? adaptiveQuality.name() : "OFF") + "\"\n");
-        w.write("# DLSS Ray Reconstruction: flat voxel geometric normals (ng) for sharp block edges (true), or smooth/perturbed (false)\n");
-        w.write("dlss_rr_geometric_normals = " + dlssRrGeometricNormals + "\n");
     }
 }

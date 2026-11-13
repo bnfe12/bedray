@@ -19,7 +19,7 @@ final class NrdPackPipeline {
     static final int BINDINGS = BedrayNrdPackNative.VIEW_COUNT;
     static final int PUSH_BYTES = BedrayNrdPackNative.PUSH_BYTES;
     private static final int[] PACK_BINDINGS = {0,1,2,3,4,5,6,9,10,12,13};
-    private static final int[] RR_BINDINGS = {0,1,2,4,5,6,9,10,12,13};
+    private static final int[] RR_BINDINGS = {0,2,4,6,9,10,12,13};
     private static final int[] COMPOSE_BINDINGS = {0,3,4,7,8,11,13};
     private final SlangRuntime runtime;
     private final BedrayNrdPackNative nativePass;
@@ -32,6 +32,16 @@ final class NrdPackPipeline {
         this.runtime = Objects.requireNonNull(runtime, "NRD pack needs the existing SlangRuntime");
         nativePass = new BedrayNrdPackNative(runtime.library(), runtime.core());
         program("nrd_compose", COMPOSE_BINDINGS);
+    }
+
+    static NrdPackPipeline forRayReconstruction(SlangRuntime runtime) {
+        Objects.requireNonNull(runtime, "Ray Reconstruction needs the existing SlangRuntime");
+        if (!runtime.library().hasCompactRrPack()) {
+            throw new IllegalStateException("Ray Reconstruction needs the bedray_core.dll bundled with this build");
+        }
+        NrdPackPipeline pipeline = new NrdPackPipeline(runtime);
+        pipeline.program("nrd_pack_rr", RR_BINDINGS);
+        return pipeline;
     }
 
     private SlangProgram program(String name, int[] bindings) {
@@ -54,7 +64,6 @@ final class NrdPackPipeline {
     void writeViews(long[] nextViews) {
         if (closed) throw new IllegalStateException("NRD pack is closed");
         if (nextViews == null || nextViews.length != BINDINGS) throw new IllegalArgumentException("need 14 NRD views");
-        for (long view : nextViews) if (view == 0) throw new IllegalArgumentException("missing NRD view");
         views = nextViews.clone();
     }
 

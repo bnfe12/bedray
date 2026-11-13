@@ -7,7 +7,6 @@ import java.util.Locale;
  * <ul>
  *   <li>{@code -Dvkbridge.rt.radiusSections=6} horizontal radius in sections (Y radius: {@code vkbridge.rt.radiusY}, 4);</li>
  *   <li>{@code -Dvkbridge.rt.blasPerFrame=24} maximum BLAS builds recorded per frame;</li>
- *   <li>{@code -Dvkbridge.rt.vramBudgetMb=1024} stop creating BLAS above this much reserved GPU memory;</li>
  *   <li>{@code -Dvkbridge.rt.debug=normals|depth|uv|section|albedo|lit|shadow|ao|sky|gi|emission|bounces|material|reflection} view that REPLACES the world image;
  *       unset: shading mode lit, shown only when the Hardware RT option is on (with only {@code -Dvkbridge.rt.geometry=true} it is traced, not shown);
  *   <li>{@code -Dvkbridge.rt.sunFlipX=true} mirrors the sun/moon X direction (the sign is an estimate);</li>
@@ -40,21 +39,10 @@ public final class RtConfig {
      * camera the extra sections hold little geometry (terrain ends at the world floor) and empty sections get no BLAS,
      * so the instance count barely grows; the previous +-8 dropped the ground out of the TLAS when flying above ~y 190. */
     public static final int AUTO_RADIUS_Y = 16;
-    /** Legacy constants (radius before the settings existed), used by the unit tests only. */
-    public static final int RADIUS_XZ = 6;
-    public static final int RADIUS_Y = 4;
     /** Sections farther than this (radius + margin) release their GPU data. */
     public static final int EVICT_MARGIN = 2;
     public static final int BLAS_PER_FRAME = Math.max(1, Integer.getInteger("vkbridge.rt.blasPerFrame", 24));
-    /** Session override of the BLAS memory budget ({@code -Dvkbridge.rt.vramBudgetMb}), 0 = from the settings. */
-    public static final long VRAM_BUDGET_OVERRIDE_MB = Math.max(0L, Long.getLong("vkbridge.rt.vramBudgetMb", 0L));
     public static final int MAX_INSTANCES = Math.max(256, Integer.getInteger("vkbridge.rt.maxInstances", 16384));
-    /** Opacity micromaps on CUTOUT geometry (VK_EXT_opacity_micromap). Off by default: a state is only safe when the
-     * whole footprint the shader's cutout test averages resolves to it, and that margin leaves no micro-triangle of a
-     * real 16x16 cutout sprite classifiable (measured, see {@link OpacityMicromapCache}).
-     * {@code -Dvkbridge.rt.opacityMicromaps=true} re-enables the experiment. */
-    public static final boolean OPACITY_MICROMAPS = Boolean.parseBoolean(System.getProperty("vkbridge.rt.opacityMicromaps", "false"));
-
     /** The local player's own model in first person, so water and glass reflect their body ({@code -Dvkbridge.rt.selfAvatar=false}
      * turns it off for an A/B check). */
     public static final boolean SELF_AVATAR = Boolean.parseBoolean(System.getProperty("vkbridge.rt.selfAvatar", "true"));
@@ -63,12 +51,15 @@ public final class RtConfig {
      * sun-and-moon only, which is what a torch-lit room looked like before the port. The number of resampled quads per
      * bounce and the share of the NEE draw given to the emitter list follow the same switch family. */
     public static final boolean SLANG_BLOCK_EMITTERS = Boolean.parseBoolean(System.getProperty("vkbridge.rt.blockEmitters", "true"));
-    public static final int SLANG_EMITTER_CANDIDATES = Math.max(1, Math.min(32, Integer.getInteger("vkbridge.rt.emitterCandidates", 8)));
+    // 2, not 8: each candidate walks the light tree; in the torch room at 2560x1440 (DLSS-RR) the trace pass went
+    // 41.6 -> 24.0 ms with 2, and the frame-to-frame difference in the lit area did not grow (2.33 -> 2.17), because
+    // ReSTIR DI temporal/spatial reuse already pools the candidates (2026-11-07).
+    public static final int SLANG_EMITTER_CANDIDATES = Math.max(1, Math.min(32, Integer.getInteger("vkbridge.rt.emitterCandidates", 2)));
     public static final float SLANG_EMITTER_PROBABILITY = Math.min(1.0f,
         Math.max(0.0f, Float.parseFloat(System.getProperty("vkbridge.rt.emitterProbability", "0.5"))));
 
     /** Captured mobs, items and armour stands in the Slang path tracer: the ring {@link RtEntityGeometryManager} uploads
-     * every frame, bound as five buffers instead of reached through the statistics buffer like the legacy shader.
+     * every frame into shader buffers.
      * {@code -Dvkbridge.rt.slangEntities=false} traces the terrain alone, which is the fastest A/B for an entity artifact. */
     public static final boolean SLANG_ENTITIES = Boolean.parseBoolean(System.getProperty("vkbridge.rt.slangEntities", "true"));
 
@@ -84,12 +75,6 @@ public final class RtConfig {
      * {@code -Dvkbridge.rt.nativePathTrace=true} opts in. */
     public static final boolean SLANG_PATH_TRACE_CPP =
         Boolean.parseBoolean(System.getProperty("vkbridge.rt.nativePathTrace", "false"));
-
-    /** {@code bedray_scene.dll} owns the section BLAS, the TLAS and the 64-byte section table; the path tracer then
-     * dispatches {@code path_trace_scene}. {@code -Dvkbridge.rt.nativeScene=true} opts in. The scene is optional: a
-     * missing DLL, ABI mismatch or missing {@code path_trace_scene} artifact keeps the Java scene and logs why. */
-    public static final boolean SLANG_NATIVE_SCENE =
-        Boolean.parseBoolean(System.getProperty("vkbridge.rt.nativeScene", "false"));
 
     /** Experimental finite-window RC diffuse continuation; requires both native owners. */
     public static final boolean SLANG_RADIANCE_CASCADES =
@@ -115,12 +100,6 @@ public final class RtConfig {
         return Math.min(AUTO_RADIUS_Y, Math.max(2, radiusXz));
     }
 
-    /** BLAS memory budget in bytes. */
-    public static long vramBudgetBytes() {
-        long mb = VRAM_BUDGET_OVERRIDE_MB > 0 ? VRAM_BUDGET_OVERRIDE_MB
-            : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.vramBudgetMb();
-        return Math.max(64L, mb) << 20;
-    }
     /** Ambient occlusion rays per pixel, 0 = off (default). The ao debug view uses at least 1. */
     public static final int AO_SAMPLES = Math.max(0, Math.min(16, Integer.getInteger("vkbridge.rt.ao", 0)));
     /** Tone mapping of the lit view: aces (default) or none. */

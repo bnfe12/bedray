@@ -2,37 +2,8 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 
 import org.joml.Matrix4f;
 
-import java.nio.ByteBuffer;
-
-/**
- * Push constants of the traced passes (exactly 128 bytes, the guaranteed minimum of maxPushConstantsSize). The
- * shader-side mirror is {@code PushConstants} in {@code shaders/slang/bindings.slang}:
- * <pre>
- *   0  mat4  invViewProj
- *  64  uvec2 statsAddr
- *  72  uint  modeBits   view (bits 0-7) | aoSamples (8-15) | flipY (16) | tonemap (17) | accumCount (18-31)
- *  76  uint  frame
- *  80  vec4  keyDir (xyz towards the light, w = day factor)
- *  96  vec4  keyColor (rgb); w = uint flags (FLAG_*, read with floatBitsToUint)
- * 112  vec4  skyColor (rgb); w = uint params2: path: quality (0-7) | bounces (8-15) | spp (16-23) | rayDistance/4 (24-31);
- *                                             rays: shadow, emissive, GI, reflection rays (4 bits each, 0-15) | reflDistance/4 (24-31)
- * </pre>
- */
+/** Host state packed by each render pass into its own Slang contract. */
 public final class RtFrameParams {
-    public static final int BYTES = 128;
-
-    /** PC member types in declaration order (the same seven members {@code PushConstants} declares in bindings.slang). */
-    static final String[] PC_TYPES = {"mat4", "uvec2", "uint", "uint", "vec4", "vec4", "vec4"};
-    /** std430 offsets of the PC members, computed once by the same rules the GLSL compiler applies. */
-    static final int[] PC_OFFSETS = RtStatsLayout.std430Offsets(PC_TYPES);
-    static final int OFF_INV_VIEW_PROJ = PC_OFFSETS[0];
-    static final int OFF_STATS_ADDR = PC_OFFSETS[1];
-    static final int OFF_MODE_BITS = PC_OFFSETS[2];
-    static final int OFF_FRAME = PC_OFFSETS[3];
-    static final int OFF_KEY_DIR = PC_OFFSETS[4];
-    static final int OFF_KEY_COLOR = PC_OFFSETS[5];
-    static final int OFF_SKY_COLOR = PC_OFFSETS[6];
-
     public static final int FLAG_SHADOWS = 1;
     public static final int FLAG_SOFT_SHADOWS = 1 << 1;
     public static final int FLAG_REFLECTIONS = 1 << 2;
@@ -51,8 +22,6 @@ public final class RtFrameParams {
     public static final int FLAG_GI = 1 << 9;
     /** Generated normal maps (sprites without LabPBR _n), strength in the frame slot. */
     public static final int FLAG_AUTO_NORMALS = 1 << 10;
-    /** DLSS-RR: feed flat voxel geometric normals (ng) instead of perturbed shading normals (ns). */
-    public static final int FLAG_GEOMETRIC_NORMALS = 1 << 11;
     /** Volumetric fog and atmospheric haze. */
     public static final int FLAG_VOLUMETRIC_FOG = 1 << 12;
     /** Water style: 1 = Realistic (wave normals, caustics, refraction), 0 = Vanilla (classic clear). */
@@ -84,7 +53,6 @@ public final class RtFrameParams {
     public boolean cameraStatic;
     /** CPU only: inverse view-projection without the upscaler jitter (accumulation reset decision). */
     public final Matrix4f invViewProjStable = new Matrix4f();
-    public long statsAddress;
     public int mode;
     public int aoSamples;
     public boolean flipY;
@@ -99,11 +67,6 @@ public final class RtFrameParams {
     public int rayDistance = 128;
     /** Section radius of the RT world this frame (16 blocks each): the ray profile traces no farther than this. */
     public int rtRadiusXz = 8;
-    /** Ray mode: rays per pixel nibbles (RtRayEffectsPass.packQualities) replacing quality/bounces/spp in params2; -1 = path layout. */
-    public int rayQualities = -1;
-    /** Ray mode spatial filter (rt_atrous.comp): iteration index (params2 bits 16-19) and iteration count (20-23). */
-    public int filterIter;
-    public int filterIters;
     // ---- written to the per-frame slot (RtFrameRenderer), not pushed ----
     /**
      * The frame's tone-mapping exposure: {@link RtExposure#applied} of the auto state and the EV compensation. One number
@@ -167,35 +130,4 @@ public final class RtFrameParams {
      */
     public final float[] skyLightZenith = new float[3];
     public final float[] skyLightHorizon = new float[3];
-
-    public int modeBits() {
-        return (mode & 0xFF) | ((aoSamples & 0xFF) << 8) | (flipY ? 1 << 16 : 0) | (tonemap ? 1 << 17 : 0)
-            | ((Math.min(accumCount, MAX_ACCUM) & 0x3FFF) << 18);
-    }
-
-    public int params2() {
-        if (filterIters > 0) {
-            int base = rayQualities >= 0 ? (rayQualities & 0xFFFF) : ((quality & 0xFF) | ((bounces & 0xFF) << 8));
-            return (base & 0xFFFF) | ((filterIter & 15) << 16) | ((filterIters & 15) << 20)
-                | ((Math.min(1020, rayDistance) / 4 & 0xFF) << 24);
-        }
-        if (rayQualities >= 0) {
-            return (rayQualities & 0xFFFF) | ((filterIter & 15) << 16) | ((filterIters & 15) << 20) | ((Math.min(1020, rayDistance) / 4 & 0xFF) << 24);
-        }
-        return (quality & 0xFF) | ((bounces & 0xFF) << 8) | ((spp & 0xFF) << 16) | ((Math.min(1020, rayDistance) / 4 & 0xFF) << 24);
-    }
-
-    /** Writes the 128 bytes at absolute offset 0 (position and limit of {@code b} are not changed). */
-    public void write(ByteBuffer b) {
-        invViewProj.get(OFF_INV_VIEW_PROJ, b);
-        b.putLong(OFF_STATS_ADDR, statsAddress);
-        b.putInt(OFF_MODE_BITS, modeBits());
-        b.putInt(OFF_FRAME, frame);
-        b.putFloat(OFF_KEY_DIR, key.dir[0]).putFloat(OFF_KEY_DIR + 4, key.dir[1])
-            .putFloat(OFF_KEY_DIR + 8, key.dir[2]).putFloat(OFF_KEY_DIR + 12, key.day);
-        b.putFloat(OFF_KEY_COLOR, key.color[0]).putFloat(OFF_KEY_COLOR + 4, key.color[1])
-            .putFloat(OFF_KEY_COLOR + 8, key.color[2]).putInt(OFF_KEY_COLOR + 12, flags);
-        b.putFloat(OFF_SKY_COLOR, skyColor[0]).putFloat(OFF_SKY_COLOR + 4, skyColor[1])
-            .putFloat(OFF_SKY_COLOR + 8, skyColor[2]).putInt(OFF_SKY_COLOR + 12, params2());
-    }
 }

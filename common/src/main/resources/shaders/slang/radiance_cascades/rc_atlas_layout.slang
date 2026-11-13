@@ -2,7 +2,6 @@
 //
 // This module owns the one linear layout shared by every atlas flavour:
 //
-//   legacy float4 atlas   radiance_cascades/legacy_float4_store.slang
 //   typed RCSegment atlas radiance_cascades/segment_record.slang
 //
 // It knows nothing about the payload.  A record module owns its element type,

@@ -44,7 +44,11 @@ public final class BedrayNrdPackNative {
         if (command == 0 || program == 0 || views == null || views.length != VIEW_COUNT || settings == null
             || phase < PACK || phase > COMPOSE || width <= 0 || height <= 0)
             throw new IllegalArgumentException("invalid NRD pack frame");
-        for (long view : views) if (view == 0) throw new IllegalArgumentException("NRD pack needs every borrowed view");
+        for (int binding = 0; binding < views.length; binding++) {
+            // RR borrows the original normal image directly at SDK evaluation.
+            if (settings.denoiser == 2 && (binding == 1 || binding == 5)) continue;
+            if (views[binding] == 0) throw new IllegalArgumentException("missing NRD pack view at binding " + binding);
+        }
         long pixels = (long) width * height;
         if (pixels > 0xffff_ffffL) throw new IllegalArgumentException("NRD motion index overflow");
         long bytes = pixels * 16;

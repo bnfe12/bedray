@@ -1,5 +1,9 @@
 # Radiance interval transport
 
+The v1 atlas store described below is historical. The v2 field uses the
+interval arithmetic from `interval_transport.slang` and its own field layout
+and reconstruction. See the [RC reconstruction plan](../../../../../../../docs/RC_RECONSTRUCTION_PLAN.md).
+
 `interval_transport.slang` defines the segment-local radiance/transmittance
 record and front-to-back composition.  Its flag bits describe events seen in
 the segment or composed segments; they are not an exclusive terminal-state
@@ -10,19 +14,14 @@ Exactly opaque foreground transport can be resolved without a back sample.
 
 | Module | Role |
 |---|---|
-| `rc_atlas_layout.slang` | record-neutral `(cascade, probe, ray, interval)` addressing shared by both atlases |
+| `rc_atlas_layout.slang` | record-neutral `(cascade, probe, ray, interval)` addressing |
 | `interval_transport.slang` | `RCSegment`, validity flags, `rcComposeSegments` |
 | `segment_record.slang` | typed whole-record read/write and near/far ray composition |
 | `probe_resolve.slang` | typed probe radiance/completeness resolve |
 | `segment_store.slang` | facade re-exporting `segment_record` and `probe_resolve` |
 | `rc_trace.slang` | typed probe-ray trace facade (see `RC_TRACE_API.md`) |
-| `legacy_float4_store.slang` | **legacy** float4 records and confidence-weighted resolve |
-| `radiance_cascades_store.slang` | **legacy** compatibility facade over the float4 store |
 
-The typed atlas and the legacy float4 atlas are different formats.  A float4
-record stores `(radiance.rgb, confidence)`; an `RCSegment` stores
-`(radiance.rgb, confidence, transmittance.rgb, flags)` at a 32-byte stride.
-Never bind one format to the other's descriptor.
+An `RCSegment` stores `(radiance.rgb, confidence, transmittance.rgb, flags)` at a 32-byte stride.
 
 ## Record semantics
 
@@ -82,9 +81,8 @@ unresolved and make the probe incomplete.
 
 ## Typed trace
 
-`rc_trace.slang` is the typed trace facade.  It writes segment-local records
-through `rcWriteRaySegments`; it does not use the float4 resolve.  The module
-split, entry points and host obligations are in
+`rc_trace.slang` is the typed trace facade. It writes segment-local records
+through `rcWriteRaySegments`. The module split, entry points and host obligations are in
 [`RC_TRACE_API.md`](RC_TRACE_API.md).
 
 ## Cross-cascade resolve
@@ -101,8 +99,8 @@ No GPU memory budget or rendering result has been measured for this record.
 
 ## Verification
 
-`verify_rc_typed.slang` compiles the typed store and resolve without importing
-the legacy store.  `verify_rc_trace_api.slang` instantiates the full trace API
+`verify_rc_typed.slang` compiles the typed store and resolve.
+`verify_rc_trace_api.slang` instantiates the full trace API
 with mock backends.  Both are L1 compile evidence; they do not execute a
 dispatch or validate a reflected stride.
 

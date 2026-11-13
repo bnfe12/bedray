@@ -8,15 +8,14 @@ extern "C" {
 #define BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE (1u << 0)
 #define BEDRAY_VOLUMETRIC_FRAME_RESET_HISTORY (1u << 1)
 
-/* Separate additive layouts; existing ABI-v2 structures remain unchanged.
- * Programs stay runtime-owned. March variants share 5 bindings/96 push bytes,
- * but binding 2 has different section record semantics (legacy/native scene).
- * Each program must have the reflected 8x8x1 workgroup contract. */
+/* Programs stay runtime-owned. March uses the native GeometrySection table
+ * at binding 2 and declares 5 bindings and 96 push bytes. Both programs use
+ * an 8x8x1 workgroup. */
 typedef struct BedrayVolumetricDesc {
     uint32_t abi_version;
     uint32_t struct_size;
-    uint64_t program_march_legacy; /* zero when only native scene is supported */
-    uint64_t program_march_scene; /* zero when only legacy tables are supported */
+    uint64_t reserved; /* zero */
+    uint64_t program_march_scene;
     uint64_t program_apply; /* 4 bindings, 24 push bytes */
     uint64_t image_budget_bytes;
     uint64_t buffer_budget_bytes;
@@ -40,7 +39,7 @@ typedef struct BedrayVolumetricFrameDesc {
     uint64_t sections_bytes; /* whole 64-byte section records */
     uint32_t width;
     uint32_t height;
-    uint32_t flags;
+    uint32_t flags; /* requires BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE */
     uint32_t frame_index;
     const void* frame_constants;
     uint32_t frame_constants_bytes;
@@ -63,7 +62,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_volumetric(BedrayCore*);
 }
 #include <cstddef>
 static_assert(sizeof(BedrayVolumetricDesc) == 48);
-static_assert(offsetof(BedrayVolumetricDesc, program_march_legacy) == 8);
+static_assert(offsetof(BedrayVolumetricDesc, reserved) == 8);
 static_assert(offsetof(BedrayVolumetricDesc, program_march_scene) == 16);
 static_assert(offsetof(BedrayVolumetricDesc, program_apply) == 24);
 static_assert(offsetof(BedrayVolumetricDesc, image_budget_bytes) == 32);

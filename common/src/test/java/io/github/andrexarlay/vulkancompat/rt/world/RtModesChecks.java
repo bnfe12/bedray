@@ -8,8 +8,6 @@ import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import org.joml.Matrix4f;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 
 /**
  * L2 checks of the two RT modes (no GPU): LabPBR decoding, auto-PBR table, material atlas region fill, push-constant packing
@@ -24,7 +22,7 @@ final class RtModesChecks {
         labPbrDecode();
         autoPbrTable();
         regionFill();
-        paramsPacking();
+        runtimeDebugViews();
         accumulation();
         settingsKeys();
         telemetry();
@@ -295,38 +293,7 @@ final class RtModesChecks {
         check(brightE == 255 && darkE > 0 && darkE < 80, "glowstone mask dark=" + darkE + " bright=" + brightE);
     }
 
-    private static void paramsPacking() {
-        RtFrameParams p = new RtFrameParams();
-        p.mode = RtConfig.MODE_LIT;
-        p.flags = RtFrameParams.FLAG_SHADOWS | RtFrameParams.FLAG_EMISSIVE | RtFrameParams.FLAG_MATERIALS;
-        p.quality = 3;
-        p.bounces = 5;
-        p.spp = 2;
-        p.rayDistance = 256;
-        p.accumCount = 1000;
-        ByteBuffer b = ByteBuffer.allocateDirect(RtFrameParams.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-        p.write(b);
-        check(b.getInt(108) == p.flags, "flags in keyColor.w");
-        int p2 = b.getInt(124);
-        check((p2 & 255) == 3 && ((p2 >>> 8) & 255) == 5 && ((p2 >>> 16) & 255) == 2 && ((p2 >>> 24) & 255) * 4 == 256, "params2 " + Integer.toHexString(p2));
-        p.filterIter = 2;
-        p.filterIters = 3;
-        int filteredPathParams = p.params2();
-        check((filteredPathParams & 0xFFFF) == ((p.quality & 0xFF) | ((p.bounces & 0xFF) << 8))
-            && ((filteredPathParams >>> 16) & 15) == 2 && ((filteredPathParams >>> 20) & 15) == 3
-            && ((filteredPathParams >>> 24) & 255) * 4 == 256, "path A-Trous iteration packing preserves mode and distance");
-        p.filterIter = 1;
-        p.filterIters = 2;
-        p.rayQualities = 0x4321;
-        int filteredRayParams = p.params2();
-        check((filteredRayParams & 0xFFFF) == 0x4321 && ((filteredRayParams >>> 16) & 15) == 1
-            && ((filteredRayParams >>> 20) & 15) == 2, "ray A-Trous iteration packing preserves ray qualities");
-        p.filterIter = 0;
-        p.filterIters = 0;
-        p.rayQualities = -1;
-        check((b.getInt(72) >>> 18) == 1000 && (b.getInt(72) & 255) == RtConfig.MODE_LIT, "accumCount in modeBits");
-        p.accumCount = 1 << 20;
-        check((p.modeBits() >>> 18) == RtFrameParams.MAX_ACCUM, "accumCount saturates");
+    private static void runtimeDebugViews() {
         check(RtConfig.parseMode("gi") == RtConfig.MODE_GI && RtConfig.parseMode("bounces") == RtConfig.MODE_BOUNCES
             && RtConfig.parseMode("emission") == RtConfig.MODE_EMISSION && RtConfig.parseMode("material") == RtConfig.MODE_MATERIAL
             && RtConfig.parseMode("reflection") == RtConfig.MODE_REFLECTION, "new debug views");

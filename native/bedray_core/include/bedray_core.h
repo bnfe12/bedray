@@ -190,7 +190,7 @@ typedef struct BedrayFrameDesc {
  *
  * These declarations do not change any layout above and are optional for a
  * host that only uses bedray_core_render_frame/render_phases. The pass records
- * path_trace.slang -> restir_spatial.slang (optional) -> path_display.slang into
+ * path_trace_scene.slang -> restir_spatial.slang (optional) -> path_display.slang into
  * the host command buffer, and the additive statistics call appends the
  * frame_stats.slang meter over what those stages just wrote. It never submits
  * or waits.
@@ -199,10 +199,9 @@ typedef struct BedrayFrameDesc {
  *   - the core owns radiance, motion, the two accumulation images, the two
  *     history-depth images, FrameConstants uploads and one-element dummies;
  *   - with NATIVE_DI the core also owns the DI ring, reset and parity;
- *   - the host owns the TLAS, section table, atlases, emitters, external reservoirs,
- *     entity rings, output view, depth view and the StatsBuf range the statistics
- *     call borrows, and keeps them alive and in the declared layouts until
- *     bedray_core_release_recording for the command buffer;
+ *   - bedray_scene owns the TLAS and section table. The host retains the scene
+ *     recording and the borrowed atlases, emitters, external reservoirs, entity
+ *     rings, output, depth and StatsBuf through recording completion or discard;
  *   - the host must call bedray_core_release_recording after proven GPU
  *     completion or proven discard, exactly as for every other core recording.
  */
@@ -212,9 +211,8 @@ typedef struct BedrayFrameDesc {
 #define BEDRAY_PATH_TRACE_FRAME_CAMERA_STATIC (1u << 2)
 #define BEDRAY_PATH_TRACE_FRAME_FLIP_Y        (1u << 3)
 #define BEDRAY_PATH_TRACE_FRAME_SPATIAL       (1u << 4)
-/* scene.sections is the 64-byte GeometrySection table of bedray_scene and the
- * pass traces with program_trace_scene (path_trace_scene.slang). The flag is
- * host-only: it never reaches the shader push block. */
+/* Required on every path-trace frame. scene.sections is the 64-byte
+ * GeometrySection table of bedray_scene. The flag is host-only. */
 #define BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE  (1u << 5)
 /* Optional host-only extension. With NATIVE_DI, scene.reservoirs and input
  * di_state.y must be zero. C++ owns the ring, clear, history bit and parity.
@@ -267,6 +265,9 @@ typedef struct BedrayFrameDesc {
 /* Answers bedray_core_render_path_trace_ext: the trace adds its F3 reject split (PATH_REJECTS, words 140..143) into the
  * host's StatsBuf slot bound at 37 instead of a one-word stand-in. */
 #define BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT     (1u << 8)
+/* Required native scene table and zeroed retired shader slots. ABI 2 layout is unchanged. */
+#define BEDRAY_PATH_TRACE_FEATURE_NATIVE_SCENE_ONLY (1u << 9)
+#define BEDRAY_PATH_TRACE_FEATURE_COMPACT_RR_PACK (1u << 10)
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void);
 
 #define BEDRAY_PATH_DISPLAY_ACCUMULATE     (1u << 0)
@@ -356,7 +357,7 @@ typedef struct BedrayPathTraceAtmosphere {
     float cloud[4];
 } BedrayPathTraceAtmosphere;
 
-/* Mirror of passes/path_trace.slang PathTracePush (112 B). With NATIVE_DI,
+/* Mirror of passes/path_trace_scene.slang PathTracePush (112 B). With NATIVE_DI,
  * the core derives the HISTORY bit and parity; otherwise forwarded verbatim. */
 typedef struct BedrayPathTracePath {
     uint32_t max_depth;
@@ -397,10 +398,13 @@ typedef struct BedrayPathTraceFrameDesc {
     uint32_t reserved[5];
 } BedrayPathTraceFrameDesc;
 
+/* program_stats maps one invocation to a 4x4 tile. Zero uses the full image grid. */
+#define BEDRAY_PATH_TRACE_CONFIG_TILE_STATS (1u << 0)
+
 typedef struct BedrayPathTraceDesc {
     uint32_t abi_version;
     uint32_t flags;
-    uint64_t program_trace;         /* handle from bedray_core_register_program */
+    uint64_t retired_trace_slot;   /* Must be zero. */
     uint64_t program_spatial;       /* 0 disables the spatial stage */
     uint64_t program_display;
     uint64_t image_budget_bytes;    /* 0 selects 512 MiB */
@@ -412,8 +416,7 @@ typedef struct BedrayPathTraceDesc {
      * reserved0/reserved1 pair, so the struct size is unchanged. 0 means the
      * host lends no statistics program, and the call then refuses. */
     uint64_t program_stats;
-    /* path_trace_scene.slang; 0 keeps the legacy table for every frame. The
-     * field occupies the former reserved[0], so the struct size is unchanged. */
+    /* Required native scene trace program. */
     uint64_t program_trace_scene;
     uint64_t reserved;
 } BedrayPathTraceDesc;
@@ -465,11 +468,10 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_record_path_trace_stats(
     uint64_t stats_offset, uint64_t stats_bytes, uint32_t frame_index,
     BedrayError* error);
 
-/* Lends the ReSTIR PT spatial stage (restir_pt_spatial.slang for the legacy section table, restir_pt_spatial_scene.slang
- * for NATIVE_SCENE; either may be 0 when that table never asks for it). Call after bedray_core_configure_path_trace,
- * which forgets them; refused while a recording remains. Programs stay host-owned. */
+/* Lends restir_pt_spatial_scene.slang (0 disables the stage). The retired first program slot must be zero.
+ * Call after bedray_core_configure_path_trace, which clears the borrowed stage. Refused while a recording remains. */
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace_pt(
-    BedrayCore* core, uint64_t program_pt_spatial, uint64_t program_pt_spatial_scene, BedrayError* error);
+    BedrayCore* core, uint64_t retired_program, uint64_t program_pt_spatial_scene, BedrayError* error);
 
 /* One call for every output combination: guides and motion as for the _guides/_motion calls (motion needs guides),
  * stats_slot a borrowed range of the frame's whole 576-byte StatsBuf slot that the trace adds its reject split into.
