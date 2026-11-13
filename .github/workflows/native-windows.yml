@@ -7,6 +7,10 @@ on:
         description: Compile and probe the optional NVIDIA DLSS Neural Rendering ABI
         type: boolean
         default: false
+      onefile_runtime:
+        description: Build the native wrappers and NRD runtime for the Windows single-JAR distribution
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
   push:
@@ -36,7 +40,7 @@ jobs:
       - name: Build production wrappers and exercise actual entrypoints with SDK failures
         shell: pwsh
         env:
-          PROBE_DLSS_NR: ${{ inputs.dlss_neural_rendering }}
+          PROBE_DLSS_NR: ${{ inputs.dlss_neural_rendering || inputs.onefile_runtime }}
         run: |
           ./source/.github/scripts/vendor-resources-ci.ps1 -SourceRoot source -Headers deps/Vulkan-Headers/include -BuildRoot evidence/vendor -DependencyRoot deps/vendor -ProbeDlssNeuralRendering:($env:PROBE_DLSS_NR -eq 'true')
       - name: Install JDK for actual host FFM probes
@@ -47,10 +51,30 @@ jobs:
       - name: Exercise actual Java bindings against fault and production DLLs
         shell: pwsh
         env:
-          PROBE_DLSS_NR: ${{ inputs.dlss_neural_rendering }}
+          PROBE_DLSS_NR: ${{ inputs.dlss_neural_rendering || inputs.onefile_runtime }}
         run: |
           $partner = if ($env:PROBE_DLSS_NR -eq 'true') { 'evidence/vendor/partner/Release/vkb_dlss_nr_contract.dll' } else { '' }
           ./source/.github/scripts/dlss-ffm-ci.ps1 -SourceRoot source -RuntimeRoot evidence/vendor/runtime -DependencyRoot deps/java -EvidenceRoot evidence/vendor/ffm -PartnerWrapper $partner
+      - name: Checkout pinned NRD
+        if: inputs.onefile_runtime
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: NVIDIA-RTX/NRD
+          ref: 8f12a22fc90e6a3c7f5da4c9c3103633c842963a
+          path: deps/NRD
+          persist-credentials: false
+      - name: Build the Windows runtime inputs
+        if: inputs.onefile_runtime
+        shell: pwsh
+        run: ./source/.github/scripts/onefile-runtime-ci.ps1
+      - name: Publish Windows runtime inputs
+        if: inputs.onefile_runtime && success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: onefile-runtime-${{ github.sha }}
+          path: evidence/onefile/*
+          if-no-files-found: error
+          retention-days: 7
       - name: Publish resource test evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
