@@ -805,7 +805,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             break;
         }
 
-        if (!firstSurfaceAccepted && (options.flags & PATH_TRACE_OPTION_WORLD_MOTION) != 0u
+        // Free straight transmissions are still on the camera segment even after its first glass guide was accepted.
+        if (result.depth == 0u && (options.flags & PATH_TRACE_OPTION_WORLD_MOTION) != 0u
             && materialIsTranslucent(surface.material)) {
             float alpha = saturate(surface.material.alpha);
             result.primaryCoverage += (1.0 - result.primaryCoverage) * alpha;

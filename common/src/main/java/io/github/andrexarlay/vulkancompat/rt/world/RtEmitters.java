@@ -668,10 +668,11 @@ public final class RtEmitters {
             EmissiveTexelIndex.build(material, atlasW, atlasH));
     }
 
-    private static float[] extractQuads(float[] positions, float[] uvs, int[] colors, int[] light, int quads, int[] material,
+    static float[] extractQuads(float[] positions, float[] uvs, int[] colors, int[] light, int quads, int[] material,
                                         int atlasW, int atlasH, int solidQuads, EmissiveTexelIndex candidates) {
         float[] tmp = null;
         int[] levels = null;
+        float[] peaks = null;
         int n = 0;
         TexelEmission tex = new TexelEmission() {
             @Override
@@ -706,11 +707,14 @@ public final class RtEmitters {
             if (tmp == null) {
                 tmp = new float[quads * FLOATS];
                 levels = new int[quads];
+                peaks = new float[quads];
             }
             // cutout pass quads (torches, lanterns, campfires, fire) are open sources: they radiate to both sides
             float redstoneSignal = quadRedstoneSignal(colors, q * 4);
-            if (buildQuadRecord(tmp, n * FLOATS, positions, q * 12, uvs, uvOffset, tex, q >= solidQuads, redstoneSignal)) {
+            float peak = buildQuadRecordPeak(tmp, n * FLOATS, positions, q * 12, uvs, uvOffset, tex, q >= solidQuads, redstoneSignal);
+            if (peak > 0f) {
                 levels[n] = vertexBlockLightLevel(light, q * 4);
+                peaks[n] = peak;
                 n++;
             }
         }
@@ -718,7 +722,7 @@ public final class RtEmitters {
             return EMPTY;
         }
         if (light != null) {
-            normalizeOpenSourcePower(tmp, levels, n);
+            normalizeOpenSourcePower(tmp, levels, peaks, n);
         }
         return java.util.Arrays.copyOf(tmp, n * FLOATS);
     }
@@ -751,13 +755,15 @@ public final class RtEmitters {
     }
 
     /** Rescales the open (two-sided, non-redstone) records of every block cell to the power of the cell's light level. */
-    static void normalizeOpenSourcePower(float[] r, int[] levels, int n) {
+    static void normalizeOpenSourcePower(float[] r, int[] levels, float[] peaks, int n) {
         Map<Integer, float[]> cells = new HashMap<>();   // cell -> {power, level, quads}
         int[] cellOf = new int[n];
         for (int i = 0; i < n; i++) {
             int o = i * FLOATS;
             cellOf[i] = Integer.MIN_VALUE;
-            if (r[o + 11] != 1.0f || levels[i] < 0) {
+            // Weak authored emitters (fungi, roots, spores) have no vanilla source light level. Their vertex light
+            // comes from neighbours; retain their intrinsic area/mean/boost instead of calibrating it as a lamp.
+            if (r[o + 11] != 1.0f || levels[i] < 0 || peaks[i] < 1f) {
                 continue;
             }
             int cx = (int) Math.floor(r[o] + 0.5f * (r[o + 4] + r[o + 8]));
@@ -834,10 +840,10 @@ public final class RtEmitters {
      */
     public static boolean buildQuadRecord(float[] dst, int o, float[] positions, int po, float[] uvs, int uo, TexelEmission tex,
                                           boolean twoSidedSource) {
-        return buildQuadRecord(dst, o, positions, po, uvs, uo, tex, twoSidedSource, 1f);
+        return buildQuadRecordPeak(dst, o, positions, po, uvs, uo, tex, twoSidedSource, 1f) > 0f;
     }
 
-    private static boolean buildQuadRecord(float[] dst, int o, float[] positions, int po, float[] uvs, int uo, TexelEmission tex,
+    private static float buildQuadRecordPeak(float[] dst, int o, float[] positions, int po, float[] uvs, int uo, TexelEmission tex,
                                            boolean twoSidedSource, float redstoneSignal) {
         int w = tex.width();
         int h = tex.height();
@@ -871,7 +877,7 @@ public final class RtEmitters {
         float e2z = positions[po + 11] - pz;
         float areaFull = cross(e1x, e1y, e1z, e2x, e2y, e2z);
         if (areaFull < 1.0e-6f) {
-            return false;
+            return 0f;
         }
         // uv of p0 and of its two edges, to map a texel centre back to the quad coordinates (a along e1, b along e2):
         // uv = uv0 + A a + B b
@@ -931,7 +937,7 @@ public final class RtEmitters {
             }
         }
         if (emissive == 0 || sum / k <= MIN_EMISSION) {
-            return false;
+            return 0f;
         }
         if (!invertible) {
             aMin = 0f;
@@ -944,7 +950,7 @@ public final class RtEmitters {
         aMax = Math.min(1f, aMax);
         bMax = Math.min(1f, bMax);
         if (aMax <= aMin || bMax <= bMin) {
-            return false;
+            return 0f;
         }
         // mean emission and brightest texel inside the emitter rectangle
         float inSum = 0f;
@@ -959,7 +965,7 @@ public final class RtEmitters {
         }
         float mean = inCount > 0 ? inSum / inCount : 0f;
         if (mean <= MIN_EMISSION) {
-            return false;
+            return 0f;
         }
         float da = aMax - aMin;
         float db = bMax - bMin;
@@ -996,7 +1002,7 @@ public final class RtEmitters {
         dst[o + 21] = 1f;
         dst[o + 22] = 1f;
         dst[o + 23] = 1f;
-        return true;
+        return best;
     }
 
     /**
