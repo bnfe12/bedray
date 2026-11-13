@@ -473,5 +473,9 @@
   "bedray.addons.read_failed": "The add-on could not load its settings. See the log.",
   "bedray.addons.pending": "Add-ons with changes: %s",
   "bedray.addons.discard_title": "Discard add-on changes?",
-  "bedray.addons.discard_message": "Unsaved changes will be discarded."
+  "bedray.addons.discard_message": "Unsaved changes will be discarded.",
+  "bedray.natives.downloads": "Download DLLs",
+  "bedray.natives.downloads.tip": "Official DLL downloads and import instructions in your browser",
+  "bedray.natives.downloads.opened": "Download page opened. Drop the downloaded ZIP or DLL here, then restart.",
+  "bedray.natives.downloads.failed": "Open DLL downloads from the Bedray project page."
 }

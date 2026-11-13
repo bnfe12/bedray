@@ -546,5 +546,9 @@
   "bedray.addons.read_failed": "Аддон не смог загрузить настройки. Подробности в логе.",
   "bedray.addons.pending": "Аддонов с изменениями: %s",
   "bedray.addons.discard_title": "Отменить изменения аддонов?",
-  "bedray.addons.discard_message": "Несохранённые изменения будут отменены."
+  "bedray.addons.discard_message": "Несохранённые изменения будут отменены.",
+  "bedray.natives.downloads": "Скачать DLL",
+  "bedray.natives.downloads.tip": "Официальные загрузки DLL и инструкция установки в браузере",
+  "bedray.natives.downloads.opened": "Страница открыта. Перетащите скачанный ZIP или DLL сюда и перезапустите игру.",
+  "bedray.natives.downloads.failed": "Откройте раздел скачивания DLL на странице Bedray."
 }

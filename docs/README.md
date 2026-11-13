@@ -15,7 +15,8 @@ the published `0.1.0-alpha.1` uses the earlier renderer and has its own release 
 | Guide | What you will find |
 | :--- | :--- |
 | [Installation](INSTALL.md) | Requirements, loader setup, renderer core and optional libraries |
-| [Runtime library downloads](RUNTIME_LIBRARIES.md) | Official sources, compatible packages and local import |
+| [DLL download picker](DOWNLOADS.html) | Choose a feature and download its official files directly |
+| [Runtime library setup](RUNTIME_LIBRARIES.md) | Compatible packages and local import |
 | [User guide](USER_GUIDE.md) | First start, renderer modes and diagnostics |
 | [Settings reference](SETTINGS_REFERENCE.md) | Available controls and their trade-offs |
 | [GPU recommendations](GPU_GUIDE.md) | Starting points by GPU family and dated vendor advice |
