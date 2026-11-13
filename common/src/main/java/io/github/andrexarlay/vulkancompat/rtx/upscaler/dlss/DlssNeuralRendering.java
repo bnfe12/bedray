@@ -52,7 +52,7 @@ public final class DlssNeuralRendering implements AutoCloseable {
 
     /** SR has been accepted independently. A false result leaves the normal SR output available for presentation. */
     public boolean render(VulkanDevice host, DlssNrNative bridge, ImageRef color, ImageRef depth,
-                          ImageRef motion, ImageRef target, boolean reset) {
+                          ImageRef motion, ImageRef target, boolean reset, float jitterX, float jitterY) {
         if (disabled) return false;
         if (!validImages(color, depth, motion, target)) {
             return fail("frame_inputs", "expected sampled SDR RGBA8 color, reverse-Z depth, render-grid motion and writable RGBA8 destination");
@@ -69,7 +69,7 @@ public final class DlssNeuralRendering implements AutoCloseable {
         }
 
         try {
-            boolean recorded = recordings.record(host, cmd -> record(cmd, color, depth, motion, target, reset));
+            boolean recorded = recordings.record(host, cmd -> record(cmd, color, depth, motion, target, reset, jitterX, jitterY));
             if (!recorded) return false;
             acceptedThisFrame = true;
             if (!loggedSubmission) {
@@ -103,7 +103,7 @@ public final class DlssNeuralRendering implements AutoCloseable {
     }
 
     private boolean record(VkCommandBuffer command, ImageRef color, ImageRef depth, ImageRef motion,
-                           ImageRef target, boolean reset) {
+                           ImageRef target, boolean reset, float jitterX, float jitterY) {
         VkBarriers.fullMemoryBarrier(command);
         boolean create = feature.empty();
         if (create) {
@@ -120,9 +120,9 @@ public final class DlssNeuralRendering implements AutoCloseable {
         var destination = new DlssNative.Image(output.image, output.view, OUTPUT_FORMAT,
             output.width, output.height, VK_IMAGE_ASPECT_COLOR_BIT, true);
         var info = new DlssNrNative.EvalInfo(reset || create || !acceptedPreviousFrame,
-            input(color), destination, input(depth), input(motion), DlssNative.Image.NONE, 0.0f, 0.0f,
+            input(color), destination, input(depth), input(motion), DlssNative.Image.NONE, jitterX, jitterY,
             (float) color.width() / motion.width(), (float) color.height() / motion.height(),
-            1.0f, 1.0f, 1.0f, 1.0f, 0, false, true);
+            1.0f, 0.3f, 0.7f, 0.0f, 0, false, true);
         DlssNative.Status status = api.evaluate(command.address(), feature.handle(), info);
         if (!status.ok()) return fail("evaluate", status.toString());
 

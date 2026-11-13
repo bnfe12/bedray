@@ -92,6 +92,16 @@ h1 { margin-block: .55rem .95rem; font-size: clamp(2.5rem, 5vw, 4.4rem); line-he
 .docs-group a { display: block; padding-block: .42rem; }
 footer { margin-top: 2.5rem; padding-block: 1rem 1.75rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; }
 
+.guide { max-width: 85ch; margin: 1.5rem auto 3rem; overflow-wrap: anywhere; }
+.guide h1 { font-size: clamp(2rem, 4vw, 3rem); }
+.guide h2, .guide h3 { margin-block: 1.75rem .5rem; }
+.guide p, .guide ul, .guide ol, .guide pre, .guide table { margin-block: .75rem; }
+.guide pre, .guide table { display: block; max-width: 100%; overflow-x: auto; }
+.guide pre { padding: .85rem; background: var(--surface); border: 1px solid var(--line); }
+.guide code { font-family: var(--mono); font-size: .9em; }
+.guide table { border-collapse: collapse; }
+.guide td, .guide th { padding: .45rem .65rem; border: 1px solid var(--line); text-align: start; }
+
 @media (max-width: 48rem) {
   .hero { grid-template-columns: 1fr; }
   .intro { max-width: 48ch; }

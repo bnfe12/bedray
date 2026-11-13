@@ -58,12 +58,11 @@ libraries and local wrapper builds outside version control.
 2. Add `-Dbedray.dlss5=true` to the instance's JVM arguments. Select the raster
    renderer and DLSS Super Resolution or DLAA. Disable frame generation and
    Ray Reconstruction, then restart the game.
-3. In `logs/latest.log`, check the Neural Rendering stages for wrapper ABI,
-   NGX capability, feature creation and evaluation. Confirm successful
-   evaluation in a loaded world. A file match or a compiled wrapper establishes
-   only that the dependency is present. NGX can still report an unsupported
-   device, driver, or application. Keep the NGX result and failure stage when
-   reporting an issue.
+3. In `logs/latest.log`, find `[VKB-DLSS-NR] stage=preflight` and
+   `[DLSS-NR] stage=record accepted=true`. The second line reports a successful
+   SDK evaluation accepted for submission. On failure, keep the stage and
+   NGX result. `fallback=dlss_sr` means Bedray kept the original SR output.
+   NGX can still report an unsupported device, driver, or application.
 4. Compare a fixed scene with the option off and on. Check motion, a world
    reload, a resize and the HUD, and record GPU timing and VRAM use. A build or
    CPU test does not validate output on RTX hardware.
@@ -73,3 +72,4 @@ and uses scene motion and depth from the active rendering path. Remix restores
 HDR afterward for its downstream effects. The wrapper uses the official NGX
 capability and evaluation calls. [RTX Remix render pass](https://github.com/NVIDIAGameWorks/dxvk-remix/blob/remix-1.6.1/src/dxvk/rtx_render/rtx_dlss_neural_rendering.cpp)
 · [RTX Remix NGX wrapper](https://github.com/NVIDIAGameWorks/dxvk-remix/blob/remix-1.6.1/src/dxvk/rtx_render/rtx_ngx_wrapper.cpp)
+· [NVIDIA Vulkan raster example](https://github.com/nvpro-samples/vk_gltf_renderer/blob/aacfd2d/src/dlss.cpp#L461-L614)

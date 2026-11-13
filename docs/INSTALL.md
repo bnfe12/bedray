@@ -67,6 +67,8 @@ and `native/*/build.bat` (the scripts read the SDK locations from environment va
 
 * **DLSS:** `nvngx_dlss.dll` (Super Resolution), `nvngx_dlssd.dll` (Ray Reconstruction), `vkb_dlss.dll`. A restart is needed if the
   files appear after the game has started (the page says "restart required").
+* **DLSS 5 Neural Rendering:** The experimental Windows Vulkan path uses a locally built NR-capable wrapper and the signed NVIDIA
+  model. Follow the [DLSS 5 guide](experiments/dlss5.md) for file verification and launch settings.
 * **FSR:** the DLL must be the official build. The mod checks its SHA-256 against the known official file
   (`a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78` for `PrebuiltSignedDLL/amd_fidelityfx_vk.dll` of v1.1.4). Other builds
   are refused ("library missing" on the page). Bedray currently uses the FSR 3.1/2.x integration. AMD provides FSR 4 for Vulkan in the [FSR SDK](https://gpuopen.com/amd-fsr-sdk/).

@@ -137,6 +137,8 @@ from environment variables (`VKB_NGX_SDK`, `VKB_VK_HEADERS`, `VKB_NRD_SRC`, `VKB
 script prints what is missing. Vendor SDKs are downloaded from the vendor and are never committed. Built DLLs go into `<game folder>/bedray/natives/`
 (see [INSTALL.md](INSTALL.md)) and must not be committed.
 
+For the opt-in DLSS 5 Neural Rendering build, see the [RTX Remix SDK overlay instructions](experiments/dlss5.md#build-a-local-wrapper).
+
 ## 7. Optional deploy tasks
 
 `deployTestbed`, `deployFabricTestbed`, `deployUser`, `syncDlssNatives` copy the single Bedray jar (and for DLSS the two DLLs) into a test instance. They need `testbed_dir`,

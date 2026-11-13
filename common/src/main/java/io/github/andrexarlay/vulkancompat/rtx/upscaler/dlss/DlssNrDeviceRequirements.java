@@ -28,7 +28,7 @@ final class DlssNrDeviceRequirements {
             if (nr == null) return;
             DlssNative.NameList query = nr.requiredInstanceExtensions(library.featureDir(), DlssRuntime.gameLogDir());
             if (!query.status().ok()) {
-                LOGGER.warn("[VKB-DLSS-NR] stage=instance_request result={} ", LogPaths.show(query.status().toString()));
+                LOGGER.warn("[VKB-DLSS-NR] stage=instance_request result={}", LogPaths.show(query.status().toString()));
                 return;
             }
             registry.requestInstanceExtensions("VKB DLSS Neural Rendering instance", Set.copyOf(query.names()));

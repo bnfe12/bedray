@@ -5,6 +5,7 @@ Current state is `main` = unreleased `0.2.0-alpha` (Slang renderer, native core)
 ## Use it
 [INSTALL](INSTALL.md) | [INSTALL_NATIVES_WITH_AI](INSTALL_NATIVES_WITH_AI.md) | [USER_GUIDE](USER_GUIDE.md) | [SETTINGS_REFERENCE](SETTINGS_REFERENCE.md) |
 [UPSCALERS](UPSCALERS.md) | [FRAME_GENERATION](FRAME_GENERATION.md) | [TROUBLESHOOTING](TROUBLESHOOTING.md) | [FAQ](FAQ.md) | [KNOWN_ISSUES](KNOWN_ISSUES.md) |
+[DLSS 5 Neural Rendering](experiments/dlss5.md) |
 [GALLERY (legacy images)](GALLERY.md)
 
 ## Status and evidence
@@ -23,4 +24,5 @@ Current state is `main` = unreleased `0.2.0-alpha` (Slang renderer, native core)
 
 ## Contribute and release
 [BUILDING](BUILDING.md) | [TESTING](TESTING.md) | [BRANCH_LAYOUT](BRANCH_LAYOUT.md) | [DEVELOPMENT_BRANCHES](DEVELOPMENT_BRANCHES.md) | [RELEASE_CHECKLIST](RELEASE_CHECKLIST.md) |
+[ADDON_SETTINGS_API](ADDON_SETTINGS_API.md) |
 [../ROADMAP](../ROADMAP.md) | [../CHANGELOG](../CHANGELOG.md) | [../CONTRIBUTING](../CONTRIBUTING.md) | [../SECURITY](../SECURITY.md) | [../PRIVACY](../PRIVACY.md)

@@ -30,6 +30,7 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerLibraryLoader;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityPipeline;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssNeuralRendering;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.spatial.SpatialUpscaler;
@@ -575,7 +576,10 @@ public final class WorldTargetManager {
         if (xessOutput != null && xessOutput.width == w && xessOutput.height == h) {
             return;
         }
-        if (xessOutput != null) drainSpatialRecordings();
+        if (xessOutput != null) {
+            if (dlssNeural.ownsResources()) velocityRecordings.drain();
+            drainSpatialRecordings();
+        }
         storageUsageFormat = GpuFormat.RGBA8_UNORM;
         try {
             if (xessOutput == null) {
@@ -758,7 +762,8 @@ public final class WorldTargetManager {
                     VulkanConst.toVk(target.getFormat()), VK10.VK_IMAGE_ASPECT_COLOR_BIT, fullMain.width, fullMain.height)
                 : null;
             neuralPresented = dlssNeural.render(vulkanDevice, neural, readable ? srOutput : null,
-                rasterDepth, srMotion, destination, reset);
+                rasterDepth, srMotion, destination, reset,
+                srJitterX * DlssConfig.jitterSignX(), srJitterY * DlssConfig.jitterSignY());
         }
         if (!neuralPresented) copyXessOutputToMain(fullMain);
         boolean twoStageRr = colorResolved
