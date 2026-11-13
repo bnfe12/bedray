@@ -258,7 +258,7 @@ final class SettingsDraft {
         if (p.startsWith("compute_") || p.startsWith("debug_") || p.equals("rt_debug_view") || p.equals("ui_expert")) return Category.SYSTEM;
         if (p.contains("mode") && (p.startsWith("dlss") || p.startsWith("fsr") || p.startsWith("xess"))
             || p.startsWith("upscaler") || p.startsWith("frame_generation") || p.startsWith("fsr_")
-            || p.equals("quality_preset") || p.equals("custom_scale")) return Category.UPSCALING;
+            || p.equals("quality_preset") || p.equals("custom_scale") || p.equals("dlss_sr_preset")) return Category.UPSCALING;
         if (p.startsWith("atm_") || p.startsWith("water_") || p.startsWith("waving_") || p.startsWith("auto_normal")
             || p.startsWith("texture_") || p.equals("point_sampling_sharpness") || p.startsWith("rt_fog")) return Category.WORLD;
         return Category.LIGHTING;
@@ -285,7 +285,10 @@ final class SettingsDraft {
         }
         applied += stageUpscaler(values);
         for (var item : values.entrySet()) {
-            if (Set.of("renderer", "active_backend", "fsr_version").contains(item.getKey())) continue;
+            if (switch (item.getKey()) {
+                case "renderer", "active_backend", "fsr_version" -> true;
+                default -> false;
+            }) continue;
             if (PRESET_SKIPPED.contains(item.getKey()) || !known.containsKey(item.getKey())) continue;
             Entry e = entries.stream().filter(row -> !SESSION.contains(row.path()) && key(row.path()).equals(item.getKey())).findFirst().orElse(null);
             if (e == null) {

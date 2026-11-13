@@ -14,7 +14,6 @@ import org.lwjgl.vulkan.VK11;
 import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkFormatProperties2;
 import org.lwjgl.vulkan.VkFormatProperties3;
-import org.lwjgl.vulkan.VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -129,10 +128,11 @@ public final class FsrDeviceRequirements {
     }
 
     private static final String COMPUTE_DERIVATIVES = "VK_KHR_compute_shader_derivatives";
+    private static final String DERIVATIVES_STRUCT = "org.lwjgl.vulkan.VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR";
     private static final List<FeatureRequest> MODERN_FEATURES = List.of(
         FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageExtendedFormats"),
         FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageWriteWithoutFormat"),
-        FeatureRequest.of(VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR.class, "computeDerivativeGroupLinear"));
+        new FeatureRequest(DERIVATIVES_STRUCT, "computeDerivativeGroupLinear"));
 
     private static DeviceRequirement modernBase() {
         return new DeviceRequirement("VKB FSR SDK 2.4", Set.of(COMPUTE_DERIVATIVES), MODERN_FEATURES,
@@ -189,7 +189,7 @@ public final class FsrDeviceRequirements {
         register(registry, FsrConfig.requestedRequest() != null, UpscalerPreregistration.enabled(),
             modern.usable() ? modern : FsrLibrary.library());
         modernRegistered = modern.usable() && UpscalerPreregistration.isRegistered(UpscalerBackend.FSR);
-        if (modernRegistered) {
+        if (modernRegistered && featureStructPresent(DERIVATIVES_STRUCT)) {
             registry.register(modernBase());
             registerMl(registry);
         }
