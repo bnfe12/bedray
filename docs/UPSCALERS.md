@@ -9,6 +9,7 @@ resolution. Choose it under **Video Settings, Bedray ALPHA: Upscaling, Upscaler*
 | Bilinear (built-in) | nothing | any | simple stretch, no reconstruction | BETA |
 | FSR 1 (built-in) | nothing | any | spatial (one frame), AMD EASU + optional RCAS | EXPERIMENTAL |
 | NIS (built-in) | nothing | any | spatial, NVIDIA Image Scaling | EXPERIMENTAL |
+| FSR 4.1.2 (AMD) | signed AMD FSR SDK 2.4 Vulkan loader and upscaler | supported AMD Radeon GPU and Adrenalin 26.10.1+ | temporal ML | EXPERIMENTAL |
 | FSR 3.1 / 2.x (AMD) | official `amd_fidelityfx_vk.dll` | any Vulkan GPU in theory; only tested on NVIDIA | temporal | BETA |
 | XeSS (Intel) | `libxess.dll` | any in theory; only tested on NVIDIA | temporal | BETA |
 | DLSS Super Resolution (NVIDIA) | `nvngx_dlss.dll` + `vkb_dlss.dll` | NVIDIA RTX | temporal | BETA |
@@ -44,7 +45,7 @@ extensions that backend needs (for example the library appeared after the game s
 ## Notes
 
 * Texture detail: "Auto Texture LOD Bias" (Page 1) sharpens textures when the render scale is below 100%.
-* FSR version: Auto uses FSR 3.1. "FSR 2" is listed if the installed AMD library contains it. Bedray's Vulkan backend currently integrates FSR 3.1 and 2.x.
+* **FSR Version** lists providers available on the current device. **Auto** lets the AMD loader pick a compatible ML provider, including future driver updates. If unavailable or if setup fails, Bedray tries FSR 3.1 and FSR 2. An explicit version only tries its own family. F3 displays the active provider. See [installation](INSTALL.md#exact-file-lists).
 * A backend that is not usable is rejected with a log line, never silently replaced: look for `upscaler=rejected` in `latest.log`.
 * Frame generation is separate: [FRAME_GENERATION.md](FRAME_GENERATION.md). With it on, DLSS runs through Streamline plugins (see that page).
 * [DLSS 5 Neural Rendering](experiments/dlss5.md) is an opt-in pass after direct DLSS Super Resolution or DLAA in the raster renderer.

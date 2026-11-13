@@ -1325,7 +1325,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             case NOT_IMPLEMENTED -> "Not implemented yet. Selecting it has no effect: Bilinear stays active.";
             case LIBRARY_MISSING -> switch (backend) {
                 case DLSS -> "nvngx_dlss.dll and vkb_dlss.dll are not both installed (see docs/INSTALL.md). Selecting it has no effect: Bilinear stays active.";
-                case FSR -> "The official AMD amd_fidelityfx_vk.dll (FidelityFX SDK v1.1.4, PrebuiltSignedDLL) is not installed (see docs/INSTALL.md), or the file is not an official build. Selecting it has no effect: Bilinear stays active.";
+                case FSR -> "Install the signed Vulkan files from AMD FSR SDK 2.4 or FidelityFX SDK 1.1.4, then restart. See the runtime library guide.";
                 default -> "libxess.dll is not found in bedray/natives. Selecting it has no effect: Bilinear stays active.";
             };
             case UNSUPPORTED_GPU -> "DLSS needs an NVIDIA RTX GPU with a current driver. Selecting it has no effect: Bilinear stays active.";

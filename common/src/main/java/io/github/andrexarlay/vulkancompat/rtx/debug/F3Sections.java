@@ -296,7 +296,7 @@ public final class F3Sections {
             case DLSS -> runtimeState(b, req.toString(), DlssRuntime.state(), DlssRuntime.lastFailure());
             case XESS -> runtimeState(b, req.toString(), XessRuntime.state(), XessRuntime.lastFailure());
             case FSR -> {
-                runtimeState(b, req.toString(), FsrRuntime.state(), null);
+                runtimeState(b, req.toString(), FsrRuntime.state(), FsrRuntime.failureReason());
                 if (FsrRuntime.isActive()) {
                     b.append(OFF).append(' ').append(FsrRuntime.activeProvider()).append(R);
                 }

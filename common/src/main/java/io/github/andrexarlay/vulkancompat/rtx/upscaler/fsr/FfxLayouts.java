@@ -46,16 +46,26 @@ public final class FfxLayouts {
         ADDRESS.withName("resource"), RESOURCE_DESCRIPTION.withName("description"), JAVA_INT.withName("state"),
         MemoryLayout.paddingLayout(4));
 
+    // VkDeviceContext is also passed by pointer in the SDK 2.4 provider query.
+    public static final StructLayout VK_DEVICE_CONTEXT = MemoryLayout.structLayout(
+        ADDRESS.withName("vkDevice"), ADDRESS.withName("vkPhysicalDevice"), ADDRESS.withName("vkDeviceProcAddr"));
+
+    // SDK 2.4 nests VkDeviceContext; these offsets also preserve the legacy FG binding.
     public static final StructLayout CREATE_BACKEND_VK = MemoryLayout.structLayout(
         HEADER.withName("header"), JAVA_LONG.withName("vkDevice"), JAVA_LONG.withName("vkPhysicalDevice"),
         ADDRESS.withName("vkDeviceProcAddr"));
-
     public static final StructLayout CREATE_UPSCALE = MemoryLayout.structLayout(
         HEADER.withName("header"), JAVA_INT.withName("flags"), DIMENSIONS_2D.withName("maxRenderSize"),
         DIMENSIONS_2D.withName("maxUpscaleSize"), MemoryLayout.paddingLayout(4), ADDRESS.withName("fpMessage"));
 
     public static final StructLayout OVERRIDE_VERSION = MemoryLayout.structLayout(
         HEADER.withName("header"), JAVA_LONG.withName("versionId"));
+
+    public static final StructLayout UPSCALE_API_VERSION = MemoryLayout.structLayout(
+        HEADER.withName("header"), JAVA_INT.withName("version"), MemoryLayout.paddingLayout(4));
+
+    public static final StructLayout QUERY_RESOURCE_REQUIREMENTS = MemoryLayout.structLayout(
+        HEADER.withName("header"), JAVA_LONG.withName("requiredResources"), JAVA_LONG.withName("optionalResources"));
 
     public static final StructLayout QUERY_GET_VERSIONS = MemoryLayout.structLayout(
         HEADER.withName("header"), JAVA_LONG.withName("createDescType"), ADDRESS.withName("device"),
@@ -118,10 +128,13 @@ public final class FfxLayouts {
         expect(RESOURCE_DESCRIPTION.byteSize(), 32, "sizeof(FfxApiResourceDescription)");
         expect(RESOURCE.byteSize(), 48, "sizeof(FfxApiResource)");
         expect(offset(RESOURCE, "state"), 40, "FfxApiResource.state");
+        expect(VK_DEVICE_CONTEXT.byteSize(), 24, "sizeof(VkDeviceContext)");
         expect(CREATE_BACKEND_VK.byteSize(), 40, "sizeof(ffxCreateBackendVKDesc)");
         expect(offset(CREATE_UPSCALE, "fpMessage"), 40, "ffxCreateContextDescUpscale.fpMessage");
         expect(CREATE_UPSCALE.byteSize(), 48, "sizeof(ffxCreateContextDescUpscale)");
         expect(OVERRIDE_VERSION.byteSize(), 24, "sizeof(ffxOverrideVersion)");
+        expect(UPSCALE_API_VERSION.byteSize(), 24, "sizeof(ffxCreateContextDescUpscaleVersion)");
+        expect(QUERY_RESOURCE_REQUIREMENTS.byteSize(), 32, "sizeof(ffxQueryDescUpscaleGetResourceRequirements)");
         expect(QUERY_GET_VERSIONS.byteSize(), 56, "sizeof(ffxQueryDescGetVersions)");
         expect(QUERY_PROVIDER_VERSION.byteSize(), 32, "sizeof(ffxQueryGetProviderVersion)");
         expect(offset(QUERY_RENDER_RESOLUTION, "pOutRenderWidth"), 32, "GetRenderResolution.pOutRenderWidth");

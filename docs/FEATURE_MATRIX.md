@@ -97,7 +97,7 @@ other upscalers, or noise levels) has not been evaluated.
 | NVIDIA Reflex | BETA | L4 (developer run) | same | Streamline files |
 | DLSS SR / Ray Reconstruction through Streamline plugins (when frame generation is on) | BETA | L3 | code path in `vkb_sl.dll`; reported working by the developer | Streamline plugins, self-built `vkb_sl.dll` |
 | AMD FSR frame generation | NOT_IMPLEMENTED | L0 | design notes only | |
-| FSR 4 | NOT_IMPLEMENTED | [AMD FSR SDK](https://gpuopen.com/amd-fsr-sdk/) | available in the vendor Vulkan SDK, pending Bedray integration | |
+| FSR 4.1.2 upscaling | EXPERIMENTAL | [AMD FSR SDK 2.4](https://gpuopen.com/amd-fsr-sdk/) | Vulkan provider selection and analytical fallback | ML gameplay verification requires a supported AMD Radeon GPU |
 | DLSS 5 Neural Rendering | EXPERIMENTAL | L2 | Direct Vulkan NGX path after raster DLSS SR or DLAA. RTX evaluation pending. | [RTX Remix SDK overlay and signed model](experiments/dlss5.md), `-Dbedray.dlss5=true`, frame generation off |
 
 ## Ray tracing

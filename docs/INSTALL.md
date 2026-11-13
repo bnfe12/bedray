@@ -54,6 +54,7 @@ never DLLs from forums, file-sharing sites or other games' folders.
 |---|---|---|---|
 | DLSS Super Resolution | `nvngx_dlss.dll` + `vkb_dlss.dll` | `bedray/natives/` | NVIDIA DLSS SDK: https://github.com/NVIDIA/DLSS |
 | DLSS Ray Reconstruction | additionally `nvngx_dlssd.dll` | `bedray/natives/` | same |
+| FSR Upscaling 4.1.2 | AMD FSR SDK **2.4.0** Vulkan loader and upscaler DLLs | Import both DLLs into `bedray/natives/` or use a Windows single-JAR build that includes them | [AMD FSR SDK](https://gpuopen.com/amd-fsr-sdk/) |
 | FSR 3.1 / 2.x | `amd_fidelityfx_vk.dll` (signed Vulkan DLL of FidelityFX SDK **v1.1.4**) | Included in release jar and extracted to `bedray/natives/` | https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4 |
 | XeSS | `libxess.dll` (XeSS SDK **3.0.2**) | Included in release jar and extracted to `bedray/natives/` | https://github.com/intel/xess/releases |
 | NRD denoiser (path tracing) | `NRD.dll` + `vkb_nrd.dll` | `bedray/natives/` | NRD sources: https://github.com/NVIDIA-RTX/NRD (you build `NRD.dll`) |
@@ -75,9 +76,12 @@ for the public release policy.
   files appear after the game has started (the page says "restart required").
 * **DLSS 5 Neural Rendering:** The experimental Windows Vulkan path uses a locally built NR-capable wrapper and the signed NVIDIA
   model. Follow the [DLSS 5 guide](experiments/dlss5.md) for file verification and launch settings.
-* **FSR:** the DLL must be the official build. The mod checks its SHA-256 against the known official file
-  (`a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78` for `PrebuiltSignedDLL/amd_fidelityfx_vk.dll` of v1.1.4). Other builds
-  are refused ("library missing" on the page). Bedray currently uses the FSR 3.1/2.x integration. AMD provides FSR 4 for Vulkan in the [FSR SDK](https://gpuopen.com/amd-fsr-sdk/).
+* **FSR 4:** import `amd_fidelityfx_loader_vk.dll` and `amd_fidelityfx_upscaler_vk.dll` from `Kits/FidelityFX/signedbin/` in AMD FSR SDK 2.4.0.
+  Bedray checks both hashes before loading the pair. Restart the game and select **FSR (AMD)** and **Auto** under **FSR Version**.
+  The ML provider requires a supported AMD Radeon GPU and Adrenalin 26.10.1 or later. Other Vulkan GPUs can use the analytical providers.
+  Check the active provider in F3 or search the game log for `fsr=context_created`.
+* **FSR 3.1 / 2.x:** SDK 2.4 supplies FSR 3.1.6 and 2.3.4. The signed `PrebuiltSignedDLL/amd_fidelityfx_vk.dll` from SDK 1.1.4 is also supported
+  for upscaling and is used by Bedray's existing AMD frame generation integration.
 * **XeSS:** `libxess.dll` only. Release jars include the approved SDK 3.0.2 binary and notices.
 * **Frame generation:** `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.reflex.dll`, `sl.pcl.dll`, `nvngx_dlssg.dll` (from the
   Streamline release; use a 2.14.x release, the mod was developed against 2.14.1) and `vkb_sl.dll`.

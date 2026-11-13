@@ -4,18 +4,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
-/**
- * The FSR upscaler version the user wants. The ffx-api picks a provider per create call; {@code ffxOverrideVersion} with an
- * id from {@code ffxQueryDescGetVersions} forces one (ffx_api.h l.85-101, ffx_api.cpp GetVersionOverride). The Vulkan DLL of
- * FidelityFX SDK v1.1.4 contains two upscaler providers (ffx_provider.cpp l.43-53: FSR3Upscale first, then FSR2), whose
- * names are their version strings ("3.1.x", "2.x.y"). FSR 4 is not offered: on Vulkan the ffx-api has no driver-side
- * (external) providers (backends.cpp GetDevice returns nullptr for the VK backend, and GetExternalProviders only queries
- * the AMD D3D12 driver extension), and AMD's FSR 4 is published only as a DX12 upscaler DLL.
- * <p>
- * {@link #AUTO}: no override, the API default (the newest internal provider, FSR 3.1.x for v1.1.4).
- */
+/** Provider family selected from AMD's Vulkan version query. AUTO uses the best eligible family. */
 public enum FsrVersion {
     AUTO("Auto", null),
+    FSR_4("FSR 4", "4."),
     FSR_3_1("FSR 3.1", "3.1."),
     FSR_2("FSR 2", "2.");
 
@@ -33,7 +25,10 @@ public enum FsrVersion {
 
     /** True when the provider version name reported by the DLL belongs to this choice (AUTO matches nothing explicitly). */
     public boolean matches(String providerName) {
-        return namePrefix != null && providerName != null && providerName.startsWith(namePrefix);
+        if (namePrefix == null || providerName == null) return false;
+        String version = providerName.strip().replaceFirst(
+            "(?i)^(?:AMD\\s+)?(?:FSR(?:\\s+Upscaling)?|(?:FidelityFX\\s+)?Super Resolution)\\s*", "");
+        return version.startsWith(namePrefix);
     }
 
     /** Provider of {@code available} for this choice; empty for AUTO (no override) or when the DLL does not have it. */
@@ -49,14 +44,15 @@ public enum FsrVersion {
         return this == AUTO || pick(available).isPresent();
     }
 
-    /** {@code auto}, {@code 3.1}, {@code 2}, or the enum name. */
+    /** Accepts the persisted enum name and the human-readable version. */
     public static FsrVersion parse(String raw) {
         String v = raw.trim().toUpperCase(Locale.ROOT);
         return switch (v) {
             case "AUTO", "" -> AUTO;
+            case "4", "4.1", "FSR4", "FSR_4", "FSR4.1" -> FSR_4;
             case "3.1", "3", "FSR3", "FSR_3_1", "FSR3.1" -> FSR_3_1;
             case "2", "FSR2", "FSR_2" -> FSR_2;
-            default -> throw new IllegalArgumentException("unknown FSR version '" + raw + "' (auto, 3.1, 2)");
+            default -> throw new IllegalArgumentException("unknown FSR version '" + raw + "' (auto, 4, 3.1, 2)");
         };
     }
 }

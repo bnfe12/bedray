@@ -15,7 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.Optional;
+import java.util.Set;
 
 /**
  * Lifecycle of the AMD FidelityFX (ffx-api, Vulkan backend) upscaler context. Same state machine as XessRuntime / DlssRuntime
@@ -33,12 +33,12 @@ public final class FsrRuntime {
 
     private static State state = State.IDLE;
     private static FfxNative nativeLib;
-    private static List<FfxNative.ProviderVersion> versions = List.of();
     private static FfxNative.Context context;
     private static VulkanDevice contextDevice;
     private static FsrRequest activeRequest;
     private static FfxNative.Size activeInput;
     private static String activeProvider;
+    private static String failureReason;
     private static int activeFlags;
     private static int outputWidth;
     private static int outputHeight;
@@ -111,31 +111,14 @@ public final class FsrRuntime {
         return activeInput == null || activeInput.width() <= 0 ? 1.0 : (double) outputWidth / activeInput.width();
     }
 
-    /**
-     * Upscaler providers of the official DLL (loads it on first use; for the settings page). Empty list when the library is
-     * not usable or the query failed (logged).
-     */
+    public static synchronized String failureReason() {
+        return failureReason;
+    }
+
+    /** Inspect providers without replacing the library that owns a live or retiring context. */
     public static synchronized List<FfxNative.ProviderVersion> availableVersions() {
-        if (nativeLib == null) {
-            FsrLibrary.Library lib = FsrLibrary.library();
-            if (!lib.usable()) {
-                return List.of();
-            }
-            try {
-                nativeLib = FfxNative.load(lib.dll());
-            } catch (FsrException e) {
-                LOGGER.error("[VKB-FSR] fsr=FAILED stage=load result={}\n{}", LogPaths.show(e.getMessage()), LogPaths.stack(e));
-                return List.of();
-            }
-        }
-        if (versions.isEmpty()) {
-            FfxNative.QueryResult<List<FfxNative.ProviderVersion>> q = nativeLib.upscalerVersions();
-            LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=versions result={} available={}", q.result(), q.value());
-            if (q.result() == FfxNative.RETURN_OK) {
-                versions = q.value();
-            }
-        }
-        return versions;
+        VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
+        return device == null ? List.of() : FsrProviders.available(device);
     }
 
     public static synchronized void onFrameBegin(int winW, int winH) {
@@ -219,13 +202,8 @@ public final class FsrRuntime {
         if (context != null || retiredContext != null)
             throw new IllegalStateException("provider=fsr stage=create retained_context=true");
         DeviceInfo info = device.getDeviceInfo();
-        FsrLibrary.Library lib = FsrLibrary.library();
-        LOGGER.info("[VKB-FSR] FSR requested: request={} gpu='{}' vendor='{}' driver='{}' dll={}",
-            request, info.name(), info.vendorName(), info.driverInfo(), io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(lib.dll()));
-        if (!lib.usable()) {
-            fail("library", lib.reason());
-            return;
-        }
+        LOGGER.info("[VKB-FSR] request={} gpu='{}' vendor='{}' driver='{}'",
+            request, info.name(), info.vendorName(), info.driverInfo());
         if (!UpscalerPreregistration.isRegistered(UpscalerBackend.FSR)) {
             // The FSR VK backend picks shader permutations from what the GPU supports (FP16, storage image formats);
             // without our FeatureSets the device may lack features those shaders use. Refused, not risked.
@@ -234,7 +212,7 @@ public final class FsrRuntime {
         }
         // ffxCreateContext calls vkGetBufferMemoryRequirements2KHR through vkGetDeviceProcAddr (NULL without the extension
         // enabled on the device: access violation at pc=0). Refuse instead of crashing (FsrDeviceRequirements).
-        java.util.Set<String> underlying = info.underlyingExtensions();
+        Set<String> underlying = info.underlyingExtensions();
         List<String> missing = new java.util.ArrayList<>();
         for (String ext : FsrDeviceRequirements.BASE_EXTENSIONS) {
             if (!underlying.contains(ext + " (D)")) {
@@ -246,26 +224,50 @@ public final class FsrRuntime {
             fail("required_device_ext", "missing=" + missing + " (the optional FeatureSet '" + FsrDeviceRequirements.ID + "' was not enabled)");
             return;
         }
-        List<FfxNative.ProviderVersion> available = availableVersions();
-        if (nativeLib == null || available.isEmpty()) {
-            fail("versions", "no upscaler provider reported by " + LogPaths.show(lib.dll()));
-            return;
+        FfxNative.VulkanHandles handles = FsrProviders.handles(device);
+        if (handles.getDeviceProcAddr() == 0L) {
+            throw new FsrException("device", "vkGetDeviceProcAddr is unavailable", null);
         }
-        Optional<FfxNative.ProviderVersion> picked = request.version().pick(available);
-        if (request.version() != FsrVersion.AUTO && picked.isEmpty()) {
-            fail("version", "not_in_dll requested=" + request.version() + " available=" + available);
-            return;
+        var candidates = FsrProviders.candidates(device, request.version());
+        if (candidates.isEmpty()) {
+            throw new FsrException("version", "requested=" + request.version()
+                + " available=" + FsrProviders.available(device), null);
         }
-        long overrideId = picked.map(FfxNative.ProviderVersion::id).orElse(0L);
+        FsrException lastFailure = null;
+        for (var candidate : candidates) {
+            try {
+                createWithProvider(request, device, handles, candidate, winW, winH);
+                return;
+            } catch (FsrException failure) {
+                lastFailure = failure;
+                LOGGER.warn("[VKB-FSR] candidate_failed provider={} dll={} stage={} reason={}",
+                    candidate, candidate.library().libraryPath().getFileName(), failure.stage(), LogPaths.show(failure.getMessage()));
+                // Setup may already own a context. No fallback while that context is retained.
+                context = releaseContext(context, "rejected_provider");
+            }
+        }
+        throw lastFailure;
+    }
+
+    private static void createWithProvider(FsrRequest request, VulkanDevice device, FfxNative.VulkanHandles handles,
+                                           FsrProviders.Candidate candidate, int winW, int winH) {
+        FfxNative selected = candidate.library();
+        long overrideId = candidate.versionId();
+        if (candidate.allowMl()) {
+            var required = selected.requiredInputs(overrideId, handles);
+            if (required.result() != FfxNative.RETURN_OK || (required.value() & ~FfxNative.PROVIDED_INPUTS) != 0) {
+                throw new FsrException("resource_requirements", "sdk_return=" + required.result()
+                    + " required=0x" + Long.toHexString(required.value()), null);
+            }
+        }
         int quality = request.quality().nativeValue();
 
-        FfxNative.QueryResult<FfxNative.Size> rr = nativeLib.renderResolution(winW, winH, quality, overrideId);
-        FfxNative.QueryResult<Float> ratio = nativeLib.upscaleRatio(quality, overrideId);
+        FfxNative.QueryResult<FfxNative.Size> rr = selected.renderResolution(winW, winH, quality, overrideId, handles);
+        FfxNative.QueryResult<Float> ratio = selected.upscaleRatio(quality, overrideId, handles);
         LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=query render_resolution result={} mode={} display={}x{} render={} ratio_result={} ratio={} table_ratio={}",
             rr.result(), request.quality(), winW, winH, rr.value(), ratio.result(), ratio.value(), request.quality().ratio());
         if (rr.result() != FfxNative.RETURN_OK || rr.value().width() <= 0 || rr.value().height() <= 0) {
-            fail("query_render_resolution", String.valueOf(rr.result()));
-            return;
+            throw new FsrException("query_render_resolution", "sdk_return=" + rr.result() + " render=" + rr.value(), null);
         }
         if (ratio.result() == FfxNative.RETURN_OK && Math.abs(ratio.value() - request.quality().ratio()) > 1e-3) {
             // The UI table comes from the SDK header; a different DLL answer is reported (the DLL answer is what is used).
@@ -276,6 +278,14 @@ public final class FsrRuntime {
             // Custom render scale: the context is created with maxRenderSize = the custom size and every dispatch uses it
             // (ffx_upscale.h: renderSize per dispatch may be anything up to maxRenderSize). The mode query above is only logged.
             int[] s = UpscalerReconfigure.customSize(winW, winH, pendingCustom, null, null);
+            if (candidate.allowMl()) {
+                var minimum = selected.renderResolution(winW, winH, FsrQuality.ULTRA_PERFORMANCE.nativeValue(), overrideId, handles);
+                if (minimum.result() != FfxNative.RETURN_OK || minimum.value().width() <= 0 || minimum.value().height() <= 0) {
+                    throw new FsrException("custom_scale_limits", "sdk_return=" + minimum.result(), null);
+                }
+                s[0] = Math.max(s[0], minimum.value().width());
+                s[1] = Math.max(s[1], minimum.value().height());
+            }
             render = new FfxNative.Size(s[0], s[1]);
             LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=custom_render percent={} output={}x{} render={}", pendingCustom, winW, winH, render);
         }
@@ -288,29 +298,25 @@ public final class FsrRuntime {
         if (FsrConfig.debugChecking()) {
             flags |= FfxNative.CREATE_DEBUG_CHECKING;
         }
-        long gdpa = device.vkDevice().getCapabilities().vkGetDeviceProcAddr;
-        if (gdpa == 0L) {
-            fail("create_context", "vkGetDeviceProcAddr address is 0");
-            return;
-        }
         long t0 = System.nanoTime();
-        FfxNative.ContextResult created = nativeLib.createUpscaleContext(flags, render.width(), render.height(), winW, winH,
-            device.vkDevice().address(), device.vkDevice().getPhysicalDevice().address(), gdpa, overrideId);
+        FfxNative.ContextResult created = selected.createUpscaleContext(flags, render.width(), render.height(), winW, winH,
+            handles, overrideId);
         long ms = (System.nanoTime() - t0) / 1_000_000L;
-        if (created.result() != FfxNative.RETURN_OK || created.context().handle() == 0L) {
-            fail("create_context", String.valueOf(created.result()));
-            return;
-        }
         context = created.context();
+        nativeLib = selected;
         contextDevice = device;
-        FfxNative.QueryResult<FfxNative.ProviderVersion> pv = nativeLib.providerVersion(context);
-        activeProvider = pv.result() == FfxNative.RETURN_OK ? pv.value().name() : "unknown(result=" + pv.result() + ")";
-        LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=context_created result=0 provider={} requested_version={} override=0x{} flags=0x{} max_render={} output={}x{} camera={} ms={}",
-            activeProvider, request.version(), Long.toHexString(overrideId), Integer.toHexString(flags), render, winW, winH, cam, ms);
-        if (picked.isPresent() && !picked.get().name().equals(activeProvider)) {
-            fail("provider_mismatch", "requested " + picked.get() + " got " + activeProvider);
-            return;
+        if (created.result() != FfxNative.RETURN_OK || context == null) {
+            throw new FsrException("create_context", "sdk_return=" + created.result() + " has_context=" + (context != null), null);
         }
+        var provider = selected.providerVersion(context);
+        if (provider.result() != FfxNative.RETURN_OK || !candidate.accepts(provider.value())) {
+            throw new FsrException("provider_mismatch", "expected=" + candidate + " actual=" + provider, null);
+        }
+        activeProvider = provider.value().name();
+        LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=context_created result=0 provider={} requested_version={} dll={} override=0x{} flags=0x{} max_render={} output={}x{} camera={} ms={}",
+            activeProvider, request.version(), selected.libraryPath().getFileName(), Long.toHexString(overrideId),
+            Integer.toHexString(flags), render, winW, winH, cam, ms);
+        failureReason = null;
         activeRequest = request;
         activeCustom = pendingCustom;
         activeInput = render;
@@ -337,6 +343,7 @@ public final class FsrRuntime {
         LOGGER.error("[VKB-FSR] [VKB-AUTOTEST] provider=fsr stage=execute frame={} context=0x{} output={}x{} retained={} result={}",
             frameCounter, context == null ? "0" : Long.toHexString(context.handle()), outputWidth, outputHeight, context != null, result);
         pendingDestroy = true;
+        failureReason = "execute: " + result;
         activeRequest = null;
         activeInput = null;
         state = State.FAILED;
@@ -348,6 +355,7 @@ public final class FsrRuntime {
     }
 
     private static void fail(String stage, String result) {
+        failureReason = stage + ": " + result;
         LOGGER.error("[VKB-FSR] [VKB-AUTOTEST] fsr=FAILED stage={} result={}", stage, result);
         activeRequest = null;
         activeInput = null;
@@ -400,6 +408,9 @@ public final class FsrRuntime {
         destroyRetired();
         context = releaseContext(context, "cleanup");
         contextDevice = null;
+        nativeLib = null;
+        activeProvider = null;
+        failureReason = null;
         pendingDestroy = false;
         activeRequest = null;
         activeInput = null;

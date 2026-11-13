@@ -15,6 +15,7 @@ Check the release contents before downloading another copy.
 
 | Feature | Official download | What Bedray needs |
 | :--- | :--- | :--- |
+| **FSR Upscaling 4.1.2** | [AMD FSR SDK 2.4.0](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v2.4.0) · [AMD GPUOpen](https://gpuopen.com/amd-fsr-sdk/) | Both signed Vulkan DLLs from `Kits/FidelityFX/signedbin/`: `amd_fidelityfx_loader_vk.dll` and `amd_fidelityfx_upscaler_vk.dll`. |
 | **FSR 3.1 / 2.x** | [FidelityFX SDK 1.1.4](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4) · [Windows archive](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip) | The unmodified `PrebuiltSignedDLL/amd_fidelityfx_vk.dll`; reviewed release builds can include it. |
 | **XeSS** | [XeSS SDK 3.0.2](https://github.com/intel/xess/releases/tag/v3.0.2) · [Windows archive](https://github.com/intel/xess/releases/download/v3.0.2/XeSS_SDK_3.0.2.zip) | `bin/libxess.dll`; reviewed release builds can include it. |
 | **DLSS Super Resolution / Ray Reconstruction** | [DLSS SDK 310.9.16](https://github.com/NVIDIA/DLSS/tree/9981c6350dc58c0ce21f024fd65e31e851c31689) · [Release DLL folder](https://github.com/NVIDIA/DLSS/tree/9981c6350dc58c0ce21f024fd65e31e851c31689/lib/Windows_x86_64/rel) | `nvngx_dlss.dll`, optionally `nvngx_dlssd.dll`, and a matching Bedray `vkb_dlss.dll` build. |

@@ -14,7 +14,7 @@ import java.nio.file.Path;
  * <li>{@code -Dvkrtx.fsr=<mode>}: NATIVE_AA, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE ({@link FsrQuality});
  *     without it the read-only early parse of {@code config/bedray.toml} ({@code active_backend=FSR}, {@code fsr_mode},
  *     {@code fsr_version}) is used.</li>
- * <li>{@code -Dvkrtx.fsr.version=auto|3.1|2}: provider version ({@link FsrVersion}).</li>
+ * <li>{@code -Dvkrtx.fsr.version=auto|4|3.1|2}: provider version ({@link FsrVersion}).</li>
  * <li>{@code -Dvkrtx.fsr.sharpness=0..1}: RCAS sharpness override (otherwise the config value).</li>
  * <li>{@code -Dvkrtx.fsr.jitterSignX/Y=1|-1}: sign of the pixel jitter handed to FSR (verifier tunes on a static scene).</li>
  * <li>{@code -Dvkrtx.fsr.debugChecking=true}: FFX_UPSCALE_ENABLE_DEBUG_CHECKING (the runtime reports API misuse through the

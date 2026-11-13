@@ -249,7 +249,7 @@ public final class VulkanRtxConfig {
     public static UpscalerMode dlssMode = UpscalerModes.defaultMode(UpscalerBackend.DLSS);
     /** FSR quality mode (persisted as {@code fsr_mode}); must be a member of {@code UpscalerModes.modesFor(FSR)}. */
     public static UpscalerMode fsrMode = UpscalerModes.defaultMode(UpscalerBackend.FSR);
-    /** FSR provider version (persisted as {@code fsr_version}): AUTO, FSR_3_1 or FSR_2 (only those present in the DLL apply). */
+    /** FSR provider version (persisted as {@code fsr_version}): AUTO, FSR_4, FSR_3_1 or FSR_2. */
     public static FsrVersion fsrVersion = FsrVersion.AUTO;
     /** FSR RCAS sharpness 0..1 (persisted as {@code fsr_sharpness}); 0 disables the sharpening pass. Per dispatch, no re-init. */
     public static float fsrSharpness = 0.0f;
@@ -809,7 +809,7 @@ public final class VulkanRtxConfig {
             writer.write("# Bedray configuration\n\n");
             writer.write("[super_resolution]\n");
             writer.write("# BILINEAR, FSR1, NIS (built-in, any GPU), XESS (needs libxess.dll), DLSS (needs nvngx_dlss.dll + vkb_dlss.dll (see docs/INSTALL.md) and an NVIDIA RTX GPU)\n");
-            writer.write("# or FSR (needs the official AMD amd_fidelityfx_vk.dll of FidelityFX SDK v1.1.4 (see docs/INSTALL.md)).\n");
+            writer.write("# or FSR (needs the official AMD Vulkan DLLs from FSR SDK 2.4 or FidelityFX SDK v1.1.4 (see docs/INSTALL.md)).\n");
             writer.write("# XESS/DLSS/FSR switch live in the settings page; only when their Vulkan device requirements were not registered at startup (library missing then, or -Dvkrtx.upscaler.preregister=false) the choice applies after a restart.\n");
             writer.write("active_backend = \"" + activeBackend.name() + "\"\n");
             writer.write("# XeSS mode: ULTRA_QUALITY_PLUS, ULTRA_QUALITY, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE\n");
@@ -818,7 +818,7 @@ public final class VulkanRtxConfig {
             writer.write("dlss_mode = \"" + dlssMode.name() + "\"\n");
             writer.write("# FSR mode: NATIVE_AA, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE (the render size is asked from the FidelityFX DLL)\n");
             writer.write("fsr_mode = \"" + fsrMode.name() + "\"\n");
-            writer.write("# FSR version: AUTO (newest provider in the DLL), FSR_3_1 or FSR_2. FSR 4 has no Vulkan build from AMD.\n");
+            writer.write("# FSR version: AUTO, FSR_4, FSR_3_1 or FSR_2. FSR_4 requires the AMD FSR SDK 2.4 Vulkan DLLs and a compatible AMD GPU.\n");
             writer.write("fsr_version = \"" + fsrVersion.name() + "\"\n");
             writer.write("# FSR RCAS sharpening 0.0 (off) .. 1.0\n");
             writer.write("fsr_sharpness = " + fsrSharpness + "\n");

@@ -17,6 +17,12 @@ STREAMLINE = (
     "sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "sl.dlss_d.dll", "sl.dlss_g.dll",
     "sl.reflex.dll", "sl.pcl.dll", "nvngx_dlss.dll", "nvngx_dlssd.dll", "nvngx_dlssg.dll", "NvLowLatencyVk.dll",
 )
+FSR24_DLLS = {
+    "amd_fidelityfx_loader_vk.dll": "38a56a01fb3565c0757d9f5c1e4e69de4b65e5f2e5769b323b200dc1f142bab9",
+    "amd_fidelityfx_upscaler_vk.dll": "4a7e895af6e0b615d40a84d59eb8c2b1054ad91cdd0c739567940270d51bdab7",
+}
+FSR24_LICENSE = "32357259b965d6a8001e9e508ba60eda6034027c5923a7d226ffbaff813c2bfb"
+
 SDK_DIGESTS = {
     "fsr": "a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78",
     "xess": "88b8a373f30e33f3558a77a93e634f11b8132fc3047ea1a8edeead32b8471990",
@@ -90,6 +96,17 @@ def stage(args, directory):
         notices["amd_fidelityfx_vk.dll/LICENSE.txt"] = fsr.read("sdk/LICENSE.txt")
         require(digest(notices["amd_fidelityfx_vk.dll/LICENSE.txt"])
                 == "c93d509cd69d50698796c9c3274247352736ef122a3197ace2010f0978e21aa6", "Unexpected AMD SDK license")
+
+    if args.fsr24 is not None:
+        license_file = args.fsr24 / "license.md"
+        verify_file(license_file, FSR24_LICENSE)
+        license_text = license_file.read_bytes()
+        for name, expected in FSR24_DLLS.items():
+            file = args.fsr24 / name
+            verify_file(file, expected)
+            require_dll(file)
+            dlls[name] = file
+            notices[f"{name}/LICENSE.txt"] = license_text
 
     verify_file(args.xess, SDK_DIGESTS["xess"])
     with ZipFile(args.xess) as xess:
@@ -178,6 +195,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("jar", "output", "core", "wrappers", "fsr", "xess", "streamline", "dlss5", "dlss5-license"):
         parser.add_argument(f"--{name}", required=True, type=Path)
+    parser.add_argument("--fsr24", type=Path,
+                        help="directory with both signed SDK 2.4 Vulkan DLLs and Kits/FidelityFX/docs/license.md")
     parser.add_argument("--native-revision", required=True)
     parser.add_argument("--java-revision", required=True)
     args = parser.parse_args()
