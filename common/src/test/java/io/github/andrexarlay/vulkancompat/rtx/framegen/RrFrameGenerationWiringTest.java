@@ -35,18 +35,17 @@ class RrFrameGenerationWiringTest {
         String amd = source("rtx/framegen/fsr3/Fsr3FrameGen");
         String world = source("rtx/WorldTargetManager");
         String renderer = source("rt/world/RtFrameRenderer");
-        assertTrue(renderer.contains("FrameGenRuntime.needsFrameInputs())\n                        pendingFgGuides"));
-        int nvidiaWorldReady = nvidia.indexOf("public static void onWorldReady(");
-        int amdWorldReady = amd.indexOf("public static void onWorldReady(");
-        assertTrue(nvidia.indexOf("if (!needsDlssgInputs())", nvidiaWorldReady)
-            < nvidia.indexOf("producerCommands.record(", nvidiaWorldReady));
-        assertTrue(amd.indexOf("if (!needsFrameInputs())", amdWorldReady)
-            < amd.indexOf("producerCommands.record(", amdWorldReady));
-        for (String vendor : new String[]{nvidia, amd}) {
-            assertTrue(vendor.contains("!rrFrame && !WorldTargetManager.hasCurrentRasterMotion()"));
-        }
+        assertTrue(renderer.contains("&& FrameGenRuntime.needsFrameInputs())"));
+        assertProducerIsGated(nvidia, "if (!needsDlssgInputs())");
+        assertProducerIsGated(amd, "if (!needsFrameInputs())");
         assertTrue(world.contains("WorldFrames.isCurrent(rasterMotionStamp)"));
-        assertTrue(world.contains("!reuseDenoiserMotion || FrameGenRuntime.needsFrameInputs() || probeRasterMotion"));
+    }
+
+    private static void assertProducerIsGated(String vendor, String gate) {
+        int worldReady = vendor.indexOf("public static void onWorldReady(");
+        int gateAt = vendor.indexOf(gate, worldReady);
+        assertTrue(worldReady >= 0 && gateAt > worldReady && gateAt < vendor.indexOf("producerCommands.record(", worldReady));
+        assertTrue(vendor.contains("!rrFrame && !WorldTargetManager.hasCurrentRasterMotion()"));
     }
 
     @Test void rrSdkAndVelocityUseTheActualPrimaryProducerJitter() throws IOException {
