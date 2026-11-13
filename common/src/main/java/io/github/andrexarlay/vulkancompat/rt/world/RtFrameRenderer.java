@@ -721,6 +721,7 @@ public final class RtFrameRenderer {
             if (gpuTimer != null) {
                 gpuTimer.stamp(cmd, SPAN_WORLD, false);
             }
+            RtComputeCheckpoints.mark(vulkanDevice, cmd, "world_update");
             stats = recordingWorld.update(cmd, camera.pos.x, camera.pos.y, camera.pos.z, radiusXz, radiusY);
             if (gpuTimer != null) {
                 gpuTimer.stamp(cmd, SPAN_WORLD, true);
@@ -1142,6 +1143,7 @@ public final class RtFrameRenderer {
         if (gpuTimer != null) {
             gpuTimer.stamp(cmd, SPAN_RAYS, false);
         }
+        RtComputeCheckpoints.mark(vulkanDevice, cmd, "trace");
         pass.dispatch(cmd, params, w, h);
         if (gpuTimer != null) {
             gpuTimer.stamp(cmd, SPAN_RAYS, true);
@@ -1162,6 +1164,7 @@ public final class RtFrameRenderer {
             gpuTimer.stamp(cmd, SPAN_DENOISE, false);
         }
         boolean rrColorResolved = false;
+        RtComputeCheckpoints.mark(vulkanDevice, cmd, "denoise");
         if (useDenoiser) {
             if (dlssRrDenoiser != null) {
                 // [DLSS-RR] Record DLSS Ray Reconstruction
@@ -1177,9 +1180,11 @@ public final class RtFrameRenderer {
                     // The published primary sample is authoritative, including non-upscaler fallback sequences.
                     float rrJitterX = slang.guideFrame().jitter.x;
                     float rrJitterY = slang.guideFrame().jitter.y;
+                    RtComputeCheckpoints.mark(vulkanDevice, cmd, "rr_hardware_depth");
                     rrHardwareDepth.record(cmd, slang.guideFrame(), owner.gbViewZ(), owner.hardwareDepth());
                     owner.hardwareDepthRecorded(cmd.address());
                     VkBarriers.fullMemoryBarrier(cmd);
+                    RtComputeCheckpoints.mark(vulkanDevice, cmd, "rr_record");
                     frameColorTemporallyResolved = owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
                         params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY, camera.projectionMatrix);
                     rrColorResolved = frameColorTemporallyResolved;
@@ -1218,6 +1223,7 @@ public final class RtFrameRenderer {
                     float nrdJitterPrevY = nrdJittered
                         ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getPrevPixelJitterY() : 0.0f;
                     NrdDenoiser owner = denoiser;
+                    RtComputeCheckpoints.mark(vulkanDevice, cmd, "nrd_record");
                     owner.record(cmd, camera.projectionMatrix, frameProjection, camera.viewRotationMatrix,
                         camera.pos.x, camera.pos.y, camera.pos.z, params.tonemap, composeExposure,
                         nrdJitterX, nrdJitterY, nrdJitterPrevX, nrdJitterPrevY);
@@ -1240,6 +1246,7 @@ public final class RtFrameRenderer {
 
         RtMemory.Img presented = frameOutput(), presentedDepth = frameDepth();
         if (WorldTargetManager.rrResolvesOutput()) {
+            RtComputeCheckpoints.mark(vulkanDevice, cmd, "output_resolve");
             outputResolve.record(cmd, params, frameResources, rrColorResolved);
             VkBarriers.fullMemoryBarrier(cmd);
             presented = frameComposite();
@@ -1250,11 +1257,13 @@ public final class RtFrameRenderer {
         if (rrColorResolved && localTonemap != null && RtLocalTonemap.enabled() && dlssRrDenoiser != null
                 && dlssRrDenoiser.outDiffuse() != null && frameResources.localLum() != null
                 && dlssRrDenoiser.outDiffuse().width == presented.width && dlssRrDenoiser.outDiffuse().height == presented.height) {
+            RtComputeCheckpoints.mark(vulkanDevice, cmd, "local_tonemap");
             localTonemap.record(cmd, dlssRrDenoiser.outDiffuse(), presented, frameResources.localLum(), presentedDepth,
                 params.exposure);
             VkBarriers.fullMemoryBarrier(cmd);
         }
         // Raster particles/weather and world depth match the presentation grid and stay outside RR.
+        RtComputeCheckpoints.mark(vulkanDevice, cmd, "particles_composite");
         io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.composite(cmd, pathSlangRuntime(vulkanDevice),
             presented.view, presented.width, presented.height);
 
@@ -1262,6 +1271,7 @@ public final class RtFrameRenderer {
         if (gpuTimer != null) {
             gpuTimer.stamp(cmd, SPAN_ATMO, false);
         }
+        RtComputeCheckpoints.mark(vulkanDevice, cmd, "atmosphere");
         atmosphere.record(cmd, vulkanDevice, world.memory(), params, curViewProj,
             new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), presented.view, atlasView, materials.materialView(),
                 materials.normalView(), 0L, null, presentedDepth.view, lightmapView),
@@ -1277,6 +1287,7 @@ public final class RtFrameRenderer {
             if (dst == 0L) {
                 throw new RtFailure("copy_to_target", "engine VkImage of the main/world target is 0");
             }
+            RtComputeCheckpoints.mark(vulkanDevice, cmd, "copy_to_target");
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkImageCopy.Buffer region = VkImageCopy.calloc(1, stack);
                 region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
