@@ -1,0 +1,84 @@
+{
+  "launcher": [
+    {
+      "path": "net/neoforged/neoforge/26.3.0.57-beta/neoforge-26.3.0.57-beta-universal.jar",
+      "url": "https://maven.neoforged.net/releases/net/neoforged/neoforge/26.3.0.57-beta/neoforge-26.3.0.57-beta-universal.jar",
+      "algorithm": "SHA256",
+      "digest": "d2dba65f59fab3c563f9504810df067bfe3d8d0008221a550893a8cababf1472"
+    },
+    {
+      "path": "net/neoforged/fancymodloader/loader/12.0.9/loader-12.0.9.jar",
+      "url": "https://maven.neoforged.net/releases/net/neoforged/fancymodloader/loader/12.0.9/loader-12.0.9.jar",
+      "algorithm": "SHA256",
+      "digest": "283d0063fd27101276cae33ffff6c876c16df5d0523ea10d48bc0eb08d7e285a"
+    },
+    {
+      "path": "net/neoforged/bus/8.0.5/bus-8.0.5.jar",
+      "url": "https://maven.neoforged.net/releases/net/neoforged/bus/8.0.5/bus-8.0.5.jar",
+      "algorithm": "SHA256",
+      "digest": "705e24f37752809499a5cd0c7dd31eaabf3d933c5d3b2060168e94e9ef62593a"
+    },
+    {
+      "path": "net/neoforged/mergetool/2.0.7/mergetool-2.0.7-api.jar",
+      "url": "https://maven.neoforged.net/releases/net/neoforged/mergetool/2.0.7/mergetool-2.0.7-api.jar",
+      "algorithm": "SHA256",
+      "digest": "e78f586e085206e3b5699bf0a8de3ee94c59dd34d8cd5b4033e8c58e5ac9c2ec"
+    },
+    {
+      "path": "net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar",
+      "url": "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar",
+      "algorithm": "SHA256",
+      "digest": "93044e4dd46de5d8136701292f05e868da096d2c9fddb4793e4fdbcc63efc695"
+    }
+  ],
+  "libs": [
+    {
+      "path": "minecraft-26.3-client.jar",
+      "url": "https://piston-data.mojang.com/v1/objects/e877b6a07acd633fb3bb475002175cec036e7b87/client.jar",
+      "algorithm": "SHA1",
+      "digest": "e877b6a07acd633fb3bb475002175cec036e7b87"
+    },
+    {
+      "path": "authlib-10.0.77.jar",
+      "url": "https://libraries.minecraft.net/com/mojang/authlib/10.0.77/authlib-10.0.77.jar",
+      "algorithm": "SHA1",
+      "digest": "add8754cda96cf0cd840441632875648836f8a71"
+    },
+    {
+      "path": "datafixerupper-10.0.21.jar",
+      "url": "https://libraries.minecraft.net/com/mojang/datafixerupper/10.0.21/datafixerupper-10.0.21.jar",
+      "algorithm": "SHA1",
+      "digest": "b6b2ae770c02e0c1eb90f9985b151e9085a38d0b"
+    },
+    {
+      "path": "jtracy-1.14.38.jar",
+      "url": "https://libraries.minecraft.net/com/mojang/jtracy/1.14.38/jtracy-1.14.38.jar",
+      "algorithm": "SHA1",
+      "digest": "cc2ad81342001b4281c305a298d7f50332354058"
+    },
+    {
+      "path": "logging-1.7.12.jar",
+      "url": "https://libraries.minecraft.net/com/mojang/logging/1.7.12/logging-1.7.12.jar",
+      "algorithm": "SHA1",
+      "digest": "351cea64a5233361327d8d54c44277041beed97f"
+    },
+    {
+      "path": "text2speech-1.19.12.jar",
+      "url": "https://libraries.minecraft.net/com/mojang/text2speech/1.19.12/text2speech-1.19.12.jar",
+      "algorithm": "SHA1",
+      "digest": "2e517a75c79d34d32de2b5d68422150836c2133e"
+    },
+    {
+      "path": "sodium-neoforge.jar",
+      "url": "https://cdn.modrinth.com/data/AANobbMI/versions/VHtnT9Q4/sodium-neoforge-0.9.2%2Bmc26.3.jar",
+      "algorithm": "SHA512",
+      "digest": "f5b62730bbee7d116a83c765b8e7cdb660da97ab7f122f180293eda3e56b5ca4d701b0bf18c36f087e9a7349f8ec113f1f8c0d462a8893c551a2f3e163bd0cb8"
+    },
+    {
+      "path": "iris-neoforge.jar",
+      "url": "https://cdn.modrinth.com/data/YL57xq9U/versions/Ag5S66CF/iris-neoforge-1.11.7%2Bmc26.3.jar",
+      "algorithm": "SHA512",
+      "digest": "302659f09e50d02a6cd96075be93aade2a2f9d709afe21d56465228fb7d7f4717566e3702a7872479df2fff9b7a5ff5b1b6047cc95e09ee6120fad5ea5857eec"
+    }
+  ]
+}
