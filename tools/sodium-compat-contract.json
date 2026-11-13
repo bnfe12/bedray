@@ -1,0 +1,338 @@
+[
+  {
+    "class": "net.caffeinemc.mods.sodium.api.config.ConfigEntryPoint",
+    "kind": "method",
+    "name": "registerConfigLate",
+    "descriptor": "(Lnet/caffeinemc/mods/sodium/api/config/structure/ConfigBuilder;)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.ConfigManager",
+    "kind": "field",
+    "name": "CONFIG",
+    "descriptor": "Lnet/caffeinemc/mods/sodium/client/config/structure/Config;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.ConfigManager$ModMetadata",
+    "kind": "method",
+    "name": "<init>",
+    "descriptor": "(Ljava/lang/String;Ljava/lang/String;)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.ModOptions",
+    "kind": "method",
+    "name": "configId",
+    "descriptor": "()Ljava/lang/String;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.ModOptions",
+    "kind": "method",
+    "name": "name",
+    "descriptor": "()Ljava/lang/String;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.ModOptions",
+    "kind": "method",
+    "name": "version",
+    "descriptor": "()Ljava/lang/String;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.builder.ConfigBuilderImpl",
+    "kind": "method",
+    "name": "<init>",
+    "descriptor": "(Ljava/util/function/Function;Ljava/lang/String;)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.builder.ConfigBuilderImpl",
+    "kind": "method",
+    "name": "build",
+    "descriptor": "()Ljava/util/Collection;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.Config",
+    "kind": "method",
+    "name": "<init>",
+    "descriptor": "(Ljava/util/List;)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.Config",
+    "kind": "method",
+    "name": "getOption",
+    "descriptor": "(Lnet/minecraft/resources/Identifier;)Lnet/caffeinemc/mods/sodium/client/config/structure/Option;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.Config",
+    "kind": "method",
+    "name": "getModOptions",
+    "descriptor": "()Ljava/util/List;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.Config",
+    "kind": "method",
+    "name": "applyAllOptions",
+    "descriptor": "()V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.Config",
+    "kind": "method",
+    "name": "resetAllOptionsFromBindings",
+    "descriptor": "()V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.Option",
+    "kind": "field",
+    "name": "id",
+    "descriptor": "Lnet/minecraft/resources/Identifier;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.Option",
+    "kind": "method",
+    "name": "isEnabled",
+    "descriptor": "()Z"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.Option",
+    "kind": "method",
+    "name": "resetToDefault",
+    "descriptor": "()V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.OptionGroup",
+    "kind": "method",
+    "name": "name",
+    "descriptor": "()Lnet/minecraft/network/chat/Component;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.OptionGroup",
+    "kind": "method",
+    "name": "options",
+    "descriptor": "()Ljava/util/List;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.config.structure.EnumOption",
+    "kind": "method",
+    "name": "getElementName",
+    "descriptor": "(Ljava/lang/Enum;)Lnet/minecraft/network/chat/Component;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.VideoSettingsScreen",
+    "kind": "field",
+    "name": "prevScreen",
+    "descriptor": "Lnet/minecraft/client/gui/screens/Screen;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.VideoSettingsScreen",
+    "kind": "field",
+    "name": "optionList",
+    "descriptor": "Lnet/caffeinemc/mods/sodium/client/gui/widgets/OptionListWidget;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.VideoSettingsScreen",
+    "kind": "method",
+    "name": "updateControls",
+    "descriptor": "(II)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.VideoSettingsScreen",
+    "kind": "method",
+    "name": "mouseClicked",
+    "descriptor": "(Lnet/minecraft/client/input/MouseButtonEvent;Z)Z"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.VideoSettingsScreen",
+    "kind": "method",
+    "name": "keyPressed",
+    "descriptor": "(Lnet/minecraft/client/input/KeyEvent;)Z"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.VideoSettingsScreen",
+    "kind": "method",
+    "name": "createScreen",
+    "descriptor": "(Lnet/minecraft/client/gui/screens/Screen;)Lnet/minecraft/client/gui/screens/Screen;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.OptionListWidget",
+    "kind": "method",
+    "name": "rebuild",
+    "descriptor": "(Lnet/minecraft/client/gui/screens/Screen;)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.OptionListWidget",
+    "kind": "method",
+    "name": "renderAllPages",
+    "descriptor": "(Lnet/minecraft/client/gui/screens/Screen;III)I"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.OptionListWidget",
+    "kind": "method",
+    "name": "extractRenderState",
+    "descriptor": "(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIF)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.OptionListWidget$HeaderWidget",
+    "kind": "field",
+    "name": "title",
+    "descriptor": "Ljava/lang/String;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.OptionListWidget$HeaderWidget",
+    "kind": "method",
+    "name": "mouseClicked",
+    "descriptor": "(Lnet/minecraft/client/input/MouseButtonEvent;Z)Z"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.OptionListWidget$HeaderWidget",
+    "kind": "method",
+    "name": "extractRenderState",
+    "descriptor": "(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIF)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.ScrollableTooltip",
+    "kind": "field",
+    "name": "hoveredElement",
+    "descriptor": "Lnet/caffeinemc/mods/sodium/client/gui/options/control/ControlElement;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.ScrollableTooltip",
+    "kind": "field",
+    "name": "tooltipArea",
+    "descriptor": "Lnet/caffeinemc/mods/sodium/client/util/Dim2i;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.ScrollableTooltip",
+    "kind": "field",
+    "name": "font",
+    "descriptor": "Lnet/minecraft/client/gui/Font;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.ScrollableTooltip",
+    "kind": "field",
+    "name": "reservedArea",
+    "descriptor": "Lorg/joml/Vector2i;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.ScrollableTooltip",
+    "kind": "field",
+    "name": "contentSize",
+    "descriptor": "Lorg/joml/Vector2i;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.ScrollableTooltip",
+    "kind": "field",
+    "name": "visibleDim",
+    "descriptor": "Lnet/caffeinemc/mods/sodium/client/util/Dim2i;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.ScrollableTooltip",
+    "kind": "field",
+    "name": "overlayMode",
+    "descriptor": "Z"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.ScrollableTooltip",
+    "kind": "method",
+    "name": "positionTooltip",
+    "descriptor": "(Z)Z"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.ScrollableTooltip",
+    "kind": "method",
+    "name": "<init>",
+    "descriptor": "(Lnet/caffeinemc/mods/sodium/client/gui/widgets/ScrollableTooltip$TooltipParent;)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.ScrollableTooltip",
+    "kind": "method",
+    "name": "render",
+    "descriptor": "(Lnet/minecraft/client/gui/GuiGraphicsExtractor;)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.ScrollableTooltip",
+    "kind": "method",
+    "name": "mouseScrolled",
+    "descriptor": "(DDD)Z"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.widgets.AbstractWidget",
+    "kind": "method",
+    "name": "playClickSound",
+    "descriptor": "()V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.options.control.AbstractScrollable",
+    "kind": "field",
+    "name": "scrollbar",
+    "descriptor": "Lnet/caffeinemc/mods/sodium/client/gui/widgets/ScrollbarWidget;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.options.control.CyclingControl$CyclingControlElement",
+    "kind": "field",
+    "name": "option",
+    "descriptor": "Lnet/caffeinemc/mods/sodium/client/config/structure/EnumOption;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.gui.options.control.CyclingControl$CyclingControlElement",
+    "kind": "method",
+    "name": "extractRenderState",
+    "descriptor": "(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIF)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.render.SodiumWorldRenderer",
+    "kind": "method",
+    "name": "instanceNullable",
+    "descriptor": "()Lnet/caffeinemc/mods/sodium/client/render/SodiumWorldRenderer;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.render.SodiumWorldRenderer",
+    "kind": "method",
+    "name": "scheduleRebuildForChunks",
+    "descriptor": "(IIIIIIZ)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.render.chunk.RenderSection",
+    "kind": "method",
+    "name": "delete",
+    "descriptor": "()V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.render.chunk.RenderSection",
+    "kind": "method",
+    "name": "getChunkX",
+    "descriptor": "()I"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.render.chunk.RenderSection",
+    "kind": "method",
+    "name": "getChunkY",
+    "descriptor": "()I"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.render.chunk.RenderSection",
+    "kind": "method",
+    "name": "getChunkZ",
+    "descriptor": "()I"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.render.chunk.compile.ChunkBuildOutput",
+    "kind": "method",
+    "name": "destroy",
+    "descriptor": "()V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.render.chunk.compile.tasks.ChunkBuilderMeshingTask",
+    "kind": "method",
+    "name": "execute",
+    "descriptor": "(Lnet/caffeinemc/mods/sodium/client/render/chunk/compile/ChunkBuildContext;Lnet/caffeinemc/mods/sodium/client/util/task/CancellationToken;)Lnet/caffeinemc/mods/sodium/client/render/chunk/compile/ChunkBuildOutput;"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.client.render.chunk.region.RenderRegionManager",
+    "kind": "method",
+    "name": "uploadResults",
+    "descriptor": "(Ljava/util/Collection;Lnet/caffeinemc/mods/sodium/client/render/chunk/UniformBufferManager;)V"
+  },
+  {
+    "class": "net.caffeinemc.mods.sodium.neoforge.config.ConfigLoaderForge",
+    "kind": "class",
+    "name": "*",
+    "descriptor": "*"
+  }
+]

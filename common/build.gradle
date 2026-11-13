@@ -18,7 +18,12 @@ dependencies {
     compileOnly project(':core')
     testImplementation project(':core')
 
-    testImplementation fileTree(dir: rootProject.file('libs'), include: ['*.jar'])
+    if (rootProject.hasProperty('sodiumJar')) {
+        testImplementation fileTree(dir: rootProject.file('libs'), include: ['*.jar'], exclude: ['*sodium*.jar'])
+        testImplementation files(rootProject.file(rootProject.property('sodiumJar')))
+    } else {
+        testImplementation fileTree(dir: rootProject.file('libs'), include: ['*.jar'])
+    }
     testImplementation "org.lwjgl:lwjgl:${rootProject.lwjgl_version}"
     testImplementation "org.lwjgl:lwjgl-opengl:${rootProject.lwjgl_version}"
     testImplementation "org.lwjgl:lwjgl-vulkan:${rootProject.lwjgl_version}"
