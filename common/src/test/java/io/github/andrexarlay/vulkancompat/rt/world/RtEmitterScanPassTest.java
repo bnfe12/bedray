@@ -46,6 +46,15 @@ public class RtEmitterScanPassTest {
     }
 
     @Test
+    void lastSectionCompletesThePassEvenWhenItUsesUpTheFrameBudget() {
+        List<Integer> steps = new ArrayList<>();
+        var scan = pass(List.of(1, 2), 5L);
+        assertFalse(scan.advance(expiredDeadline(), steps::add));
+        assertTrue(scan.advance(expiredDeadline(), steps::add));
+        assertEquals(List.of(1, 2), steps);
+    }
+
+    @Test
     void worldChangeKeepsProgressInsteadOfRestarting() {
         List<Integer> steps = new ArrayList<>();
         RtEmitters.ScanPass<Integer> pass = pass(List.of(0, 1, 2, 3, 4), 100L);
