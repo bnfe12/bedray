@@ -65,7 +65,8 @@ class BedrockMaterialConverterTest {
         int grey = 0xFF808080;
         int[] s = BedrockMaterialConverter.specular(new int[] {iron, torch, leaf}, new int[] {grey, grey, grey});
         assertEquals(LabPbr.METAL_G, (s[0] >>> 8) & 255, "metalness 0.9+ is an albedo metal");
-        assertEquals(0.16f, LabPbr.roughnessFromSmoothness((s[0] >>> 16) & 255), 0.01f, "perceptual roughness survives the round trip");
+        // LabPbr.roughnessFromSmoothness returns GGX alpha (perceptual roughness squared); sqrt recovers the perceptual value.
+        assertEquals(0.16f, (float) Math.sqrt(LabPbr.roughnessFromSmoothness((s[0] >>> 16) & 255)), 0.01f, "perceptual roughness survives the round trip");
         assertEquals(255, s[0] >>> 24, "no emission is alpha 255");
         assertEquals(10, (s[1] >>> 8) & 255, "a dielectric gets F0 0.04");
         assertEquals(0.75f, LabPbr.emission(s[1] >>> 24), 0.01f, "emission is scaled into LabPBR's range");
