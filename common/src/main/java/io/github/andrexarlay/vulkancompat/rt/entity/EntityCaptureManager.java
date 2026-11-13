@@ -86,7 +86,8 @@ public final class EntityCaptureManager {
     private float[] worldEmitters = new float[RtEmitters.FLOATS * 64];
     private int worldEmitterCount;
     /** The emitters of the frame that was closed by {@link #endFrame()} (what the RT pass of that frame lights). */
-    private float[] publishedEmitters = new float[0];
+    private static final float[] NO_EMITTERS = new float[0];
+    private float[] publishedEmitters = NO_EMITTERS;
     private int publishedEmitterCount;
     private static final int MAX_PARTICLE_EMITTERS_PER_FRAME = 256;
     /** Offsets of the three basis rows inside a {@link RtEmitters#FLOATS}-wide quad, rotated into view space per frame. */
@@ -607,7 +608,7 @@ public final class EntityCaptureManager {
         int hand = (frameSeq - handSeq <= 1 && viewRotation != null) ? handEmitterCount : 0;
         int total = publishedEmitterCount + hand;
         if (total == 0) {
-            return new float[0];
+            return NO_EMITTERS;
         }
         float[] out = new float[total * RtEmitters.FLOATS];
         System.arraycopy(publishedEmitters, 0, out, 0, publishedEmitterCount * RtEmitters.FLOATS);
@@ -1211,7 +1212,8 @@ public final class EntityCaptureManager {
         insideEntity = false;
         frameConsumer.flushRemaining();
         geometryGeneration++;
-        publishedEmitters = java.util.Arrays.copyOf(worldEmitters, worldEmitterCount * RtEmitters.FLOATS);
+        publishedEmitters = worldEmitterCount == 0 ? NO_EMITTERS
+            : java.util.Arrays.copyOf(worldEmitters, worldEmitterCount * RtEmitters.FLOATS);
         publishedEmitterCount = worldEmitterCount;
         publishedParticleEmitterCount = particleEmitterCount;
 

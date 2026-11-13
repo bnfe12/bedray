@@ -156,10 +156,10 @@ SurfaceVisibility traceFilteredVisibility<T : ISceneTracer>(T traversal,
         return visibility;
     }
 
-    // The layer budget ran out while the ray was still passing through
-    // filters.  The remaining energy is kept, but the caller can see that the
-    // walk was truncated instead of silently treating it as a clean ray.
-    visibility.flags |= SURFACE_VISIBILITY_FLAG_OVERFLOW;
+    // A filter within the final bias can exhaust the interval before the layer budget does.
+    if (current.tMax > current.tMin) {
+        visibility.flags |= SURFACE_VISIBILITY_FLAG_OVERFLOW;
+    }
     visibility.result.visible = true;
     visibility.result.distance = ray.tMax;
     visibility.result.transmittance = transmittance;
@@ -282,7 +282,11 @@ SurfaceVisibility traceFilteredVisibilityMedium<T : ISceneTracer>(T traversal,
         return visibility;
     }
 
-    visibility.flags |= SURFACE_VISIBILITY_FLAG_OVERFLOW;
+    if (current.tMax > current.tMin) {
+        visibility.flags |= SURFACE_VISIBILITY_FLAG_OVERFLOW;
+    } else if (medium.inside) {
+        transmittance *= waterSegmentTransmittance(medium, max(ray.tMax - lastT, 0.0));
+    }
     visibility.result.visible = true;
     visibility.result.distance = ray.tMax;
     visibility.result.transmittance = transmittance;

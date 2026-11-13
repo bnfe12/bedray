@@ -49,7 +49,7 @@ final class EmitterLightBvh {
                 double centre = ((double) bounds[i * 7 + axis] + bounds[i * 7 + axis + 3]) * 0.5;
                 double unit = max[axis] > min[axis] ? (centre - min[axis]) / (max[axis] - min[axis]) : 0;
                 int quantized = (int) Math.clamp(unit * 1023, 0, 1023);
-                for (int bit = 0; bit < 10; bit++) morton |= ((quantized >>> bit) & 1) << (bit * 3 + axis);
+                morton |= mortonLane(quantized) << axis;
             }
             keys[i] = ((long) morton << 32) | Integer.toUnsignedLong(i);
         }
@@ -57,6 +57,14 @@ final class EmitterLightBvh {
         int[] order = new int[count];
         for (int i = 0; i < count; i++) order[i] = (int) keys[i];
         return order;
+    }
+
+    /** Spread ten coordinate bits into positions 0, 3, ... 27 of a 30-bit Morton key. */
+    static int mortonLane(int coordinate) {
+        int bits = (coordinate | (coordinate << 16)) & 0x030000FF;
+        bits = (bits | (bits << 8)) & 0x0300F00F;
+        bits = (bits | (bits << 4)) & 0x030C30C3;
+        return (bits | (bits << 2)) & 0x09249249;
     }
 
     private static final class Writer {

@@ -3,13 +3,10 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 import io.github.andrexarlay.vulkancompat.rt.material.MaterialAtlasBaker;
 import io.github.andrexarlay.vulkancompat.rt.material.LabPbr;
 import io.github.andrexarlay.vulkancompat.rt.sodium.DecodedSection;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
 
 /**
  * Light list for next event estimation of emissive surfaces (both RT modes). Every quad of a built section whose atlas
@@ -117,8 +114,8 @@ public final class RtEmitters {
 
     private final EmitterCaptureBuffers buffers;
     private final EmitterFrameSelection frameSelection = new EmitterFrameSelection();
-    private final Map<Long, Entry> cache = new HashMap<>();
-    private final Set<Long> seen = new HashSet<>();
+    private final Long2ObjectOpenHashMap<Entry> cache = new Long2ObjectOpenHashMap<>();
+    private final LongOpenHashSet seen = new LongOpenHashSet();
     private float[][] heap = new float[1024][FLOATS + 1];
     private int heapSize;
     private int totalCounter;
@@ -320,6 +317,7 @@ public final class RtEmitters {
             cache.put(d.key, e);
         }
         float[] r = e.records;
+        if (r.length == 0) return;
         int quads = r.length / FLOATS;
         totalCounter += quads;
         float dx = d.sectionX * 16 - originX;
@@ -579,7 +577,10 @@ public final class RtEmitters {
     }
 
     private void completeStaticSelection() {
-        cache.keySet().retainAll(seen);
+        var cachedKeys = cache.keySet().iterator();
+        while (cachedKeys.hasNext()) {
+            if (!seen.contains(cachedKeys.nextLong())) cachedKeys.remove();
+        }
         // snapshot the static selection: a frame where only entity lights changed skips the whole section scan
         ensureStaticHeapCapacity(Math.max(targetBudget, heapSize));
         for (int i = 0; i < heapSize; i++) {

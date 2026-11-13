@@ -88,6 +88,7 @@ public final class IrisFrameHook {
                 if (device == null) {
                     reason = "no_device";
                 } else {
+                    String failureReason = null;
                     try {
                         FsrCamera cam = FsrCamera.fromCurrentProjection();
                         VulkanCommandEncoder encoder = device.createCommandEncoder();
@@ -96,24 +97,30 @@ public final class IrisFrameHook {
                         recorded = IrisRenderBridge.render(cmd, host, colorImage, colorView, depthView, width, height,
                             camera, levelState, IrisRenderBridge.frameTimeCounter(), IrisRenderBridge.frameCounter(),
                             cam.near(), cam.far(), IrisRenderBridge.frameTime());
-                        VkBarriers.fullMemoryBarrier(cmd);
-                        RtFailure.check(VK10.vkEndCommandBuffer(cmd), "iris_end_command_buffer");
-                        encoder.execute(cmd);
-                        if (!recorded) {
-                            reason = "executor_failed";
-                            disableForSession(selector, "IrisPostExecutor.record failed (see [IrisRenderBridge] error)");
-                        } else {
+                        if (recorded) {
+                            VkBarriers.fullMemoryBarrier(cmd);
+                            RtFailure.check(VK10.vkEndCommandBuffer(cmd), "iris_end_command_buffer");
+                            encoder.execute(cmd);
                             reason = null;
+                        } else {
+                            reason = "executor_failed";
+                            failureReason = "Iris executor could not record the frame";
                         }
-                    } catch (Throwable t) {
-                        reason = "exception:" + t.getClass().getSimpleName();
-                        LOGGER.error("[VKB-IRIS] executor failure, disabling the iris host for this session", t);
-                        disableForSession(selector, "iris post failed: " + t);
+                    } catch (RuntimeException | LinkageError error) {
+                        recorded = false;
+                        reason = "exception:" + error.getClass().getSimpleName();
+                        LOGGER.error("[VKB-IRIS] executor failure, disabling the iris host for this session", error);
+                        failureReason = "Iris post failed: " + error.getClass().getSimpleName();
                     }
+                    if (failureReason != null) disableForSession(failureReason);
                 }
             }
         }
-        LOGGER.info(logLine(sel.requested(), sel.active(), state, passes, recorded, reason));
+        ShaderHostSelector.Selection current = ShaderHosts.selection();
+        if (current != null && current.active() != sel.active()) {
+            state = current.requestedStatus().state();
+        }
+        LOGGER.info(logLine(sel.requested(), current == null ? sel.active() : current.active(), state, passes, recorded, reason));
         return recorded;
     }
 
@@ -149,10 +156,8 @@ public final class IrisFrameHook {
         return sel != null && sel.active() == ShaderHostKind.IRIS;
     }
 
-    private static void disableForSession(ShaderHostSelector selector, String why) {
-        if (selector != null) {
-            selector.disableForSession(ShaderHostKind.IRIS, why);
-        }
+    static void disableForSession(String why) {
+        ShaderHosts.noteIrisFailure(why);
         IrisRenderBridge.teardown();
     }
 }

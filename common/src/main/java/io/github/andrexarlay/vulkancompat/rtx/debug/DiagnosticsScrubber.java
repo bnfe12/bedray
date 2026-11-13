@@ -48,9 +48,12 @@ public final class DiagnosticsScrubber {
     private static final Pattern IPV6_FULL = Pattern.compile("(?i)(?<![\\w:])(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}(?![\\w:])");
     private static final Pattern IPV6_SHORT = Pattern.compile(
         "(?i)(?<![\\w:])(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,5})?(?![\\w:])|(?<![\\w:])::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?(?![\\w:])");
-    private static final Pattern SECRET_KV = Pattern.compile(
-        "(?i)\\b((?:access[_\\-]?token|session[_\\-]?(?:id|token)|auth[_\\-]?token|token|password|passwd|pwd|secret|api[_\\-]?key|client[_\\-]?secret)\\s*[=:]\\s*)(\\S+)");
-    private static final Pattern BEARER = Pattern.compile("(?i)\\b(Bearer\\s+)[A-Za-z0-9._~+/=\\-]{8,}");
+    // Free-form passwords and secrets can contain whitespace. Mask the rest of the log line.
+    private static final Pattern SECRET_TEXT = Pattern.compile(
+        "(?i)((?<![\\p{L}\\p{N}])(?:password|passwd|pwd|client[_\\-]?secret|secret)[\"']?\\h*[=:]\\h*)[^\\r\\n]+");
+    private static final Pattern SECRET_TOKEN = Pattern.compile(
+        "(?i)((?<![\\p{L}\\p{N}])(?:access[_\\-]?token|session[_\\-]?(?:id|token)|auth[_\\-]?token|token|api[_\\-]?key)[\"']?\\h*[=:]\\h*)(?:[\"'][^\\r\\n]*|[^\\s\"']+)");
+    private static final Pattern BEARER = Pattern.compile("(?i)\\b(Bearer\\h+)[A-Za-z0-9._~+/=\\-]+");
 
     private final List<Pattern> literals;
 
@@ -60,12 +63,12 @@ public final class DiagnosticsScrubber {
 
     /**
      * @param literals strings that identify this player or machine (account name, machine name, nick, UUID text, game directory...);
-     *                 blank and very short (&lt; 3 characters) values are ignored
+     *                 blank values are ignored
      */
     public static DiagnosticsScrubber of(String... literals) {
         Set<String> uniq = new LinkedHashSet<>();
         for (String s : literals) {
-            if (s != null && s.strip().length() >= 3) {
+            if (s != null && !s.isBlank()) {
                 uniq.add(s.strip());
             }
         }
@@ -73,7 +76,8 @@ public final class DiagnosticsScrubber {
         sorted.sort((a, b) -> Integer.compare(b.length(), a.length()));   // longest first: a path before the name inside it
         List<Pattern> ps = new ArrayList<>(sorted.size());
         for (String s : sorted) {
-            ps.add(Pattern.compile("(?i)(?<![A-Za-z0-9_])" + Pattern.quote(s) + "(?![A-Za-z0-9_])"));
+            ps.add(Pattern.compile("(?iu)" + Pattern.quote(REDACTED)
+                + "|(?<![\\p{L}\\p{N}_])" + Pattern.quote(s) + "(?![\\p{L}\\p{N}_])"));
         }
         return new DiagnosticsScrubber(List.copyOf(ps));
     }
@@ -98,7 +102,8 @@ public final class DiagnosticsScrubber {
             return text;
         }
         String s = text;
-        s = SECRET_KV.matcher(s).replaceAll("$1" + REDACTED);
+        s = SECRET_TEXT.matcher(s).replaceAll("$1" + REDACTED);
+        s = SECRET_TOKEN.matcher(s).replaceAll("$1" + REDACTED);
         s = BEARER.matcher(s).replaceAll("$1" + REDACTED);
         // paths first: a path may contain the account name, the nick or a UUID
         s = replacePaths(WIN_PATH, s);

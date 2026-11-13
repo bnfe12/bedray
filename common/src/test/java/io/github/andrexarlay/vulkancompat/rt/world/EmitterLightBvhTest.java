@@ -38,6 +38,16 @@ class EmitterLightBvhTest {
         }
         for(boolean seen:leafSeen) assertTrue(seen);
     }
+    @Test void mortonLanePreservesTheBitOrderForEveryTenBitCoordinate() {
+        for (int coordinate = 0; coordinate < 1024; coordinate++) {
+            int expected = 0;
+            for (int bit = 0; bit < 10; bit++) {
+                expected |= ((coordinate >>> bit) & 1) << (3 * bit);
+            }
+            assertEquals(expected, EmitterLightBvh.mortonLane(coordinate));
+        }
+    }
+
     @Test void balancedSpatialTreeCoversSkewedQuadsAndFinitePower() {
         float[][] records={light(100),light(-5),light(0),light(7),light(2)};
         records[1][8]=2; records[1][9]=-3; records[1][4]=-4;
