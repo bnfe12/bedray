@@ -1779,6 +1779,32 @@ static Mesh compaction_mesh() {
     return mesh;
 }
 
+static void test_compacted_section_table_keeps_vertex_address() {
+    /* Compaction copies only the BLAS; the vertex buffer stays put. When the
+       section table rebuilds on the compaction frame (membership churn during
+       world streaming), the compacted section's record must still publish the
+       committed vertex address, not a null BDA the trace would dereference. */
+    Fixture fixture(2);
+    const Mesh mesh = compaction_mesh();
+    CHECK_STATUS(fixture.add_section(7, 1, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x740);
+    const uint64_t committed_vertex = read_section_record(fixture.resources(), 0).vertex_address;
+    CHECK(committed_vertex != 0);
+    fixture.release(1); // proves the build + compacted-size query completed
+
+    // A second section dirties the table so this frame rebuilds it and republishes
+    // section 7 (slot 0, ordered by id) through the compaction path.
+    CHECK_STATUS(fixture.add_section(8, 1, mesh), BEDRAY_SCENE_OK);
+    const auto second = fixture.prepare(2, 0x741);
+    CHECK(fake::g.as_copies.size() == 1); // section 7 compacted, section 8 freshly built
+    CHECK((second.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0
+        || (second.flags & BEDRAY_SCENE_FRAME_TLAS_REBUILT) != 0);
+    const BedraySceneSectionRecord record = read_section_record(fixture.resources(), 0);
+    CHECK(record.vertex_address == committed_vertex);
+    CHECK(record.vertex_address != 0);
+    fixture.release(2);
+}
+
 static void test_compaction_allocation_retry_keeps_query_slots_unique() {
     Fixture fixture(2);
     const Mesh mesh = compaction_mesh();
@@ -2373,6 +2399,7 @@ int main() {
     test_replacement_blas_relinks_a_live_cached_tlas_without_a_build();
     test_rebuild_without_update_capability_retires_after_frame();
     test_section_blas_compacts_after_release();
+    test_compacted_section_table_keeps_vertex_address();
     test_compaction_allocation_retry_keeps_query_slots_unique();
     test_stale_compaction_query_waits_for_build_completion();
     test_failed_prepare_retries_all_planned_compactions();
