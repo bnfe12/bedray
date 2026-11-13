@@ -1,6 +1,6 @@
 # Bedray brand assets
 
-[Project home](../README.md) · [Documentation](README.md)
+[Project home](https://github.com/bnfe12/bedray#readme) · [Documentation](README.md)
 
 The mark connects two ideas: a block-built world and a ray that reflects inside it.
 An open voxel makes the light path visible. Deep green surfaces and warm amber light
@@ -21,6 +21,6 @@ The animation is a brand illustration. It does not show gameplay or claim render
 Use the static banner wherever motion is unnecessary. Keep the mark's proportions and give it space;
 use the PNG when the destination does not accept SVG.
 
-Assets are drawn from vector primitives by [`tools/make_brand_assets.py`](../tools/make_brand_assets.py).
+Assets are drawn from vector primitives by [`tools/make_brand_assets.py`](https://github.com/bnfe12/bedray/blob/main/tools/make_brand_assets.py).
 To regenerate them, install Pillow and run `python tools/make_brand_assets.py` from the repository root.
 The shared mod icon is generated from the same source.

@@ -15,6 +15,7 @@ the published `0.1.0-alpha.1` uses the earlier renderer and has its own release 
 | Guide | What you will find |
 | :--- | :--- |
 | [Installation](INSTALL.md) | Requirements, loader setup, renderer core and optional libraries |
+| [Runtime library downloads](RUNTIME_LIBRARIES.md) | Official sources, compatible packages and local import |
 | [User guide](USER_GUIDE.md) | First start, renderer modes and diagnostics |
 | [Settings reference](SETTINGS_REFERENCE.md) | Available controls and their trade-offs |
 | [Upscalers](UPSCALERS.md) | Resolution scaling and hardware-dependent integrations |
@@ -44,6 +45,8 @@ the published `0.1.0-alpha.1` uses the earlier renderer and has its own release 
 
 [Building](BUILDING.md) · [Contributing](https://github.com/bnfe12/bedray/blob/main/CONTRIBUTING.md) · [Branch layout](BRANCH_LAYOUT.md) · [Add-on settings API](ADDON_SETTINGS_API.md) ·
 [Release checklist](RELEASE_CHECKLIST.md) · [Verification log](VERIFICATION_LOG.md)
+
+[Native library licences and delivery](NATIVES_LICENSES.md)
 
 ### Renderer
 
