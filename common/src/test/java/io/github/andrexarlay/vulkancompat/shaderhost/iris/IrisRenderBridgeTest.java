@@ -110,7 +110,7 @@ class IrisRenderBridgeTest {
     void renderGuardsAgainstNullCommandBuffer() {
         boolean result = IrisRenderBridge.render(
             null, readyHost, 1L, 2L, 3L, 1920, 1080,
-            camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+            camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
         );
         assertFalse(result, "render must return false when cmd is null");
     }
@@ -120,7 +120,7 @@ class IrisRenderBridgeTest {
         assumeTrue(dummyCmd != null, "dummy VkCommandBuffer required");
         boolean result = IrisRenderBridge.render(
             dummyCmd, null, 1L, 2L, 3L, 1920, 1080,
-            camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+            camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
         );
         assertFalse(result, "render must return false when host is null");
     }
@@ -144,7 +144,7 @@ class IrisRenderBridgeTest {
 
             boolean result = IrisRenderBridge.render(
                 dummyCmd, unreadyHost, 1L, 2L, 3L, 1920, 1080,
-                camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+                camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
             );
             assertFalse(result, "render must return false when host state is " + state);
         }
@@ -160,7 +160,7 @@ class IrisRenderBridgeTest {
 
         boolean result = IrisRenderBridge.render(
             dummyCmd, hostWithoutGraph, 1L, 2L, 3L, 1920, 1080,
-            camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+            camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
         );
         assertFalse(result, "render must return false when host.activeGraph() is null");
     }
@@ -176,7 +176,7 @@ class IrisRenderBridgeTest {
 
         boolean result = IrisRenderBridge.render(
             dummyCmd, hostWithEmptyGraph, 1L, 2L, 3L, 1920, 1080,
-            camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+            camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
         );
         assertFalse(result, "render must return false when activeGraph has no passes");
     }
@@ -188,19 +188,19 @@ class IrisRenderBridgeTest {
         // Zero engineColorImage
         assertFalse(IrisRenderBridge.render(
             dummyCmd, readyHost, 0L, 2L, 3L, 1920, 1080,
-            camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+            camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
         ), "engineColorImage == 0");
 
         // Zero engineColorView
         assertFalse(IrisRenderBridge.render(
             dummyCmd, readyHost, 1L, 0L, 3L, 1920, 1080,
-            camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+            camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
         ), "engineColorView == 0");
 
         // Zero depthView
         assertFalse(IrisRenderBridge.render(
             dummyCmd, readyHost, 1L, 2L, 0L, 1920, 1080,
-            camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+            camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
         ), "depthView == 0");
     }
 
@@ -211,25 +211,25 @@ class IrisRenderBridgeTest {
         // Zero width
         assertFalse(IrisRenderBridge.render(
             dummyCmd, readyHost, 1L, 2L, 3L, 0, 1080,
-            camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+            camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
         ), "width == 0");
 
         // Zero height
         assertFalse(IrisRenderBridge.render(
             dummyCmd, readyHost, 1L, 2L, 3L, 1920, 0,
-            camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+            camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
         ), "height == 0");
 
         // Negative width
         assertFalse(IrisRenderBridge.render(
             dummyCmd, readyHost, 1L, 2L, 3L, -1, 1080,
-            camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+            camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
         ), "width < 0");
 
         // Negative height
         assertFalse(IrisRenderBridge.render(
             dummyCmd, readyHost, 1L, 2L, 3L, 1920, -1,
-            camera, 0.0f, 0, 0.05f, 128.0f, 0.016f
+            camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f
         ), "height < 0");
     }
 
@@ -327,6 +327,7 @@ class IrisRenderBridgeTest {
             1920,
             1080,
             camera,
+            null,
             12.5f,
             42,
             0.05f,

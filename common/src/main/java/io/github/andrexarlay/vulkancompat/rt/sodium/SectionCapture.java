@@ -16,7 +16,7 @@ import java.util.Collection;
 
 /**
  * Glue between the Sodium mixins (H1, H3, H4) and the Sodium-independent decoder/registry. All methods return
- * immediately when {@link RtGeometryGate#enabled()} is false.
+ * immediately when {@link RtGeometryGate#captureEnabled()} is false (native RT or the Iris raster host needs geometry).
  *
  * <p>The decoder reads the pass NativeBuffers directly on the Sodium worker thread: they are freed only by
  * {@code ChunkBuildOutput.destroy()}, which runs on the render thread after the output has been returned from
@@ -32,7 +32,7 @@ public final class SectionCapture {
 
     /** H1, Sodium worker thread: decode the finished build output and attach the result to it. */
     public static void captureOnWorker(ChunkBuildOutput output) {
-        if (output == null || !RtGeometryGate.enabled()) {
+        if (output == null || !RtGeometryGate.captureEnabled()) {
             return;
         }
         RenderSection section = output.section;
@@ -69,7 +69,7 @@ public final class SectionCapture {
 
     /** H3, render thread, before Sodium destroys the results: hand the decoded sections of accepted outputs to the registry. */
     public static void acceptOnRenderThread(Collection<BuilderTaskOutput> results) {
-        if (!RtGeometryGate.enabled()) {
+        if (!RtGeometryGate.captureEnabled()) {
             return;
         }
         SectionGeometryRegistry registry = SectionGeometryRegistry.INSTANCE;
@@ -96,7 +96,7 @@ public final class SectionCapture {
     /** H4, render thread: the section is deleted. */
     public static void onSectionDeleted(RenderSection section) {
         SectionGeometryRegistry registry = SectionGeometryRegistry.INSTANCE;
-        if (!RtGeometryGate.enabled() && registry.sectionCount() == 0) {
+        if (!RtGeometryGate.captureEnabled() && registry.sectionCount() == 0) {
             return;
         }
         registry.remove(SectionPos.asLong(section.getChunkX(), section.getChunkY(), section.getChunkZ()));

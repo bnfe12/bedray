@@ -88,11 +88,12 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
             RtCaptureControl.onFrameBegin();
             io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.beginFrame();
             io.github.andrexarlay.vulkancompat.rt.overlay.RtBlockOutline.beginFrame();
-            // entity/block-entity/item submits of renderLevel() are captured for the RT scene only while RT is gated on;
-            // RtFrameRenderer.render (head of render3dHud, before the hand) publishes and closes the capture
+            // entity/block-entity/item submits of renderLevel() are captured while native RT OR the Iris raster host needs
+            // geometry; RtFrameRenderer.render (head of render3dHud, before the hand) publishes and closes the capture
             io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().beginFrame(
-                System.nanoTime(), io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.enabled());
+                System.nanoTime(), io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.captureEnabled());
             VulkanRtxManager.setFrameRendering(true);
+            io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisFrameHook.onFrameBegin();
         }
     }
 
@@ -187,6 +188,7 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
      * order: RASTER_END stamp, R1 world ray tracing (BLAS/TLAS from Sodium sections, rays; it also shuts its GPU objects down
      * when the gate turned off, so it is called whenever the backend is Vulkan), RT_END stamp, then the X4 depth copy for the
      * temporal upscaler (the hand pass clears the world depth via clearDepthTexture). The RT pass does not read the depth copy.
+     * Last: the I3.5 Iris pack post passes (see {@link io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisFrameHook}).
      * Signature (javap, client jar and NeoForge-patched jar):
      * {@code private void render3dHud(CameraRenderState, PlayerRenderState, OptionsRenderState, boolean)}.
      */
@@ -222,6 +224,12 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
                 producer == io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.HARDWARE_RT);
             PerfMonitor.mark(PerfMonitor.Mark.RT_END);
             WorldTargetManager.copyWorldDepth();
+            // I3.5 frame point: engine color (raster or RT copy) and world depth are final here; the hand pass has not
+            // run (it clears the world depth), no render pass is open, and GUI + final upscale come later. The pack
+            // therefore sees the world image only, never the hand or the HUD. No-op unless the iris host is active.
+            io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisFrameHook.renderWorldPost(
+                this.mainRenderTarget, this.gameRenderState.levelRenderState.cameraRenderState,
+                this.gameRenderState.levelRenderState);
         }
     }
 

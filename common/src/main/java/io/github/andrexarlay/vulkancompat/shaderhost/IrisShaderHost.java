@@ -3,6 +3,7 @@ package io.github.andrexarlay.vulkancompat.shaderhost;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler;
 import io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisPackOptions;
 import io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisPassGraph;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.IrisPackSettings;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackReport;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackReportCache;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackScanException;
@@ -10,6 +11,8 @@ import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackSource;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.ScanLimits;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.ShaderpackDiscovery;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.ShaderpackScanner;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -23,16 +26,23 @@ import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * Compatibility host for Iris/OptiFine-style shaderpacks. Validates pack structure, parses fullscreen composite and final
- * passes, and compiles them to SPIR-V bytecode via {@link IrisPassGraph}.
+ * Compatibility host for Iris/OptiFine-style shaderpacks. The raster core (shadow -> gbuffers -> deferred -> composite ->
+ * final) is the primary path selected by {@code shader_host=iris}; it compiles via {@link IrisPassGraph.FullResult}. The
+ * older fullscreen composite post host coexists as an opt-in ({@code -Dbedray.iris.post=true}) with per-dimension graphs.
  */
 @Experimental("I3")
 public final class IrisShaderHost implements ShaderHost {
+    private static final Logger LOGGER = LoggerFactory.getLogger("VulkanRtx/ShaderHost");
+
     private final PackReportCache cache;
     private volatile PackReport lastReport;
     /** Compiled graph per program folder ({@code ""} = root); a pack with world folders has one per used folder. */
     private volatile Map<String, IrisPassGraph> graphs = Map.of();
     private volatile String activeFolder = "";
+    /** Raster-core graph (shadow -> gbuffers -> deferred -> composite -> final) when the pack builds one, else null. */
+    private volatile IrisPassGraph.FullResult activeFullGraph;
+    /** Pack settings backing {@link #activeFullGraph()} (targets, custom textures, expression uniforms), else null. */
+    private volatile IrisPackSettings activeSettings;
     private volatile ShaderHostStatus lastStatus;
 
     public IrisShaderHost(PackReportCache cache) {
@@ -61,6 +71,22 @@ public final class IrisShaderHost implements ShaderHost {
     }
 
     /**
+     * Raster-core graph (shadow -> gbuffers -> deferred -> composite -> final) when the pack builds one, else null. The
+     * forward executor uses it; null when probe was not READY or after teardown.
+     */
+    public IrisPassGraph.FullResult activeFullGraph() {
+        return activeFullGraph;
+    }
+
+    /**
+     * Pack settings backing {@link #activeFullGraph()} (targets, custom textures, expression uniforms). Null when no raster
+     * core was built or after teardown. The forward executor needs these to construct its targets and uniform expressions.
+     */
+    public IrisPackSettings activeSettings() {
+        return activeSettings;
+    }
+
+    /**
      * Selects the program folder Iris would use for {@code dimensionId} (e.g. {@code minecraft:the_nether}).
      * @return true when the active graph changed, so the caller must retire resources built for the previous one
      */
@@ -78,12 +104,12 @@ public final class IrisShaderHost implements ShaderHost {
         return lastStatus;
     }
 
-    /** Current state of this host (READY if activeGraph is present, else state from lastStatus or NOT_INSTALLED). */
+    /** Current state of this host (READY if a graph is present, else state from lastStatus or NOT_INSTALLED). */
     public ShaderHostState state() {
         if (lastStatus != null) {
             return lastStatus.state();
         }
-        return activeGraph() != null ? ShaderHostState.READY : ShaderHostState.NOT_INSTALLED;
+        return (activeGraph() != null || activeFullGraph != null) ? ShaderHostState.READY : ShaderHostState.NOT_INSTALLED;
     }
 
     public void setStatusForTesting(ShaderHostStatus status) {
@@ -99,6 +125,8 @@ public final class IrisShaderHost implements ShaderHost {
     public void teardown() {
         graphs = Map.of();
         activeFolder = "";
+        activeFullGraph = null;
+        activeSettings = null;
         lastReport = null;
         lastStatus = null;
     }
@@ -108,6 +136,8 @@ public final class IrisShaderHost implements ShaderHost {
         try { lastStatus = doProbe(ctx); }
         catch (RuntimeException | LinkageError error) {
             graphs = Map.of();
+            activeFullGraph = null;
+            activeSettings = null;
             lastStatus = status(ShaderHostState.COMPILE_FAILED, "Shader host initialization failed: " + error.getMessage());
         }
         return lastStatus;
@@ -117,6 +147,8 @@ public final class IrisShaderHost implements ShaderHost {
         lastReport = null;
         graphs = Map.of();
         activeFolder = "";
+        activeFullGraph = null;
+        activeSettings = null;
         Optional<String> choice;
         try {
             choice = IrisPackChoice.read(ctx.gameDir());
@@ -150,14 +182,69 @@ public final class IrisShaderHost implements ShaderHost {
                 return status(ShaderHostState.DEVICE_UNSUPPORTED, "pack " + report.name() + " needs " + missing + " (not on this device)");
             }
         }
+
+        // Raster core first: the primary path for shader_host=iris. Its build is self-validating and accepts shadow,
+        // gbuffers, deferred, composite and final, so it must not be gated by the composite-only validate() below.
+        IrisPassGraph.FullResult full = buildFullGraph(pack, report);
+        if (full.success()) {
+            activeFullGraph = full;
+        }
+        String rasterReady = "pack " + report.name() + " (" + full.passes().size() + " passes, raster core) ready; in-game execution is not verified"
+            + (full.skipped().isEmpty() ? "" : "; skipped: " + String.join("; ", full.skipped()));
+
+        // The composite post host is opt-in. When enabled it builds per-dimension fullscreen graphs and its READY message
+        // is the host status; the raster core (when present) still drives the forward executor.
+        if (Boolean.getBoolean("bedray.iris.post")) {
+            ShaderHostStatus postStatus = buildPostGraphs(pack, report, ctx);
+            if (postStatus.state() == ShaderHostState.READY) {
+                return postStatus;
+            }
+            return full.success() ? status(ShaderHostState.READY, rasterReady) : postStatus;
+        }
+        return full.success() ? status(ShaderHostState.READY, rasterReady) : full.status();
+    }
+
+    /**
+     * Builds the raster-core graph. Always returns a {@link IrisPassGraph.FullResult}; on success {@link #activeSettings}
+     * is populated, on failure it is cleared and the result carries the honest status. Never throws.
+     */
+    private IrisPassGraph.FullResult buildFullGraph(Path pack, PackReport report) {
+        try (PackSource src = PackSource.open(pack, ScanLimits.defaults())) {
+            IrisPackSettings settings = IrisPackSettings.parse(src, report);
+            IrisPassGraph.FullResult full = IrisPassGraph.build(src, report, settings);
+            if (full.success()) {
+                activeSettings = settings;
+                LOGGER.info("[VKB-SHADERHOST] raster core ready for pack {} ({} passes, {} skipped)",
+                    report.name(), full.passes().size(), full.skipped().size());
+            } else {
+                activeSettings = null;
+                LOGGER.warn("[VKB-SHADERHOST] raster core unavailable for pack {}: {}", report.name(), full.status().detail());
+            }
+            return full;
+        } catch (IOException e) {
+            activeSettings = null;
+            LOGGER.warn("[VKB-SHADERHOST] raster core build failed for pack {}: {}", report.name(), e.toString());
+            return new IrisPassGraph.FullResult(false,
+                status(ShaderHostState.UNSUPPORTED_PACK_FEATURES, "pack refused while building raster core: " + e.getMessage()),
+                List.of(), List.of());
+        } catch (RuntimeException e) {
+            activeSettings = null;
+            LOGGER.warn("[VKB-SHADERHOST] raster core build failed for pack {}: {}", report.name(), e.toString());
+            return new IrisPassGraph.FullResult(false,
+                status(ShaderHostState.COMPILE_FAILED, "raster core build failed: " + e.getMessage()),
+                List.of(), List.of());
+        }
+    }
+
+    /**
+     * The opt-in composite post host ({@code -Dbedray.iris.post=true}): validates the fullscreen-only structure and builds
+     * one compiled graph per used dimension folder. Preserved from the post-only host; the raster core is independent.
+     */
+    private ShaderHostStatus buildPostGraphs(Path pack, PackReport report, ShaderHostContext ctx) {
         ShaderHostStatus validation = IrisPassGraph.validate(report);
         if (validation.state() != ShaderHostState.READY) {
             return validation;
         }
-
-        if (!Boolean.getBoolean("bedray.iris.post"))
-            return status(ShaderHostState.DISABLED_FOR_SESSION,
-                "Post-only Vulkan host is opt-in: -Dbedray.iris.post=true; no general Iris compatibility claim");
 
         io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisStandardMacros.configure(ctx.gameDir());
         String primary = IrisPassGraph.folderFor(report, IrisPassGraph.OVERWORLD);
