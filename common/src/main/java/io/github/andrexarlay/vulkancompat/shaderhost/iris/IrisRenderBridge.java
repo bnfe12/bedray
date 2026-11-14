@@ -145,6 +145,20 @@ public final class IrisRenderBridge {
     }
 
     /**
+     * Testing hook to inject a test {@link IrisForwardExecutor} with a specific pack name (no Vulkan device in L2).
+     */
+    public static synchronized void setForwardExecutorForTesting(IrisForwardExecutor testExec, String packName) {
+        if (forwardExecutor != null && forwardExecutor != testExec) {
+            try {
+                forwardExecutor.close();
+            } catch (Throwable ignored) {}
+        }
+        forwardExecutor = testExec;
+        forwardPackName = packName;
+        forwardGraph = null;
+    }
+
+    /**
      * Gets or creates the {@link IrisPostExecutor} singleton.
      * Recreates the executor if the shaderpack has changed.
      */
@@ -232,20 +246,52 @@ public final class IrisRenderBridge {
         float far,
         float frameTime
     ) {
+        return renderWithOutcome(cmd, host, engineColorImage, engineColorView, depthView, width, height,
+            camera, levelState, frameTimeCounter, frameCounter, near, far, frameTime) == RenderOutcome.RECORDED;
+    }
+
+    /**
+     * Tri-state result of a render attempt. {@link #SKIPPED} means the forward path had no gbuffers geometry this frame
+     * (capture warmup): the engine image is left untouched and the host must NOT be disabled for the session — retry next
+     * frame. {@link #FAILED} is a real guard/executor failure (honest native fallback). {@link #RECORDED} means GPU work
+     * was recorded into the command buffer.
+     */
+    public enum RenderOutcome { RECORDED, SKIPPED, FAILED }
+
+    /**
+     * Same contract as {@link #render} but distinguishes a graceful no-geometry skip from a real failure, so the frame
+     * hook does not disable the iris host on a capture-warmup frame.
+     */
+    public static RenderOutcome renderWithOutcome(
+        VkCommandBuffer cmd,
+        IrisShaderHost host,
+        long engineColorImage,
+        long engineColorView,
+        long depthView,
+        int width,
+        int height,
+        CameraRenderState camera,
+        LevelRenderState levelState,
+        float frameTimeCounter,
+        int frameCounter,
+        float near,
+        float far,
+        float frameTime
+    ) {
         if (cmd == null) {
-            return false;
+            return RenderOutcome.FAILED;
         }
         if (host == null) {
-            return false;
+            return RenderOutcome.FAILED;
         }
         if (host.state() != ShaderHostState.READY) {
-            return false;
+            return RenderOutcome.FAILED;
         }
         if (engineColorImage == 0L || engineColorView == 0L || depthView == 0L) {
-            return false;
+            return RenderOutcome.FAILED;
         }
         if (width <= 0 || height <= 0) {
-            return false;
+            return RenderOutcome.FAILED;
         }
 
         IrisPassGraph.FullResult full = host.activeFullGraph();
@@ -256,15 +302,15 @@ public final class IrisRenderBridge {
 
         IrisPassGraph graph = host.activeGraph();
         if (graph == null || graph.passes().isEmpty()) {
-            return false;
+            return RenderOutcome.FAILED;
         }
         // Legacy raw-handle callers have no provenance/conversion or frame history contract.
         if (graph.passes().stream().anyMatch(pass -> !pass.allFrameUsed().isEmpty()
-            || pass.allSamplerBindings().contains(IrisUniforms.BINDING_DEPTHTEX0))) return false;
+            || pass.allSamplerBindings().contains(IrisUniforms.BINDING_DEPTHTEX0))) return RenderOutcome.FAILED;
 
         IrisPostExecutor exec = getOrCreateExecutor(cmd, graph);
         if (exec == null) {
-            return false;
+            return RenderOutcome.FAILED;
         }
 
         try {
@@ -282,14 +328,14 @@ public final class IrisRenderBridge {
                 far,
                 frameTime
             );
-            return true;
+            return RenderOutcome.RECORDED;
         } catch (Throwable t) {
             LOGGER.error("[IrisRenderBridge] Exception during IrisPostExecutor.record\n{}", LogPaths.stack(t));
-            return false;
+            return RenderOutcome.FAILED;
         }
     }
 
-    private static boolean renderForward(
+    private static RenderOutcome renderForward(
         VkCommandBuffer cmd, IrisShaderHost host, IrisPassGraph.FullResult full,
         long engineColorImage, long engineColorView, long depthView, int width, int height,
         CameraRenderState camera, LevelRenderState levelState, float frameTimeCounter, int frameCounter,
@@ -297,15 +343,21 @@ public final class IrisRenderBridge {
     ) {
         IrisForwardExecutor exec = getOrCreateForwardExecutor(cmd, host, full);
         if (exec == null) {
-            return false;
+            return RenderOutcome.FAILED;
         }
         try {
             IrisForwardExecutor.FrameInputs in = buildForwardInputs(engineColorImage, engineColorView, depthView,
                 width, height, camera, levelState, frameTimeCounter, frameCounter, near, far, frameTime);
-            return exec.record(cmd, in);
+            // No gbuffers geometry this frame (capture warmup): leave the engine image untouched and retry next frame.
+            // This is a graceful skip, NOT a failure — disabling the host here would permanently latch native fallback
+            // on the first empty frame, which is why the forward path was never observed in-game.
+            if (!IrisForwardExecutor.frameIsCoherent(full.passes(), in.meshes().keySet())) {
+                return RenderOutcome.SKIPPED;
+            }
+            return exec.record(cmd, in) ? RenderOutcome.RECORDED : RenderOutcome.FAILED;
         } catch (Throwable t) {
             LOGGER.error("[IrisRenderBridge] Exception during IrisForwardExecutor.record\n{}", LogPaths.stack(t));
-            return false;
+            return RenderOutcome.FAILED;
         }
     }
 
