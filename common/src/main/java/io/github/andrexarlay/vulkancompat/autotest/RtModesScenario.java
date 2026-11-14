@@ -37,7 +37,7 @@ public final class RtModesScenario implements AutotestScenario {
      * pocket, L night street with lamp posts and lit windows, M snowfield around a lava pit with a campfire (the owner
      * screenshot), N a base mixing every block light type.
      */
-    static final java.util.Set<String> LIGHT_SCENES = java.util.Set.of("J", "K", "L", "M", "N", "Z");
+    static final java.util.Set<String> LIGHT_SCENES = java.util.Set.of("J", "K", "L", "M", "N", "Y", "Z");
     public static final String DEFAULT_STEPS = "A:off,A:rays,A:rays+ao+soft+q2,A:rays+refl,B:off,B:rays,B:path+b3+f400";
     private static final int TIME_OF_DAY = Integer.getInteger("vkrtx.autotest.rtTime", 2500);
 
@@ -256,6 +256,16 @@ public final class RtModesScenario implements AutotestScenario {
 
     /** Geometry of the light-placement scenes J..N (see {@link #LIGHT_SCENES}); all within ~70 blocks of the base. */
     private void lightScenes(List<String> c) {
+        // Y: the owner screenshots of 2026-11-14: a closed dark room, a sea lantern panel on the west wall and dark-oak fence rails
+        // in front of it; with ReSTIR DI the wall behind the rails shows hard black wedges, without it soft shadows
+        c.add(fill(110, -2, -30, 124, 8, -16, "deepslate_bricks"));
+        c.add(fill(111, 0, -29, 123, 6, -17, "air"));
+        c.add(fill(111, 2, -25, 111, 4, -21, "sea_lantern"));
+        c.add(fill(115, 1, -29, 115, 1, -17, "dark_oak_fence"));
+        c.add(fill(115, 3, -29, 115, 3, -17, "dark_oak_fence"));
+        for (int pz : new int[] {-28, -24, -20, -18}) {
+            c.add(fill(115, 0, pz, 115, 4, pz, "dark_oak_fence"));
+        }
         // Z: dense light field (the owner hub: 2048 of 2463 lights in range). 90x90 stone floor, a lamp every 2 blocks in a
         // cycle of lantern / soul lantern / glowstone / lit redstone lamp / torch (~2000 emitters), camera at its south edge
         c.add(fill(10, -2, 50, 100, -1, 140, "stone"));
@@ -550,6 +560,9 @@ public final class RtModesScenario implements AutotestScenario {
             // snowfield: above the south-west of the pit looking down at the lava (the owner screenshot)
             x = bx + 33.5; y = by + 6; z = bz + 22.5; aimYaw = -45f; aimPitch = 32f;
             flyScene = true;
+        } else if (scene.equals("Y")) {
+            // dark room: south-east corner looking north-west at the lantern behind the rails
+            x = bx + 122.5; y = by; z = bz - 18.5; aimYaw = 125f; aimPitch = 5f;
         } else if (scene.equals("Z")) {
             // hub: at the south edge of the lamp field looking north (+Z) across it
             x = bx + 55.5; y = by; z = bz + 49.0; aimYaw = 0f; aimPitch = 8f;
