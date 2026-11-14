@@ -832,6 +832,11 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setBinding(v -> RtSettings.tonemapper = v, () -> RtSettings.tonemapper)
             .setImpact(OptionImpact.LOW).setStorageHandler(st);
         look.addOption(track("tonemapper", tm));
+        Function<ConfigState, Boolean> localToneOn = state -> pathOn.apply(state)
+            && state.readEnumOption(denId, RtSettings.PathDenoiser.class) == RtSettings.PathDenoiser.DLSS_RR;
+        Identifier[] dLocalTone = rtDependencies(modeId, denId);
+        look.addOption(atmSlider(builder, "atm_local_highlights", "local_highlights", 100, 0, 200, 5, localToneOn, dLocalTone, true, st));
+        look.addOption(atmSlider(builder, "atm_local_shadows", "local_shadows", 100, 0, 200, 5, localToneOn, dLocalTone, true, st));
         look.addOption(boolOpt(builder, "vibrant_visuals", false, v -> RtSettings.vibrantVisuals = v,
             () -> RtSettings.vibrantVisuals, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(boolOpt(builder, "vignette", false, v -> RtSettings.vignette = v,

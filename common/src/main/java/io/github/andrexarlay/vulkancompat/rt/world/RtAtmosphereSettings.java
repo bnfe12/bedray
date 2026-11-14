@@ -33,6 +33,8 @@ public final class RtAtmosphereSettings {
     private static volatile int godRayRange = (int) clamp(num("vkrtx.rt.godrays.range", 160), 32, 256);
     private static volatile boolean bloom = flag("vkrtx.rt.bloom", true);
     private static volatile boolean bloomSky = false;
+    private static volatile float localHighlights = (float) clamp(num("vkrtx.rt.localTonemap", 1.0), 0, 2);
+    private static volatile float localShadows = (float) clamp(num("vkrtx.rt.localTonemap.shadows", 1.0), 0, 2);
     private static volatile float bloomStrength = (float) clamp(num("vkrtx.rt.bloom.strength", 0.25), 0, 2);
     private static volatile float bloomThreshold = (float) clamp(num("vkrtx.rt.bloom.threshold", 6.0), 0.5, 10);
     private static volatile float bloomScatter = (float) clamp(num("vkrtx.rt.bloom.scatter", 0.62), 0.3, 0.95);
@@ -81,6 +83,10 @@ public final class RtAtmosphereSettings {
         return bloomSky;
     }
 
+    public static float localHighlights() { return localHighlights; }
+
+    public static float localShadows() { return localShadows; }
+
     public static float bloomStrength() {
         return bloomStrength;
     }
@@ -128,6 +134,10 @@ public final class RtAtmosphereSettings {
                 Tier.BASIC, Kind.SLIDER, 0, 2, 1.0, List.of()),
             new Option("bloom", "Bloom", "Soft glow around bright light sources and emissive blocks, added before tone mapping so "
                 + "colours are kept.", Tier.BASIC, Kind.TOGGLE, 0, 1, 1, List.of()),
+            new Option("local_highlights", "Local highlight recovery", "Preserve detail in bright areas with DLSS Ray Reconstruction.",
+                Tier.ADVANCED, Kind.SLIDER, 0, 2, 1, List.of()),
+            new Option("local_shadows", "Local shadow lift", "Reveal detail in dark areas with DLSS Ray Reconstruction.",
+                Tier.ADVANCED, Kind.SLIDER, 0, 2, 1, List.of()),
             new Option("bloom_sky", "Sky bloom", "Let bright sky pixels contribute to bloom.",
                 Tier.ADVANCED, Kind.TOGGLE, 0, 1, 0, List.of()),
             new Option("bloom_strength", "Bloom strength", "How strong the glow is.", Tier.BASIC, Kind.SLIDER, 0, 2, 0.25, List.of()),
@@ -161,6 +171,8 @@ public final class RtAtmosphereSettings {
             case "godrays_range" -> godRayRange;
             case "bloom" -> bloom ? 1 : 0;
             case "bloom_sky" -> bloomSky ? 1 : 0;
+            case "local_highlights" -> localHighlights;
+            case "local_shadows" -> localShadows;
             case "bloom_strength" -> bloomStrength;
             case "bloom_threshold" -> bloomThreshold;
             case "bloom_scatter" -> bloomScatter;
@@ -185,6 +197,8 @@ public final class RtAtmosphereSettings {
             case "godrays_range" -> godRayRange = (int) clamp(Math.round(v), 32, 256);
             case "bloom" -> bloom = v >= 0.5;
             case "bloom_sky" -> bloomSky = v >= 0.5;
+            case "local_highlights" -> localHighlights = (float) clamp(v, 0, 2);
+            case "local_shadows" -> localShadows = (float) clamp(v, 0, 2);
             case "bloom_strength" -> bloomStrength = (float) clamp(v, 0, 2);
             case "bloom_threshold" -> bloomThreshold = (float) clamp(v, 0.5, 10);
             case "bloom_scatter" -> bloomScatter = (float) clamp(v, 0.3, 0.95);
@@ -202,9 +216,9 @@ public final class RtAtmosphereSettings {
 
     /** One line for the log. */
     public static String describe() {
-        return String.format(Locale.ROOT, "godrays=%s steps=%d strength=%.2f range=%d bloom=%s strength=%.2f threshold=%.2f scatter=%.2f "
+        return String.format(Locale.ROOT, "godrays=%s steps=%d strength=%.2f range=%d bloom=%s sky=%s strength=%.2f threshold=%.2f scatter=%.2f "
                 + "sunglare=%s strength=%.2f fog_vanilla=%.2f fog_aerial=%.2f chunk_fade=%.2f", godRays, godRaySteps(), godRayStrength, godRayRange,
-            bloom(), bloomStrength, bloomThreshold, bloomScatter, sunGlare(), sunGlareStrength, fogVanilla, fogAerial, chunkFade);
+            bloom(), bloomSky(), bloomStrength, bloomThreshold, bloomScatter, sunGlare(), sunGlareStrength, fogVanilla, fogAerial, chunkFade);
     }
 
     static GodRays parseGodRays(String s, GodRays def) {

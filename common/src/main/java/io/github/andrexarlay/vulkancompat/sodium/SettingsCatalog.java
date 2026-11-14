@@ -573,6 +573,12 @@ public final class SettingsCatalog {
         putNoImage("manual_texture_lod_bias", Tier.ADVANCED, "Fixed Mipmap Bias",
             "Offsets mipmap selection by a fixed amount. Negative values keep more detail. Positive values soften textures.",
             "", "Automatic Texture Detail off.", "Check terrain textures while moving.");
+        putNoImage("atm_local_highlights", Tier.ADVANCED, "Local Highlight Recovery",
+            "Preserves texture in bright areas such as blocks around a torch. Zero disables highlight compression.",
+            "", "Active DLSS Ray Reconstruction.", "Compare detail around bright lights.");
+        putNoImage("atm_local_shadows", Tier.ADVANCED, "Local Shadow Lift",
+            "Reveals detail in dark areas behind bright lights. Zero disables shadow lift.",
+            "", "Active DLSS Ray Reconstruction.", "Compare dark areas near bright lights.");
         putNoImage("atm_bloom_sky", Tier.ADVANCED, "Sky Bloom",
             "Lets bright sky pixels contribute to bloom. Use a higher threshold if daylight looks washed out.",
             "", "Bloom on.", "Compare bright horizons and clouds.");

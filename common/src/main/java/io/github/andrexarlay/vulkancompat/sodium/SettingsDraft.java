@@ -44,7 +44,7 @@ final class SettingsDraft {
         "path_spp", "path_bounces", "path_distance", "adaptive_quality", "sun_size_tenths", "sun_tilt_deg",
         "water_style", "auto_normals", "auto_normal_strength", "point_sampling_sharpness", "auto_texture_lod_bias",
         "texture_lod_bias_offset", "manual_texture_lod_bias",
-        "path_auto_exposure", "path_exposure_ev", "tonemapper", "vibrant_visuals",
+        "path_auto_exposure", "path_exposure_ev", "tonemapper", "atm_local_highlights", "atm_local_shadows", "vibrant_visuals",
         "atm_bloom", "atm_bloom_strength", "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky",
         "atm_godrays", "atm_godrays_strength", "atm_godrays_quality", "atm_godrays_range",
         "atm_sunglare", "atm_sunglare_strength",
@@ -280,7 +280,7 @@ final class SettingsDraft {
         if ((p.endsWith("custom_scale") || Set.of("fsr_sharpness", "fsr1_sharpness", "nis_sharpness",
                 "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky", "atm_godrays_quality", "atm_godrays_range", "atm_sunglare_strength",
                 "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_vanilla", "auto_normal_strength",
-                "texture_lod_bias_offset", "manual_texture_lod_bias").contains(p))
+                "texture_lod_bias_offset", "manual_texture_lod_bias", "atm_local_highlights", "atm_local_shadows").contains(p))
                 && !e.option().isEnabled()) return false;
         if (!voxel()) return !e.option().shouldHideControl();
         return Set.of("renderer", "renderer_status", "quality_preset", "custom_scale", "debug_overlay", "ui_expert").contains(p)

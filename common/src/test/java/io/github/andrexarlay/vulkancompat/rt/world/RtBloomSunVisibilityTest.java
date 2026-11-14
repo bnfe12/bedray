@@ -24,6 +24,24 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 class RtBloomSunVisibilityTest {
     @Test
+    void localToneControlsRetainIndependentStrengths() throws IOException {
+        float highlights = RtAtmosphereSettings.localHighlights();
+        float shadows = RtAtmosphereSettings.localShadows();
+        try {
+            RtLocalTonemap.setStrength(0f, 1.5f);
+            assertTrue(RtLocalTonemap.enabled());
+            var config = new java.io.StringWriter();
+            io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.writeAll(config);
+            assertTrue(config.toString().lines().anyMatch("atm_local_highlights = 0.0"::equals));
+            assertTrue(config.toString().lines().anyMatch("atm_local_shadows = 1.5"::equals));
+            RtLocalTonemap.setStrength(0f, 0f);
+            assertFalse(RtLocalTonemap.enabled());
+        } finally {
+            RtLocalTonemap.setStrength(highlights, shadows);
+        }
+    }
+
+    @Test
     void skyBloomIsPersistedAndUsesAnIndependentShaderFlag() throws IOException {
         double previous = RtAtmosphereSettings.get("bloom_sky");
         try {
