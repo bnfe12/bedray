@@ -17,6 +17,11 @@
 
 ### Unreleased details
 
+* Fixed a straight seam across lakes. The water wave field is evaluated at the wrapped world position (1024 blocks), and its six waves
+  were not periodic over that wrap, so the phase jumped at every world line x or z = 1024 n (the slope jumped by 0.08 on average
+  against 0.0005 for a step of the same size elsewhere, in a model of the field). The wave vectors are now the nearest multiples of
+  2 pi / 1024 (k moves by at most 0.4 %, the direction by 0.15 degrees), and the jump is 0.0003. Autotest scene `W` builds a lake over
+  the lines x = 0 and z = 0.
 * Fixed ReSTIR Direct Light brightening the image. A history (or a spatial neighbour) with no weight to give - an empty record, or
   one zeroed by its own shadow ray - was dropped together with its M, so the sample the pixel kept was divided by the fresh batch
   alone whenever the history happened to be empty, which is most of the time on a dim wall. Such a record now adds its draws and
