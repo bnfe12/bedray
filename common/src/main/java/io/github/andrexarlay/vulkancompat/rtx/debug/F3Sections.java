@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.device.DeviceInfo;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import io.github.andrexarlay.vulkancompat.BuildIdentity;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserMode;
+import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate;
 import io.github.andrexarlay.vulkancompat.rt.sodium.SectionGeometryRegistry;
 import io.github.andrexarlay.vulkancompat.rt.world.RtAdaptiveQuality;
@@ -20,7 +21,6 @@ import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.RtActivation;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerLibraryLoader;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerRequest;
@@ -288,6 +288,13 @@ public final class F3Sections {
     private static String upscaleLine() {
         UpscalerRequest.Request req = UpscalerRequest.current();
         StringBuilder b = sb().append("Upscale: ");
+        if (WorldTargetManager.rrOutputThisFrame()) {
+            if (RtFrameRenderer.displayedThisFrame() && RtFrameRenderer.frameColorTemporallyResolved()
+                    && RtFrameRenderer.denoiserSelected() == DenoiserMode.DLSS_RR) {
+                return colored(b, OK, "DLSS Ray Reconstruction").toString();
+            }
+            return colored(b, WARN, "RR fallback this frame").toString();
+        }
         UpscalerBackend backend = req.backend();
         switch (backend) {
             case DLSS -> runtimeState(b, req.toString(), DlssRuntime.state(), DlssRuntime.lastFailure());
@@ -618,11 +625,11 @@ public final class F3Sections {
         out.add(b.toString());
 
         b = sb().append("Jitter: ");
-        if (!CameraJitterManager.isActive() || !TemporalUpscaler.isActive()) {
+        if (!CameraJitterManager.isActive()) {
             colored(b, OFF, "off");
         } else {
             b.append(OK).append("on").append(R).append(" phase ").append(CameraJitterManager.getPhaseIndex() + 1).append('/')
-                .append(CameraJitterManager.phaseCountFor(TemporalUpscaler.scale())).append(OFF).append(" (");
+                .append(CameraJitterManager.getPhaseCount()).append(OFF).append(" (");
             appendSigned(b, CameraJitterManager.getCurrentPixelJitterX());
             b.append(", ");
             appendSigned(b, CameraJitterManager.getCurrentPixelJitterY());

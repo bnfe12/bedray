@@ -772,12 +772,8 @@ public final class DlssRrDenoiser {
             if (io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.dlssViaStreamline()) {
                 // SL combines this projection with RR's worldToView. Reusing the raster's bobbed projection here
                 // would apply bob twice. Preserve the exact SDK projection (including its clip-Y convention).
-                int outW = io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.isActive()
-                    ? io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.outputWidth() : width;
-                int outH = io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.isActive()
-                    ? io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.outputHeight() : height;
                 io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.ensureRrConstants(
-                    sdkCamera, width, height, outW, outH);
+                    sdkCamera, width, height, outputWidth, outputHeight);
             }
             DlssNative.Status st = rr.evaluate(cmd.address(), feature.handle(), eval);
             if (!st.ok()) {

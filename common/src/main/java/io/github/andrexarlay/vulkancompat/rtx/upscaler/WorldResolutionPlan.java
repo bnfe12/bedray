@@ -8,6 +8,20 @@ public record WorldResolutionPlan(int traceWidth, int traceHeight, int worldWidt
             throw new IllegalArgumentException("non-positive world resolution");
     }
 
+    /** A vendor input size is valid only for the full output extent it was queried for. */
+    public static boolean matchesOutput(int outputWidth, int outputHeight, int configuredWidth, int configuredHeight) {
+        return outputWidth > 0 && outputHeight > 0 && outputWidth == configuredWidth && outputHeight == configuredHeight;
+    }
+
+    public int jitterPhaseCount(int outputWidth, int outputHeight) {
+        double upscale = Math.max((double) outputWidth / traceWidth, (double) outputHeight / traceHeight);
+        return CameraJitterManager.phaseCountFor(upscale);
+    }
+
+    public double rasterScale(int outputWidth, int outputHeight) {
+        return Math.min((double) worldWidth / outputWidth, (double) worldHeight / outputHeight);
+    }
+
     public static WorldResolutionPlan choose(int inputWidth, int inputHeight, int outputWidth, int outputHeight,
                                              boolean rrReady, UpscalerBackend backend, boolean spatialSelected) {
         boolean nativeWithoutUpscaler = (backend == null || backend == UpscalerBackend.BILINEAR)

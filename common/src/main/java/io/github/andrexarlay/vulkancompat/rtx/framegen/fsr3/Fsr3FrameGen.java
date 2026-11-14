@@ -101,7 +101,6 @@ public final class Fsr3FrameGen {
     private static long windowPresented0;
     private static double fpsRendered;
     private static double fpsPresented;
-    private static boolean windowFocused = true;
 
     private Fsr3FrameGen() {}
 
@@ -391,6 +390,10 @@ public final class Fsr3FrameGen {
                 }
                 return;
             }
+            if (!Minecraft.getInstance().getWindow().isFocused()) {
+                worldFail = "window_not_focused";
+                return;
+            }
             var world = WorldTargetManager.getWorldTarget();
             var depthCopy = WorldTargetManager.getDepthCopy();
             var mvTarget = WorldTargetManager.getMotionVectorsTarget();
@@ -430,8 +433,8 @@ public final class Fsr3FrameGen {
             }
             var camera = guides != null ? guides.preparedCamera()
                 : new io.github.andrexarlay.vulkancompat.rtx.frame.ReconstructionCamera(pc, rc, cc.x, cc.y, cc.z,
-                    CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), false);
-            windowFocused = Minecraft.getInstance().getWindow().isFocused();
+                    CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(),
+                    WorldTargetManager.currentRasterMotionResetsHistory());
             FrameGenSettings.Mode wanted = FrameGenSettings.mode();
             if (scSwapchain == 0L) {
                 worldFail = "no_swapchain";
@@ -444,10 +447,9 @@ public final class Fsr3FrameGen {
             long surfaceGen = FrameGenSurfaceInfo.generation();
             boolean surfaceChanged = surfaceGen != lastSurfaceGeneration;
             lastSurfaceGeneration = surfaceGen;
-            validFrames = surfaceChanged || camera.reset() ? 0 : validFrames + 1;
-            if (camera.reset()) shutdownFgContext("rr_camera_reset");
-            boolean want = validFrames > WARMUP_FRAMES;
-
+            if (camera.reset()) {
+                shutdownFgContext("camera_reset");
+            }
             FsrCamera cam = FsrCamera.fromProjection(camera.projection());
             if (gpu == null) {
                 gpu = new FrameGenGpu(device);
@@ -455,7 +457,10 @@ public final class Fsr3FrameGen {
             if (!gpu.matches(fmt, winW, winH, renderW, renderH)) {
                 shutdownFgContext("output_resize");
                 gpu.ensure(fmt, winW, winH, renderW, renderH);
+                surfaceChanged = true;
             }
+            validFrames = surfaceChanged || camera.reset() ? 0 : validFrames + 1;
+            boolean want = validFrames > WARMUP_FRAMES;
             if (!ensureFg(device, winW, winH, fmt, cam)) {
                 return;
             }
@@ -504,8 +509,8 @@ public final class Fsr3FrameGen {
                     guides.generation(), guides.stamp(), renderW, renderH, winW, winH);
             }
             if (want != modeOn) {
-                LOGGER.info("[VKB-FG] fsr3 mode={} multiplier=2x (was {}) frame={} output={}x{} render={}x{} back_buffers={} focused={}",
-                    want ? "ON" : "OFF", modeOn ? "ON" : "OFF", frameId, winW, winH, renderW, renderH, FrameGenSurfaceInfo.imageCount(), windowFocused);
+                LOGGER.info("[VKB-FG] fsr3 mode={} multiplier=2x (was {}) frame={} output={}x{} render={}x{} back_buffers={}",
+                    want ? "ON" : "OFF", modeOn ? "ON" : "OFF", frameId, winW, winH, renderW, renderH, FrameGenSurfaceInfo.imageCount());
                 modeOn = want;
                 genStreak = 0;
                 ratioPresented0 = -1;
@@ -523,14 +528,13 @@ public final class Fsr3FrameGen {
         if (worldReady || fg == null || configuredFrame == frameId) {
             return;
         }
-        // no world this frame (menu, loading): generation off, nothing tagged
+        validFrames = 0;
+        if (!modeOn) {
+            return;
+        }
         try {
-            boolean wasOn = modeOn;
             disableGeneration();
-            validFrames = 0;
-            if (wasOn) {
-                LOGGER.info("[VKB-FG] fsr3 mode=OFF reason={} frame={} configure_result=0", idleReason, frameId);
-            }
+            LOGGER.info("[VKB-FG] fsr3 mode=OFF reason={} frame={} configure_result=0", idleReason, frameId);
         } catch (Throwable t) {
             fail("after_render", t.toString(), t);
         }

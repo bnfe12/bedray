@@ -1,8 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx;
 
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Resolution scaling of Minecraft's 3D render target.
@@ -15,7 +13,6 @@ import org.slf4j.LoggerFactory;
  * NOT called from here; see the {@code // STUB:} headers in their files.
  */
 public final class VulkanRtxManager {
-    private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/RtxManager");
 
     private static volatile boolean frameRendering = false;
 
@@ -49,19 +46,23 @@ public final class VulkanRtxManager {
     }
 
     public static int calculateScaledWidth(int displayWidth, float scaleFactor) {
-        int w = Math.max(320, (int) Math.round(displayWidth * scaleFactor));
-        return (w + 1) & ~1;
+        return calculateScaledSize(displayWidth, scaleFactor, 320);
     }
 
     public static int calculateScaledHeight(int displayHeight, float scaleFactor) {
-        int h = Math.max(240, (int) Math.round(displayHeight * scaleFactor));
-        return (h + 1) & ~1;
+        return calculateScaledSize(displayHeight, scaleFactor, 240);
+    }
+
+    private static int calculateScaledSize(int output, float scale, int minimum) {
+        if (output <= 0 || scale >= 1.0f) {
+            return output;
+        }
+        int scaled = Math.max(minimum, Math.round(output * scale));
+        return scaled >= output ? output : Math.min(output, (scaled + 1) & ~1);
     }
 
     /**
-     * Applies the configured resolution scale to Minecraft's GameRenderer on the render thread.
-     * If a frame is in flight the resize is skipped; MixinGameRenderer re-checks the target size
-     * at the start of every frame, so the change is picked up there.
+     * Syncs the engine's window-sized targets and GUI metrics. The next world phase owns allocation of scaled targets.
      */
     public static void applyResolutionScalingNow() {
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
@@ -70,14 +71,8 @@ public final class VulkanRtxManager {
         }
         int winW = mc.getWindow().getWidth();
         int winH = mc.getWindow().getHeight();
-        final int targetW;
-        final int targetH;
-        if (mc.level != null && WorldTargetManager.isScalingActive()) {
-            targetW = WorldTargetManager.getTargetWidth(winW);
-            targetH = WorldTargetManager.getTargetHeight(winH);
-        } else {
-            targetW = winW;
-            targetH = winH;
+        if (winW <= 0 || winH <= 0) {
+            return;
         }
 
         // GUI and scissor math must keep using full window size.
@@ -94,10 +89,6 @@ public final class VulkanRtxManager {
             if (mc.gameRenderer.mainRenderTarget().width != winW || mc.gameRenderer.mainRenderTarget().height != winH) {
                 mc.gameRenderer.resize(winW, winH);
             }
-            if (WorldTargetManager.isScalingActive() && mc.level != null) {
-                WorldTargetManager.ensureTargets(targetW, targetH);
-            }
-            LOGGER.info("Applied dynamic render target resolution: {}x{} (window: {}x{})", targetW, targetH, winW, winH);
         };
 
         if (com.mojang.blaze3d.systems.RenderSystem.isOnRenderThread()) {

@@ -308,8 +308,13 @@ public class ShimTestRunner {
             VulkanRtxConfig.qualityPreset = VulkanRtxConfig.QualityPreset.BALANCED;
             assertTrue(WorldTargetManager.isScalingActive(), "BILINEAR + BALANCED must be scaling active");
             assertTrue(WorldTargetManager.isWorldPhaseActive(), "BILINEAR + BALANCED must be world phase active");
-            assertEquals(1708, WorldTargetManager.getTargetWidth(2560), "BALANCED width 66.7%");
-            assertEquals(960, WorldTargetManager.getTargetHeight(1440), "BALANCED height 66.7%");
+            float scale = VulkanRtxConfig.qualityPreset.getScaleFactor();
+            assertEquals(1708, VulkanRtxManager.calculateScaledWidth(2560, scale), "BALANCED width 66.7%");
+            assertEquals(960, VulkanRtxManager.calculateScaledHeight(1440, scale), "BALANCED height 66.7%");
+            assertEquals(1921, VulkanRtxManager.calculateScaledWidth(1921, 1.0f), "odd native width");
+            assertEquals(1081, VulkanRtxManager.calculateScaledHeight(1081, 1.0f), "odd native height");
+            assertEquals(319, VulkanRtxManager.calculateScaledWidth(319, scale), "small window caps the width");
+            assertEquals(0, VulkanRtxManager.calculateScaledHeight(0, scale), "zero output remains unavailable");
 
             // A RUNNING Hardware RT (gate on) activates world phase isolation even at 100% Native resolution. The config flag
             // alone does not: the gate is decided per frame (RtActivation) and stays off while RT is blocked or failed.

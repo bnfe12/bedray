@@ -547,10 +547,10 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
 
     /** One "Upscaler Quality" row per backend, only the one of the selected backend is shown; Built-in shows "3D Scale". */
     private void addQualityModes(ConfigBuilder builder, OptionGroupBuilder group, Identifier backendId, Path gameDir, StorageEventHandler st) {
-        for (UpscalerBackend ub : new UpscalerBackend[] {UpscalerBackend.DLSS, UpscalerBackend.XESS, UpscalerBackend.FSR}) {
+        for (UpscalerBackend ub : new UpscalerBackend[] {UpscalerBackend.DLSS, UpscalerBackend.XESS, UpscalerBackend.FSR, UpscalerBackend.FSR1}) {
             String path = ub.name().toLowerCase(Locale.ROOT) + "_mode";
             EnumOptionBuilder<UpscalerMode> o = builder.createEnumOption(id(path), UpscalerMode.class);
-            o.setName(nameOf(path)).setTooltip(val -> Component.empty().append(modeTooltip(ub)).append("\n").append(tipOf(path)))
+            o.setName(nameOf(path)).setTooltip(val -> ub.isSpatial() ? tipOf(path) : modeTooltip(ub))
                 .setDefaultValue(UpscalerModes.defaultMode(ub))
                 .setAllowedValues(EnumSet.copyOf(UpscalerModes.modesFor(ub)))
                 .setElementNameProvider(val -> modeName(ub, val))
@@ -560,21 +560,21 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                     UpscalerSwitch.Outcome outcome = switch (ub) {
                         case XESS -> VulkanRtxConfig.applyUpscaler(VulkanRtxConfig.activeBackend, val, null, "ui_xess_mode");
                         case DLSS -> VulkanRtxConfig.applyUpscaler(VulkanRtxConfig.activeBackend, null, val, "ui_dlss_mode");
-                        default -> VulkanRtxConfig.applyUpscaler(VulkanRtxConfig.activeBackend, null, null, val, null, "ui_fsr_mode");
+                        case FSR -> VulkanRtxConfig.applyUpscaler(VulkanRtxConfig.activeBackend, null, null, val, null, "ui_fsr_mode");
+                        case FSR1 -> VulkanRtxConfig.applyUpscalerFull(VulkanRtxConfig.activeBackend, null, null, null, null, val, "ui_fsr1_mode");
+                        default -> throw new IllegalStateException("No quality selector for " + ub);
                     };
                     LOGGER.info("[VKB-AUTOTEST] ui_upscaler {}={} ratio={} outcome={}", path, val, qualityRatioForLog(ub, val), outcome);
-                }, () -> switch (ub) {
-                    case XESS -> VulkanRtxConfig.xessMode;
-                    case DLSS -> VulkanRtxConfig.dlssMode;
-                    default -> VulkanRtxConfig.fsrMode;
-                })
+                }, () -> VulkanRtxConfig.modeOf(ub))
                 .setImpact(OptionImpact.MEDIUM).setStorageHandler(st);
             if (restartNeeded(gameDir, ub)) {
                 o.setFlags(OptionFlag.REQUIRES_GAME_RESTART);
             }
             hideRowWhenDisabled(path);
             group.addOption(track(path, o));
+            addCustomUpscalerScale(builder, group, backendId, ub, id(path), st);
         }
+        addCustomUpscalerScale(builder, group, backendId, UpscalerBackend.NIS, null, st);
         Identifier presetId = id("quality_preset");
         EnumOptionBuilder<VulkanRtxConfig.QualityPreset> q = builder.createEnumOption(presetId, VulkanRtxConfig.QualityPreset.class);
         q.setName(nameOf("quality_preset")).setTooltip(v -> tipOf("quality_preset")).setDefaultValue(VulkanRtxConfig.QualityPreset.NATIVE)
@@ -595,6 +595,31 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setControlHiddenWhenDisabled(true).setImpact(OptionImpact.MEDIUM).setStorageHandler(st);
         hideRowWhenDisabled("quality_preset");
         group.addOption(track("quality_preset", q));
+        group.addOption(intOpt(builder, "custom_scale", 100, 25, 100, 5, percent(),
+            v -> {
+                VulkanRtxConfig.customScalePercent = v;
+                VulkanRtxConfig.syncUpscalerTypeWithPreset();
+                VulkanRtxManager.applyResolutionScalingNow();
+            }, () -> VulkanRtxConfig.customScalePercent,
+            s -> s.readEnumOption(presetId, VulkanRtxConfig.QualityPreset.class) == VulkanRtxConfig.QualityPreset.CUSTOM
+                && s.readEnumOption(backendId, UpscalerChoice.class).backend() == UpscalerBackend.BILINEAR,
+            new Identifier[] {id("quality_preset"), backendId}, Mark.NONE, OptionImpact.MEDIUM, true, st));
+    }
+
+    private static void addCustomUpscalerScale(ConfigBuilder builder, OptionGroupBuilder group, Identifier backendId,
+                                               UpscalerBackend backend, Identifier modeId, StorageEventHandler st) {
+        String path = backend.name().toLowerCase(Locale.ROOT) + "_custom_scale";
+        Identifier[] deps = modeId == null ? new Identifier[] {backendId} : new Identifier[] {backendId, modeId};
+        group.addOption(intOpt(builder, path, UpscalerModes.CUSTOM_DEFAULT_PERCENT, UpscalerModes.customMinPercent(backend),
+            UpscalerModes.CUSTOM_MAX_PERCENT, 1, percent(), value -> {
+                VulkanRtxConfig.setCustomPercent(backend, value);
+                if (VulkanRtxConfig.activeBackend == backend && VulkanRtxConfig.modeOf(backend) == UpscalerMode.CUSTOM) {
+                    VulkanRtxConfig.reapplyUpscaler("ui_custom_scale");
+                }
+            }, () -> VulkanRtxConfig.customPercent(backend),
+            state -> state.readEnumOption(backendId, UpscalerChoice.class).backend() == backend
+                && (modeId == null || state.readEnumOption(modeId, UpscalerMode.class) == UpscalerMode.CUSTOM),
+            deps, Mark.NONE, OptionImpact.MEDIUM, true, st));
     }
 
     private void addDlssModel(ConfigBuilder builder, OptionGroupBuilder group, Identifier backendId, StorageEventHandler st) {
@@ -695,7 +720,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         pt.addOption(intOpt(builder, "path_distance", 384, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16,
             unit(" blocks"), v -> RtSettings.pathDistance = v, () -> RtSettings.pathDistance, pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
         EnumOptionBuilder<RtSettings.PathDenoiser> den = builder.createEnumOption(id("path_denoiser"), RtSettings.PathDenoiser.class);
-        den.setName(nameOf("path_denoiser")).setTooltip(v -> tipOf("path_denoiser")).setDefaultValue(RtSettings.PathDenoiser.DLSS_RR)
+        den.setName(nameOf("path_denoiser")).setTooltip(v -> tipOf("path_denoiser")).setDefaultValue(RtSettings.PathDenoiser.NRD)
             .setAllowedValues(EnumSet.of(RtSettings.PathDenoiser.OFF, RtSettings.PathDenoiser.NRD, RtSettings.PathDenoiser.DLSS_RR))
             .setElementNameProvider(val -> switch (val) {
                 case OFF -> tr("bedray.path_denoiser.off", "Off");
@@ -852,15 +877,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                 VulkanRtxConfig.textureLodBiasOffset = offset;
                 TextureLodBias.textureLodBiasOffset = offset;
             }, () -> Math.round(VulkanRtxConfig.textureLodBiasOffset * 10.0f), null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
-        img.addOption(intOpt(builder, "custom_scale", 100, 25, 100, 5, percent(),
-            v -> {
-                VulkanRtxConfig.customScalePercent = v;
-                VulkanRtxConfig.syncUpscalerTypeWithPreset();
-                VulkanRtxManager.applyResolutionScalingNow();
-            }, () -> VulkanRtxConfig.customScalePercent,
-            s -> s.readEnumOption(id("quality_preset"), VulkanRtxConfig.QualityPreset.class) == VulkanRtxConfig.QualityPreset.CUSTOM
-                && s.readEnumOption(backendId, UpscalerChoice.class).backend() == UpscalerBackend.BILINEAR,
-            new Identifier[] {id("quality_preset"), backendId}, Mark.NONE, OptionImpact.MEDIUM, true, st));
         img.addOption(intOpt(builder, "fsr_sharpness", 0, 0, 100, 5,
             v -> v == 0 ? tr("bedray.onoff.off", "Off") : Component.literal(v + "%"),
             v -> {
@@ -1377,14 +1393,19 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         return String.format(Locale.ROOT, "%.4fx%s", ratio, mode == UpscalerMode.CUSTOM ? "-requested-custom" : "");
     }
 
-    /** "Quality (1.7x, 58.8%)": mode name plus its table or configured custom scale. */
+    /** Shows table ratios for presets whose scale is known. The custom slider shows the pending percentage. */
     static Component modeName(UpscalerBackend backend, UpscalerMode mode) {
-        if (backend == UpscalerBackend.DLSS) {
-            // no table: the render size comes from NGX at runtime
-            return Component.translatableWithFallback(mode.translationKey(), mode.englishName());
+        Component name = Component.translatableWithFallback(mode.translationKey(), mode.englishName());
+        if (mode == UpscalerMode.CUSTOM) {
+            return name;
         }
-        return Component.empty().append(Component.translatableWithFallback(mode.translationKey(), mode.englishName()))
-            .append(ratioSuffix(backend, mode));
+        if (mode == UpscalerMode.DLAA) {
+            return name.copy().append(" (100%)");
+        }
+        if (backend == UpscalerBackend.DLSS) {
+            return name;
+        }
+        return name.copy().append(ratioSuffix(backend, mode));
     }
 
     /** " (1.5x, 67.0%)": the table ratio of the mode and the render scale it implies; CUSTOM is the user's percent. */

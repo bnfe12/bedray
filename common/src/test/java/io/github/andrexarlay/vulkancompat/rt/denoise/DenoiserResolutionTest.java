@@ -23,7 +23,7 @@ class DenoiserResolutionTest {
 
     private static DenoiserResolution.Result resolve(RtSettings.PathDenoiser want, boolean nrdOk) {
         return DenoiserResolution.resolve(want, false, false, false, "null", false, nrdOk,
-            nrdOk ? "" : "NRD.dll not found", DenoiserMode.NRD_REBLUR);
+            nrdOk ? "" : "NRD.dll not found", DenoiserMode.NRD_REBLUR, true);
     }
 
     @Test
@@ -35,17 +35,17 @@ class DenoiserResolutionTest {
     @Test
     void theStartupFlagChoosesTheNrdVariant() {
         DenoiserResolution.Result relax = DenoiserResolution.resolve(RtSettings.PathDenoiser.NRD, false, false,
-            false, "null", false, true, "", DenoiserMode.NRD_RELAX);
+            false, "null", false, true, "", DenoiserMode.NRD_RELAX, true);
         assertEquals(DenoiserMode.NRD_RELAX, relax.mode());
         DenoiserResolution.Result reblur = DenoiserResolution.resolve(RtSettings.PathDenoiser.NRD, false, false,
-            false, "null", false, true, "", DenoiserMode.OFF);
+            false, "null", false, true, "", DenoiserMode.OFF, true);
         assertEquals(DenoiserMode.NRD_REBLUR, reblur.mode(), "a non-NRD flag keeps the default variant");
     }
 
     @Test
     void aSessionFailureStopsRetrying() {
         DenoiserResolution.Result failed = DenoiserResolution.resolve(RtSettings.PathDenoiser.NRD, false, true,
-            false, "null", false, true, "", DenoiserMode.NRD_REBLUR);
+            false, "null", false, true, "", DenoiserMode.NRD_REBLUR, true);
         assertEquals(DenoiserMode.OFF, failed.mode());
         assertEquals("nrd_failed_earlier_this_session", failed.reason());
     }
@@ -60,14 +60,14 @@ class DenoiserResolutionTest {
     @Test
     void dlssRrIsSelectedWhenItsLibraryIsUsable() {
         DenoiserResolution.Result ok = DenoiserResolution.resolve(RtSettings.PathDenoiser.DLSS_RR, false, false,
-            true, "", false, false, "null", DenoiserMode.NRD_REBLUR);
+            true, "", false, false, "null", DenoiserMode.NRD_REBLUR, true);
         assertEquals(DenoiserMode.DLSS_RR, ok.mode());
     }
 
     @Test
     void frameGenerationWithoutTheStreamlinePluginExplainsTheLimitation() {
         DenoiserResolution.Result blocked = DenoiserResolution.resolve(RtSettings.PathDenoiser.DLSS_RR, false, false,
-            true, "", true, false, "null", DenoiserMode.NRD_REBLUR);
+            true, "", true, false, "null", DenoiserMode.NRD_REBLUR, true);
         assertEquals(DenoiserMode.OFF, blocked.mode());
         assertEquals("frame_generation_needs_sl.dlss_d.dll+nvngx_dlssd.dll_in_the_streamline_folder", blocked.reason());
     }
@@ -75,9 +75,20 @@ class DenoiserResolutionTest {
     @Test
     void anUnusableDlssRrFallsBackToNrd() {
         DenoiserResolution.Result fallback = DenoiserResolution.resolve(RtSettings.PathDenoiser.DLSS_RR, false, false,
-            false, "vkb_dlss.dll missing", false, true, "", DenoiserMode.NRD_REBLUR);
+            false, "vkb_dlss.dll missing", false, true, "", DenoiserMode.NRD_REBLUR, true);
         assertEquals(DenoiserMode.NRD_REBLUR, fallback.mode());
         assertEquals("dlss_library_unusable vkb_dlss.dll missing -> fallback_to_nrd", fallback.reason());
+    }
+
+    @Test
+    void incompatibleUpscaleFallsBackFromRayReconstruction() {
+        var fallback = DenoiserResolution.resolve(RtSettings.PathDenoiser.DLSS_RR, false, false,
+            true, "", false, true, "", DenoiserMode.OFF, false);
+        assertEquals(DenoiserMode.NRD_REBLUR, fallback.mode());
+        assertEquals("dlss_rr_needs_dlss_or_native_scale -> fallback_to_nrd", fallback.reason());
+        var noNrd = DenoiserResolution.resolve(RtSettings.PathDenoiser.DLSS_RR, false, false,
+            true, "", false, false, "", DenoiserMode.OFF, false);
+        assertEquals(DenoiserMode.OFF, noNrd.mode());
     }
 
     @Test

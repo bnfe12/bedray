@@ -28,6 +28,7 @@ class UpscalerQualityBindingTest {
         var oldDlss = VulkanRtxConfig.dlssMode;
         var oldXess = VulkanRtxConfig.xessMode;
         var oldFsr = VulkanRtxConfig.fsrMode;
+        var oldFsr1 = VulkanRtxConfig.fsr1Mode;
         var oldType = VulkanRtxConfig.upscalerType;
         var requestField = UpscalerRequest.class.getDeclaredField("current");
         requestField.setAccessible(true);
@@ -36,7 +37,7 @@ class UpscalerQualityBindingTest {
             // Store inactive quality settings without native libraries or a GPU.
             VulkanRtxConfig.activeBackend = UpscalerBackend.BILINEAR;
             new VulkanSodiumConfig().registerSettings(recorder(ConfigBuilder.class, null, setters, names));
-            for (var backend : new UpscalerBackend[]{UpscalerBackend.DLSS, UpscalerBackend.XESS, UpscalerBackend.FSR}) {
+            for (var backend : new UpscalerBackend[]{UpscalerBackend.DLSS, UpscalerBackend.XESS, UpscalerBackend.FSR, UpscalerBackend.FSR1}) {
                 String path = backend.name().toLowerCase(Locale.ROOT) + "_mode";
                 assertNotNull(setters.get(path), path);
                 assertNotNull(names.get(path), path);
@@ -54,6 +55,7 @@ class UpscalerQualityBindingTest {
             VulkanRtxConfig.dlssMode = oldDlss;
             VulkanRtxConfig.xessMode = oldXess;
             VulkanRtxConfig.fsrMode = oldFsr;
+            VulkanRtxConfig.fsr1Mode = oldFsr1;
             VulkanRtxConfig.upscalerType = oldType;
             requestField.set(null, oldRequest);
         }
@@ -72,7 +74,7 @@ class UpscalerQualityBindingTest {
             if (method.getName().startsWith("create") && args != null && args.length > 0 && args[0] instanceof Identifier id) {
                 childPath = id.getPath();
             }
-            if (path != null && path.matches("(dlss|xess|fsr)_mode")) {
+            if (path != null && path.matches("(dlss|xess|fsr|fsr1)_mode")) {
                 if (method.getName().equals("setBinding")) setters.put(path, (Consumer<UpscalerMode>) args[0]);
                 if (method.getName().equals("setElementNameProvider")) names.put(path, (Function<UpscalerMode, ?>) args[0]);
             }

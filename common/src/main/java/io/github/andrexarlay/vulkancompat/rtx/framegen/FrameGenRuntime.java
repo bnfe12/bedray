@@ -31,8 +31,8 @@ import org.slf4j.LoggerFactory;
  * </pre>
  * Contract: ProgrammingGuideDLSS_G.md sections 5 (tags), 6 (options), 7 (constants), 8 (Reflex), 13/14 (state), 16 (Vulkan sync;
  * the engine already waits on the acquire semaphore and signals the present semaphore the way section 16 demands).
- * Frame generation is on only in frames that actually rendered the world through a temporal upscaler (depth + motion vectors
- * exist); in every other frame (menus, loading) it is switched off (section 6.4/12) and the tags are cleared (section 5.2 note).
+ * Frame generation uses the current world depth and motion vectors, including with native rendering. Missing inputs
+ * disable generation and clear the tags (sections 5.2, 6.4 and 12).
  * A failure is logged once as {@code [VKB-FG] fg=FAILED stage=..} and disables the feature for the session; nothing is retried silently.
  */
 public final class FrameGenRuntime {
@@ -350,7 +350,8 @@ public final class FrameGenRuntime {
 
     /** Whether the selected provider can consume this frame's world inputs. */
     public static boolean needsFrameInputs() {
-        return amd() ? Fsr3FrameGen.needsFrameInputs() : needsDlssgInputs();
+        return (amd() ? Fsr3FrameGen.needsFrameInputs() : needsDlssgInputs())
+            && Minecraft.getInstance().getWindow().isFocused();
     }
 
     private static void fail(String stage, String detail, Throwable t) {
@@ -432,6 +433,10 @@ public final class FrameGenRuntime {
         if (!needsDlssgInputs()) {
             return;
         }
+        if (!Minecraft.getInstance().getWindow().isFocused()) {
+            worldFail = "window_not_focused";
+            return;
+        }
         try {
             var world = WorldTargetManager.getWorldTarget();
             var depthCopy = WorldTargetManager.getDepthCopy();
@@ -468,7 +473,8 @@ public final class FrameGenRuntime {
             }
             if (guides != null) guides.requireMatches(
                 io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull(), device, winW, winH);
-            frameGenCamera = guides != null ? guides.preparedCamera() : rasterCamera(false);
+            frameGenCamera = guides != null ? guides.preparedCamera()
+                : rasterCamera(WorldTargetManager.currentRasterMotionResetsHistory());
             if (frameGenCamera.reset()) validFrames = 0;
             if (gpu == null) {
                 gpu = new FrameGenGpu(device);
@@ -523,7 +529,7 @@ public final class FrameGenRuntime {
             windowFocused = Minecraft.getInstance().getWindow().isFocused();
             FrameGenSettings.Mode wanted = FrameGenSettings.mode();
             boolean allowed = windowFocused && needsDlssgInputs();
-            if (worldReady && !surfaceChanged) {
+            if (allowed && worldReady && !surfaceChanged) {
                 validFrames++;
                 sendFrameGenConstants(sl);
                 tag(sl);

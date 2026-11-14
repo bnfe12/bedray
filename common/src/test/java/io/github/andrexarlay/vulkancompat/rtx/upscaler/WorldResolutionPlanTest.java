@@ -3,6 +3,21 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorldResolutionPlanTest {
+    @Test void vendorExtentMustMatchBothAxes() {
+        assertTrue(WorldResolutionPlan.matchesOutput(1921, 1081, 1921, 1081));
+        assertFalse(WorldResolutionPlan.matchesOutput(1921, 1080, 1921, 1081));
+        assertFalse(WorldResolutionPlan.matchesOutput(1920, 1081, 1921, 1081));
+        assertFalse(WorldResolutionPlan.matchesOutput(0, 1081, 0, 1081));
+    }
+
+    @Test void combinedRrUsesTraceScaleForJitterAndRasterScaleForMipSelection() {
+        var rr = WorldResolutionPlan.choose(960, 540, 1920, 1080, true, UpscalerBackend.DLSS, false);
+        assertEquals(32, rr.jitterPhaseCount(1920, 1080));
+        assertEquals(1.0, rr.rasterScale(1920, 1080));
+        var sr = WorldResolutionPlan.choose(960, 540, 1920, 1080, false, UpscalerBackend.DLSS, false);
+        assertEquals(0.5, sr.rasterScale(1920, 1080));
+    }
+
     @Test void balancedRrTracesLowButKeepsPostUiAndDepthAtOutputSize() {
         var plan = WorldResolutionPlan.choose(1485, 835, 2560, 1440, true, UpscalerBackend.DLSS, false);
         assertTrue(plan.rayReconstructionOutput());
