@@ -18,8 +18,9 @@ import java.util.Locale;
  * used by the emissive resubmission of glowing item pixels ({@code MixinSubmitNodeCollection.HAND_FULL_LIGHT}).
  * Enchantment glint does not read the lightmap and stays as in vanilla.
  * <p>
- * STUB: no RT source until Step 2 (the hand light probe). Step 1 only proves the hook with a diagnostic colour given by
- * {@code -Dvkbridge.rt.handLight.debug=RRGGBB}; without that property nothing changes.
+ * Light source (opt-in, default off): {@code -Dvkbridge.rt.handLight=sky} uses {@link HandRtProbe}, the RT sky model plus the
+ * vanilla block/sky levels of the hand (an estimate, not a traced probe). {@code -Dvkbridge.rt.handLight.debug=RRGGBB} gives a
+ * diagnostic colour and wins over it; with neither property nothing changes.
  * <p>
  * Render thread only.
  */
@@ -32,6 +33,11 @@ public final class HandRtLight {
     static final int FULL_BRIGHT_TEXEL = 15;
     static final int SIZE = 16;
     static final String DEBUG_PROPERTY = "vkbridge.rt.handLight.debug";
+    static final String MODE_PROPERTY = "vkbridge.rt.handLight";
+    private static final boolean SKY_MODE = "sky".equalsIgnoreCase(System.getProperty(MODE_PROPERTY));
+    /** Vanilla block/sky levels the hand last submitted with (read while the hand draws, used by the next pass). */
+    private static volatile int lastBlockLevel = 15;
+    private static volatile int lastSkyLevel = 15;
 
     /** Between the hand pass HEAD and RETURN: the hand's packed light is redirected to the sentinel. */
     private static boolean armed;
@@ -43,6 +49,7 @@ public final class HandRtLight {
     private static DynamicTexture texture;
     private static int uploadedArgb;
     private static String lastPath;
+    private static String lastSource;
 
     private HandRtLight() {
     }
@@ -57,6 +64,10 @@ public final class HandRtLight {
 
     /** The packed light the hand submits with: the sentinel while armed, the vanilla value otherwise. */
     public static int handLight(int vanilla) {
+        if (armed) {
+            lastBlockLevel = (vanilla >> 4) & 0xF;
+            lastSkyLevel = (vanilla >> 20) & 0xF;
+        }
         return armed ? SENTINEL_LIGHT : vanilla;
     }
 
@@ -111,6 +122,9 @@ public final class HandRtLight {
         overriding = false;
         if (failed) return;
         Integer argb = debugColor();
+        if (argb == null && SKY_MODE && HandRtProbe.hasSky()) {
+            argb = HandRtProbe.argb(lastBlockLevel, lastSkyLevel);
+        }
         if (argb == null) return;
         try {
             if (texture == null) {
@@ -132,6 +146,11 @@ public final class HandRtLight {
             return;
         }
         armed = true;
+        if (argb != null && debugColor() == null && !"sky".equals(lastSource)) {
+            lastSource = "sky";
+            LOGGER.info("[VKB-RT] hand_light state=on source=sky_model estimate=1 color={}",
+                String.format(Locale.ROOT, "%06X", argb & 0xFFFFFF));
+        }
         String path = deferredReplay ? "deferred" : "inworld";
         if (!path.equals(lastPath)) {
             lastPath = path;
