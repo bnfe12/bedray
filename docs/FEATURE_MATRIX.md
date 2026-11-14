@@ -115,6 +115,9 @@ other upscalers, or noise levels) has not been evaluated.
 | Accumulation-only fallback (no denoiser library) | BETA | L4 | used when libraries are missing | |
 | Volumetric / distance fog | EXPERIMENTAL | L2 | | |
 | Entities, items, hand in the traced scene | EXPERIMENTAL | L1 | code and unit checks only; no recorded in-game image check | |
+| First-person hand light from the sky model (`-Dvkbridge.rt.handLight=sky`, default off) | EXPERIMENTAL | L4 | `rt_hand` autotest with path tracing and DLSS RR: the hand is no longer white on a dark scene; log `[VKB-RT] hand_light state=on source=sky_model`; not owner-confirmed | |
+| Held item as RT geometry (`-Dvkbridge.rt.handGeometry=true`, default off) | EXPERIMENTAL | L4 | `rt_hand` autotest (glass, torch) with DLSS RR: item sits where the raster item sits, glass is see-through; log `hand_geometry injected`. STUB: arm and offhand stay raster, the item is one frame late, torch stick looks orange (cause not analysed) | |
+| Inventory icons in the traced look | NOT IMPLEMENTED | L0 | icons are drawn by vanilla `GuiItemAtlas.drawToSlot` and stay raster | |
 | Particles in the traced scene | EXPERIMENTAL | L1 | partial; particles may not cast shadows or appear in reflections | |
 | Water and glass | EXPERIMENTAL | historical L4 | Earlier screenshots only. Water has a realistic Snell/medium approximation; glass remains a thin filter. Current integration has no fresh evidence | |
 | Animated block textures in materials | EXPERIMENTAL | L4 | only the first frame is baked | |
