@@ -36,7 +36,7 @@ import java.util.Locale;
  * {@code tm=peak|aces|pbr_neutral|gt|agx}, {@code fixed} (fixed exposure), {@code ev=<tenths>}, {@code dn=off|nrd|rr},
  * {@code aim=<yaw>_<pitch>}, {@code cx=<dx>}, {@code cz=<dz>}.
  * {@code -Dvkrtx.autotest.materialDimension=nether|end|overworld} selects the real dimension (default overworld).
- * Nether/End reference rooms are built at y=200, clear of natural terrain; they are controlled material scenes, not biome captures.
+ * Nether/End reference rooms use y=64/80 and clear their own volume; they are controlled material scenes, not biome captures.
  * Shots: {@code NN_<step>.png}; a {@code [VKB-AUTOTEST] scenario=rt_materials ... event=state} line per step.
  */
 public final class MaterialsScenario implements AutotestScenario {
@@ -148,7 +148,7 @@ public final class MaterialsScenario implements AutotestScenario {
         by = mc.player.getBlockY();
         bz = mc.player.getBlockZ();
         if (!dimension.equals("minecraft:overworld")) {
-            by = 200;
+            by = dimension.equals("minecraft:the_nether") ? 64 : 80;
         }
         if (!listening) {
             listening = true;
@@ -498,7 +498,8 @@ public final class MaterialsScenario implements AutotestScenario {
         command(ctx, "effect clear @a minecraft:slow_falling");
         int roomX = roomX(s.scene()), roomZ = roomZ(s.scene());
         boolean open = s.mods().contains("open");
-        command(ctx, fill(roomX + 1, 5, roomZ + 1, roomX + 9, open ? 20 : 5, roomZ + 9, open ? "air" : "stone_bricks"));
+        int roofTop = open ? Math.max(5, mc.level.getMaxY() - by) : 5;
+        command(ctx, fill(roomX + 1, 5, roomZ + 1, roomX + 9, roofTop, roomZ + 9, open ? "air" : "stone_bricks"));
         placeCamera(ctx, s);
         // F1 hides the hand too: only the H scene (item in the hand) keeps the HUD on
         if (mc.gui.hud.isHidden() != !s.scene().equals("H")) {
@@ -529,6 +530,17 @@ public final class MaterialsScenario implements AutotestScenario {
         ctx.log("scenario", name(), "step", String.valueOf(index), "event", "apply", "spec", s.raw(), "mode", s.mode().logName(),
             "frame", String.valueOf(ctx.frames()));
         ctx.waitFrames(s.frames(), () -> {
+            var floor = mc.level.getBlockState(new net.minecraft.core.BlockPos(bx + roomX + 5, by - 1, bz + roomZ + 1));
+            var expected = switch (s.scene()) {
+                case "C" -> net.minecraft.world.level.block.Blocks.CRIMSON_NYLIUM;
+                case "F" -> net.minecraft.world.level.block.Blocks.WARPED_NYLIUM;
+                case "X" -> net.minecraft.world.level.block.Blocks.END_STONE;
+                default -> net.minecraft.world.level.block.Blocks.STONE_BRICKS;
+            };
+            if (!floor.is(expected) || Math.abs(mc.player.getY() - by) > 0.1) {
+                ctx.fail("rt_materials: reference room was not built or the camera left its floor", null);
+                return;
+            }
             RtMode pass = RtFrameRenderer.lastPassMode();
             String file = String.format(Locale.ROOT, "%02d_%s.png", index, s.label());
             ctx.log("scenario", name(), "step", String.valueOf(index), "event", "state", "spec", s.raw(),
