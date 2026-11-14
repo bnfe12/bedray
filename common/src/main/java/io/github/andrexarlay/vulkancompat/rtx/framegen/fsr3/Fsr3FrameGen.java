@@ -498,6 +498,11 @@ public final class Fsr3FrameGen {
                 VkBarriers.fullMemoryBarrier(cmd);
             });
             worldReady = true;
+            if (!uiModeLogged) {
+                uiModeLogged = true;
+                // The UI is not a separate resource: FFX derives it from the hudless image (FfxFgNative.registerUi is unused).
+                LOGGER.info("[VKB-FG] fsr3 ui_mode=hudless_diff ui_resource=none hudless={}x{} (UI layer not implemented)", winW, winH);
+            }
             if (guides != null && lastRrGuideGeneration != guides.generation()) {
                 lastRrGuideGeneration = guides.generation();
                 LOGGER.info("[VKB-FG] provider=amd guides=rr generation={} stamp={} trace={}x{} output={}x{} origin_flip=once jitter=physical_primary_converted",
@@ -587,6 +592,7 @@ public final class Fsr3FrameGen {
         }
     }
 
+    private static boolean uiModeLogged;
     private static long presentBase;
 
     /** Real swapchain presents since creation (rendered + generated), {@code getLastPresentCountFFXAPI} of the replacement functions. */
