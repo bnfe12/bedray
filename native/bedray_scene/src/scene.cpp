@@ -1190,19 +1190,17 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
             buffer_barrier(plan_instance_buffer(plan, slot),
                 VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
         }
+        if (!plan.jobs.empty() && plan.new_blas_scratch.handle == VK_NULL_HANDLE) {
+            src_stage |= VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+            buffer_barrier(slot.blas_scratch, VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+        }
         record_buffer_barriers(scene, command_buffer,
             src_stage, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
             barriers.data(), static_cast<uint32_t>(barriers.size()));
         barriers.clear();
     }
 
-    if (!plan.jobs.empty() && plan.new_blas_scratch.handle == VK_NULL_HANDLE) {
-        record_memory_barrier(scene, command_buffer,
-            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-            VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
-    }
     const Buffer& blas_scratch = plan.new_blas_scratch.handle != VK_NULL_HANDLE ? plan.new_blas_scratch : slot.blas_scratch;
     for (const GeometryJob& job : plan.jobs) {
         const uint64_t scratch_address = blas_scratch.address + job.scratch_offset;

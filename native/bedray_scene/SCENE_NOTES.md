@@ -400,10 +400,11 @@ aligned to `minAccelerationStructureScratchOffsetAlignment`, with a minimum of
      `ACCELERATION_STRUCTURE_BUILD`/`ACCELERATION_STRUCTURE_READ`;
    - instance buffer: `HOST`/`HOST_WRITE` ->
      `ACCELERATION_STRUCTURE_BUILD`/`ACCELERATION_STRUCTURE_READ`.
-   The source stage is the union of `TRANSFER` and `HOST` as applicable.
-3. **BLAS work**: a barrier orders earlier scratch writes before the frame
-   reuses that storage. Each job has its own aligned scratch range.
-   `vkCmdBuildAccelerationStructuresKHR` records each job. A refit uses `ALLOW_UPDATE`, source = destination = the committed BLAS and
+   The same barrier orders earlier BLAS scratch writes before the slot
+   reuses that buffer. The source stage includes `TRANSFER`, `HOST` and
+   `ACCELERATION_STRUCTURE_BUILD` as needed.
+3. **BLAS work**: `vkCmdBuildAccelerationStructuresKHR` records each job with
+   its own aligned scratch range. A refit uses `ALLOW_UPDATE`, source = destination = the committed BLAS and
    the update scratch size. A rebuild targets the new BLAS.
 4. **AS writes -> TLAS build**: a barrier makes previous AS writes visible to
    the TLAS build or update. It covers reads of new BLAS and the update source,

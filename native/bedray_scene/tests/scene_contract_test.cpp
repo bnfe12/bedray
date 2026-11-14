@@ -2134,6 +2134,23 @@ static void test_build_buffers_follow_frame_slots() {
     CHECK(fake::g.copies[third_copy].src == second_staging);
     CHECK(fake::g.copies[third_copy].payload == moved.vertex_bytes());
     CHECK(fake::g.builds[third_build].scratch == second_scratch);
+    const int barrier = fake::find_barrier(VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT
+        | VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, false);
+    CHECK(barrier >= 0);
+    bool orders_reused_scratch = false;
+    if (barrier >= 0) {
+        for (const auto& dependency : fake::g.barriers[barrier].buffers) {
+            const auto* buffer = fake::find_buffer(dependency.buffer);
+            if (buffer != nullptr && buffer->address != 0 && second_scratch >= buffer->address
+                    && second_scratch - buffer->address < 256) {
+                orders_reused_scratch = dependency.srcAccessMask == VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR
+                    && dependency.dstAccessMask == (VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
+                        | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+            }
+        }
+    }
+    CHECK(orders_reused_scratch);
     CHECK(fake::find_buffer(first_staging) != nullptr);
     fixture.release(1);
     fixture.release(3);
