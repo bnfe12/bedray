@@ -368,7 +368,7 @@ public final class VulkanRtxConfig {
 
     /** Custom render percent of {@code backend} (default 67, clamped to the technology range). */
     public static int customPercent(UpscalerBackend backend) {
-        return UpscalerModes.clampCustomPercent(backend, customPercents.getOrDefault(backend, 67));
+        return UpscalerModes.clampCustomPercent(backend, customPercents.getOrDefault(backend, UpscalerModes.CUSTOM_DEFAULT_PERCENT));
     }
 
     public static void setCustomPercent(UpscalerBackend backend, int percent) {
@@ -819,7 +819,7 @@ public final class VulkanRtxConfig {
             writer.write("# or FSR (needs the official AMD Vulkan DLLs from FSR SDK 2.4 or FidelityFX SDK v1.1.4 (see docs/INSTALL.md)).\n");
             writer.write("# XESS/DLSS/FSR switch live in the settings page; only when their Vulkan device requirements were not registered at startup (library missing then, or -Dvkrtx.upscaler.preregister=false) the choice applies after a restart.\n");
             writer.write("active_backend = \"" + activeBackend.name() + "\"\n");
-            writer.write("# XeSS mode: ULTRA_QUALITY_PLUS, ULTRA_QUALITY, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE\n");
+            writer.write("# XeSS mode: NATIVE_AA, ULTRA_QUALITY_PLUS, ULTRA_QUALITY, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE, CUSTOM\n");
             writer.write("xess_mode = \"" + xessMode.name() + "\"\n");
             writer.write("# DLSS mode: DLAA, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE (the render size is asked from NGX)\n");
             writer.write("dlss_mode = \"" + dlssMode.name() + "\"\n");

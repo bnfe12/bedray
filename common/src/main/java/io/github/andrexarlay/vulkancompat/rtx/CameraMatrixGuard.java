@@ -76,19 +76,11 @@ public final class CameraMatrixGuard {
         if (!invert(currViewProj, invViewProjOut)) {
             return new Update(false, true);
         }
-        boolean reset = resetHistory;
-        if (!reset && prevProj != null && prevViewRotation != null) {
-            Matrix4f prevViewProj = new Matrix4f();
-            if (multiply(prevProj, prevViewRotation, prevViewProj)) {
-                prevViewProjOut.set(prevViewProj);
-            } else {
-                prevViewProjOut.set(currViewProj);
-                reset = true;
-            }
-        } else {
-            prevViewProjOut.set(currViewProj);
+        if (!resetHistory && multiply(prevProj, prevViewRotation, prevViewProjOut)) {
+            return new Update(true, false);
         }
-        return new Update(true, reset);
+        prevViewProjOut.set(currViewProj);
+        return new Update(true, true);
     }
 
     /** Names the degenerate input in one line for the log. */

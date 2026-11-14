@@ -39,6 +39,15 @@ public class UpscalerModeLabelTest {
     }
 
     @Test
+    public void xessNativeAaUsesFullResolutionAndTheVendorAaMode() {
+        assertTrue(UpscalerModes.modesFor(UpscalerBackend.XESS).contains(UpscalerMode.NATIVE_AA));
+        assertEquals(1.0, UpscalerModes.ratio(UpscalerBackend.XESS, UpscalerMode.NATIVE_AA));
+        assertEquals(io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessQuality.AA,
+            UpscalerModes.toXessQuality(UpscalerMode.NATIVE_AA));
+        assertEquals(1.3, UpscalerModes.ratio(UpscalerBackend.XESS, UpscalerMode.ULTRA_QUALITY_PLUS));
+    }
+
+    @Test
     public void bindingLogValueNeverThrows() {
         for (UpscalerBackend backend : UpscalerBackend.values()) {
             for (UpscalerMode mode : UpscalerModes.modesFor(backend)) {

@@ -35,7 +35,8 @@ public final class UpscalerModes {
     /** How trustworthy a ratio is. */
     public enum Source { SDK_DOC, RESEARCH_NOTE, UNVERIFIED, RUNTIME_QUERY, USER }
 
-    /** Range of the custom render scale slider in percent. NIS raises the minimum to 50 (NisConstants). */
+    public static final int CUSTOM_DEFAULT_PERCENT = 67;
+    /** Range of the custom render scale slider in percent. NIS raises the minimum to 50. */
     public static final int CUSTOM_MIN_PERCENT = 25;
     public static final int CUSTOM_MAX_PERCENT = 100;
 
@@ -49,7 +50,7 @@ public final class UpscalerModes {
                 UpscalerMode.PERFORMANCE, UpscalerMode.ULTRA_PERFORMANCE, UpscalerMode.CUSTOM);
             case FSR -> List.of(UpscalerMode.NATIVE_AA, UpscalerMode.QUALITY,
                 UpscalerMode.BALANCED, UpscalerMode.PERFORMANCE, UpscalerMode.ULTRA_PERFORMANCE, UpscalerMode.CUSTOM);
-            case XESS -> List.of(UpscalerMode.ULTRA_QUALITY_PLUS, UpscalerMode.ULTRA_QUALITY, UpscalerMode.QUALITY,
+            case XESS -> List.of(UpscalerMode.NATIVE_AA, UpscalerMode.ULTRA_QUALITY_PLUS, UpscalerMode.ULTRA_QUALITY, UpscalerMode.QUALITY,
                 UpscalerMode.BALANCED, UpscalerMode.PERFORMANCE, UpscalerMode.ULTRA_PERFORMANCE, UpscalerMode.CUSTOM);
             case FSR1 -> List.of(UpscalerMode.ULTRA_QUALITY, UpscalerMode.QUALITY, UpscalerMode.BALANCED,
                 UpscalerMode.PERFORMANCE, UpscalerMode.CUSTOM);
@@ -96,6 +97,7 @@ public final class UpscalerModes {
         return switch (backend) {
             case DLSS -> throw new IllegalArgumentException("DLSS ratios are queried from NGX at runtime (NGX_DLSS_GET_OPTIMAL_SETTINGS), there is no table");
             case XESS -> switch (mode) {
+                case NATIVE_AA -> 1.0;
                 case ULTRA_QUALITY_PLUS -> 1.3;
                 case ULTRA_QUALITY -> 1.5;
                 case QUALITY -> 1.7;
@@ -148,6 +150,6 @@ public final class UpscalerModes {
         if (!isOffered(UpscalerBackend.XESS, mode) || mode == UpscalerMode.CUSTOM) {
             throw new IllegalArgumentException("XeSS has no library mode " + mode);
         }
-        return XessQuality.parse(mode.name());
+        return mode == UpscalerMode.NATIVE_AA ? XessQuality.AA : XessQuality.parse(mode.name());
     }
 }

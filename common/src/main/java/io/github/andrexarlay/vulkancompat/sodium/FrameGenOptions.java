@@ -201,8 +201,7 @@ public final class FrameGenOptions {
         if (VulkanRtxConfig.voxelRendererSelected()) {
             return tr("bedray.fg.voxel_unavailable", "Disabled for voxel diagnostics: matching depth and motion guides are not implemented.");
         }
-        String base = "Frame Generation inserts generated frames between rendered ones (2x with AMD FSR 3 or NVIDIA DLSS-G; 3x up to 6x Multi Frame Generation on RTX 50). "
-            + "Choose the method (Auto / NVIDIA DLSS-G / AMD FSR 3) in the row above. Needs a temporal upscaler (FSR, DLSS or XeSS); it switches off in menus, while loading and when the window loses focus. ";
+        String base = tr("bedray.fg.mode_info", "Inserts frames between rendered frames. Works at native resolution and with upscaling. Pauses while loading, in menus and when the window loses focus. ").getString();
         String extra = switch (FrameGenRuntime.availability()) {
             case READY -> "Applied immediately, no restart. " + (FrameGenRuntime.maxMultiplier() < 3 ? "3x and up are not offered on this provider/GPU." : "");
             case NEEDS_RESTART -> "The frame generation swapchain is hooked when the game starts: your choice is saved and takes effect after a restart.";

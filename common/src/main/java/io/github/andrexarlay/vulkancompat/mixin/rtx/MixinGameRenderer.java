@@ -161,8 +161,10 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
             if (levelCall) {
                 // the hand (hud3d) projection that follows in the same frame must not replace the full bobbed world projection.
                 WorldTargetManager.setCurrentProjectionMatrix(WorldTargetManager.levelProjectionOr(projMatrix));
+                if (!WorldTargetManager.rrResolvesOutput()) {
+                    return CameraJitterManager.applyJitter(projMatrix);
+                }
             }
-            return WorldTargetManager.rrResolvesOutput() ? projMatrix : CameraJitterManager.applyJitter(projMatrix);
         }
         return projMatrix;
     }

@@ -38,8 +38,9 @@ public final class UpscalerSelectionChecks {
         check(UpscalerModes.modesFor(UpscalerBackend.FSR).equals(List.of(UpscalerMode.NATIVE_AA,
             UpscalerMode.QUALITY, UpscalerMode.BALANCED, UpscalerMode.PERFORMANCE, UpscalerMode.ULTRA_PERFORMANCE, UpscalerMode.CUSTOM)),
             "FSR modes (ffx_upscale.h FfxApiUpscaleQualityMode: no Ultra Quality)");
-        check(UpscalerModes.modesFor(UpscalerBackend.XESS).equals(List.of(UpscalerMode.ULTRA_QUALITY_PLUS, UpscalerMode.ULTRA_QUALITY,
-            UpscalerMode.QUALITY, UpscalerMode.BALANCED, UpscalerMode.PERFORMANCE, UpscalerMode.ULTRA_PERFORMANCE, UpscalerMode.CUSTOM)), "XeSS modes");
+        check(UpscalerModes.modesFor(UpscalerBackend.XESS).equals(List.of(UpscalerMode.NATIVE_AA, UpscalerMode.ULTRA_QUALITY_PLUS,
+            UpscalerMode.ULTRA_QUALITY, UpscalerMode.QUALITY, UpscalerMode.BALANCED, UpscalerMode.PERFORMANCE,
+            UpscalerMode.ULTRA_PERFORMANCE, UpscalerMode.CUSTOM)), "XeSS modes (AA xess_sr_developer_guide)");
         check(UpscalerModes.modesFor(UpscalerBackend.FSR1).equals(List.of(UpscalerMode.ULTRA_QUALITY, UpscalerMode.QUALITY,
             UpscalerMode.BALANCED, UpscalerMode.PERFORMANCE, UpscalerMode.CUSTOM)), "FSR 1 modes (GPUOpen FSR 1 table)");
         check(UpscalerModes.modesFor(UpscalerBackend.NIS).equals(List.of(UpscalerMode.CUSTOM)), "NIS: no published modes, custom only");

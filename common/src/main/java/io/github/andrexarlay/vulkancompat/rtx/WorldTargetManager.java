@@ -34,6 +34,7 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerLibraryLoader;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityPipeline;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssNeuralRendering;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime;
@@ -73,7 +74,7 @@ public final class WorldTargetManager {
     /** Copy of the world depth taken before the hand pass (XeSS depth input, velocity input). */
     private static TextureTarget depthCopy;
     private static boolean depthCopiedThisFrame = false;
-    private static int lastXessEpoch = -1;
+    private static int lastTemporalEpoch = -1;
 
     private static RenderTarget savedMainRenderTarget;
     private static RenderTarget savedHud3DTarget;
@@ -115,14 +116,24 @@ public final class WorldTargetManager {
     private static int lastLogWinH = -1;
 
     private WorldTargetManager() {}
-    private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan resolutionPlan;
+    private static WorldResolutionPlan resolutionPlan;
 
     private static WorldFrame.Stamp resolutionStamp;
+    private static WorldFrame.Stamp lastWorldPhaseStamp;
     private static WorldFrame.Stamp rasterMotionStamp;
+    private static boolean rasterMotionReset;
+    private static boolean worldColorReady;
+    private static boolean temporalForFrame;
+    private static double textureRenderScale = 1.0;
 
     public static boolean rrOutputThisFrame() {
         return resolutionStamp != null && WorldFrames.isCurrent(resolutionStamp)
             && resolutionPlan != null && resolutionPlan.rayReconstructionOutput();
+    }
+
+    /** True after this frame's world color has reached the main target. */
+    public static boolean hasCurrentWorldColor() {
+        return worldColorReady && resolutionStamp != null && WorldFrames.isCurrent(resolutionStamp);
     }
 
     /** True after a depth copy and raster velocity dispatch have both been submitted for this world frame. */
@@ -130,12 +141,20 @@ public final class WorldTargetManager {
         return rasterMotionStamp != null && WorldFrames.isCurrent(rasterMotionStamp);
     }
 
+    public static boolean currentRasterMotionResetsHistory() {
+        return hasCurrentRasterMotion() && rasterMotionReset;
+    }
+
+    public static double textureRenderScale() {
+        return textureRenderScale;
+    }
+
     public static boolean rrResolvesOutput() { return inWorldPhase && resolutionPlan != null && resolutionPlan.rayReconstructionOutput(); }
     public static int traceWidth(int fallback) { return rrResolvesOutput() ? resolutionPlan.traceWidth() : fallback; }
     public static int traceHeight(int fallback) { return rrResolvesOutput() ? resolutionPlan.traceHeight() : fallback; }
     public static int presentationWidth(int fallback) { return rrResolvesOutput() ? resolutionPlan.worldWidth() : fallback; }
     public static int presentationHeight(int fallback) { return rrResolvesOutput() ? resolutionPlan.worldHeight() : fallback; }
-    private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan lastLoggedResolutionPlan;
+    private static WorldResolutionPlan lastLoggedResolutionPlan;
     /** Change-triggered log state: the upscaler last ran on a DLSS-RR-resolved image (the blurry two-stage chain). */
     private static boolean lastTwoStageRr;
 
@@ -165,7 +184,7 @@ public final class WorldTargetManager {
         if (SpatialUpscaler.isSelected()) {
             return true;
         }
-        return isResolutionScaleReduced();
+        return isResolutionScaleReduced() || FrameGenRuntime.needsFrameInputs();
     }
 
     /**
@@ -185,26 +204,29 @@ public final class WorldTargetManager {
         return isScalingActive();
     }
 
-    public static int getTargetWidth(int winW) {
-        if (TemporalUpscaler.isActive() && TemporalUpscaler.outputWidth() == winW) {
-            return TemporalUpscaler.inputWidth();
-        }
-        if (!TemporalUpscaler.isActive() && SpatialUpscaler.isSelected()) {
-            return SpatialUpscaler.renderSize(winW);
-        }
-        float scale = VulkanRtxConfig.qualityPreset.getScaleFactor();
-        return VulkanRtxManager.calculateScaledWidth(winW, scale);
+    private static boolean temporalMatchesOutput(int winW, int winH) {
+        return TemporalUpscaler.isActive()
+            && WorldResolutionPlan.matchesOutput(winW, winH, TemporalUpscaler.outputWidth(), TemporalUpscaler.outputHeight());
     }
 
-    public static int getTargetHeight(int winH) {
-        if (TemporalUpscaler.isActive() && TemporalUpscaler.outputHeight() == winH) {
-            return TemporalUpscaler.inputHeight();
+    private static WorldResolutionPlan planResolution(int winW, int winH, boolean temporal) {
+        boolean spatial = !TemporalUpscaler.isActive() && SpatialUpscaler.isSelected();
+        int targetW;
+        int targetH;
+        if (temporal) {
+            targetW = TemporalUpscaler.inputWidth();
+            targetH = TemporalUpscaler.inputHeight();
+        } else if (spatial) {
+            targetW = SpatialUpscaler.renderSize(winW);
+            targetH = SpatialUpscaler.renderSize(winH);
+        } else {
+            float scale = VulkanRtxConfig.qualityPreset.getScaleFactor();
+            targetW = VulkanRtxManager.calculateScaledWidth(winW, scale);
+            targetH = VulkanRtxManager.calculateScaledHeight(winH, scale);
         }
-        if (!TemporalUpscaler.isActive() && SpatialUpscaler.isSelected()) {
-            return SpatialUpscaler.renderSize(winH);
-        }
-        float scale = VulkanRtxConfig.qualityPreset.getScaleFactor();
-        return VulkanRtxManager.calculateScaledHeight(winH, scale);
+        return WorldResolutionPlan.choose(targetW, targetH, winW, winH,
+            RtFrameRenderer.rrOutputReady() && !Boolean.getBoolean("bedray.rt.disableRrOutput"),
+            temporal ? TemporalUpscaler.active() : null, spatial);
     }
 
     /** Copy of the last unjittered world projection (null before the first world frame). Read by FSR for near/far/fov. */
@@ -226,6 +248,7 @@ public final class WorldTargetManager {
     /** Arms {@link #noteLevelProjection}: called before {@code renderLevel} of every Vulkan frame. */
     public static void beginLevelProjectionFrame() {
         WorldLevelProjection.beginFrame();
+        WorldCameraHistory.beginFrame();
     }
 
     /** True only after the world projection hook has run in the current renderLevel invocation. */
@@ -308,33 +331,37 @@ public final class WorldTargetManager {
         rasterMotionStamp = null;
         // Always start from "unresolved": only this frame's denoiser record may claim the colour is already resolved.
         io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.resetFrameColorTemporallyResolved();
-        if (!isScalingActive()) {
-            return;
-        }
-        if (!(renderer instanceof GameRendererTargetAccessor accessor)) {
-            return;
-        }
-
-        int targetW = getTargetWidth(winW);
-        int targetH = getTargetHeight(winH);
-
-        if (targetW <= 0 || targetH <= 0) {
+        if (winW <= 0 || winH <= 0 || !isScalingActive() || !(renderer instanceof GameRendererTargetAccessor accessor)) {
+            WorldCameraHistory.markReset();
             return;
         }
 
-        // 100% resolution or invalid dimensions: zero overhead vanilla path when hardware RT is disabled
-        final boolean rtNow = io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.enabled();
-        if (!rtNow && !TemporalUpscaler.isActive() && !FrameGenRuntime.needsDlssgInputs() && !SpatialUpscaler.isSelected()
+        temporalForFrame = temporalMatchesOutput(winW, winH);
+        var plan = planResolution(winW, winH, temporalForFrame);
+        int targetW = plan.traceWidth();
+        int targetH = plan.traceHeight();
+        final boolean rtNow = RtGeometryGate.enabled();
+        if (!rtNow && !temporalForFrame && !FrameGenRuntime.needsFrameInputs() && !SpatialUpscaler.isSelected()
             && targetW == winW && targetH == winH) {
+            WorldCameraHistory.markReset();
             return;
         }
 
-        resolutionPlan = chooseResolutionPlan(targetW, targetH, winW, winH);
+        resolutionPlan = plan;
+        textureRenderScale = plan.rasterScale(winW, winH);
         resolutionStamp = WorldFrames.stampOrNull();
+        if (resolutionStamp != null && (lastWorldPhaseStamp == null
+                || lastWorldPhaseStamp.worldEpoch() != resolutionStamp.worldEpoch()
+                || lastWorldPhaseStamp.frameNumber() != resolutionStamp.frameNumber() - 1)) {
+            WorldCameraHistory.markReset();
+            CameraJitterManager.reset();
+        }
+        lastWorldPhaseStamp = resolutionStamp;
         ensureTargets(resolutionPlan.worldWidth(), resolutionPlan.worldHeight());
         if (!resolutionPlan.equals(lastLoggedResolutionPlan)) {
             lastLoggedResolutionPlan = resolutionPlan;
             WorldCameraHistory.markReset();
+            CameraJitterManager.reset();
             LOGGER.info("[VKB-RESOLVE] rr_output={} trace={}x{} raster={}x{} output={}x{} framegen_off={}",
                 resolutionPlan.rayReconstructionOutput(), targetW, targetH, resolutionPlan.worldWidth(),
                 resolutionPlan.worldHeight(), winW, winH,
@@ -348,6 +375,7 @@ public final class WorldTargetManager {
             if (!first) {
                 // RT toggle only changes the execution policy; the target object is kept. Drop the RT binding and history.
                 WorldCameraHistory.markReset();
+                CameraJitterManager.reset();
                 logSkyIdentity("rt_toggle rt=" + rtNow);
             }
         }
@@ -359,20 +387,21 @@ public final class WorldTargetManager {
 
         inWorldPhase = true;
         depthCopiedThisFrame = false;
-        handPassDeferred = handMustBeDeferred(inWorldPhase, CameraJitterManager.temporalConsumerActive());
+        boolean temporalConsumer = temporalForFrame || resolutionPlan.rayReconstructionOutput()
+            || (Boolean.getBoolean("bedray.rt.disableRrOutput") && RtFrameRenderer.rrOutputReady());
+        handPassDeferred = handMustBeDeferred(inWorldPhase, temporalConsumer);
         if (lastLoggedHandDeferral == null || lastLoggedHandDeferral != handPassDeferred) {
             lastLoggedHandDeferral = handPassDeferred;
             LOGGER.info("[VKB-AUTOTEST] hand_defer={} temporal_consumer={}", handPassDeferred,
-                TemporalUpscaler.isActive() ? TemporalUpscaler.active()
-                    : CameraJitterManager.temporalConsumerActive() ? "dlss_rr" : "off");
+                temporalForFrame ? TemporalUpscaler.active() : temporalConsumer ? "dlss_rr" : "off");
         }
-        if (CameraJitterManager.temporalConsumerActive()) {
-            if (TemporalUpscaler.initEpoch() != lastXessEpoch) {
-                lastXessEpoch = TemporalUpscaler.initEpoch();
-                WorldCameraHistory.markReset();
-            }
-            CameraJitterManager.advanceFrame(targetW, targetH,
-                CameraJitterManager.phaseCountFor(TemporalUpscaler.isActive() ? TemporalUpscaler.scale() : 1.0));
+        if (TemporalUpscaler.initEpoch() != lastTemporalEpoch) {
+            lastTemporalEpoch = TemporalUpscaler.initEpoch();
+            WorldCameraHistory.markReset();
+            CameraJitterManager.reset();
+        }
+        if (temporalConsumer) {
+            CameraJitterManager.advanceFrame(targetW, targetH, plan.jitterPhaseCount(winW, winH));
         }
 
         if (lastLogW != targetW || lastLogH != targetH || lastLogWinW != winW || lastLogWinH != winH) {
@@ -419,10 +448,6 @@ public final class WorldTargetManager {
         if (worldTarget != null && fullMain != null) {
             boolean dispatched = false;
             try {
-                // 1. Hardware Ray Tracing: done by RtFrameRenderer at the head of render3dHud (MixinGameRenderer).
-                // The PoC overlay that used to run here (test geometry, rt_test) is deleted with the legacy renderer.
-
-                // 2. Temporal upscaler: XeSS (-Dvkbridge.xess) or DLSS (-Dvkbridge.dlss). STUB: FSR has no implementation.
                 if (reconstructedOutput) {
                     // RR already produced the world at output resolution, including the raw fallback of a skipped RR frame.
                     // Post effects/UI have run on that image. Do not feed it through SR a second time.
@@ -435,9 +460,9 @@ public final class WorldTargetManager {
                         worldTarget.getColorTexture(), fullMain.getColorTexture(), 0, 0, 0, 0, 0,
                         fullMain.width, fullMain.height);
                     dispatched = true;
-                } else if (TemporalUpscaler.isActive()) {
+                } else if (temporalForFrame && temporalMatchesOutput(fullMain.width, fullMain.height)) {
                     dispatched = runXessPass(fullMain);
-                } else if (FrameGenRuntime.needsDlssgInputs()) {
+                } else if (!temporalForFrame && FrameGenRuntime.needsFrameInputs()) {
                     runMotionVectorsOnly();
                 }
 
@@ -446,10 +471,7 @@ public final class WorldTargetManager {
                     dispatched = runSpatialPass(fullMain);
                 }
 
-                // 3. Default: bilinear upscale of the world target into the full-size main target
-                if (!dispatched) {
-                    upscaleWorld(worldTarget, fullMain);
-                }
+                worldColorReady = dispatched || upscaleWorld(worldTarget, fullMain);
             } catch (Throwable t) {
                 LOGGER.error("Failed to upscale world target to full main target", t);
                 try {
@@ -458,8 +480,22 @@ public final class WorldTargetManager {
                     LOGGER.error("Fallback bilinear blit also failed", fallbackErr);
                 }
             } finally {
-                advanceFrameHistory();
+                if (!worldColorReady) {
+                    rasterMotionStamp = null;
+                }
+                if ((temporalForFrame && dispatched) || hasCurrentRasterMotion()) {
+                    WorldCameraHistory.advanceFrameHistory();
+                } else {
+                    WorldCameraHistory.markReset();
+                }
+                if ((temporalForFrame && !dispatched)
+                        || (reconstructedOutput && !RtFrameRenderer.frameColorTemporallyResolved())) {
+                    CameraJitterManager.reset();
+                }
             }
+        } else {
+            WorldCameraHistory.markReset();
+            CameraJitterManager.reset();
         }
 
         // Full-resolution replay: the hand has no motion vectors and uses its own depth buffer, so it must not be fed to
@@ -473,15 +509,11 @@ public final class WorldTargetManager {
         }
     }
 
-    private static void advanceFrameHistory() {
-        WorldCameraHistory.advanceFrameHistory();
-    }
-
     /**
      * Safely resizes the dedicated world targets without touching GameRenderer.resize
      * (avoiding invalidation of sectionOcclusionGraph).
      */
-    public static void ensureTargets(int w, int h) {
+    private static void ensureTargets(int w, int h) {
         RenderSystem.assertOnRenderThread();
         if (w <= 0 || h <= 0) {
             return;
@@ -524,7 +556,7 @@ public final class WorldTargetManager {
         }
 
         if ((resolutionPlan == null || !resolutionPlan.rayReconstructionOutput())
-                && (TemporalUpscaler.isActive() || FrameGenRuntime.needsDlssgInputs())) {
+                && (temporalForFrame || FrameGenRuntime.needsFrameInputs())) {
             ensureTemporalTargets(w, h);
         }
     }
@@ -568,7 +600,7 @@ public final class WorldTargetManager {
     public static void copyWorldDepth() {
         // Output-grid raster depth is already available to UI; RR owns its input-grid motion/depth guides.
         if (rrResolvesOutput()) return;
-        if (!inWorldPhase || (!TemporalUpscaler.isActive() && !FrameGenRuntime.needsDlssgInputs()) || worldTarget == null || depthCopy == null) {
+        if (!inWorldPhase || (!temporalForFrame && !FrameGenRuntime.needsFrameInputs()) || worldTarget == null || depthCopy == null) {
             return;
         }
         if (depthCopy.width != worldTarget.width || depthCopy.height != worldTarget.height) {
@@ -769,9 +801,6 @@ public final class WorldTargetManager {
         if (!ok) {
             return false; // the backend's dispatch already logged stage=execute and disabled itself
         }
-        if (recordRasterMotion) {
-            rasterMotionStamp = resolutionStamp;
-        }
         var neural = kind == UpscalerBackend.DLSS && !colorResolved ? DlssRuntime.neuralRendering() : null;
         boolean neuralPresented = false;
         if (neural != null && neuralRasterCompatible()) {
@@ -788,9 +817,12 @@ public final class WorldTargetManager {
                 srJitterX * DlssConfig.jitterSignX(), srJitterY * DlssConfig.jitterSignY());
         }
         if (!neuralPresented) copyXessOutputToMain(fullMain);
-        boolean twoStageRr = colorResolved
-            && io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.denoiser()
-                == io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.PathDenoiser.DLSS_RR;
+        if (recordRasterMotion) {
+            rasterMotionStamp = resolutionStamp;
+            rasterMotionReset = reset;
+        }
+        boolean twoStageRr = colorResolved && RtFrameRenderer.denoiserSelected()
+            == io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserMode.DLSS_RR;
         if (twoStageRr != lastTwoStageRr) {
             lastTwoStageRr = twoStageRr;
             if (twoStageRr) {
@@ -863,6 +895,7 @@ public final class WorldTargetManager {
         });
         if (recorded) {
             rasterMotionStamp = resolutionStamp;
+            rasterMotionReset = WorldCameraHistory.resetHistory();
         }
     }
 
@@ -997,36 +1030,29 @@ public final class WorldTargetManager {
         return texture != null && !texture.isClosed() && (texture.usage() & usage) == usage;
     }
 
-    private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan chooseResolutionPlan(
-            int targetW, int targetH, int winW, int winH) {
-        return io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan.choose(
-            targetW, targetH, winW, winH,
-            io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.rrOutputReady()
-                && !Boolean.getBoolean("bedray.rt.disableRrOutput"),
-            TemporalUpscaler.active(), SpatialUpscaler.isSelected());
-    }
-
     /**
      * Safety reset hook at HEAD of {@link GameRenderer#render()}.
      * Restores original targets if a previous frame was interrupted by an exception between
      * beginWorldPhase and endWorldPhase.
      */
     public static void resetPhase(GameRenderer renderer) {
-        // Experimental XeSS / DLSS contexts (request-only via -Dvkbridge.xess / -Dvkbridge.dlss; no-op otherwise). Here no render pass is open.
-        net.minecraft.client.Minecraft mcForXess = net.minecraft.client.Minecraft.getInstance();
-        if (mcForXess != null && mcForXess.getWindow() != null) {
-            TemporalUpscaler.onFrameBegin(
-                mcForXess.getWindow().getWidth(), mcForXess.getWindow().getHeight());
-            io.github.andrexarlay.vulkancompat.rtx.config.SamplerBiasSync.onFrameBegin();
-            int winW = mcForXess.getWindow().getWidth();
-            int winH = mcForXess.getWindow().getHeight();
-            int targetW = getTargetWidth(winW), targetH = getTargetHeight(winH);
-            if (winW > 0 && winH > 0 && targetW > 0 && targetH > 0
-                && chooseResolutionPlan(targetW, targetH, winW, winH).rayReconstructionOutput()) {
-                io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime.suspendSrFeatureForRr();
+        CameraJitterManager.beginFrame();
+        worldColorReady = false;
+        resolutionPlan = null;
+        textureRenderScale = 1.0;
+        temporalForFrame = false;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc != null && mc.getWindow() != null) {
+            int winW = mc.getWindow().getWidth();
+            int winH = mc.getWindow().getHeight();
+            TemporalUpscaler.onFrameBegin(winW, winH);
+            if (mc.level != null && !RtGeometryGate.irisActive() && RtFrameRenderer.rrOutputReady()
+                    && temporalMatchesOutput(winW, winH)
+                    && TemporalUpscaler.active() == UpscalerBackend.DLSS && !Boolean.getBoolean("bedray.rt.disableRrOutput")) {
+                DlssRuntime.suspendSrFeatureForRr();
             }
         }
-        dlssNeural.beginFrame(dlssNeural.ownsResources() && mcForXess != null && mcForXess.level != null
+        dlssNeural.beginFrame(dlssNeural.ownsResources() && mc != null && mc.level != null
             && TemporalUpscaler.active() == UpscalerBackend.DLSS && neuralRasterCompatible());
         if (inWorldPhase) {
             LOGGER.warn("World phase was not properly ended in previous frame; resetting render targets");
@@ -1155,6 +1181,8 @@ public final class WorldTargetManager {
         }
         worldTargetHasStorage = false;
         lastRtEnabled = null;
+        lastWorldPhaseStamp = null;
+        textureRenderScale = 1.0;
         lastLoggedSkyTargetId = -1;
         CameraJitterManager.reset();
         WorldLevelProjection.reset();
@@ -1168,11 +1196,11 @@ public final class WorldTargetManager {
     /**
      * Copies matching native-size color targets or uses a bilinear blit when scaling or conversion is needed.
      */
-    private static void upscaleWorld(RenderTarget world, RenderTarget fullMain) {
+    private static boolean upscaleWorld(RenderTarget world, RenderTarget fullMain) {
         GpuTextureView srcView = world.getColorTextureView();
         GpuTextureView dstView = fullMain.getColorTextureView();
         if (srcView == null || dstView == null) {
-            return;
+            return false;
         }
 
         CommandEncoder enc = RenderSystem.getDevice().createCommandEncoder();
@@ -1182,7 +1210,7 @@ public final class WorldTargetManager {
                 && hasUsage(src, GpuTexture.USAGE_COPY_SRC) && hasUsage(dst, GpuTexture.USAGE_COPY_DST)
                 && src.getFormat() == dst.getFormat()) {
             enc.copyTextureToTexture(src, dst, 0, 0, 0, 0, 0, world.width, world.height);
-            return;
+            return true;
         }
         try (RenderPass p = enc.createRenderPass(() -> "VKB upscale", dstView, Optional.empty())) {
             p.setPipeline(RenderSystem.getCompiledPipeline(RenderPipelines.TRACY_BLIT));
@@ -1190,6 +1218,7 @@ public final class WorldTargetManager {
             p.setUniform("InSampler", srcView, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
             p.draw(3, 1, 0, 0);
         }
+        return true;
     }
 
     public static long extractVkImage(RenderTarget target) {

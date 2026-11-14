@@ -36,32 +36,22 @@ public final class CameraJitterManager {
     private static float prevPixelJitterY = 0.0f;
 
     private static int phaseIndex = -1;
+    private static int phaseCount;
     private static boolean active = false;
 
     private CameraJitterManager() {}
 
-    /**
-     * Checks whether camera jittering is enabled and required by the active upscaler backend.
-     * A temporal upscaler or an initialized native-resolution RR consumer requires jitter.
-     */
+    /** True only when the current world phase prepared a jitter sample. */
     public static boolean isJitterActive() {
-        return temporalConsumerActive() && isScalingActive() && WorldTargetManager.isInWorldPhase();
+        return active && WorldTargetManager.isInWorldPhase();
     }
 
-    /**
-     * True when a temporal upscaler needs sub-pixel jitter. This includes DLAA / native-AA (render == display): the DLSS
-     * Programming Guide requires jitter for every temporal mode (the accumulation IS the anti-aliasing); without it DLAA
-     * degenerates to an un-jittered history blend with unstable edges. (Previously gated on scale > 1.0001: bug.)
-     */
-    public static boolean isScalingActive() {
-        return temporalConsumerActive();
-    }
-
-    /**
-     * True for an initialized temporal upscaler or live RR, including native-resolution RR without an upscaler.
-     */
-    public static boolean temporalConsumerActive() {
-        return TemporalUpscaler.isActive() || io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.rrOutputReady();
+    /** Invalidates offsets for this render while retaining the sequence across consecutive world frames. */
+    public static void beginFrame() {
+        if (!active && phaseIndex >= 0) {
+            reset();
+        }
+        active = false;
     }
 
     /** Minimum Halton length for a super-resolution scale (XeSS guide: 8 * scale^2), never below {@link #PHASE_COUNT}. */
@@ -69,37 +59,20 @@ public final class CameraJitterManager {
         return Math.max(PHASE_COUNT, (int) Math.ceil(8.0 * scale * scale - 1e-9));
     }
 
-    /**
-     * Advances to the next phase in the 16-phase Halton sequence and computes current offsets.
-     *
-     * @param renderWidth  Render width of the 3D target
-     * @param renderHeight Render height of the 3D target
-     * @param phaseCount   Length of the Halton cycle, see {@link #phaseCountFor(double)}
-     */
-    public static void advanceFrame(int renderWidth, int renderHeight, int phaseCount) {
-        if (!temporalConsumerActive()) {
+    /** Prepares a new sample for a frame with a temporal consumer. */
+    public static void advanceFrame(int renderWidth, int renderHeight, int requestedPhaseCount) {
+        if (renderWidth <= 0 || renderHeight <= 0) {
+            reset();
             return;
         }
+        boolean continuing = phaseIndex >= 0;
+        phaseCount = Math.max(PHASE_COUNT, requestedPhaseCount);
+        phaseIndex = (phaseIndex + 1) % phaseCount;
+        active = true;
         prevJitterNdcX = currentJitterNdcX;
         prevJitterNdcY = currentJitterNdcY;
         prevPixelJitterX = currentPixelJitterX;
         prevPixelJitterY = currentPixelJitterY;
-
-        final boolean wasActive = active;
-        if (!isJitterActive() || !isScalingActive() || renderWidth <= 0 || renderHeight <= 0) {
-            if (wasActive) {
-                LOGGER.info("[VKB-AUTOTEST] jitter_state=inactive");
-            }
-            currentJitterNdcX = 0.0f;
-            currentJitterNdcY = 0.0f;
-            currentPixelJitterX = 0.0f;
-            currentPixelJitterY = 0.0f;
-            active = false;
-            return;
-        }
-
-        active = true;
-        phaseIndex = (phaseIndex + 1) % Math.max(PHASE_COUNT, phaseCount);
 
         // Halton sequence (base 2 for X, base 3 for Y)
         float hx = HaltonJitter.halton(phaseIndex + 1, 2);
@@ -113,7 +86,11 @@ public final class CameraJitterManager {
         currentJitterNdcX = (currentPixelJitterX / (float) renderWidth) * 2.0f;
         currentJitterNdcY = (currentPixelJitterY / (float) renderHeight) * 2.0f;
 
-        if (!wasActive) {
+        if (!continuing) {
+            prevJitterNdcX = currentJitterNdcX;
+            prevJitterNdcY = currentJitterNdcY;
+            prevPixelJitterX = currentPixelJitterX;
+            prevPixelJitterY = currentPixelJitterY;
             LOGGER.info("[VKB-AUTOTEST] jitter_state=active render={}x{}", renderWidth, renderHeight);
         }
         if (LOGGER.isDebugEnabled()) {
@@ -130,7 +107,7 @@ public final class CameraJitterManager {
      * @return New projection matrix with jitter applied, or original if jitter is inactive
      */
     public static Matrix4f applyJitter(Matrix4f projMatrix) {
-        if (!isJitterActive() || !active || projMatrix == null) {
+        if (!isJitterActive() || projMatrix == null) {
             return projMatrix;
         }
         Matrix4f jittered = new Matrix4f(projMatrix);
@@ -152,43 +129,48 @@ public final class CameraJitterManager {
         prevPixelJitterX = 0.0f;
         prevPixelJitterY = 0.0f;
         phaseIndex = -1;
+        phaseCount = 0;
         active = false;
     }
 
     public static float getCurrentJitterNdcX() {
-        return currentJitterNdcX;
+        return active ? currentJitterNdcX : 0.0f;
     }
 
     public static float getCurrentJitterNdcY() {
-        return currentJitterNdcY;
+        return active ? currentJitterNdcY : 0.0f;
     }
 
     public static float getPrevJitterNdcX() {
-        return prevJitterNdcX;
+        return active ? prevJitterNdcX : 0.0f;
     }
 
     public static float getPrevJitterNdcY() {
-        return prevJitterNdcY;
+        return active ? prevJitterNdcY : 0.0f;
     }
 
     public static float getCurrentPixelJitterX() {
-        return currentPixelJitterX;
+        return active ? currentPixelJitterX : 0.0f;
     }
 
     public static float getCurrentPixelJitterY() {
-        return currentPixelJitterY;
+        return active ? currentPixelJitterY : 0.0f;
     }
 
     public static float getPrevPixelJitterX() {
-        return prevPixelJitterX;
+        return active ? prevPixelJitterX : 0.0f;
     }
 
     public static float getPrevPixelJitterY() {
-        return prevPixelJitterY;
+        return active ? prevPixelJitterY : 0.0f;
     }
 
     public static int getPhaseIndex() {
-        return phaseIndex;
+        return active ? phaseIndex : -1;
+    }
+
+    public static int getPhaseCount() {
+        return active ? phaseCount : 0;
     }
 
     public static boolean isActive() {
@@ -196,10 +178,10 @@ public final class CameraJitterManager {
     }
 
     public static Vector2f getCurrentNdcVector() {
-        return new Vector2f(currentJitterNdcX, currentJitterNdcY);
+        return new Vector2f(getCurrentJitterNdcX(), getCurrentJitterNdcY());
     }
 
     public static Vector2f getPrevNdcVector() {
-        return new Vector2f(prevJitterNdcX, prevJitterNdcY);
+        return new Vector2f(getPrevJitterNdcX(), getPrevJitterNdcY());
     }
 }

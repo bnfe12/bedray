@@ -50,8 +50,8 @@ system with the F3 screen (Bedray block).
 | Auto Exposure | Brightness follows the scene. Known issue: it can pulse when the scene changes, see [KNOWN_ISSUES.md](KNOWN_ISSUES.md). | none |
 | Water Style | Vanilla (classic) or Realistic. | low |
 | Light Shafts | Beams of sun / moon light. | low-medium |
-| Upscaler | Built-in, FSR, DLSS, XeSS. A backend whose files are missing is marked "library missing" and has no effect. See [UPSCALERS.md](UPSCALERS.md). | raises FPS |
-| Upscaler Quality (DLSS / XeSS / FSR) or 3D Scale (Built-in) | Render size before the upscale. | quality vs FPS |
+| Upscaler | Built-in, FSR 1, NIS, FSR, DLSS, XeSS. A backend whose files are missing is marked "library missing" and has no effect. See [UPSCALERS.md](UPSCALERS.md). | raises FPS |
+| Upscaler Quality (DLSS / XeSS / FSR / FSR 1) or 3D Scale (Built-in) | Render size before the upscale. Custom shows a 25-100% slider stored for each backend (NIS: 50-100%). | quality vs FPS |
 | Frame Generation | Off, 2x, 3x, 4x (NVIDIA, needs Streamline). See [FRAME_GENERATION.md](FRAME_GENERATION.md). | presented FPS up |
 
 ## Page "Bedray Advanced" (groups are collapsed; click a header)
