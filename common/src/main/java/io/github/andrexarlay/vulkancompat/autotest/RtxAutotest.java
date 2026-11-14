@@ -27,6 +27,7 @@ public final class RtxAutotest {
         AutotestScenarios.register(new ShadowScenario());
         AutotestScenarios.register(new LookScenario());
         AutotestScenarios.register(new OverlayScenario());
+        AutotestScenarios.register(new HandScenario());
         AutotestScenarios.register(new MaterialsScenario());
         AutotestScenarios.register(new FrameGenScenario());
         AutotestScenarios.register(new F3Scenario());

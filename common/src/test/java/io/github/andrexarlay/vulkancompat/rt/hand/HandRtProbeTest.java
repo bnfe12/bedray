@@ -14,25 +14,30 @@ class HandRtProbeTest {
 
     @Test
     void darkCaveKeepsTheFloor() {
-        int c = HandRtProbe.argb(0, 0, DAY_KEY, AMB);
+        int c = HandRtProbe.argb(0, 0, DAY_KEY, AMB, 1f);
         assertTrue(ch(c, 16) > 0 && ch(c, 8) > 0 && ch(c, 0) > 0);
         assertEquals(0xFF, c >>> 24);
     }
 
     @Test
     void moreSkyLightIsBrighter() {
-        assertTrue(ch(HandRtProbe.argb(0, 15, DAY_KEY, AMB), 8) > ch(HandRtProbe.argb(0, 5, DAY_KEY, AMB), 8));
+        assertTrue(ch(HandRtProbe.argb(0, 15, DAY_KEY, AMB, 1f), 8) > ch(HandRtProbe.argb(0, 5, DAY_KEY, AMB, 1f), 8));
     }
 
     @Test
     void blockLightIsWarm() {
-        int c = HandRtProbe.argb(15, 0, DAY_KEY, AMB);
+        int c = HandRtProbe.argb(15, 0, DAY_KEY, AMB, 1f);
         assertTrue(ch(c, 16) > ch(c, 0));
     }
 
     @Test
     void neverExceedsWhite() {
-        int c = HandRtProbe.argb(15, 15, new float[]{50f, 50f, 50f}, new float[]{9f, 9f, 9f});
+        int c = HandRtProbe.argb(15, 15, new float[]{50f, 50f, 50f}, new float[]{9f, 9f, 9f}, 1f);
         assertTrue(ch(c, 16) <= 255 && ch(c, 8) <= 255 && ch(c, 0) <= 255);
+    }
+
+    @Test
+    void lowerExposureGivesADarkerHand() {
+        assertTrue(ch(HandRtProbe.argb(0, 15, DAY_KEY, AMB, 0.2f), 8) < ch(HandRtProbe.argb(0, 15, DAY_KEY, AMB, 1f), 8));
     }
 }
