@@ -207,7 +207,9 @@ public final class VulkanRtxConfig {
         OFF("1x / Off", 1),
         X2("2x (DLSS 3 / FSR 3)", 2),
         X3("3x", 3),
-        X4("4x", 4);
+        X4("4x", 4),
+        X5("5x", 5),
+        X6("6x", 6);
 
         private final String label;
         private final int multiplier;

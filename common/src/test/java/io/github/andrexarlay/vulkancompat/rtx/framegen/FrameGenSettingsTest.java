@@ -17,8 +17,10 @@ public class FrameGenSettingsTest {
         assertEquals(FrameGenSettings.Mode.X2, FrameGenSettings.parseMode("dlss"));
         assertEquals(FrameGenSettings.Mode.X3, FrameGenSettings.parseMode("X3"));
         assertEquals(FrameGenSettings.Mode.X4, FrameGenSettings.parseMode("4x"));
+        assertEquals(FrameGenSettings.Mode.X5, FrameGenSettings.parseMode("5x"));
+        assertEquals(FrameGenSettings.Mode.X6, FrameGenSettings.parseMode("x6"));
         assertNull(FrameGenSettings.parseMode(null));
-        assertNull(FrameGenSettings.parseMode("9x"));
+        assertNull(FrameGenSettings.parseMode("7x"));
     }
 
     @Test
@@ -26,6 +28,7 @@ public class FrameGenSettingsTest {
         assertEquals(1, FrameGenSettings.Mode.OFF.multiplier());
         assertEquals(1, FrameGenSettings.Mode.X2.generated());
         assertEquals(3, FrameGenSettings.Mode.X4.generated());
+        assertEquals(5, FrameGenSettings.Mode.X6.generated());
     }
 
     @Test

@@ -37,7 +37,7 @@ public final class RtModesScenario implements AutotestScenario {
      * pocket, L night street with lamp posts and lit windows, M snowfield around a lava pit with a campfire (the owner
      * screenshot), N a base mixing every block light type.
      */
-    static final java.util.Set<String> LIGHT_SCENES = java.util.Set.of("J", "K", "L", "M", "N");
+    static final java.util.Set<String> LIGHT_SCENES = java.util.Set.of("J", "K", "L", "M", "N", "Z");
     public static final String DEFAULT_STEPS = "A:off,A:rays,A:rays+ao+soft+q2,A:rays+refl,B:off,B:rays,B:path+b3+f400";
     private static final int TIME_OF_DAY = Integer.getInteger("vkrtx.autotest.rtTime", 2500);
 
@@ -256,6 +256,17 @@ public final class RtModesScenario implements AutotestScenario {
 
     /** Geometry of the light-placement scenes J..N (see {@link #LIGHT_SCENES}); all within ~70 blocks of the base. */
     private void lightScenes(List<String> c) {
+        // Z: dense light field (the owner hub: 2048 of 2463 lights in range). 90x90 stone floor, a lamp every 2 blocks in a
+        // cycle of lantern / soul lantern / glowstone / lit redstone lamp / torch (~2000 emitters), camera at its south edge
+        c.add(fill(10, -2, 50, 100, -1, 140, "stone"));
+        c.add(fill(10, 0, 50, 100, 8, 140, "air"));
+        String[] hubLamps = {"lantern", "soul_lantern", "glowstone", "redstone_lamp[lit=true]", "torch"};
+        int hubIndex = 0;
+        for (int hx = 12; hx <= 98; hx += 2) {
+            for (int hz = 52; hz <= 138; hz += 2) {
+                c.add(set(hx, 0, hz, hubLamps[hubIndex++ % hubLamps.length]));
+            }
+        }
         // J: house, interior x -69..-61, y 0..3, z -3..5; spruce walls, plank floor, a window and a door gap; few lights
         c.add(fill(-71, -2, -5, -59, -1, 7, "oak_planks"));
         c.add(fill(-71, 0, -5, -59, 6, 7, "air"));
@@ -539,6 +550,9 @@ public final class RtModesScenario implements AutotestScenario {
             // snowfield: above the south-west of the pit looking down at the lava (the owner screenshot)
             x = bx + 33.5; y = by + 6; z = bz + 22.5; aimYaw = -45f; aimPitch = 32f;
             flyScene = true;
+        } else if (scene.equals("Z")) {
+            // hub: at the south edge of the lamp field looking north (+Z) across it
+            x = bx + 55.5; y = by; z = bz + 49.0; aimYaw = 0f; aimPitch = 8f;
         } else if (scene.equals("N")) {
             // base: just inside the doorway looking north (+Z) across the row of light blocks
             x = bx - 61.5; y = by; z = bz + 36.5; aimYaw = 0f; aimPitch = 10f;
