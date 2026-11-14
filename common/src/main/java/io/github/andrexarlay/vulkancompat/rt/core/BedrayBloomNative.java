@@ -11,7 +11,7 @@ import static java.lang.foreign.ValueLayout.*;
 /** Coarse bloom ABI. Native core owns the pass, images, barriers and recorded uses. */
 public final class BedrayBloomNative implements AutoCloseable {
     public static final int PUSH_BYTES = 128;
-    static final int CONFIG_BYTES = 64, FRAME_BYTES = 56;
+    static final int CONFIG_BYTES = 64, FRAME_BYTES = 64;
     private final long core;
     private final MethodHandle render, destroy;
     private boolean closed;
@@ -46,6 +46,12 @@ public final class BedrayBloomNative implements AutoCloseable {
 
     static MemorySegment frame(Arena arena, long command, int width, int height, long output, long depth,
                                ByteBuffer push, boolean bloom) {
+        return frame(arena, command, width, height, output, depth, 0L, push, bloom);
+    }
+
+    /** {@code source} 0 = the prefilter reads {@code output}; otherwise the scene-linear HDR image it rebuilds the glow from. */
+    static MemorySegment frame(Arena arena, long command, int width, int height, long output, long depth, long source,
+                               ByteBuffer push, boolean bloom) {
         if (command == 0 || width <= 0 || height <= 0 || output == 0 || depth == 0
             || push == null || !push.isDirect() || push.remaining() != PUSH_BYTES)
             throw new IllegalArgumentException("recording, positive extent, views and 128 direct push bytes are required");
@@ -55,13 +61,19 @@ public final class BedrayBloomNative implements AutoCloseable {
         desc.set(JAVA_LONG, 24, output); desc.set(JAVA_LONG, 32, depth);
         desc.set(JAVA_INT, 40, bloom ? 1 : 0); desc.set(JAVA_INT, 44, PUSH_BYTES);
         desc.set(ADDRESS, 48, MemorySegment.ofBuffer(push));
+        desc.set(JAVA_LONG, 56, source);
         return desc;
     }
 
     public void record(long command, int width, int height, long output, long depth, ByteBuffer push, boolean bloom) {
+        record(command, width, height, output, depth, 0L, push, bloom);
+    }
+
+    public void record(long command, int width, int height, long output, long depth, long source, ByteBuffer push,
+                       boolean bloom) {
         if (closed) throw new IllegalStateException("native bloom is closed");
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment desc = frame(arena, command, width, height, output, depth, push, bloom);
+            MemorySegment desc = frame(arena, command, width, height, output, depth, source, push, bloom);
             MemorySegment error = arena.allocate(BedrayCoreLayouts.ERROR);
             check("render_bloom", (int) render.invokeExact(MemorySegment.ofAddress(core), desc, error), error);
         } catch (Throwable failure) { throw failure("render_bloom", failure); }

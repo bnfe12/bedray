@@ -31,6 +31,7 @@ final class RtAtmosphere {
     private boolean slangUnavailableLogged;
     /** Set once the volumetric passes refuse to register, so the frame loop stops asking. */
     private boolean shaftsUnavailable;
+    private boolean bloomUnavailableLogged;
     private RtGpuTimer timer;
     private String lastLogged = "";
     /**
@@ -39,6 +40,23 @@ final class RtAtmosphere {
      */
     private long lastLoggedToken = Long.MIN_VALUE;
     private final Vector4f tmp = new Vector4f();
+    /** HDR image of this frame's denoiser resolve (0 = none) and the exposure the presented image was mapped with. */
+    private long bloomHdrView;
+    private float bloomHdrExposure;
+    private boolean bloomSourceLogged;
+    private boolean bloomSourceWasHdr;
+
+    /** The bloom of the next {@link #record} rebuilds its glow from this HDR view; 0 falls back to the presented image. */
+    void bloomSource(long hdrView, float exposure) {
+        bloomHdrView = hdrView;
+        bloomHdrExposure = exposure;
+        boolean hdr = hdrView != 0L && exposure > 0f;
+        if (!bloomSourceLogged || hdr != bloomSourceWasHdr) {
+            LOGGER.info("[VKB-ATMO] bloom source={}", hdr ? "hdr_resolve" : "tonemapped_ldr");
+            bloomSourceLogged = true;
+            bloomSourceWasHdr = hdr;
+        }
+    }
 
     /**
      * @param views    views of the main pass of this frame (output = final image, depth = ray distance of the primary hit)
@@ -63,6 +81,14 @@ final class RtAtmosphere {
         SlangRuntime runtime = slangRuntime(vulkanDevice);
         if (runtime == null) {
             return;
+        }
+        if ((glow || glare) && !runtime.library().hasHdrExport()) {
+            if (!bloomUnavailableLogged) {
+                bloomUnavailableLogged = true;
+                LOGGER.warn("[VKB-ATMO] event=feature_unavailable feature=hdr_bloom action=skip_bloom_and_glare reason=matching_native_core_required");
+            }
+            glow = false;
+            glare = false;
         }
         if (RtGpuTimer.ENABLED && timer == null) {
             try {
@@ -110,7 +136,7 @@ final class RtAtmosphere {
             float threshold = RtAtmosphereSettings.bloomThreshold();
             RtBloomPass.Params bp = new RtBloomPass.Params(p.invViewProj, dir, glareK,
                 bobX, bobY, bobZ, p.flipY, p.tonemap, threshold, 0.35f * threshold, RtAtmosphereSettings.bloomStrength(),
-                RtAtmosphereSettings.bloomScatter(), ndcX, ndcY);
+                RtAtmosphereSettings.bloomScatter(), ndcX, ndcY, bloomHdrView, bloomHdrExposure);
             if (timer != null) {
                 timer.stamp(cmd, SPAN_BLOOM, false);
             }
@@ -220,6 +246,7 @@ final class RtAtmosphere {
         }
         slangRuntime = null;
         slangUnavailableLogged = false;
+        bloomUnavailableLogged = false;
         if (timer != null) {
             timer.destroy();
             timer = null;
