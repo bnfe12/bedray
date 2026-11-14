@@ -6,6 +6,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager;
 import io.github.andrexarlay.vulkancompat.rt.hand.HandRtLight;
+import io.github.andrexarlay.vulkancompat.rt.hand.IconRtLight;
 import io.github.andrexarlay.vulkancompat.rtx.GameRendererHandAccessor;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import net.minecraft.client.renderer.GameRenderer;
@@ -106,12 +107,15 @@ public abstract class MixinGameRendererHand implements GameRendererHandAccessor 
     private void vkb$handLightmap(CallbackInfoReturnable<GpuTextureView> cir) {
         if (HandRtLight.overriding()) {
             cir.setReturnValue(HandRtLight.view());
+        } else if (IconRtLight.overriding()) {
+            cir.setReturnValue(IconRtLight.view());
         }
     }
 
     @Inject(method = "close", at = @At("HEAD"))
     private void vkb$closeHandLight(CallbackInfo ci) {
         HandRtLight.close();
+        IconRtLight.close();
     }
 
     @Override
