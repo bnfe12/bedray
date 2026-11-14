@@ -73,7 +73,7 @@ public abstract class MixinGameRendererHand implements GameRendererHandAccessor 
         }
         this.vkb$deferredCameraState = null;
         this.vkb$deferredPlayerState = null;
-        EntityCaptureManager.getInstance().beginHandPass(cameraState.viewRotationMatrix);
+        EntityCaptureManager.getInstance().beginHandPass(cameraState.viewRotationMatrix, cameraState.hudFov);
         HandRtLight.beginPass(this.vkb$replaying);
     }
 
