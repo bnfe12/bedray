@@ -12,6 +12,7 @@ import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.PlainTextButton;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.KeyEvent;
@@ -90,23 +91,32 @@ public final class BedrayConfigScreen extends Screen {
             index++;
         }
 
-        detailsButton = footerButton(0, tr("bedray.settings.details", "Details"), b -> {
-            if (selected != null) PreviewPanel.openModal(selected.option());
-        });
-        revertButton = footerButton(1, tr("bedray.settings.revert", "Revert"), b -> {
-            draft.revert();
-            notice = Component.empty();
-            rebuildRows();
-        });
-        applyButton = footerButton(2, tr("bedray.settings.apply", "Apply"), b -> apply());
-        closeButton = footerButton(3, Component.translatable("gui.done"), b -> onClose());
-        rebuildRows(); updateRuntime();
-    }
+        int footerY = layout.footerY();
+        int footerHeight = SettingsLayout.FOOTER_HEIGHT;
+        Component details = tr("bedray.settings.details", "Details");
+        detailsButton = addRenderableWidget(new PlainTextButton(contentX, footerY, font.width(details) + 6, footerHeight,
+            details, b -> { if (selected != null) PreviewPanel.openModal(selected.option()); }, font));
 
-    private Button footerButton(int index, Component label, Button.OnPress action) {
-        int buttonWidth = layout.gridWidth(index, 4);
-        return addRenderableWidget(Button.builder(fit(label, buttonWidth - 6), action)
-            .bounds(layout.gridEdge(index, 4), layout.footerY(), buttonWidth, CONTROL_HEIGHT).build());
+        Component close = tr("bedray.settings.close", "Close");
+        int closeWidth = font.width(close) + 6;
+        int closeX = contentX + contentWidth - closeWidth;
+        closeButton = addRenderableWidget(new PlainTextButton(closeX, footerY, closeWidth, footerHeight, close, b -> onClose(), font));
+
+        Component apply = tr("bedray.settings.apply", "Apply");
+        int applyWidth = font.width(apply) + 12;
+        int applyX = closeX - applyWidth - 6;
+        applyButton = addRenderableWidget(Button.builder(apply, b -> apply()).bounds(applyX, footerY, applyWidth, footerHeight).build());
+
+        Component revert = tr("bedray.settings.revert", "Revert");
+        int revertWidth = font.width(revert) + 6;
+        revertButton = addRenderableWidget(new PlainTextButton(applyX - revertWidth - 6, footerY, revertWidth, footerHeight,
+            revert, b -> {
+                draft.revert();
+                notice = Component.empty();
+                rebuildRows();
+            }, font));
+        rebuildRows();
+        updateRuntime();
     }
 
     private void selectCategory(SettingsDraft.Category value) {
@@ -173,6 +183,7 @@ public final class BedrayConfigScreen extends Screen {
         for (AbstractWidget widget : nextWidgets) rowWidgets.add(addRenderableWidget(widget));
         if (!rows.contains(selected)) selected = rows.isEmpty() ? null : rows.getFirst();
         if (!searching && category == SettingsDraft.Category.PRESETS) {
+            addAction(tr("bedray.settings.looks", "Visual style…"), () -> openLooks(contentX, listTop));
             addAction(tr("bedray.settings.experience_library", "Rendering experiences..."),
                 () -> openExperiences(contentX, listTop, contentWidth - 6));
             addAction(tr("bedray.settings.presets_manage", "Manage presets..."), () -> minecraft.gui.setScreen(new PresetsScreen(this, draft)));
@@ -316,10 +327,12 @@ public final class BedrayConfigScreen extends Screen {
     private void updateButtons() {
         boolean changed = draft.changed();
         if (detailsButton != null) detailsButton.active = selected != null;
-        if (closeButton != null) closeButton.setMessage(fit(Component.translatable(changed ? "gui.cancel" : "gui.done"),
-            closeButton.getWidth() - 6));
-        if (applyButton != null) applyButton.active = changed;
-        if (revertButton != null) revertButton.active = changed;
+        if (closeButton != null) closeButton.setTooltip(changed
+            ? Tooltip.create(tr("bedray.settings.close_unsaved", "Close and discard changes"))
+            : null);
+        if (applyButton != null) applyButton.visible = applyButton.active = changed;
+        if (revertButton != null) revertButton.visible = revertButton.active = changed;
+        if (!changed && (getFocused() == applyButton || getFocused() == revertButton)) setFocused(closeButton);
         if (captureButton != null) captureButton.active = !changed && io.github.andrexarlay.vulkancompat.rtx.debug.GameplayCapture.canStart();
     }
     private void apply() {
@@ -370,6 +383,18 @@ public final class BedrayConfigScreen extends Screen {
         }
         positionChoices(); if (!popupButtons.isEmpty()) setFocused(popupButtons.getFirst());
     }
+    private void openLooks(int x, int y) {
+        var styles = SettingsLook.values();
+        openChoices(java.util.Arrays.stream(styles).map(SettingsLook::title).toList(), i -> {
+            styles[i].valuesToStage().forEach(draft::stage);
+            notice = tr("bedray.settings.look_staged", "%s staged. Apply to save.", styles[i].title());
+            rebuildRows();
+        }, x, y, 145);
+        for (int i = 0; i < styles.length; i++) {
+            popupButtons.get(i).setTooltip(Tooltip.create(styles[i].description()));
+        }
+    }
+
     private void openExperiences(int x, int y, int popupWidth) {
         var experiences = SettingsDraft.Experience.values();
         openChoices(java.util.Arrays.stream(experiences).map(SettingsDraft.Experience::title).toList(), index -> {

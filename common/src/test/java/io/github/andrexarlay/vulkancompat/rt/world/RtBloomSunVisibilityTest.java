@@ -23,6 +23,25 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * the apply stage reads it.
  */
 class RtBloomSunVisibilityTest {
+    @Test
+    void skyBloomIsPersistedAndUsesAnIndependentShaderFlag() throws IOException {
+        double previous = RtAtmosphereSettings.get("bloom_sky");
+        try {
+            assertTrue(RtAtmosphereSettings.set("bloom_sky", 1));
+            var config = new java.io.StringWriter();
+            io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.writeAll(config);
+            assertTrue(config.toString().lines().anyMatch("atm_bloom_sky = 1.0"::equals));
+            RtAtmosphereSettings.set("bloom_sky", 0);
+            io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.applyKeyValue("atm_bloom_sky", "1.0");
+            assertTrue(RtAtmosphereSettings.bloomSky());
+            String shader = Files.readString(Path.of("src/main/resources/shaders/slang/bloom/bloom.slang"));
+            assertTrue(shader.contains("!bloomIncludesSky(pc) && bloomIsSky(depth, dp)"));
+            assertTrue(shader.contains("& (1u << 5u)"));
+        } finally {
+            RtAtmosphereSettings.set("bloom_sky", previous);
+        }
+    }
+
     @Test void thePackedCurveCannotChangeTheSourceMode() {
         var previous = RtSettings.tonemapper;
         try {

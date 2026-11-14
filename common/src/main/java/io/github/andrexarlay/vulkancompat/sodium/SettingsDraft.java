@@ -42,9 +42,10 @@ final class SettingsDraft {
         "frame_generation_reflex", "frame_generation_limit",
         "dlss_rr_preset", "dlss_sr_preset", "fsr_sharpness", "fsr1_sharpness", "nis_sharpness",
         "path_spp", "path_bounces", "path_distance", "adaptive_quality", "sun_size_tenths", "sun_tilt_deg",
-        "water_style", "auto_normals", "auto_normal_strength", "point_sampling_sharpness", "texture_lod_bias_offset",
+        "water_style", "auto_normals", "auto_normal_strength", "point_sampling_sharpness", "auto_texture_lod_bias",
+        "texture_lod_bias_offset", "manual_texture_lod_bias",
         "path_auto_exposure", "path_exposure_ev", "tonemapper", "vibrant_visuals",
-        "atm_bloom", "atm_bloom_strength", "atm_bloom_threshold", "atm_bloom_scatter",
+        "atm_bloom", "atm_bloom_strength", "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky",
         "atm_godrays", "atm_godrays_strength", "atm_godrays_quality", "atm_godrays_range",
         "atm_sunglare", "atm_sunglare_strength",
         "rt_fog", "rt_fog_density", "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_aerial", "atm_fog_vanilla", "atm_chunk_fade",
@@ -142,7 +143,7 @@ final class SettingsDraft {
         }
     }
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private void stage(String path, Object value) {
+    void stage(String path, Object value) {
         if (config.getOption(id(path)) instanceof StatefulOption option) option.modifyValue(value);
     }
     private void applySelectedProfile() {
@@ -198,6 +199,7 @@ final class SettingsDraft {
 
     /** Stages a texture sampling style into the pending model; Apply commits it like any other edit. */
     void applyTexturePreset(io.github.andrexarlay.vulkancompat.rtx.config.TexturePreset preset) {
+        stage("auto_texture_lod_bias", true);
         preset.stagedValues().forEach(this::stage);
     }
     void revert() { imported.clear(); config.resetAllOptionsFromBindings(); }
@@ -276,8 +278,9 @@ final class SettingsDraft {
         if (p.startsWith("voxel_") || p.startsWith("compute_")) return voxel() && !e.option().shouldHideControl();
         if (p.equals("dlss_rr_preset") && !e.option().isEnabled()) return false;
         if ((p.endsWith("custom_scale") || Set.of("fsr_sharpness", "fsr1_sharpness", "nis_sharpness",
-                "atm_bloom_threshold", "atm_bloom_scatter", "atm_godrays_quality", "atm_godrays_range", "atm_sunglare_strength",
-                "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_vanilla", "auto_normal_strength").contains(p))
+                "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky", "atm_godrays_quality", "atm_godrays_range", "atm_sunglare_strength",
+                "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_vanilla", "auto_normal_strength",
+                "texture_lod_bias_offset", "manual_texture_lod_bias").contains(p))
                 && !e.option().isEnabled()) return false;
         if (!voxel()) return !e.option().shouldHideControl();
         return Set.of("renderer", "renderer_status", "quality_preset", "custom_scale", "debug_overlay", "ui_expert").contains(p)
@@ -297,7 +300,8 @@ final class SettingsDraft {
         if (p.startsWith("atm_") || p.startsWith("rt_fog") || Set.of("path_auto_exposure", "path_exposure_ev",
                 "tonemapper", "vibrant_visuals", "vignette", "film_grain").contains(p)) return Category.EFFECTS;
         if (p.startsWith("water_") || p.startsWith("waving_") || p.startsWith("auto_normal")
-            || p.startsWith("texture_") || Set.of("point_sampling_sharpness", "rt_particles", "rt_weather",
+            || p.startsWith("texture_") || Set.of("point_sampling_sharpness", "auto_texture_lod_bias", "manual_texture_lod_bias",
+                "rt_particles", "rt_weather",
                 "rays_optical_materials", "rays_cull_shared_glass", "rays_direct_translucent_shadows",
                 "rays_indirect_translucent_shadows").contains(p)) return Category.WORLD;
         return Category.LIGHTING;
@@ -424,11 +428,12 @@ final class SettingsDraft {
         };
     }
 
-    private static boolean fractional(String p) {
-        return switch (p) {
-            case "fsr_sharpness", "fsr1_sharpness", "nis_sharpness", "texture_lod_bias_offset", "rt_fog_distance_scale" -> true;
-            case "atm_godrays", "atm_godrays_range", "atm_godrays_quality" -> false;
-            default -> p.startsWith("atm_");
+    static int persistedNumberScale(String path) {
+        return switch (path) {
+            case "texture_lod_bias_offset", "manual_texture_lod_bias" -> 10;
+            case "fsr_sharpness", "fsr1_sharpness", "nis_sharpness", "rt_fog_distance_scale" -> 100;
+            case "atm_godrays", "atm_godrays_range", "atm_godrays_quality" -> 1;
+            default -> path.startsWith("atm_") ? 100 : 1;
         };
     }
 
@@ -474,8 +479,7 @@ final class SettingsDraft {
                 next = numeric == 1.0;
             } else throw new IllegalArgumentException();
         } else if (option instanceof IntegerOption number) {
-            double parsed = Double.parseDouble(value);
-            if (fractional(e.path())) parsed *= e.path().equals("texture_lod_bias_offset") ? 10 : 100;
+            double parsed = Double.parseDouble(value) * persistedNumberScale(e.path());
             var validator = number.getSteppedValidator();
             if (!Double.isFinite(parsed) || parsed < Integer.MIN_VALUE || parsed > Integer.MAX_VALUE
                 || parsed < validator.min() || parsed > validator.max()) throw new IllegalArgumentException();
@@ -510,7 +514,9 @@ final class SettingsDraft {
         if (value instanceof VulkanSodiumConfig.SelfShadow mode) return Integer.toString(mode.storedValue());
         if (value instanceof RtAtmosphereSettings.GodRays mode) return mode.ordinal() + ".0";
         if (value instanceof Boolean on && e.path().startsWith("atm_")) return on ? "1.0" : "0.0";
-        if (value instanceof Number n && fractional(e.path())) return String.valueOf(n.doubleValue() / (e.path().equals("texture_lod_bias_offset") ? 10 : 100));
+        if (value instanceof Number n && persistedNumberScale(e.path()) != 1) {
+            return Double.toString(n.doubleValue() / persistedNumberScale(e.path()));
+        }
         if (value instanceof Enum<?> mode) return "\"" + mode.name() + "\"";
         return String.valueOf(value);
     }

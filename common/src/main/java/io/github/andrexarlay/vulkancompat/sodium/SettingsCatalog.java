@@ -235,7 +235,7 @@ public final class SettingsCatalog {
             "No measurable cost difference; the same rays are traced.", "Ray tracing on, first person.",
             "No comparison image captured yet.");
         put("atm_godrays", Tier.ESSENTIAL, "Light Shafts",
-            "Visible beams of sun and moon light through leaves, windows and cave openings; strongest at sunrise and sunset.",
+            "Visible shafts from the sun and moon. Detailed uses a separate ray-marched pass. Simple uses the cheaper inline effect.",
             "", "Needs ray tracing on.", Scene.SUNSET, 0.5f, 0.45f, "godrays", List.of(
                 p("off", "Off", () -> RtAtmosphereSettings.set("godrays", RtAtmosphereSettings.GodRays.OFF.ordinal())),
                 p("on", "On", () -> RtAtmosphereSettings.set("godrays", RtAtmosphereSettings.GodRays.POST.ordinal()))),
@@ -565,8 +565,17 @@ public final class SettingsCatalog {
         putNoImage("auto_normal_strength", Tier.ADVANCED, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",
             "Shares the Surface Relief screenshots.");
         putNoImage("texture_lod_bias_offset", Tier.ADVANCED, "Texture Sharpness Offset",
-            "Extra mipmap bias; negative values make textures sharper (-0.2 to -0.5 suits pixel art). The automatic bias for upscalers is always on.",
+            "Fine-tune automatic mipmap selection. Negative values keep more detail and can increase shimmer in motion.",
             "", "", "A sub-pixel sharpness bias is not visible in a downscaled screenshot.");
+        putNoImage("auto_texture_lod_bias", Tier.ADVANCED, "Automatic Texture Detail",
+            "Adjusts mipmap selection to the actual raster render scale. Turn it off to enter a fixed bias.",
+            "", "", "Check terrain textures while moving.");
+        putNoImage("manual_texture_lod_bias", Tier.ADVANCED, "Fixed Mipmap Bias",
+            "Offsets mipmap selection by a fixed amount. Negative values keep more detail. Positive values soften textures.",
+            "", "Automatic Texture Detail off.", "Check terrain textures while moving.");
+        putNoImage("atm_bloom_sky", Tier.ADVANCED, "Sky Bloom",
+            "Lets bright sky pixels contribute to bloom. Use a higher threshold if daylight looks washed out.",
+            "", "Bloom on.", "Compare bright horizons and clouds.");
         putNoImage("atm_godrays_range", Tier.ADVANCED, "Light Shaft Range", "Distance in blocks the beams are computed over.", "", "", "A range value.");
         putNoImage("atm_bloom_threshold", Tier.ADVANCED, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "", "", "Shares the Bloom screenshots.");
         putNoImage("atm_bloom_scatter", Tier.ADVANCED, "Bloom Spread", "Balance between a tight and a wide glow.", "", "", "Shares the Bloom screenshots.");

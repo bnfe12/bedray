@@ -13,16 +13,27 @@ class SettingsLayoutTest {
             assertTrue(layout.contentWidth() <= 500);
             assertTrue(layout.listBottom() - layout.listTop() >= SettingsLayout.CONTROL_HEIGHT);
             assertTrue(layout.listBottom() < layout.footerY());
-            assertTrue(layout.footerY() + SettingsLayout.CONTROL_HEIGHT <= size[1]);
-            for (int count : new int[] {layout.columns(), 4}) {
-                assertEquals(layout.contentX(), layout.gridEdge(0, count));
-                assertEquals(layout.contentX() + layout.contentWidth(),
-                    layout.gridEdge(count - 1, count) + layout.gridWidth(count - 1, count));
-                for (int i = 0; i < count; i++) {
-                    assertTrue(layout.gridWidth(i, count) >= 60);
-                }
+            assertTrue(layout.footerY() + SettingsLayout.FOOTER_HEIGHT <= size[1]);
+            int columns = layout.columns();
+            assertEquals(layout.contentX(), layout.gridEdge(0, columns));
+            assertEquals(layout.contentX() + layout.contentWidth(),
+                layout.gridEdge(columns - 1, columns) + layout.gridWidth(columns - 1, columns));
+            for (int i = 0; i < columns; i++) {
+                assertTrue(layout.gridWidth(i, columns) >= 60);
             }
         }
+    }
+
+    @Test
+    void visualPresetsOnlyStageDisplayChoices() {
+        var displayOptions = java.util.Set.of("tonemapper", "vibrant_visuals", "atm_bloom",
+            "atm_bloom_strength", "atm_bloom_scatter", "vignette", "film_grain");
+        for (SettingsLook style : SettingsLook.values()) {
+            assertEquals(displayOptions, style.valuesToStage().keySet());
+        }
+        assertEquals(10, SettingsDraft.persistedNumberScale("manual_texture_lod_bias"));
+        assertEquals(100, SettingsDraft.persistedNumberScale("atm_bloom_scatter"));
+        assertEquals(1, SettingsDraft.persistedNumberScale("atm_godrays_quality"));
     }
 
     @Test

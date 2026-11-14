@@ -32,6 +32,7 @@ public final class RtAtmosphereSettings {
     private static volatile float godRayStrength = (float) clamp(num("vkrtx.rt.godrays.strength", 1.0), 0, 2);
     private static volatile int godRayRange = (int) clamp(num("vkrtx.rt.godrays.range", 160), 32, 256);
     private static volatile boolean bloom = flag("vkrtx.rt.bloom", true);
+    private static volatile boolean bloomSky = false;
     private static volatile float bloomStrength = (float) clamp(num("vkrtx.rt.bloom.strength", 0.25), 0, 2);
     private static volatile float bloomThreshold = (float) clamp(num("vkrtx.rt.bloom.threshold", 6.0), 0.5, 10);
     private static volatile float bloomScatter = (float) clamp(num("vkrtx.rt.bloom.scatter", 0.62), 0.3, 0.95);
@@ -74,6 +75,10 @@ public final class RtAtmosphereSettings {
 
     public static boolean bloom() {
         return bloom && bloomStrength > 0f;
+    }
+
+    public static boolean bloomSky() {
+        return bloomSky;
     }
 
     public static float bloomStrength() {
@@ -123,6 +128,8 @@ public final class RtAtmosphereSettings {
                 Tier.BASIC, Kind.SLIDER, 0, 2, 1.0, List.of()),
             new Option("bloom", "Bloom", "Soft glow around bright light sources and emissive blocks, added before tone mapping so "
                 + "colours are kept.", Tier.BASIC, Kind.TOGGLE, 0, 1, 1, List.of()),
+            new Option("bloom_sky", "Sky bloom", "Let bright sky pixels contribute to bloom.",
+                Tier.ADVANCED, Kind.TOGGLE, 0, 1, 0, List.of()),
             new Option("bloom_strength", "Bloom strength", "How strong the glow is.", Tier.BASIC, Kind.SLIDER, 0, 2, 0.25, List.of()),
             new Option("sunglare", "Sun glare", "Halo around the sun when you look at it; hidden behind blocks and clouds.",
                 Tier.BASIC, Kind.TOGGLE, 0, 1, 1, List.of()),
@@ -153,6 +160,7 @@ public final class RtAtmosphereSettings {
             case "godrays_quality" -> godRayQuality;
             case "godrays_range" -> godRayRange;
             case "bloom" -> bloom ? 1 : 0;
+            case "bloom_sky" -> bloomSky ? 1 : 0;
             case "bloom_strength" -> bloomStrength;
             case "bloom_threshold" -> bloomThreshold;
             case "bloom_scatter" -> bloomScatter;
@@ -176,6 +184,7 @@ public final class RtAtmosphereSettings {
             case "godrays_quality" -> godRayQuality = (int) clamp(Math.round(v), 0, 3);
             case "godrays_range" -> godRayRange = (int) clamp(Math.round(v), 32, 256);
             case "bloom" -> bloom = v >= 0.5;
+            case "bloom_sky" -> bloomSky = v >= 0.5;
             case "bloom_strength" -> bloomStrength = (float) clamp(v, 0, 2);
             case "bloom_threshold" -> bloomThreshold = (float) clamp(v, 0.5, 10);
             case "bloom_scatter" -> bloomScatter = (float) clamp(v, 0.3, 0.95);

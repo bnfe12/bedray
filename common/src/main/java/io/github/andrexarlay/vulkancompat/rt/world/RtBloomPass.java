@@ -166,6 +166,7 @@ final class RtBloomPass {
             .putFloat(108, pr.hdrSource() ? pr.hdrExposure : 0f);
         int sourceMode = pr.hdrSource() ? 2 : pr.tonemapped ? 1 : 0;
         int displayFlags = sourceMode | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.tonemapper().ordinal() << 2);
+        if (RtAtmosphereSettings.bloomSky()) displayFlags |= 1 << 5;
         pc.putFloat(112, displayFlags).putFloat(116, pr.scatter).putFloat(120, pr.sunNdcX).putFloat(124, pr.sunNdcY);
     }
 

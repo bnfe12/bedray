@@ -510,10 +510,10 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     private static OptionBuilder godRaysOption(ConfigBuilder builder, Function<ConfigState, Boolean> anyRt, Identifier[] dMode, StorageEventHandler st) {
         EnumOptionBuilder<RtAtmosphereSettings.GodRays> g = builder.createEnumOption(id("atm_godrays"), RtAtmosphereSettings.GodRays.class);
         g.setName(nameOf("atm_godrays")).setTooltip(v -> tipOf("atm_godrays")).setDefaultValue(RtAtmosphereSettings.GodRays.POST)
-            .setAllowedValues(EnumSet.of(RtAtmosphereSettings.GodRays.OFF, RtAtmosphereSettings.GodRays.POST, RtAtmosphereSettings.godRays()))
+            .setAllowedValues(EnumSet.allOf(RtAtmosphereSettings.GodRays.class))
             .setElementNameProvider(v -> switch (v) {
                 case OFF -> tr("bedray.onoff.off", "Off");
-                case POST -> tr("bedray.onoff.on", "On");
+                case POST -> tr("bedray.godrays.post", "Detailed");
                 case INLINE -> tr("bedray.godrays.inline", "Simple (older)");
             })
             .setEnabledProvider(anyRt, dMode).setControlHiddenWhenDisabled(false)
@@ -866,6 +866,8 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         look.addOption(atmSlider(builder, "atm_bloom_strength", "bloom_strength", 25, 0, 200, 5, bloomOn, dBloom, true, st));
         look.addOption(atmSlider(builder, "atm_bloom_threshold", "bloom_threshold", 600, 50, 1000, 5, bloomOn, dBloom, true, st));
         look.addOption(atmSlider(builder, "atm_bloom_scatter", "bloom_scatter", 62, 30, 95, 1, bloomOn, dBloom, true, st));
+        look.addOption(boolOpt(builder, "atm_bloom_sky", false, value -> RtAtmosphereSettings.set("bloom_sky", value ? 1 : 0),
+            RtAtmosphereSettings::bloomSky, bloomOn, dBloom, Mark.NONE, OptionImpact.LOW, true, st));
         look.addOption(boolOpt(builder, "atm_sunglare", true, v -> RtAtmosphereSettings.set("sunglare", v ? 1 : 0),
             () -> RtAtmosphereSettings.get("sunglare") >= 0.5, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         Identifier glareId = id("atm_sunglare");
@@ -931,14 +933,27 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             VulkanRtxConfig.pointSamplingSharpness = v;
             TextureLodBias.setPointSamplingSharpness(v);
         }, () -> VulkanRtxConfig.pointSamplingSharpness, null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
-        // Always registered (not expert-only): the Texture style presets stage this row, so it must exist for every player.
+        Identifier autoLodId = id("auto_texture_lod_bias");
+        img.addOption(boolOpt(builder, "auto_texture_lod_bias", true, value -> {
+            VulkanRtxConfig.autoTextureLodBias = value;
+            TextureLodBias.autoTextureLodBias = value;
+        }, () -> VulkanRtxConfig.autoTextureLodBias, null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
+        img.addOption(intOpt(builder, "manual_texture_lod_bias", 0, -40, 20, 1,
+            value -> Component.literal(String.format(Locale.ROOT, "%.1f", value / 10.0)),
+            value -> {
+                VulkanRtxConfig.manualTextureLodBias = value / 10f;
+                TextureLodBias.manualTextureLodBias = value / 10f;
+            }, () -> Math.round(TextureLodBias.clamp(VulkanRtxConfig.manualTextureLodBias) * 10f),
+            state -> !state.readBooleanOption(autoLodId), new Identifier[] {autoLodId}, Mark.NONE, OptionImpact.LOW, true, st));
+        // Always registered because Texture Style presets stage this option.
         img.addOption(intOpt(builder, "texture_lod_bias_offset", 0, -20, 10, 1,
             v -> Component.literal(String.format(Locale.ROOT, "%.1f", v / 10.0f)),
             v -> {
                 float offset = v / 10.0f;
                 VulkanRtxConfig.textureLodBiasOffset = offset;
                 TextureLodBias.textureLodBiasOffset = offset;
-            }, () -> Math.round(VulkanRtxConfig.textureLodBiasOffset * 10.0f), null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
+            }, () -> Math.round(VulkanRtxConfig.textureLodBiasOffset * 10.0f),
+            state -> state.readBooleanOption(autoLodId), new Identifier[] {autoLodId}, Mark.NONE, OptionImpact.LOW, true, st));
         img.addOption(intOpt(builder, "fsr_sharpness", 0, 0, 100, 5,
             v -> v == 0 ? tr("bedray.onoff.off", "Off") : Component.literal(v + "%"),
             v -> {
