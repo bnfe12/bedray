@@ -1205,9 +1205,6 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
             record_blas_build(scene, command_buffer, blas_view_of(job), job.created->blas.handle,
                 VK_NULL_HANDLE, false, scratch_address);
         }
-        if (job.compaction_query != UINT32_MAX) {
-            record_compaction_query(scene, command_buffer, job.created->blas.handle, job.compaction_query);
-        }
     }
 
     /* Deferred compaction copies resolved this frame. Each compacted BLAS is
@@ -1216,20 +1213,23 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
         record_compaction_copy(scene, command_buffer, compaction.src_handle, compaction.compact.handle);
     }
 
-    if (plan.tlas_action) {
-        const bool overwrites_tlas = !plan.new_tlas;
-        VkAccessFlags dst_access = 0;
-        if (!plan.jobs.empty() || !plan.compactions.empty() || plan.tlas_update) {
-            dst_access |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        }
-        if (overwrites_tlas) {
-            dst_access |= VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-        }
-        if (dst_access != 0) {
-            record_memory_barrier(scene, command_buffer,
-                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, dst_access);
+    // All BLAS writes share one dependency into compaction queries and the TLAS build.
+    VkAccessFlags dst_access = 0;
+    if (!plan.jobs.empty() || !plan.compactions.empty() || plan.tlas_update) {
+        dst_access |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    }
+    if (plan.tlas_action && !plan.new_tlas) {
+        dst_access |= VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    }
+    if (dst_access != 0) {
+        record_memory_barrier(scene, command_buffer,
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, dst_access);
+    }
+    for (const GeometryJob& job : plan.jobs) {
+        if (job.compaction_query != UINT32_MAX) {
+            record_compaction_query(scene, command_buffer, job.created->blas.handle, job.compaction_query);
         }
     }
 

@@ -162,6 +162,8 @@ struct AsPropertyWriteRecord {
     VkAccelerationStructureKHR accel = VK_NULL_HANDLE;
     uint32_t query_slot = 0;
     uint64_t compacted_size = 0;
+    size_t builds_before = 0;
+    size_t barriers_before = 0;
 };
 
 struct State {
@@ -677,6 +679,8 @@ static void VKAPI_CALL fakeCmdWriteAccelerationStructuresProperties(
         record.accel = accels[i];
         record.query_slot = first + i;
         record.compacted_size = compacted;
+        record.builds_before = fake::g.builds.size();
+        record.barriers_before = fake::g.barriers.size();
         fake::g.as_property_writes.push_back(record);
         if (first + i < it->second.count) {
             it->second.results[first + i] = compacted;
@@ -1874,6 +1878,36 @@ static void test_compacted_section_table_keeps_vertex_address() {
     fixture.release(2);
 }
 
+static void test_blas_batch_shares_one_barrier_for_queries_and_tlas() {
+    Fixture fixture(1);
+    const Mesh mesh = compaction_mesh();
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(2, 1, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x745);
+    CHECK(fake::g.as_property_writes.size() == 2);
+    CHECK(fake::g.barriers.size() == 4); // host upload, build inputs, AS reads, final consumers
+    for (const auto& query : fake::g.as_property_writes) {
+        CHECK(query.builds_before == 2); // both BLAS builds are recorded, TLAS is still pending
+        CHECK(query.barriers_before == 3);
+        if (query.barriers_before == 3 && fake::g.barriers.size() >= 3) {
+            const auto& barrier = fake::g.barriers[2];
+            CHECK(barrier.src_stage == VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+            CHECK(barrier.dst_stage == VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+            CHECK(barrier.has_memory);
+            CHECK(barrier.memory.srcAccessMask == VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+            CHECK(barrier.memory.dstAccessMask == VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        }
+    }
+    fixture.release(1);
+
+    const size_t previous_barriers = fake::g.barriers.size();
+    const auto compacted = fixture.prepare(2, 0x746);
+    CHECK(fake::g.as_copies.size() == 2);
+    CHECK((compacted.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
+    CHECK(fake::g.barriers.size() == previous_barriers + 3); // instance input, both copies, final consumers
+    fixture.release(2);
+}
+
 static void test_instance_planning_merges_builds_and_out_of_order_compactions() {
     Fixture fixture(2);
     const Mesh terrain = compaction_mesh();
@@ -2510,6 +2544,7 @@ int main() {
     test_rebuild_without_update_capability_retires_after_frame();
     test_section_blas_compacts_after_release();
     test_compacted_section_table_keeps_vertex_address();
+    test_blas_batch_shares_one_barrier_for_queries_and_tlas();
     test_instance_planning_merges_builds_and_out_of_order_compactions();
     test_compaction_allocation_retry_keeps_query_slots_unique();
     test_stale_compaction_query_waits_for_build_completion();
