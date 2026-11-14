@@ -180,6 +180,7 @@ struct FrameSlot {
     Buffer instance_buffer;
     Buffer tlas_scratch;
     uint64_t tlas_scratch_capacity = 0;
+    uint64_t tlas_update_scratch_bytes = 0;
     uint32_t instance_count = 0;
     bool tlas_valid = false;
     uint64_t built_version = 0;

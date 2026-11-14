@@ -317,7 +317,8 @@ The policy is capability-driven (`AS_UPDATE`), never GPU-name-driven.
   can still run in that frame.
 - In-place update is allowed when the slot has a valid TLAS, `AS_UPDATE` is
   enabled, and the instance count is unchanged. The update can change BLAS
-  references, transforms, masks and custom indices.
+  references, transforms, masks and custom indices. The slot uses the update
+  scratch size returned by the driver when the TLAS was built.
 - Geometry rebuild/refit and membership changes bump the scene version, which
   forces TLAS work on every slot that prepared with older state.
 - An empty scene destroys the slot TLAS and reports `TLAS_REBUILT`.

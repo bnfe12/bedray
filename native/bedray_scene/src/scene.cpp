@@ -181,6 +181,7 @@ struct PreparePlan {
     uint64_t section_table_upload_offset = 0;
 
     std::unique_ptr<Acceleration> new_tlas;
+    uint64_t new_tlas_update_scratch_bytes = 0;
     std::unique_ptr<Buffer> new_tlas_scratch;
     std::unique_ptr<Buffer> new_instance_buffer;
 
@@ -329,7 +330,7 @@ bool process_compaction(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
             it = scene.compaction_jobs.erase(it);
             continue;
         }
-        CompactionCopy copy;
+        CompactionCopy& copy = plan.compactions.emplace_back();
         copy.section_id = job.section_id;
         copy.query_slot = job.query_slot;
         copy.section = &sec->second;
@@ -343,7 +344,6 @@ bool process_compaction(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
         /* Ownership of the slot stays with the job until commit_plan frees it.
            Erasing here would lose the job if a later step of this prepare fails
            and cleanup_plan rolls the compact back. */
-        plan.compactions.push_back(std::move(copy));
         ++it;
         tlas_changed = true;
     }
@@ -795,22 +795,14 @@ struct GeometryRef {
 
 /* A refit job keeps the previous acceleration structure and only replaces the
    vertex/index buffer, so instances must reference the previous BLAS. */
-GeometryRef planned_geometry(const PreparePlan& plan, bool is_section, uint64_t id, const GeometryResource* committed) {
-    for (const GeometryJob& job : plan.jobs) {
-        if (job.is_section == is_section && job.id == id && job.created) {
-            const auto& blas = job.refit ? job.previous->blas : job.created->blas;
-            return { blas.address, blas.handle, job.created->vertex_address };
-        }
+GeometryRef planned_geometry(const GeometryResource* committed, const GeometryJob* job, const CompactionCopy* compaction) {
+    if (job != nullptr) {
+        const auto& blas = job->refit ? job->previous->blas : job->created->blas;
+        return { blas.address, blas.handle, job->created->vertex_address };
     }
-    if (is_section) {
-        for (const CompactionCopy& compaction : plan.compactions) {
-            if (compaction.section_id == id) {
-                // Compaction replaces only the BLAS; the vertex buffer stays put,
-                // so the section record must keep the committed vertex address.
-                return { compaction.compact.address, compaction.compact.handle,
-                         committed != nullptr ? committed->vertex_address : 0 };
-            }
-        }
+    if (compaction != nullptr) {
+        // Compaction replaces the BLAS and retains the committed vertex buffer.
+        return { compaction->compact.address, compaction->compact.handle, committed->vertex_address };
     }
     if (committed != nullptr) {
         return { committed->blas.address, committed->blas.handle, committed->vertex_address };
@@ -862,10 +854,26 @@ void plan_instances(const Scene& scene, PreparePlan& plan, const FrameSlot& slot
     }
     plan.instances.reserve(scene.sections.size() + scene.entities.size());
 
-    // Section IDs are ordered by the scene map. Append records and instances
-    // together so the same order is used even when reusing the committed table.
+    // Build jobs follow the section map and then the entity map. Compaction queries
+    // can complete out of order, so sort their results once before walking the maps.
+    std::sort(plan.compactions.begin(), plan.compactions.end(),
+        [](const CompactionCopy& a, const CompactionCopy& b) { return a.section_id < b.section_id; });
+    auto next_job = plan.jobs.cbegin();
+    const auto jobs_end = plan.jobs.cend();
+    auto next_compaction = plan.compactions.cbegin();
+    const auto compactions_end = plan.compactions.cend();
+
+    // Append terrain records and instances in the same section ID order.
     for (const auto& [id, section] : scene.sections) {
-        const GeometryRef geometry = planned_geometry(plan, true, id, section.geometry.get());
+        const GeometryJob* job = nullptr;
+        if (next_job != jobs_end && next_job->is_section && next_job->id == id) {
+            job = &*next_job++;
+        }
+        const CompactionCopy* compaction = nullptr;
+        if (next_compaction != compactions_end && next_compaction->section_id == id) {
+            compaction = &*next_compaction++;
+        }
+        const GeometryRef geometry = planned_geometry(section.geometry.get(), job, compaction);
         if (geometry.blas_handle == VK_NULL_HANDLE) {
             continue;
         }
@@ -885,7 +893,11 @@ void plan_instances(const Scene& scene, PreparePlan& plan, const FrameSlot& slot
 
     uint32_t entity_index = 0;
     for (const auto& [id, entity] : scene.entities) {
-        const GeometryRef geometry = planned_geometry(plan, false, id, entity.geometry.get());
+        const GeometryJob* job = nullptr;
+        if (next_job != jobs_end && next_job->id == id) {
+            job = &*next_job++;
+        }
+        const GeometryRef geometry = planned_geometry(entity.geometry.get(), job, nullptr);
         if (geometry.blas_handle == VK_NULL_HANDLE) {
             continue;
         }
@@ -1030,14 +1042,14 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, BedraySceneErro
         && (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0
         && slot.instance_count == plan.instance_count;
 
-    uint64_t storage_size = 0;
-    uint64_t build_scratch = 0;
-    uint64_t update_scratch = 0;
-    if (!query_tlas_sizes(scene, plan.instance_count, storage_size, build_scratch, update_scratch, error)) {
-        return false;
-    }
-
+    // UPDATE uses the same device, flags, geometry type and instance count as the slot's build.
+    uint64_t scratch_bytes = slot.tlas_update_scratch_bytes;
     if (!plan.tlas_update) {
+        uint64_t storage_size = 0;
+        if (!query_tlas_sizes(scene, plan.instance_count, storage_size, scratch_bytes,
+                plan.new_tlas_update_scratch_bytes, error)) {
+            return false;
+        }
         plan.new_tlas = std::make_unique<Acceleration>();
         if (!create_acceleration_object(scene, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
                 storage_size, *plan.new_tlas, error)) {
@@ -1046,7 +1058,7 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, BedraySceneErro
     }
 
     const uint64_t scratch_need = std::max(
-        align_up(plan.tlas_update ? update_scratch : build_scratch, scene.scratch_alignment),
+        align_up(scratch_bytes, scene.scratch_alignment),
         scene.scratch_alignment);
     if (slot.tlas_scratch.handle == VK_NULL_HANDLE || slot.tlas_scratch_capacity < scratch_need) {
         plan.new_tlas_scratch = std::make_unique<Buffer>();
@@ -1416,12 +1428,14 @@ void commit_plan(
 
     if (plan.tlas_clear && slot.tlas_valid) {
         destroy_acceleration(scene, slot.tlas);
+        slot.tlas_update_scratch_bytes = 0;
     }
     if (plan.new_tlas) {
         if (slot.tlas_valid) {
             destroy_acceleration(scene, slot.tlas);
         }
         slot.tlas = *plan.new_tlas;
+        slot.tlas_update_scratch_bytes = plan.new_tlas_update_scratch_bytes;
         plan.new_tlas.reset();
     }
     if (plan.new_tlas_scratch) {

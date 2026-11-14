@@ -1528,6 +1528,7 @@ static void test_section_instances_follow_view() {
     CHECK(near_value(transform[7], 6.0));
     CHECK(near_value(transform[11], 7.0));
     fixture.release(1);
+    const size_t initial_size_queries = fake::g.size_queries.size();
 
     /* A section is placed at translate(origin - view) in the camera-relative
        space the renderer traces; the entity transform is unchanged. */
@@ -1565,6 +1566,7 @@ static void test_section_instances_follow_view() {
     CHECK(moved.upload_bytes == 0);
     CHECK(moved.tlas == placed.tlas);
     CHECK(fake::g.builds.size() == builds_before + 1);
+    CHECK(fake::g.size_queries.size() == initial_size_queries);
     if (fake::g.builds.size() == builds_before + 1) {
         const fake::BuildRecord& build = fake::g.builds.back();
         CHECK(build.type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
@@ -1830,6 +1832,42 @@ static void test_compacted_section_table_keeps_vertex_address() {
     CHECK(record.vertex_address == committed_vertex);
     CHECK(record.vertex_address != 0);
     fixture.release(2);
+}
+
+static void test_instance_planning_merges_builds_and_out_of_order_compactions() {
+    Fixture fixture(2);
+    const Mesh terrain = compaction_mesh();
+    CHECK_STATUS(fixture.add_section(30, 1, terrain), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x750);
+
+    CHECK_STATUS(fixture.add_section(10, 1, terrain), BEDRAY_SCENE_OK);
+    fixture.prepare(2, 0x751);
+    const auto before = fixture.resources();
+    const auto vertex10 = read_section_record(before, 0).vertex_address;
+    const auto vertex30 = read_section_record(before, 1).vertex_address;
+    fixture.release(1);
+    fixture.release(2);
+
+    CHECK_STATUS(fixture.add_section(20, 1, terrain), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_entity(entity_input(20, 1, 1, triangle_mesh(0.0f, 0.0f, 0.0f))),
+        BEDRAY_SCENE_OK);
+    const auto mixed = fixture.prepare(3, 0x752);
+    CHECK(mixed.instance_count == 4 && mixed.blas_builds == 2);
+    CHECK(fake::g.as_copies.size() == 2);
+    const auto resources = fixture.resources();
+    CHECK(read_section_record(resources, 0).vertex_address == vertex10);
+    CHECK(read_section_record(resources, 2).vertex_address == vertex30);
+    CHECK(instance_custom_index(resources, 3) == 0x800000u);
+    if (fake::g.as_copies.size() == 2) {
+        const auto tlas = reinterpret_cast<VkAccelerationStructureKHR>(static_cast<uintptr_t>(mixed.tlas));
+        const auto* state = fake::find_accel(tlas);
+        CHECK(state != nullptr && state->blas_references.size() == 4);
+        if (state != nullptr && state->blas_references.size() == 4) {
+            CHECK(state->blas_references[0] == fake::find_accel(fake::g.as_copies[0].dst)->address);
+            CHECK(state->blas_references[2] == fake::find_accel(fake::g.as_copies[1].dst)->address);
+        }
+    }
+    fixture.release(3);
 }
 
 static void test_compaction_allocation_retry_keeps_query_slots_unique() {
@@ -2305,8 +2343,11 @@ static void test_tlas_custom_indices_follow_table_slots() {
     /* Removing the lowest id compacts the slots: id 20 moves from slot 1 to
        slot 0, keeps its identity hash, and the instances follow the table. */
     CHECK_STATUS(fixture.remove_section(10), BEDRAY_SCENE_OK);
+    const size_t queries_before_removal = fake::g.size_queries.size();
     const BedraySceneFrameInfo after = fixture.prepare(3, 0xB22);
     CHECK(after.instance_count == 3);
+    CHECK(fake::g.size_queries.size() == queries_before_removal + 1);
+    CHECK(fake::g.size_queries.back().type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
     const BedraySceneResources compacted = fixture.resources();
     CHECK(compacted.section_table_bytes == 2 * BEDRAY_SCENE_SECTION_RECORD_BYTES);
     const BedraySceneSectionRecord record20 = read_section_record(compacted, 0);
@@ -2428,6 +2469,7 @@ int main() {
     test_rebuild_without_update_capability_retires_after_frame();
     test_section_blas_compacts_after_release();
     test_compacted_section_table_keeps_vertex_address();
+    test_instance_planning_merges_builds_and_out_of_order_compactions();
     test_compaction_allocation_retry_keeps_query_slots_unique();
     test_stale_compaction_query_waits_for_build_completion();
     test_failed_prepare_retries_all_planned_compactions();
