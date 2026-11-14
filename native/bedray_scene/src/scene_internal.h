@@ -175,7 +175,10 @@ struct FrameSlot {
     bool free = true;
     uint64_t frame_index = 0;
     uint64_t command_buffer = 0;
-    std::vector<Buffer> transient;
+    Buffer upload_staging;
+    Buffer blas_scratch;
+    Buffer large_upload_staging;
+    Buffer large_blas_scratch;
     Acceleration tlas;
     Buffer instance_buffer;
     Buffer tlas_scratch;

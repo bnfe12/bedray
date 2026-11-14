@@ -204,8 +204,8 @@ view.
 
 `bedray_scene_release_frame` must be called only after the host has proven GPU
 completion of that submission (or discarded an unsubmitted recording). It
-frees that frame's transient staging and BLAS scratch buffers, releases the
-BLAS pins held by the frame, and runs retirement collection. The library
+makes the slot's small staging and BLAS scratch buffers available for reuse,
+frees oversized buffers, releases BLAS pins and runs retirement collection. The library
 cannot verify completion; this is a trust boundary owned by the host.
 
 `bedray_scene_query_resources` returns the resources of the most recently
@@ -243,7 +243,7 @@ VkFences / submissions             tables[2]: GPU buffer + pending bytes
                                    section table: GPU buffer (64-byte records)
                                    frame slots[frames_in_flight]:
                                      TLAS, TLAS scratch, host-visible instance
-                                     buffer, transient staging/BLAS scratch,
+                                     buffer, upload staging and BLAS scratch,
                                      BLAS references, view and scene version
                                    retired_buffers / retired_accelerations
 ```
@@ -253,8 +253,10 @@ Per frame slot:
 - one persistent TLAS and TLAS scratch buffer, reused across frames;
 - one persistent host-visible instance buffer sized
   `align_up(max_instances * 64, 256)`, written through a mapped pointer;
-- a transient list containing the staging buffer and the BLAS scratch buffer
-  for that prepared frame, destroyed in `release_frame`;
+- a mapped upload staging buffer and a device-local BLAS scratch buffer, each
+  retained only up to 4 MiB of usable capacity per slot. A larger buffer is
+  released when its frame completes, leaving the smaller cached buffer
+  available for the next ordinary batch;
 - `cached_blas_refs` lists the BLAS bound to the slot's current TLAS. An
   outstanding frame pins them against in-place refits. A free slot with
   `AS_UPDATE` can retain them as inputs to a future TLAS update;
@@ -399,8 +401,9 @@ aligned to `minAccelerationStructureScratchOffsetAlignment`, with a minimum of
    - instance buffer: `HOST`/`HOST_WRITE` ->
      `ACCELERATION_STRUCTURE_BUILD`/`ACCELERATION_STRUCTURE_READ`.
    The source stage is the union of `TRANSFER` and `HOST` as applicable.
-3. **BLAS work**: `vkCmdBuildAccelerationStructuresKHR` for every job.
-   A refit uses `ALLOW_UPDATE`, source = destination = the committed BLAS and
+3. **BLAS work**: a barrier orders earlier scratch writes before the frame
+   reuses that storage. Each job has its own aligned scratch range.
+   `vkCmdBuildAccelerationStructuresKHR` records each job. A refit uses `ALLOW_UPDATE`, source = destination = the committed BLAS and
    the update scratch size. A rebuild targets the new BLAS.
 4. **AS writes -> TLAS build**: a barrier makes previous AS writes visible to
    the TLAS build or update. It covers reads of new BLAS and the update source,

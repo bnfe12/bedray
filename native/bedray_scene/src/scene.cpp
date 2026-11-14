@@ -121,6 +121,10 @@ BedraySceneStatus failed_status(Scene& scene, BedraySceneError* error) {
 
 namespace {
 
+// Keep the common working set per slot. Larger batches stay resident only for their submission.
+constexpr uint64_t kMaxRetainedStagingBytes = 4ull * 1024 * 1024;
+constexpr uint64_t kMaxRetainedBlasScratchBytes = 4ull * 1024 * 1024;
+
 struct GeometryJob {
     bool is_section = false;
     uint64_t id = 0;
@@ -166,10 +170,8 @@ struct PreparePlan {
     std::vector<PlannedCopy> copies;
     std::vector<CompactionCopy> compactions;
 
-    Buffer staging;
-    bool staging_present = false;
-    Buffer blas_scratch;
-    bool blas_scratch_present = false;
+    Buffer new_staging;
+    Buffer new_blas_scratch;
 
     std::array<Buffer, BEDRAY_SCENE_TABLE_COUNT> new_tables{};
     std::array<bool, BEDRAY_SCENE_TABLE_COUNT> table_action{};
@@ -688,10 +690,8 @@ void cleanup_plan(Scene& scene, PreparePlan& plan) {
     }
     plan.copies.clear();
 
-    destroy_buffer(scene, plan.staging);
-    plan.staging_present = false;
-    destroy_buffer(scene, plan.blas_scratch);
-    plan.blas_scratch_present = false;
+    destroy_buffer(scene, plan.new_staging);
+    destroy_buffer(scene, plan.new_blas_scratch);
 
     for (Buffer& buffer : plan.new_tables) {
         destroy_buffer(scene, buffer);
@@ -912,7 +912,11 @@ void plan_instances(const Scene& scene, PreparePlan& plan, const FrameSlot& slot
     }
 }
 
-bool plan_uploads(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
+Buffer& upload_staging(PreparePlan& plan, FrameSlot& slot) {
+    return plan.new_staging.handle != VK_NULL_HANDLE ? plan.new_staging : slot.upload_staging;
+}
+
+bool plan_uploads(Scene& scene, PreparePlan& plan, FrameSlot& slot, BedraySceneError* error) {
     uint64_t cursor = 0;
     auto reserve_bytes = [&cursor](uint64_t bytes) {
         cursor = align_up(cursor, kBufferAlignment);
@@ -975,16 +979,17 @@ bool plan_uploads(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
         return true;
     }
 
-    if (!create_buffer(scene, cursor, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, plan.staging, error)) {
+    if (cursor > slot.upload_staging.size
+            && !create_buffer(scene, cursor, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, plan.new_staging, error)) {
         return false;
     }
-    plan.staging_present = true;
-    if (plan.staging.mapped == nullptr) {
+    Buffer& staging = upload_staging(plan, slot);
+    if (staging.mapped == nullptr) {
         fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "staging buffer is not mapped");
         return false;
     }
 
-    auto* base = static_cast<uint8_t*>(plan.staging.mapped);
+    auto* base = static_cast<uint8_t*>(staging.mapped);
     plan.copies.reserve(plan.jobs.size() * 2 + BEDRAY_SCENE_TABLE_COUNT + 1);
     for (GeometryJob& job : plan.jobs) {
         const PendingMesh& mesh = *job.mesh;
@@ -1015,7 +1020,7 @@ bool plan_uploads(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
         plan.copies.push_back({ plan.section_table_upload_offset, &plan.new_section_table, 0, bytes });
     }
 
-    return flush_buffer(scene, plan.staging, 0, plan.staging.size, error);
+    return flush_buffer(scene, staging, 0, cursor, error);
 }
 
 bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, BedraySceneError* error) {
@@ -1114,7 +1119,7 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, BedraySceneErro
     return true;
 }
 
-bool plan_blas_scratch(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
+bool plan_blas_scratch(Scene& scene, PreparePlan& plan, const FrameSlot& slot, BedraySceneError* error) {
     uint64_t total = 0;
     for (GeometryJob& job : plan.jobs) {
         uint64_t size = align_up(job.refit ? job.update_scratch : job.build_scratch,
@@ -1125,14 +1130,8 @@ bool plan_blas_scratch(Scene& scene, PreparePlan& plan, BedraySceneError* error)
         job.scratch_offset = total;
         total += size;
     }
-    if (total == 0) {
-        return true;
-    }
-    if (!create_scratch_buffer(scene, total, plan.blas_scratch, error)) {
-        return false;
-    }
-    plan.blas_scratch_present = true;
-    return true;
+    return total <= slot.blas_scratch.size
+        || create_scratch_buffer(scene, total, plan.new_blas_scratch, error);
 }
 
 Buffer& plan_instance_buffer(PreparePlan& plan, FrameSlot& slot) {
@@ -1162,8 +1161,9 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
         barriers.push_back(barrier);
     };
 
-    if (plan.staging_present) {
-        buffer_barrier(plan.staging, VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    const Buffer& staging = upload_staging(plan, slot);
+    if (plan.upload_bytes != 0) {
+        buffer_barrier(staging, VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
         record_buffer_barriers(scene, command_buffer,
             VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
             barriers.data(), static_cast<uint32_t>(barriers.size()));
@@ -1171,7 +1171,7 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
     }
 
     for (const PlannedCopy& copy : plan.copies) {
-        record_copy(scene, command_buffer, plan.staging, copy.staging_offset,
+        record_copy(scene, command_buffer, staging, copy.staging_offset,
             *copy.dst, copy.dst_offset, copy.size);
     }
 
@@ -1196,8 +1196,16 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
         barriers.clear();
     }
 
+    if (!plan.jobs.empty() && plan.new_blas_scratch.handle == VK_NULL_HANDLE) {
+        record_memory_barrier(scene, command_buffer,
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+            VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+    }
+    const Buffer& blas_scratch = plan.new_blas_scratch.handle != VK_NULL_HANDLE ? plan.new_blas_scratch : slot.blas_scratch;
     for (const GeometryJob& job : plan.jobs) {
-        const uint64_t scratch_address = plan.blas_scratch.address + job.scratch_offset;
+        const uint64_t scratch_address = blas_scratch.address + job.scratch_offset;
         if (job.refit) {
             record_blas_build(scene, command_buffer, blas_view_of(job), job.previous->blas.handle,
                 job.previous->blas.handle, true, scratch_address);
@@ -1312,8 +1320,6 @@ void commit_plan(
     scene.retired_buffers.reserve(scene.retired_buffers.size()
         + plan.jobs.size() * 2 + BEDRAY_SCENE_TABLE_COUNT + 2);
     scene.retired_accelerations.reserve(scene.retired_accelerations.size() + plan.jobs.size());
-    slot.transient.clear();
-    slot.transient.reserve(2);
     // An UPDATE publishes new references and retains its source references until completion.
     if (plan.tlas_update) {
         slot.update_source_blas_refs.reserve(plan.instance_count);
@@ -1483,15 +1489,17 @@ void commit_plan(
         slot.cached_blas_refs.clear();
     }
 
-    if (plan.staging_present) {
-        slot.transient.push_back(plan.staging);
-        plan.staging = Buffer{};
-        plan.staging_present = false;
+    if (plan.new_staging.handle != VK_NULL_HANDLE) {
+        Buffer& target = plan.new_staging.size > kMaxRetainedStagingBytes
+            ? slot.large_upload_staging : slot.upload_staging;
+        destroy_buffer(scene, target);
+        target = std::exchange(plan.new_staging, Buffer{});
     }
-    if (plan.blas_scratch_present) {
-        slot.transient.push_back(plan.blas_scratch);
-        plan.blas_scratch = Buffer{};
-        plan.blas_scratch_present = false;
+    if (plan.new_blas_scratch.handle != VK_NULL_HANDLE) {
+        Buffer& target = plan.new_blas_scratch.size > kMaxRetainedBlasScratchBytes
+            ? slot.large_blas_scratch : slot.blas_scratch;
+        destroy_buffer(scene, target);
+        target = std::exchange(plan.new_blas_scratch, Buffer{});
     }
 
     slot.free = false;
@@ -2203,7 +2211,7 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
         }
         plan.target_version = impl.version + ((tlas_changed || impl.membership_changed) ? 1u : 0u);
         plan_instances(impl, plan, *slot);
-        if (!plan_uploads(impl, plan, err)) {
+        if (!plan_uploads(impl, plan, *slot, err)) {
             cleanup_plan(impl, plan);
             return err->status;
         }
@@ -2211,7 +2219,7 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
             cleanup_plan(impl, plan);
             return err->status;
         }
-        if (!plan_blas_scratch(impl, plan, err)) {
+        if (!plan_blas_scratch(impl, plan, *slot, err)) {
             cleanup_plan(impl, plan);
             return err->status;
         }
@@ -2283,10 +2291,8 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_release_frame(
         return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
             "frame %llu is not outstanding", static_cast<unsigned long long>(frame_index));
     }
-    for (Buffer& buffer : slot->transient) {
-        destroy_buffer(impl, buffer);
-    }
-    slot->transient.clear();
+    destroy_buffer(impl, slot->large_upload_staging);
+    destroy_buffer(impl, slot->large_blas_scratch);
     slot->free = true;
     slot->frame_index = 0;
     slot->command_buffer = 0;
@@ -2369,10 +2375,8 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_destroy(Bedray
         }
         destroy_buffer(impl, impl.section_table);
         for (FrameSlot& slot : impl.slots) {
-            for (Buffer& buffer : slot.transient) {
-                destroy_buffer(impl, buffer);
-            }
-            slot.transient.clear();
+            destroy_buffer(impl, slot.upload_staging);
+            destroy_buffer(impl, slot.blas_scratch);
             destroy_acceleration(impl, slot.tlas);
             destroy_buffer(impl, slot.instance_buffer);
             destroy_buffer(impl, slot.tlas_scratch);
