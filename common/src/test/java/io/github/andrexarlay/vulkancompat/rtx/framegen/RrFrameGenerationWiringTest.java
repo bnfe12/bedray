@@ -30,6 +30,24 @@ class RrFrameGenerationWiringTest {
         assertTrue(world.contains("WorldFrames.isCurrent(resolutionStamp)"), "the route survives endWorldPhase with engine frame provenance");
     }
 
+    @Test void disabledFrameGenerationSkipsGuideProductionAndResumingRequiresCurrentData() throws IOException {
+        String nvidia = source("rtx/framegen/FrameGenRuntime");
+        String amd = source("rtx/framegen/fsr3/Fsr3FrameGen");
+        String world = source("rtx/WorldTargetManager");
+        String renderer = source("rt/world/RtFrameRenderer");
+        assertTrue(renderer.contains("&& FrameGenRuntime.needsFrameInputs())"));
+        assertProducerIsGated(nvidia, "if (!needsDlssgInputs())");
+        assertProducerIsGated(amd, "if (!needsFrameInputs())");
+        assertTrue(world.contains("WorldFrames.isCurrent(rasterMotionStamp)"));
+    }
+
+    private static void assertProducerIsGated(String vendor, String gate) {
+        int worldReady = vendor.indexOf("public static void onWorldReady(");
+        int gateAt = vendor.indexOf(gate, worldReady);
+        assertTrue(worldReady >= 0 && gateAt > worldReady && gateAt < vendor.indexOf("producerCommands.record(", worldReady));
+        assertTrue(vendor.contains("!rrFrame && !WorldTargetManager.hasCurrentRasterMotion()"));
+    }
+
     @Test void rrSdkAndVelocityUseTheActualPrimaryProducerJitter() throws IOException {
         String renderer = source("rt/world/RtFrameRenderer");
         assertTrue(renderer.contains("float rrJitterX = slang.guideFrame().jitter.x"));
@@ -38,10 +56,11 @@ class RrFrameGenerationWiringTest {
         assertTrue(rr.contains("new VelocityPipeline.Jitter(jitterPixelsX, jitterPixelsY,"));
         assertTrue(rr.contains("reset ? jitterPixelsX : previousPrimaryJitterX"));
         assertTrue(rr.indexOf("previousPrimaryJitterX = jitterPixelsX") > rr.indexOf("rr.evaluate("));
-        // RR has its own measured jitter signs (2026-11-07: +1/+1 made the RR output wobble in a 2 px cycle; +1/-1 is still).
+        // RR has its own measured jitter signs (2026-11-07: +1/+1 made the RR output wobble in a 2 px cycle; +1/-1 is still;
+        // 2026-11-13: X re-measured at Balanced, -1/-1 is both steadier and sharper).
         assertTrue(rr.contains("jitterPixelsX * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignX()"));
         assertTrue(rr.contains("jitterPixelsY * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignY()"));
-        assertEquals(1.0f, io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignX());
+        assertEquals(-1.0f, io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignX());
         assertEquals(-1.0f, io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignY());
         String fg = source("rtx/framegen/FrameGenRuntime");
         assertTrue(fg.contains("int VIEWPORT = 1;"));

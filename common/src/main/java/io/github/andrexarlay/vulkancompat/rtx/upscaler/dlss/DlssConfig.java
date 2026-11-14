@@ -29,6 +29,9 @@ public final class DlssConfig {
      * repeating cycle of up to 2 px, mostly vertical (owner: "lights and shadows jerk in a circle"); (+1,-1) gave 0.004 px
      * of shift, frame-to-frame difference 3.01 -> 0.31 (edges 9.95 -> 0.71) and a slightly sharper image. The RR guides are
      * written y-down while NGX expects the jitter y the other way.
+     * X re-measured 2026-11-13 (rt_look scene W, daylight, 742x418 -> 1280x720 Balanced, 5 consecutive shots, same build):
+     * (+1,-1) temporal std 2.57 / mean gradient 4.55; (-1,-1) 1.46 / 5.96; (+1,+1) 3.07 / 5.31; (-1,+1) 2.82 / 5.57.
+     * With +1 on X the accumulated image was soft (rounded block corners, smeared textures) and edges crawled.
      */
     public static final String RR_JITTER_SIGN_X_PROPERTY = "vkbridge.dlss.rr.jitterSignX";
     public static final String RR_JITTER_SIGN_Y_PROPERTY = "vkbridge.dlss.rr.jitterSignY";
@@ -84,9 +87,9 @@ public final class DlssConfig {
         return signProperty(JITTER_SIGN_Y_PROPERTY, 1.0f);
     }
 
-    /** Ray Reconstruction jitter sign X (measured: +1). */
+    /** Ray Reconstruction jitter sign X (measured: -1). */
     public static float rrJitterSignX() {
-        return signProperty(RR_JITTER_SIGN_X_PROPERTY, 1.0f);
+        return signProperty(RR_JITTER_SIGN_X_PROPERTY, -1.0f);
     }
 
     /** Ray Reconstruction jitter sign Y (measured: -1, see RR_JITTER_SIGN_X_PROPERTY). */

@@ -244,7 +244,7 @@ VkFences / submissions             tables[2]: GPU buffer + pending bytes
                                    frame slots[frames_in_flight]:
                                      TLAS, TLAS scratch, host-visible instance
                                      buffer, transient staging/BLAS scratch,
-                                     blas_in_use pins, fingerprint/version
+                                     BLAS references, view and scene version
                                    retired_buffers / retired_accelerations
 ```
 
@@ -255,8 +255,11 @@ Per frame slot:
   `align_up(max_instances * 64, 256)`, written through a mapped pointer;
 - a transient list containing the staging buffer and the BLAS scratch buffer
   for that prepared frame, destroyed in `release_frame`;
-- `blas_in_use` lists every BLAS referenced by that frame's TLAS; it pins
-  those BLAS against in-place refits until the frame is released.
+- `cached_blas_refs` lists the BLAS bound to the slot's current TLAS. An
+  outstanding frame pins them against in-place refits. A free slot with
+  `AS_UPDATE` can retain them as inputs to a future TLAS update;
+- `update_source_blas_refs` retains the previous TLAS dependencies until the
+  recording that updated it is released.
 
 Commit/replacement policy:
 
@@ -309,13 +312,15 @@ The policy is capability-driven (`AS_UPDATE`), never GPU-name-driven.
 
 - Rebuild/update is required when the slot has no valid TLAS, the slot was
   built from an older scene version, or the instance count changed.
+- A matching scene version and view let the slot reuse its TLAS and instance
+  buffer without walking the scene's instances. Material and light uploads
+  can still run in that frame.
 - In-place update is allowed when the slot has a valid TLAS, `AS_UPDATE` is
-  enabled, the instance count is unchanged, and the instance fingerprint is
-  unchanged. The fingerprint covers BLAS handle and device address, custom
-  index, and mask; transforms are deliberately excluded so a pure transform
-  change can use TLAS update.
-- Mask changes (and custom-index changes caused by membership ordering) alter
-  the fingerprint and therefore conservatively rebuild the TLAS.
+  enabled, and the instance count is unchanged. The update can change BLAS
+  references, transforms, masks and custom indices. The slot uses the update
+  scratch size returned by the driver when the TLAS was built.
+- A full build queries the driver for the required sizes. It uses the released
+  slot's TLAS storage when that allocation is large enough.
 - Geometry rebuild/refit and membership changes bump the scene version, which
   forces TLAS work on every slot that prepared with older state.
 - An empty scene destroys the slot TLAS and reports `TLAS_REBUILT`.
@@ -334,20 +339,18 @@ Each record is the 64-byte `VkAccelerationStructureInstanceKHR` layout:
 - BLAS device address from the acceleration structure.
 
 Section placement is camera-relative: `bedray_scene_set_view` stores the camera
-eye in the same world space as section origins, and every prepared frame writes
-a section instance as `translate(origin - view)` (subtraction in `double`,
-rounded once to `float`). The view defaults to unset, which keeps the
-historical identity placement. A view change rewrites the slot's instance
-buffer and forces the TLAS work path; because the instance fingerprint excludes
-transforms, it is an in-place TLAS update whenever `AS_UPDATE` is enabled and
-the instance count and fingerprint are unchanged, with no BLAS work. This is
+eye in the same world space as section origins. When the slot needs new instance
+records, it writes a section instance as `translate(origin - view)` (subtraction
+in `double`, rounded once to `float`). The view defaults to unset, which keeps
+the historical identity placement. A view change rewrites the slot's instance
+buffer. It can update the TLAS in place when `AS_UPDATE` is enabled and the
+instance count is unchanged. This is
 needed because the path tracer traces camera-relative rays from the eye at the
 origin while section vertices stay section-local; entities already carry a
 camera-relative transform from the host.
 
 Slot compaction is intentional: adding or removing a section can renumber
-later sections, which changes their custom indices and therefore the instance
-fingerprint (forcing a TLAS rebuild). The shader must resolve a section through
+later sections, which changes their custom indices. The shader must resolve a section through
 the section table by slot, never treat the custom index as a stable section id;
 `origin.w` is the stable identity.
 
@@ -399,15 +402,12 @@ aligned to `minAccelerationStructureScratchOffsetAlignment`, with a minimum of
 3. **BLAS work**: `vkCmdBuildAccelerationStructuresKHR` for every job.
    A refit uses `ALLOW_UPDATE`, source = destination = the committed BLAS and
    the update scratch size. A rebuild targets the new BLAS.
-4. **BLAS -> TLAS**: if the TLAS references a BLAS written this frame, or the
-   TLAS itself is updated in place, a memory barrier
-   `ACCELERATION_STRUCTURE_BUILD`/`ACCELERATION_STRUCTURE_WRITE` ->
-   `ACCELERATION_STRUCTURE_BUILD`/`ACCELERATION_STRUCTURE_READ` is recorded
-   before the TLAS build. A BLAS update invalidates and requires this
-   ordering for any TLAS that references it.
+4. **AS writes -> TLAS build**: a barrier makes previous AS writes visible to
+   the TLAS build or update. It covers reads of new BLAS and the update source,
+   and writes when the build overwrites the slot's TLAS storage.
 5. **TLAS build/update**: `vkCmdBuildAccelerationStructuresKHR` on the TLAS.
-   Update mode requires the same instance count; the fingerprint check ensures
-   the referenced BLAS set is unchanged.
+   Update mode requires the same instance count. The source BLAS stay alive
+   through the update recording.
 6. **AS work / uploads -> compute tracing**: a final barrier with:
    - source stages: `ACCELERATION_STRUCTURE_BUILD` when AS work happened,
      `TRANSFER` when copies happened, `HOST` when the instance buffer was

@@ -416,7 +416,7 @@ public final class RtEmitters {
             // nothing (owner report 2026-10-24). The pass keeps its progress, publishes its slightly stale result, and the
             // next update starts a fresh pass because the version moved on.
             scan.noteVersion(version);
-            continueScan(camX, camY, camZ, range, budget, entityQuads, entityCount);
+            continueScan(camX, camY, camZ, range, budget, entityQuads, entityCount, false);
             return;
         }
         scan = null; // no pass in flight, or the camera left the frame its distance selection was computed in (teleport)
@@ -435,8 +435,9 @@ public final class RtEmitters {
             }
         }
         coldScan = staticHeapSize < 0 || mat != lastMaterials || moved > passAbortDistance(range);
+        boolean refreshPreviousSelection = coldScan || range != lastRange || budget != lastBudget;
         startScan(world, mat, camX, camY, camZ, range, budget, version);
-        continueScan(camX, camY, camZ, range, budget, entityQuads, entityCount);
+        continueScan(camX, camY, camZ, range, budget, entityQuads, entityCount, refreshPreviousSelection);
     }
 
     private void startScan(RtWorld world, MaterialAtlasBaker.Result mat, double camX, double camY, double camZ, float range,
@@ -454,7 +455,6 @@ public final class RtEmitters {
         lastCamZ = camZ;
         lastRange = range;
         lastBudget = budget;
-        lastEntityCount = -1; // Publish once for the new scan, including static-only scenes.
         scanMembership = frameSelection.publishedKeysSnapshot();
         originX = (int) Math.floor(camX);
         originY = (int) Math.floor(camY);
@@ -490,7 +490,7 @@ public final class RtEmitters {
     }
 
     private void continueScan(double camX, double camY, double camZ, float range, int budget,
-                              float[] entityQuads, int entityCount) {
+                              float[] entityQuads, int entityCount, boolean refreshPreviousSelection) {
         boolean complete = scan.advance(System.nanoTime() + (coldScan ? COLD_SCAN_BUDGET_NS : SCAN_BUDGET_NS), scanStep);
         if (complete) {
             scanStale = scan.stale();
@@ -498,8 +498,9 @@ public final class RtEmitters {
             scan = null;
             completeStaticSelection();
         }
-        // A slow cold section scan must not freeze moving entity lights or use its old camera for new entity records.
-        if (complete || entityCount != 0 || lastEntityCount != 0) {
+        // Keep the committed table during a warm scan. A camera jump, atlas or settings change
+        // needs an immediate refresh, and entity lights still follow the current frame.
+        if (complete || refreshPreviousSelection || entityCount != 0 || lastEntityCount != 0) {
             publishSelection(camX, camY, camZ, range, budget, entityQuads, entityCount);
         }
     }
@@ -568,7 +569,7 @@ public final class RtEmitters {
             while (cursor < items.size()) {
                 step.accept(items.get(cursor));
                 cursor++;
-                if (System.nanoTime() > deadlineNs) {
+                if (cursor < items.size() && System.nanoTime() > deadlineNs) {
                     return false;
                 }
             }

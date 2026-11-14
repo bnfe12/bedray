@@ -243,7 +243,7 @@ public class MotionVectorStabilityTest {
     /**
      * The DLSS-RR image is resolved on the render grid and already carries entity and RT-geometry motion. Feeding the
      * upscaler the raster-depth vectors instead drags moving entities and water across block edges, because that pass
-     * only knows camera motion. The raster pass must still run: frame generation reads its output.
+     * only knows camera motion. Frame generation and the motion probe can still request the raster pass.
      */
     @Test
     public void testSrReusesDenoiserMotionVectors() throws Exception {
@@ -258,9 +258,12 @@ public class MotionVectorStabilityTest {
             "the upscaler input falls back to the raster vectors");
         assertTrue(world.contains("new FrameContext.ImageRef(srMvImg, srMvView, fmtMv,"),
             "FrameContext must be built from the resolved-or-raster pair");
+        assertTrue(world.contains("!reuseDenoiserMotion || FrameGenRuntime.needsFrameInputs() || probeRasterMotion"));
+        int gate = world.indexOf("if (recordRasterMotion) {");
+        int rasterPass = world.indexOf("velocityRecordings.pipeline().dispatch(cmd, rasterDepthView, mvView", gate);
         int ctx = world.indexOf("FrameContext ctx = new FrameContext");
-        assertTrue(world.indexOf("velocityPipeline.dispatch(cmd, rasterDepthView, mvView", 0) < ctx,
-            "the raster pass still feeds frame generation and must run before the upscaler");
+        assertTrue(gate >= 0 && rasterPass > gate && rasterPass < ctx,
+            "the raster pass must run before the upscaler when any consumer needs its output");
     }
 
     /**

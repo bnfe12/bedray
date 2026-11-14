@@ -265,12 +265,18 @@ public final class RtEntityGeometryManager {
         ringIndexCap = geometry.indexCapacity();
         ringSlot = geometry.slot();
         long pos = ringPos.mapped + ringSlot * ringVertexCap * 12L;
+        long prev = ringPrev.mapped + ringSlot * ringVertexCap * 12L;
         long attr = ringAttr.mapped + ringSlot * ringVertexCap * 16L;
         for (int v = 0; v < verts; v++) {
             int o = v * FLOATS_PER_VERTEX;
-            MemoryUtil.memPutFloat(pos + v * 12L, src[o]);
-            MemoryUtil.memPutFloat(pos + v * 12L + 4, src[o + 1]);
-            MemoryUtil.memPutFloat(pos + v * 12L + 8, src[o + 2]);
+            long offset = v * 12L;
+            float x = src[o], y = src[o + 1], z = src[o + 2];
+            MemoryUtil.memPutFloat(pos + offset, x);
+            MemoryUtil.memPutFloat(pos + offset + 4, y);
+            MemoryUtil.memPutFloat(pos + offset + 8, z);
+            MemoryUtil.memPutFloat(prev + offset, x);
+            MemoryUtil.memPutFloat(prev + offset + 4, y);
+            MemoryUtil.memPutFloat(prev + offset + 8, z);
             MemoryUtil.memPutInt(attr + v * 16L, Float.floatToRawIntBits(src[o + 3]));
             MemoryUtil.memPutInt(attr + v * 16L + 4, Float.floatToRawIntBits(src[o + 6]));
             MemoryUtil.memPutFloat(attr + v * 16L + 8, src[o + 4]);
@@ -281,7 +287,7 @@ public final class RtEntityGeometryManager {
             int x = idx[i];
             MemoryUtil.memPutInt(ib + i * 4L, x >= 0 && x < verts ? x : 0);
         }
-        writePrevPositions(src, verts, ringPrev.mapped + ringSlot * ringVertexCap * 12L);
+        writePrevPositions(src, verts, prev);
         frameVertices = verts;
         frameTriangles = indices / 3;
         uploadedBytes = verts * 40L + indices * 4L;
@@ -293,12 +299,6 @@ public final class RtEntityGeometryManager {
      * Matched: per-vertex previous position (covers rigid motion AND animation); unmatched: no motion (= current position).
      */
     private void writePrevPositions(float[] src, int verts, long dst) {
-        for (int v = 0; v < verts; v++) {
-            int o = v * FLOATS_PER_VERTEX;
-            MemoryUtil.memPutFloat(dst + v * 12L, src[o]);
-            MemoryUtil.memPutFloat(dst + v * 12L + 4, src[o + 1]);
-            MemoryUtil.memPutFloat(dst + v * 12L + 8, src[o + 2]);
-        }
         matchedEntities = 0;
         unmatchedEntities = 0;
         float[] psrc = prevFrame.vertexData();

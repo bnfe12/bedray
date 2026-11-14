@@ -357,6 +357,10 @@ public final class Fsr3FrameGen {
         return FrameGenProvider.amd() && !failed && swapchainActive();
     }
 
+    public static boolean needsFrameInputs() {
+        return usable() && userEnabled && FrameGenSettings.mode() != FrameGenSettings.Mode.OFF;
+    }
+
     // ------------------------------------------------------------------------------------------------ frame hooks
 
     public static void onFrameHead() {
@@ -379,6 +383,14 @@ public final class Fsr3FrameGen {
             return;
         }
         try {
+            if (!needsFrameInputs()) {
+                validFrames = 0;
+                if (modeOn) {
+                    disableGeneration();
+                    LOGGER.info("[VKB-FG] fsr3 mode=OFF frame={}", frameId);
+                }
+                return;
+            }
             var world = WorldTargetManager.getWorldTarget();
             var depthCopy = WorldTargetManager.getDepthCopy();
             var mvTarget = WorldTargetManager.getMotionVectorsTarget();
@@ -386,6 +398,10 @@ public final class Fsr3FrameGen {
             boolean rrFrame = WorldTargetManager.rrOutputThisFrame();
             var guides = rrFrame ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.frameGenGuides() : null;
             if (rrFrame && guides == null) { worldFail = "rr_guides_missing_current_frame"; return; }
+            if (!rrFrame && !WorldTargetManager.hasCurrentRasterMotion()) {
+                worldFail = "raster_guides_missing_current_frame";
+                return;
+            }
             if (world == null || (!rrFrame && (depthCopy == null || mvTarget == null)) || main == null) {
                 worldFail = "missing_targets";
                 return;
@@ -417,19 +433,6 @@ public final class Fsr3FrameGen {
                     CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), false);
             windowFocused = Minecraft.getInstance().getWindow().isFocused();
             FrameGenSettings.Mode wanted = FrameGenSettings.mode();
-            boolean allowed = userEnabled && wanted != FrameGenSettings.Mode.OFF;
-            if (!allowed) {
-                if (modeOn) {
-                    modeOn = false;
-                    if (fg != null && scSwapchain != 0L) {
-                        nat.configureFg(fg, scSwapchain, false, FfxFgNative.Image.NONE, frameId);
-                    }
-                    configuredFrame = frameId;
-                    LOGGER.info("[VKB-FG] fsr3 mode=OFF frame={}", frameId);
-                }
-                worldReady = false;
-                return;
-            }
             if (scSwapchain == 0L) {
                 worldFail = "no_swapchain";
                 return;

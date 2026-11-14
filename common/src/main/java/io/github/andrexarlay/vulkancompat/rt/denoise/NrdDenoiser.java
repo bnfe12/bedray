@@ -303,8 +303,8 @@ public final class NrdDenoiser {
         int flags = BedrayNrdPackNative.packFlags(tonemap,
             DenoiserConfig.VIEW == DenoiserConfig.View.SPLIT, RtSettings.tonemapper().ordinal(),
             RtSettings.vignette(), RtSettings.filmGrain());
-        ByteBuffer pc = org.lwjgl.system.MemoryUtil.memAlloc(NrdPackPipeline.PUSH_BYTES);
-        try {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer pc = stack.malloc(NrdPackPipeline.PUSH_BYTES);
             NrdPackPipeline.writePush(pc, info.normalEncoding(), info.roughnessEncoding(), mode.packShaderCode(), flags, reblur,
                 DenoiserConfig.DENOISING_RANGE, width, height, exposure, entityMotionAddress);
             packPipeline.recordPack(cmd, pc, width, height);
@@ -314,8 +314,6 @@ public final class NrdDenoiser {
             if (DenoiserConfig.VIEW != DenoiserConfig.View.NOISY) {
                 packPipeline.recordCompose(cmd, pc, width, height);
             }
-        } finally {
-            org.lwjgl.system.MemoryUtil.memFree(pc);
         }
         frameCounter++;
         havePrev = true;
