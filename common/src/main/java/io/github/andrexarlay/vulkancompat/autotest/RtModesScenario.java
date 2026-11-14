@@ -118,8 +118,8 @@ public final class RtModesScenario implements AutotestScenario {
             for (int i = 1; i < parts.length; i++) {
                 String m = parts[i].trim().toLowerCase(Locale.ROOT);
                 if (!(m.equals("ao") || m.equals("gi") || m.equals("break") || m.equals("ui") || m.equals("soft") || m.equals("refl") || m.equals("noshadow") || m.equals("noemis")
-                    || m.equals("rr") || m.equals("ref") || m.equals("cmp") || m.equals("ent") || m.equals("entabove") || m.equals("noent") || m.equals("label") || m.matches("pack=(on|off)") || m.equals("entmove") || m.matches("mv=(still|walk|turn|strafe|realwalk|realturn)") || m.equals("noaccum") || m.equals("noexp") || m.equals("noautonorm") || m.matches("an\\d+") || m.matches("t\\d+") || m.matches("aim=-?\\d+_-?\\d+") || m.equals("nrd") || m.matches("[qbsf]\\d+") || m.matches("dist\\d+") || m.startsWith("dbg=") || m.matches("up=(off|dlss_[a-z_]+|xess_[a-z_]+|fsr_[a-z_]+|fsr1_[a-z_]+|nis_\\d+|bil_\\d+)") || m.matches("js=(d|-?1_-?1)") || m.matches("shp=[0-9.]+") || m.matches("tm=[a-z0-9_]+") || m.matches("jv=[a-z0-9_]+") || m.matches("p=(off|low|medium|high|ultra|path_tracing|custom)")
-                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)") || m.matches("di=(off|temporal|full)") || m.matches("pt=(off|temporal|full)") || m.matches("sway\\d+") || m.matches("ptp=(fast|quality)") || m.matches("ltm=[0-9.]+"))) {
+                    || m.equals("rr") || m.equals("ref") || m.equals("cmp") || m.equals("ent") || m.equals("entabove") || m.equals("noent") || m.equals("label") || m.matches("pack=(on|off)") || m.equals("entmove") || m.matches("mv=(still|walk|turn|strafe|realwalk|realturn|fastturn|fastwalk)") || m.equals("noaccum") || m.equals("noexp") || m.equals("noautonorm") || m.matches("an\\d+") || m.matches("t\\d+") || m.matches("aim=-?\\d+_-?\\d+") || m.equals("nrd") || m.matches("[qbsf]\\d+") || m.matches("dist\\d+") || m.startsWith("dbg=") || m.matches("up=(off|dlss_[a-z_]+|xess_[a-z_]+|fsr_[a-z_]+|fsr1_[a-z_]+|nis_\\d+|bil_\\d+)") || m.matches("js=(d|-?1_-?1)") || m.matches("shp=[0-9.]+") || m.matches("tm=[a-z0-9_]+") || m.matches("jv=[a-z0-9_]+") || m.matches("p=(off|low|medium|high|ultra|path_tracing|custom)")
+                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)") || m.matches("di=(off|temporal|full)") || m.matches("pt=(off|temporal|full)") || m.matches("sway\\d+") || m.matches("ptp=(fast|quality)") || m.matches("ltm=[0-9.]+") || m.matches("item=[a-z_]+"))) {
                     throw new IllegalArgumentException("step '" + item + "': unknown modifier " + m);
                 }
                 if (m.startsWith("dbg=") && RtConfig.isUnknownMode(m.substring(4))) {
@@ -455,6 +455,8 @@ public final class RtModesScenario implements AutotestScenario {
                 case "walk" -> z += 0.05 * k;
                 case "strafe" -> x += 0.05 * k;
                 case "turn" -> aimYaw = motionYaw + 0.5f * k;
+                case "fastturn" -> aimYaw = motionYaw + 3.0f * k;   // a quick flick of the mouse: ~270 deg/s at 90 fps
+                case "fastwalk" -> z += 0.25 * k;                   // sprint-jumping speed
                 default -> { }
             }
             player.getAbilities().flying = true;
@@ -979,6 +981,12 @@ public final class RtModesScenario implements AutotestScenario {
             spark /= (STAB_FRAMES - 1);
             java.nio.file.Path dir = ctx.minecraft().gameDirectory.toPath().resolve("autotest").resolve(name());
             String base = file.replace(".png", "");
+            if (Boolean.getBoolean("vkrtx.autotest.stabDump")) {
+                // every frame of the run, for an external judder / flicker analysis (the pair below shows one step only)
+                for (int i = 0; i < STAB_FRAMES; i++) {
+                    writePng(dir.resolve(String.format(Locale.ROOT, "%s_s%02d.png", base, i)), imgs[i], sw, sh, null);
+                }
+            }
             writePng(dir.resolve(base + "_mA.png"), imgs[STAB_FRAMES - 2], sw, sh, null);
             writePng(dir.resolve(base + "_mB.png"), imgs[STAB_FRAMES - 1], sw, sh, null);
             writePng(dir.resolve(base + "_mdiff.png"), imgs[STAB_FRAMES - 1], sw, sh, imgs[STAB_FRAMES - 2]);
@@ -1138,6 +1146,16 @@ public final class RtModesScenario implements AutotestScenario {
                 var server = ctx.minecraft().getSingleplayerServer();
                 String cmd = "time set " + m.substring(1);
                 server.execute(() -> server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), cmd));
+            }
+        }
+        // item=<id>: the player holds that item (a glowing item in the hand is a light that moves with the camera)
+        for (String m : s.mods()) {
+            if (m.startsWith("item=")) {
+                var heldServer = ctx.minecraft().getSingleplayerServer();
+                if (heldServer != null) {
+                    String heldCmd = "item replace entity @a weapon.mainhand with minecraft:" + m.substring(5);
+                    heldServer.execute(() -> heldServer.getCommands().performPrefixedCommand(heldServer.createCommandSourceStack(), heldCmd));
+                }
             }
         }
         applySettings(s);
