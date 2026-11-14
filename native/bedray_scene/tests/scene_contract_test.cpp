@@ -1402,6 +1402,33 @@ static void test_idle_frame_reuses_slot_state() {
     fixture.release(2);
 }
 
+static void test_reused_tlas_pins_blas_across_a_table_only_frame() {
+    Fixture fixture(2);
+    const Mesh mesh = triangle_mesh(0.0f, 0.0f, 0.0f);
+    CHECK_STATUS(fixture.add_entity(entity_input(9, 1, 1, mesh)), BEDRAY_SCENE_OK);
+    const auto first = fixture.prepare(1, 0x270);
+    const auto initial_blas = fake::g.builds.front().dst;
+    fixture.release(1);
+
+    CHECK_STATUS(fixture.update_table(BEDRAY_SCENE_TABLE_LIGHT, 1, std::vector<uint8_t>(32, 0xBA)),
+        BEDRAY_SCENE_OK);
+    const auto reused = fixture.prepare(2, 0x271);
+    CHECK(reused.tlas == first.tlas);
+    CHECK(reused.instance_count == first.instance_count && reused.instance_count == 1);
+    CHECK(fixture.resources().instance_count == 1);
+    CHECK((reused.flags & BEDRAY_SCENE_FRAME_TABLES_UPLOADED) != 0);
+    CHECK((reused.flags & (BEDRAY_SCENE_FRAME_TLAS_REBUILT | BEDRAY_SCENE_FRAME_TLAS_UPDATED)) == 0);
+
+    const Mesh moved = triangle_mesh(1.0f, 0.0f, 0.0f);
+    CHECK_STATUS(fixture.add_entity(entity_input(9, 2, 1, moved)), BEDRAY_SCENE_OK);
+    const auto replacement = fixture.prepare(3, 0x272);
+    CHECK((replacement.flags & BEDRAY_SCENE_FRAME_BLAS_COPY_ON_WRITE) != 0);
+    CHECK(replacement.blas_refits == 0);
+    CHECK(fake::accel_is_alive(initial_blas));
+    fixture.release(2);
+    fixture.release(3);
+}
+
 static void test_transform_update_touches_only_tlas() {
     Fixture fixture(1);
     const Mesh mesh = quad_mesh(0.0f, 0.0f, 0.0f);
@@ -2390,6 +2417,7 @@ int main() {
     test_geometry_vertex_section_stride();
     test_section_quad_limit();
     test_idle_frame_reuses_slot_state();
+    test_reused_tlas_pins_blas_across_a_table_only_frame();
     test_update_copies_inputs_and_coalesces_pending();
     test_transform_update_touches_only_tlas();
     test_section_instances_follow_view();

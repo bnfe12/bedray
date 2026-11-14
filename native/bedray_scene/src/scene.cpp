@@ -36,7 +36,7 @@ static_assert(sizeof(BedraySceneResources) == 112, "scene ABI: resources must st
 static_assert(sizeof(BedraySceneSectionRange) == 8, "scene ABI: section range must stay 8 bytes");
 static_assert(sizeof(BedraySceneSectionRecord) == 64, "scene ABI: section record must stay 64 bytes");
 static_assert(sizeof(BedraySceneStatus) == 4, "scene ABI: status enum must stay 4 bytes");
-static_assert(sizeof(VkAccelerationStructureInstanceKHR) == 64,
+static_assert(sizeof(VkAccelerationStructureInstanceKHR) == BEDRAY_SCENE_INSTANCE_RECORD_BYTES,
     "scene ABI: a TLAS instance record must stay 64 bytes");
 
 /* The shader reads both records as raw bytes, so field offsets are part of the
@@ -192,6 +192,7 @@ struct PreparePlan {
     uint64_t blas_refits = 0;
     uint64_t deferred_updates = 0;
     bool blas_copy_on_write = false;
+    bool reuse_instances = false;
     bool tlas_action = false;
     bool tlas_update = false;
     bool tlas_clear = false;
@@ -213,10 +214,11 @@ bool blas_referenced_by_outstanding(const Scene& scene, VkAccelerationStructureK
         if (slot.free) {
             continue;
         }
-        for (VkAccelerationStructureKHR candidate : slot.blas_in_use) {
-            if (candidate == handle) {
-                return true;
-            }
+        const auto references = [handle](const auto& handles) {
+            return std::find(handles.begin(), handles.end(), handle) != handles.end();
+        };
+        if (references(slot.cached_blas_refs) || references(slot.update_source_blas_refs)) {
+            return true;
         }
     }
     return false;
@@ -712,8 +714,6 @@ void cleanup_plan(Scene& scene, PreparePlan& plan) {
 }
 
 bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, BedraySceneError* error) {
-    plan.jobs.reserve(scene.sections.size() + scene.entities.size());
-
     for (auto& [id, section] : scene.sections) {
         if (!section.has_pending) {
             continue;
@@ -725,12 +725,12 @@ bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
         job.mesh = &section.pending;
         job.previous = section.geometry.get();
         job.refit = false;
-        if (!build_job_resource(scene, job, error)) {
+        plan.jobs.push_back(std::move(job));
+        if (!build_job_resource(scene, plan.jobs.back(), error)) {
             return false;
         }
         plan.blas_rebuilds++;
         tlas_changed = true;
-        plan.jobs.push_back(std::move(job));
     }
 
     const bool can_refit = (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0;
@@ -762,9 +762,11 @@ bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
         const bool refit_eligible = job.previous != nullptr && !topology_changed && can_refit && same_shape
             && entity.finite_positions && job.finite_positions;
         const bool pinned_refit = refit_eligible && blas_referenced_by_outstanding(scene, job.previous->blas.handle);
-        job.refit = refit_eligible && !pinned_refit;
-        if (!build_job_resource(scene, job, error)) return false;
-        if (job.refit) {
+        const bool refit = refit_eligible && !pinned_refit;
+        job.refit = refit;
+        plan.jobs.push_back(std::move(job));
+        if (!build_job_resource(scene, plan.jobs.back(), error)) return false;
+        if (refit) {
             plan.blas_refits++;
         } else {
             plan.blas_rebuilds++;
@@ -772,7 +774,6 @@ bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
         }
         // Never shade current host attributes with an older, deferred BLAS. A pinned refit becomes a COW build.
         tlas_changed = true;
-        plan.jobs.push_back(std::move(job));
     }
 
     if (!tlas_changed) {
@@ -846,10 +847,16 @@ BedraySceneSectionRecord section_record(const Section& section, uint64_t vertex_
     return record;
 }
 
-void plan_instances(const Scene& scene, PreparePlan& plan) {
+void plan_instances(const Scene& scene, PreparePlan& plan, const FrameSlot& slot) {
     const bool section_job = std::any_of(plan.jobs.begin(), plan.jobs.end(),
         [](const GeometryJob& job) { return job.is_section; });
     plan.section_table_rebuild = scene.section_table_dirty || section_job;
+    if (!plan.section_table_rebuild && slot.tlas_valid
+            && slot.built_version == plan.target_version && !view_differs(scene, slot)) {
+        plan.reuse_instances = true;
+        plan.instance_count = slot.instance_count;
+        return;
+    }
     if (plan.section_table_rebuild) {
         plan.section_records.reserve(scene.sections.size());
     }
@@ -997,8 +1004,10 @@ bool plan_uploads(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
     return flush_buffer(scene, plan.staging, 0, plan.staging.size, error);
 }
 
-bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_changed, BedraySceneError* error) {
-    plan.target_version = scene.version + (tlas_changed ? 1u : 0u);
+bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, BedraySceneError* error) {
+    if (plan.reuse_instances) {
+        return true;
+    }
     plan.instance_count = static_cast<uint32_t>(plan.instances.size());
 
     if (plan.instances.empty()) {
@@ -1065,8 +1074,7 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_chang
         fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "instance buffer is not mapped");
         return false;
     }
-    std::memset(instance_buffer.mapped, 0,
-        plan.instances.size() * BEDRAY_SCENE_INSTANCE_RECORD_BYTES);
+    // Each record write covers the entire instance stride.
     auto* base = static_cast<uint8_t*>(instance_buffer.mapped);
     for (size_t i = 0; i < plan.instances.size(); ++i) {
         const InstanceEntry& instance = plan.instances[i];
@@ -1079,7 +1087,8 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_chang
         record.accelerationStructureReference = instance.blas_address;
         std::memcpy(base + i * BEDRAY_SCENE_INSTANCE_RECORD_BYTES, &record, sizeof(record));
     }
-    if (!flush_buffer(scene, instance_buffer, 0, instance_buffer.size, error)) {
+    const uint64_t instance_bytes = static_cast<uint64_t>(plan.instance_count) * BEDRAY_SCENE_INSTANCE_RECORD_BYTES;
+    if (!flush_buffer(scene, instance_buffer, 0, instance_bytes, error)) {
         return false;
     }
 
@@ -1117,6 +1126,10 @@ BlasView blas_view_of(const GeometryJob& job);
 
 void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuffer command_buffer) {
     std::vector<VkBufferMemoryBarrier> barriers;
+    if (plan.jobs.empty() && !plan.tlas_action && plan.compactions.empty()
+            && !plan.tables_uploaded && !plan.section_table_uploaded) {
+        return;
+    }
     barriers.reserve(plan.jobs.size() * 2 + BEDRAY_SCENE_TABLE_COUNT + 3);
 
     auto buffer_barrier = [&barriers](const Buffer& buffer, VkAccessFlags src, VkAccessFlags dst) {
@@ -1275,8 +1288,12 @@ void commit_plan(
     scene.retired_accelerations.reserve(scene.retired_accelerations.size() + plan.jobs.size());
     slot.transient.clear();
     slot.transient.reserve(2);
-    slot.blas_in_use.reserve(plan.instances.size() + (plan.tlas_update ? slot.cached_blas_refs.size() : 0));
-    slot.cached_blas_refs.reserve(plan.instances.size());
+    // An UPDATE publishes new references and retains its source references until completion.
+    if (plan.tlas_update) {
+        slot.update_source_blas_refs.reserve(plan.instance_count);
+    } else if (plan.tlas_action) {
+        slot.cached_blas_refs.reserve(plan.instance_count);
+    }
 
     /* Compaction swaps the section's BLAS for the compacted copy. The original
        is the copy source recorded in THIS frame, so it must survive until this
@@ -1419,21 +1436,21 @@ void commit_plan(
         plan.new_instance_buffer.reset();
     }
 
-    slot.tlas_valid = !plan.instances.empty();
+    slot.tlas_valid = plan.instance_count != 0;
     slot.built_version = plan.target_version;
     slot.instance_count = plan.instance_count;
     slot.view = scene.view;
     slot.view_valid = scene.view_set;
-    slot.blas_in_use.clear();
-    if (plan.tlas_update) {
-        // The update reads the old source bindings until this recording completes.
-        for (VkAccelerationStructureKHR handle : slot.cached_blas_refs) slot.blas_in_use.push_back(handle);
-    }
-    slot.cached_blas_refs.clear();
-    for (const InstanceEntry& instance : plan.instances) {
-        slot.blas_in_use.push_back(instance.blas_handle);
-        if ((scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0)
+    if (plan.tlas_action) {
+        if (plan.tlas_update) {
+            slot.cached_blas_refs.swap(slot.update_source_blas_refs);
+        }
+        slot.cached_blas_refs.clear();
+        for (const InstanceEntry& instance : plan.instances) {
             slot.cached_blas_refs.push_back(instance.blas_handle);
+        }
+    } else if (plan.tlas_clear) {
+        slot.cached_blas_refs.clear();
     }
 
     if (plan.staging_present) {
@@ -2154,15 +2171,13 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
             cleanup_plan(impl, plan);
             return err->status;
         }
-        if (impl.membership_changed) {
-            tlas_changed = true;
-        }
-        plan_instances(impl, plan);
+        plan.target_version = impl.version + ((tlas_changed || impl.membership_changed) ? 1u : 0u);
+        plan_instances(impl, plan, *slot);
         if (!plan_uploads(impl, plan, err)) {
             cleanup_plan(impl, plan);
             return err->status;
         }
-        if (!plan_tlas(impl, plan, *slot, tlas_changed, err)) {
+        if (!plan_tlas(impl, plan, *slot, err)) {
             cleanup_plan(impl, plan);
             return err->status;
         }
@@ -2245,7 +2260,7 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_release_frame(
     slot->free = true;
     slot->frame_index = 0;
     slot->command_buffer = 0;
-    slot->blas_in_use.clear();
+    slot->update_source_blas_refs.clear();
     if (impl.outstanding > 0) {
         impl.outstanding--;
     }
