@@ -38,6 +38,7 @@ base {
 java {
     withSourcesJar()
 }
+tasks.named('sourcesJar') { dependsOn(generateBuildIdentity) }
 
 dependencies {
     compileOnly project(':renderer-api')
