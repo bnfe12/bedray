@@ -21,6 +21,10 @@ public struct LocalTonemapPush {
     public float highlights;    // 0 = off, 1 = the default compression of bright local bases
     public float shadows;       // 0 = off, 1 = the default lift of dark local bases
     public float pivotLog2;     // log2 of the exposed luminance left unchanged
+    public uint toneMode;
+    public uint postFlags;     // same vignette/grain/vibrant bits as path_display
+    public uint frameIndex;
+    public uint reserved;
 };
 
 // The ray distance the output resolve wrote; a primary miss is 999999 (path_trace.slang), any far value is sky.

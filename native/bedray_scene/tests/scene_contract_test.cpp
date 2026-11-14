@@ -162,6 +162,8 @@ struct AsPropertyWriteRecord {
     VkAccelerationStructureKHR accel = VK_NULL_HANDLE;
     uint32_t query_slot = 0;
     uint64_t compacted_size = 0;
+    size_t builds_before = 0;
+    size_t barriers_before = 0;
 };
 
 struct State {
@@ -677,6 +679,8 @@ static void VKAPI_CALL fakeCmdWriteAccelerationStructuresProperties(
         record.accel = accels[i];
         record.query_slot = first + i;
         record.compacted_size = compacted;
+        record.builds_before = fake::g.builds.size();
+        record.barriers_before = fake::g.barriers.size();
         fake::g.as_property_writes.push_back(record);
         if (first + i < it->second.count) {
             it->second.results[first + i] = compacted;
@@ -1681,7 +1685,7 @@ static void test_refit_copies_pinned_geometry_and_updates_after_completion() {
     CHECK(fake::g.builds[5].mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR);
     CHECK(fake::accel_is_alive(initial.dst)); // still read by frame 3's TLAS source.
     fixture.release(3);
-    CHECK(!fake::accel_is_alive(initial.dst));
+    CHECK(fake::accel_is_alive(initial.dst)); // the released source can now be recycled
     CHECK(fake::accel_is_alive(replacement.dst));
 }
 
@@ -1719,20 +1723,77 @@ static void test_replacement_blas_relinks_a_live_cached_tlas_without_a_build() {
     CHECK(!fake::accel_is_alive(initial_blas));
 }
 
-static void test_pipelined_cow_tlas_updates_keep_dependencies_bounded() {
+static void test_pipelined_blas_refits_recycle_completed_generations() {
     Fixture fixture(2);
     for (uint64_t frame = 1; frame <= 20; ++frame) {
         if (frame > 2) fixture.release(frame - 2);
         const Mesh moved = triangle_mesh(static_cast<float>(frame), 0, 0);
         CHECK_STATUS(fixture.add_entity(entity_input(9, frame, 1, moved)), BEDRAY_SCENE_OK);
+        const auto builds_before = fake::g.builds.size();
+        std::vector<uint64_t> pinned;
+        for (const auto& [id, accel] : fake::g.accels) {
+            if (accel.type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR) {
+                pinned.insert(pinned.end(), accel.blas_references.begin(), accel.blas_references.end());
+            }
+        }
         const auto info = fixture.prepare(frame, 0x430 + frame);
-        CHECK(info.blas_builds == 1 && info.blas_refits == 0 && info.deferred_updates == 0);
-        if (frame > 1) CHECK((info.flags & BEDRAY_SCENE_FRAME_BLAS_COPY_ON_WRITE) != 0);
+        CHECK(fake::g.builds.size() == builds_before + 2);
+        CHECK(info.deferred_updates == 0);
+        CHECK(info.blas_builds == (frame <= 4 ? 1 : 0));
+        CHECK(info.blas_refits == (frame <= 4 ? 0 : 1));
+        if (frame > 4 && fake::g.builds.size() == builds_before + 2) {
+            const auto& refit = fake::g.builds[builds_before];
+            CHECK(refit.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR);
+            CHECK(refit.src == refit.dst);
+            const auto* target = fake::find_accel(refit.dst);
+            CHECK(target != nullptr);
+            if (target != nullptr) {
+                for (const auto address : pinned) CHECK(target->address != address);
+            }
+        }
         if (frame > 2) CHECK((info.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
-        CHECK(fake::g.accels.size() <= 6); // Two cached TLAS, two current BLAS, two in-flight source BLAS.
+        CHECK(fake::g.accels.size() <= 6);
     }
-    fixture.release(19); fixture.release(20);
-    CHECK(fake::g.accels.size() == 4); // Only the two reusable, valid TLAS/BLAS pairs remain.
+    fixture.release(19);
+    fixture.release(20);
+    CHECK(fake::g.accels.size() == 5); // two cached TLAS and their BLAS, plus one spare
+}
+
+static void test_changed_indices_with_same_revision_force_a_full_blas_build() {
+    Fixture fixture(1);
+    Mesh mesh = triangle_mesh(0, 0, 0);
+    CHECK_STATUS(fixture.add_entity(entity_input(9, 1, 1, mesh)), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x450);
+    const auto old_blas = fake::g.builds.front().dst;
+    fixture.release(1);
+
+    std::swap(mesh.indices[1], mesh.indices[2]);
+    CHECK_STATUS(fixture.add_entity(entity_input(9, 2, 1, mesh)), BEDRAY_SCENE_OK);
+    const auto changed = fixture.prepare(2, 0x451);
+    CHECK(changed.blas_builds == 1 && changed.blas_refits == 0);
+    fixture.release(2);
+    CHECK(!fake::accel_is_alive(old_blas));
+}
+
+static void test_unused_spare_is_destroyed_on_entity_removal() {
+    Fixture fixture(2);
+    for (uint64_t frame = 1; frame <= 4; ++frame) {
+        if (frame > 2) fixture.release(frame - 2);
+        const Mesh moved = triangle_mesh(static_cast<float>(frame), 0, 0);
+        CHECK_STATUS(fixture.add_entity(entity_input(9, frame, 1, moved)), BEDRAY_SCENE_OK);
+        fixture.prepare(frame, 0x455 + frame);
+    }
+    fixture.release(3);
+    fixture.release(4);
+
+    const auto live_before = fake::g.accels.size();
+    const uint64_t id = 9;
+    BedraySceneUpdate update{};
+    update.abi_version = BEDRAY_SCENE_ABI_VERSION;
+    update.removed_entities = &id;
+    update.removed_entity_count = 1;
+    CHECK_STATUS(bedray_scene_update(fixture.scene, &update, &g_error), BEDRAY_SCENE_OK);
+    CHECK(fake::g.accels.size() + 1 == live_before);
 }
 
 static void test_rebuild_without_update_capability_retires_after_frame() {
@@ -1871,6 +1932,36 @@ static void test_compacted_section_table_keeps_vertex_address() {
     const BedraySceneSectionRecord record = read_section_record(fixture.resources(), 0);
     CHECK(record.vertex_address == committed_vertex);
     CHECK(record.vertex_address != 0);
+    fixture.release(2);
+}
+
+static void test_blas_batch_shares_one_barrier_for_queries_and_tlas() {
+    Fixture fixture(1);
+    const Mesh mesh = compaction_mesh();
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(2, 1, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x745);
+    CHECK(fake::g.as_property_writes.size() == 2);
+    CHECK(fake::g.barriers.size() == 4); // host upload, build inputs, AS reads, final consumers
+    for (const auto& query : fake::g.as_property_writes) {
+        CHECK(query.builds_before == 2); // both BLAS builds are recorded, TLAS is still pending
+        CHECK(query.barriers_before == 3);
+        if (query.barriers_before == 3 && fake::g.barriers.size() >= 3) {
+            const auto& barrier = fake::g.barriers[2];
+            CHECK(barrier.src_stage == VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+            CHECK(barrier.dst_stage == VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+            CHECK(barrier.has_memory);
+            CHECK(barrier.memory.srcAccessMask == VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+            CHECK(barrier.memory.dstAccessMask == VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        }
+    }
+    fixture.release(1);
+
+    const size_t previous_barriers = fake::g.barriers.size();
+    const auto compacted = fixture.prepare(2, 0x746);
+    CHECK(fake::g.as_copies.size() == 2);
+    CHECK((compacted.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
+    CHECK(fake::g.barriers.size() == previous_barriers + 3); // instance input, both copies, final consumers
     fixture.release(2);
 }
 
@@ -2504,12 +2595,15 @@ int main() {
     test_section_instances_follow_view();
     test_tlas_full_build_reuses_released_storage_when_it_fits();
     test_refit_copies_pinned_geometry_and_updates_after_completion();
-    test_pipelined_cow_tlas_updates_keep_dependencies_bounded();
+    test_pipelined_blas_refits_recycle_completed_generations();
+    test_changed_indices_with_same_revision_force_a_full_blas_build();
+    test_unused_spare_is_destroyed_on_entity_removal();
     test_nonfinite_activation_changes_rebuild_instead_of_refitting();
     test_replacement_blas_relinks_a_live_cached_tlas_without_a_build();
     test_rebuild_without_update_capability_retires_after_frame();
     test_section_blas_compacts_after_release();
     test_compacted_section_table_keeps_vertex_address();
+    test_blas_batch_shares_one_barrier_for_queries_and_tlas();
     test_instance_planning_merges_builds_and_out_of_order_compactions();
     test_compaction_allocation_retry_keeps_query_slots_unique();
     test_stale_compaction_query_waits_for_build_completion();

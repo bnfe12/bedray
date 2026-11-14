@@ -72,17 +72,21 @@ BedrayStatus BloomPass::configure(BedrayCore* core, const DeviceFns& fns,
     if (!desc.linear_sampler || !desc.nearest_sampler || !fns.cmd_pipeline_barrier)
         return bloom_error(error, BEDRAY_ERROR_INVALID_ARGUMENT, "bloom samplers/barrier missing");
     // Binding numbers are the unchanged AOT contracts, including sparse apply bindings.
-    const std::uint32_t bindings[4][3] = {{0,1,3}, {0,1,0}, {0,1,0}, {0,2,3}};
+    const std::uint32_t bindings[4][4] = {{0,1,3,0}, {0,1,0,0}, {0,1,0,0}, {0,2,3,4}};
+    bool hdr_apply = false;
     for (std::size_t stage = 0; stage < 4; ++stage) {
         ProgramContract contract{};
-        const std::uint32_t count = stage == 0 || stage == 3 ? 3u : 2u;
-        if (!program_contract(core, desc.programs[stage], contract) || contract.push_constant_bytes != 128
+        if (!program_contract(core, desc.programs[stage], contract))
+            return bloom_error(error, BEDRAY_ERROR_INVALID_ARGUMENT, "unknown bloom program");
+        const std::uint32_t count = stage == 3 && contract.binding_count == 4 ? 4u : stage == 0 || stage == 3 ? 3u : 2u;
+        if (contract.push_constant_bytes != 128
             || contract.binding_count != count)
             return bloom_error(error, BEDRAY_ERROR_INVALID_ARGUMENT, "bloom program contract mismatch");
         for (std::uint32_t i = 0; i < count; ++i)
             if (!program_has_binding(core, desc.programs[stage], bindings[stage][i],
                 i == 1 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER))
                 return bloom_error(error, BEDRAY_ERROR_INVALID_ARGUMENT, "bloom binding contract mismatch");
+        if (stage == 3) hdr_apply = count == 4;
     }
     gpu::ImageDeviceContext context{};
     context.physical_device = fns.physical_device;
@@ -98,6 +102,7 @@ BedrayStatus BloomPass::configure(BedrayCore* core, const DeviceFns& fns,
     if (status != BEDRAY_OK) return status;
     images_ = std::move(images);
     desc_ = desc;
+    apply_hdr_base_ = hdr_apply;
     fns_ = fns;
     core_ = core;
     return BEDRAY_OK;
@@ -172,13 +177,15 @@ BedrayStatus BloomPass::render(const BedrayBloomFrameDesc& frame, BedrayError* e
     initialize_ = false;
     auto dispatch = [&](std::size_t stage, std::uint32_t width, std::uint32_t height, std::uint64_t source,
                         std::uint64_t target) {
-        std::array<BedrayResource, 3> resources{image_binding(0, true, source, desc_.linear_sampler),
-            image_binding(stage == 3 ? 2 : 1, false, target), image_binding(3, true, frame.depth_view, desc_.nearest_sampler)};
+        std::array<BedrayResource, 4> resources{image_binding(0, true, source, desc_.linear_sampler),
+            image_binding(stage == 3 ? 2 : 1, false, target), image_binding(3, true, frame.depth_view, desc_.nearest_sampler),
+            image_binding(4, true, frame.source_view ? frame.source_view : frame.output_view, desc_.nearest_sampler)};
         BedrayFrameDesc call{};
         call.abi_version = BEDRAY_CORE_ABI_VERSION;
         call.command_buffer = frame.command_buffer; call.program = desc_.programs[stage];
         call.group_count_x = (width - 1) / 8 + 1; call.group_count_y = (height - 1) / 8 + 1; call.group_count_z = 1;
         call.resources = resources.data(); call.resource_count = stage == 0 || stage == 3 ? 3 : 2;
+        if (stage == 3 && apply_hdr_base_) call.resource_count = 4;
         call.push_constants = push.data(); call.push_constant_bytes = static_cast<std::uint32_t>(push.size());
         const auto result = bedray_core_render_frame(core_, &call, error);
         if (result == BEDRAY_ERROR_DEVICE_LOST) lost_ = true;

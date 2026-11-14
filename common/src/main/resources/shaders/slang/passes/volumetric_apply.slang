@@ -24,7 +24,7 @@ struct VolumetricApplyPush {
     float range;        // shaft range in blocks (same value the march used)
     uint  tonemapped;   // 1 when outImage holds the tone-mapped display colour
     uint  frameIndex;
-    uint  pad0;
+    uint  toneMode;
     uint  pad1;
 };
 
@@ -89,6 +89,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     float4 colour = outImage[p];
     float3 updated = colour.rgb +
-        shaftDisplayComposite(colour.rgb, scatter, exposure, pc.tonemapped != 0u);
+        shaftDisplayComposite(colour.rgb, scatter, exposure, pc.tonemapped != 0u, pc.toneMode);
     outImage[p] = float4(clamp(updated, float3(0.0), float3(1.0)), colour.a);
 }

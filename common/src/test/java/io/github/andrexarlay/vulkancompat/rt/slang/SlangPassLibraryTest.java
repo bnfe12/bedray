@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -131,7 +132,19 @@ class SlangPassLibraryTest {
         assertBinding(apply, "srcTex", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
         assertBinding(apply, "finalImg", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(apply, "depthTex", 3, BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-        assertBloomShape(apply, 3);
+        assertBinding(apply, "hdrSourceTex", 4, BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        assertBloomShape(apply, 4);
+    }
+
+    @Test
+    void hdrExportCopiesTheMeanThroughTwoStorageImages() {
+        Assumptions.assumeTrue(SlangPassLibrary.available("path_hdr_export"));
+        var manifest = SlangPassLibrary.load("path_hdr_export").orElseThrow().manifest();
+        assertArrayEquals(new int[]{8, 8, 1}, manifest.threadGroupSize());
+        assertEquals(0, manifest.pushConstantBytes());
+        assertEquals(2, manifest.bindings().size());
+        assertBinding(manifest, "accumulatedHdr", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        assertBinding(manifest, "outputHdr", 1, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
     }
 
     /**

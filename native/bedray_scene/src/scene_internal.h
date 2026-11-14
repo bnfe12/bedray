@@ -132,6 +132,9 @@ struct Entity {
     uint32_t vertex_stride = 0;
     uint32_t index_type = BEDRAY_SCENE_INDEX_NONE;
     bool finite_positions = false;
+    // The immutable index snapshot identifies this entity's committed topology.
+    std::shared_ptr<const std::vector<uint8_t>> topology_indices;
+    Acceleration spare_blas;
     std::array<float, 12> transform{};
     uint32_t instance_mask = 0xFF;
     std::unique_ptr<GeometryResource> geometry;
@@ -158,6 +161,8 @@ struct RetiredBuffer {
 struct RetiredAcceleration {
     Acceleration acceleration;
     uint64_t after_frame = 0;
+    uint64_t entity_id = 0;
+    std::shared_ptr<const std::vector<uint8_t>> topology_indices;
 };
 
 /* A static-section BLAS built with ALLOW_COMPACTION whose compacted size is

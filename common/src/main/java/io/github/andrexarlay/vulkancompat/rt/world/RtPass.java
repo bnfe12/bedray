@@ -33,6 +33,9 @@ public interface RtPass {
 
     void dispatch(VkCommandBuffer cmd, RtFrameParams params, int width, int height);
 
+    /** Exports the exact recording's unexposed accumulated HDR into a host-owned image. */
+    default boolean exportHdr(VkCommandBuffer command, long outputView, int width, int height) { return false; }
+
     /** True when the pipeline writes the NRD G-buffer (bindings 4..8). */
     boolean usesGbuffer();
 

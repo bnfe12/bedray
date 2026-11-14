@@ -20,6 +20,7 @@ import "surface/visibility.slang";
 import "traversal/traversal.slang";
 
 static const float RESTIR_DI_M_CAP = 20.0;
+static const float RESTIR_DI_M_CAP_MOVING = 4.0;
 static const float RESTIR_DI_TEMPORAL_RATIO_CAP = 8.0;
 static const float RESTIR_DI_SPATIAL_RATIO_CAP = 5.0;
 static const float RESTIR_DI_OCCLUSION_DECAY = 0.25;

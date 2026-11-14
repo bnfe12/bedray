@@ -148,26 +148,27 @@ class AutoPbrTexelTest {
 
     @Test
     void copperBulbLitSeparatesCasingAndBulb() {
-        // 2x1 sprite: (0,0) copper casing, (1,0) glowing bulb
-        int[] argb = {
-            0xFFC86E46, 0xFFFFDC64
-        };
-        MaterialRegion.Image albedo = new MaterialRegion.Image(2, 1, argb);
-        int[] mat = new int[2];
-        int[] nrm = new int[2];
+        // Real model coordinates: centre cross is copper, the upper aperture is lamp glass.
+        int casing = 8 * 16 + 8, bulb = 2 * 16 + 4;
+        int[] argb = new int[16 * 16];
+        argb[casing] = 0xFFC86E46;
+        argb[bulb] = 0xFFFFDC64;
+        MaterialRegion.Image albedo = new MaterialRegion.Image(16, 16, argb);
+        int[] mat = new int[argb.length];
+        int[] nrm = new int[argb.length];
 
         AutoPbr.Material auto = AutoPbr.classify("block/copper_bulb_lit");
-        int emissive = MaterialRegion.fill(mat, nrm, 2, 0, 0, 2, 1, auto, albedo, null, null, "block/copper_bulb_lit");
+        int emissive = MaterialRegion.fill(mat, nrm, 16, 0, 0, 16, 16, auto, albedo, null, null, "block/copper_bulb_lit");
 
         assertEquals(1, emissive, "1 bulb emissive texel");
 
         // Copper casing: metal, no emission
-        assertTrue(LabPbr.isMetal((mat[0] >>> 8) & 255), "copper bulb casing must be metal");
-        assertEquals(0, (mat[0] >>> 16) & 255, "copper bulb casing must not emit");
+        assertTrue(LabPbr.isMetal((mat[casing] >>> 8) & 255), "copper bulb casing must be metal");
+        assertEquals(0, (mat[casing] >>> 16) & 255, "copper bulb casing must not emit");
 
         // Lit bulb: not metal, emits
-        assertFalse(LabPbr.isMetal((mat[1] >>> 8) & 255), "lit bulb must be dielectric");
-        assertEquals(255, (mat[1] >>> 16) & 255, "lit bulb must have full emission");
+        assertFalse(LabPbr.isMetal((mat[bulb] >>> 8) & 255), "lit bulb must be dielectric");
+        assertEquals(255, (mat[bulb] >>> 16) & 255, "lit bulb must have full emission");
     }
 
     @Test

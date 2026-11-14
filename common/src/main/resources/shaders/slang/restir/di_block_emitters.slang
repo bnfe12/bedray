@@ -35,6 +35,12 @@ static const float DI_PLANE_TOLERANCE_MAX = 0.25;
 // Source pdf stored with an imported history sample: any positive value, because it multiplies the estimate and is
 // divided out again by the direct term (see the temporal import).
 static const float DI_IMPORT_SOLID_ANGLE_PDF = 1.0;
+// Visibility reuse (a blocked shadow ray zeroes the record) selects only records that were visible last frame and then shades
+// them with the full 1/M weight: the pixel brightens at every shadow edge, and the zeroed record is dropped with its M, so the
+// next frame restarts from 2 fresh candidates (edge pulsing in motion). Off: the final shadow ray alone removes occluded
+// samples each frame, which keeps the estimate unbiased (2026-11-14 audit of the reservoir code). Left ON: switching it off
+// changed neither the sparkles nor the smear of a fast turn in the autotest, so the audit finding is not acted on without a measurement.
+static const bool DI_VISIBILITY_REUSE = true;
 static const float DI_NORMAL_DOT_STATIC = 0.8;
 static const float DI_NORMAL_DOT_MOVING = 0.6;
 
@@ -214,8 +220,11 @@ struct BlockEmitterDiSampler : IReuseSampler {
                 // it again in pathTraceDirectTerm, so the light-tree walk that computed it cancelled out exactly.
                 LightEvaluation evaluation = emitters().evaluateTarget(receiver, historySample);
                 if (evaluation.valid && evaluation.targetPdf > 0.0) {
+                    // A moving camera reuses a short history: 20 frames of one sample stay stuck on a pixel while the view
+                    // slides under it, and the denoiser reads that persistent outlier as signal (sparkles, smears).
+                    float temporalCap = cameraStatic != 0u ? RESTIR_DI_M_CAP : RESTIR_DI_M_CAP_MOVING;
                     current = mergeReservoirs(current, history, evaluation.targetPdf,
-                        RESTIR_DI_TEMPORAL_RATIO_CAP, RESTIR_DI_M_CAP, seed);
+                        RESTIR_DI_TEMPORAL_RATIO_CAP, temporalCap, seed);
                     // Age even when the roulette kept the batch winner: the lane counts the frames this pixel's
                     // reservoir has survived, which is what a stale-history debug read needs.
                     current.source.y = min(current.source.y + 1u, 0xFFFFu);
@@ -263,7 +272,7 @@ struct BlockEmitterDiSampler : IReuseSampler {
     // mergeReservoirs, so it neither dilutes later merges nor glows through the wall; the next frame starts from the
     // fresh batch.  The sample and its target pdf stay untouched (a zero target pdf would hit the ratio cap).
     void reuseConfirm(bool occluded) {
-        if (!occluded || !reuseActive()) {
+        if (!DI_VISIBILITY_REUSE || !occluded || !reuseActive()) {
             return;
         }
         uint ownSlot = reservoirSlot();

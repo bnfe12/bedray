@@ -54,6 +54,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle configurePathTraceHandle;
     private final MethodHandle renderPathTraceHandle;
     private final MethodHandle recordPathTraceStatsHandle;
+    private final MethodHandle recordPathTraceHdrHandle;
     private final MethodHandle renderFgPrepareHandle;
     private final MethodHandle renderPathTraceGuidesHandle;
     private final MethodHandle renderPathTraceMotionHandle;
@@ -128,6 +129,8 @@ public final class BedrayCoreNative implements AutoCloseable {
             recordPathTraceStatsHandle = bindOptional(linker, lookup, "bedray_core_record_path_trace_stats",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_INT,
                     ADDRESS));
+            recordPathTraceHdrHandle = bindOptional(linker, lookup, "bedray_core_record_path_trace_hdr",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_INT, JAVA_INT, ADDRESS));
             renderFgPrepareHandle = bindOptional(linker, lookup, "bedray_core_render_fg_prepare",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             renderPathTraceGuidesHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_guides",
@@ -711,6 +714,26 @@ public final class BedrayCoreNative implements AutoCloseable {
      * True when the loaded core both advertises the counter pass and exports the call that records it. Without either,
      * the native backend writes no counters and the host reports them as unmeasured rather than as zero.
      */
+    public boolean hasHdrExport() { return recordPathTraceHdrHandle != null; }
+
+    public void recordPathTraceHdr(long core, long commandBuffer, long program, long outputView, int width, int height) {
+        ensureOpen();
+        requireHandle(core, "core");
+        requireHandle(commandBuffer, "commandBuffer");
+        requireHandle(program, "program");
+        requireHandle(outputView, "outputView");
+        if (width <= 0 || height <= 0) throw new IllegalArgumentException("HDR export extent must be positive");
+        if (!hasHdrExport()) throw new BedrayCoreException("record_path_trace_hdr", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+            "the loaded core has no recording-scoped HDR export", null);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment error = arena.allocate(BedrayCoreLayouts.ERROR);
+            int status = (int) recordPathTraceHdrHandle.invokeExact(handle(core), commandBuffer, program, outputView, width, height, error);
+            check("record_path_trace_hdr", status, error);
+        } catch (Throwable t) {
+            throw rethrow("record_path_trace_hdr", t);
+        }
+    }
+
     public boolean hasFrameStats() {
         return recordPathTraceStatsHandle != null && hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_FRAME_STATS);
     }

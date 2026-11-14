@@ -160,7 +160,7 @@ class RtSlangRestirDiTest {
     void aProvenOccludedSampleLosesItsWeightButNotItsSlot() {
         String di = read(DI);
         String confirm = block(di, "void reuseConfirm(bool occluded) {");
-        assertTrue(confirm.contains("if (!occluded || !reuseActive())"),
+        assertTrue(confirm.contains("if (!DI_VISIBILITY_REUSE || !occluded || !reuseActive())"),
             "a visible sample leaves the published weight alone");
         assertTrue(confirm.contains("DIReservoir record = reservoirs[ownSlot];"),
             "and the feedback re-reads the slot, because nothing may be carried between the two calls");
@@ -211,8 +211,10 @@ class RtSlangRestirDiTest {
             + " receiver);"),
             "one estimator, fed with the merged weight sum and the merged M - reuse means reusing the accumulation too");
         assertTrue(reuse.contains("current = mergeReservoirs(current, history, evaluation.targetPdf,")
-            && reuse.contains("RESTIR_DI_TEMPORAL_RATIO_CAP, RESTIR_DI_M_CAP, seed)"),
-            "the import is capped by the ratio, so one bright history cannot swallow this frame's draws");
+            && reuse.contains("RESTIR_DI_TEMPORAL_RATIO_CAP, temporalCap, seed)")
+            && reuse.contains("cameraStatic != 0u ? RESTIR_DI_M_CAP : RESTIR_DI_M_CAP_MOVING"),
+            "the import is capped by the ratio, and a moving camera reuses a short history so a stuck outlier cannot "
+                + "persist (autotest fast turn: 470 -> 44 sparkles per frame)");
         String entry = read(ENTRY);
         assertTrue(entry.contains("lights.emittersReusedAtPrimary = directReuse.enabled != 0u;"),
             "with the reservoir on, the composite stops drawing the emitter branch a second time at the primary vertex");

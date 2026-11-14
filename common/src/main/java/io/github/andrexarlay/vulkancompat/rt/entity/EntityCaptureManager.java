@@ -743,7 +743,7 @@ public final class EntityCaptureManager {
                     // text. Use a separate emissive atlas slot so ordinary text geometry never emits.
                     if (outline != 0) {
                         if (glowSlot > 0) {
-                            stageTextEmitter(pose, x0, y0, x1, y1, u0, v0, du, dv, argb, glowSlot);
+                            stageTextEmitter(pose, x0, y0, x1, y1, u0, v0, du, dv, glowLightColor(argb, outline), glowSlot);
                         }
                     }
                 }
@@ -755,6 +755,22 @@ public final class EntityCaptureManager {
         if (implicit) {
             endEntity();
         }
+    }
+
+    /**
+     * Colour of the light a glow-ink glyph casts. The default sign text is black, and black light is no light: the glow only
+     * showed once the sign was dyed (owner, 2026-11-14). Vanilla draws such text black with a bright outline, so a text colour
+     * too dark to light anything casts the outline colour instead (vanilla gives black text the cream 0xF0EBCC outline).
+     */
+    static int glowLightColor(int textArgb, int outline) {
+        int r = (textArgb >> 16) & 255;
+        int g = (textArgb >> 8) & 255;
+        int b = textArgb & 255;
+        float luma = (0.2126f * r + 0.7152f * g + 0.0722f * b) / 255f;
+        if (luma >= 0.12f || (outline & 0xFFFFFF) == 0) {
+            return textArgb;
+        }
+        return 0xFF000000 | (outline & 0xFFFFFF);
     }
 
     private void stageTextEmitter(PoseStack.Pose pose, float x0, float y0, float x1, float y1,

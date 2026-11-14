@@ -27,15 +27,17 @@ public class MatfixRulesTest {
     }
 
     @Test
-    public void litCandlesGlowOnTheFlameOnly() {
+    public void litCandlesUseTheSmallCapProxyInsteadOfEmittingFromWaxSides() {
         for (String n : new String[] {"candle_lit", "red_candle_lit", "light_blue_candle_lit"}) {
             assertEquals(AutoPbr.RULE_CANDLE, AutoPbr.classify("block/" + n).rule(), n);
         }
         assertEquals(0f, AutoPbr.classify("block/candle").emission(), 0f, "unlit candle");
-        assertEquals(1f, AutoPbr.candleEmission(0xff, 0xf6, 0xe7, 255), "white candle flame");
-        assertEquals(0f, AutoPbr.candleEmission(0xe6, 0xb9, 0x8c, 255), "white candle wax");
-        assertEquals(1f, AutoPbr.candleEmission(0xff, 0xa1, 0x60, 255), "red candle flame");
-        assertEquals(0f, AutoPbr.candleEmission(0x90, 0x21, 0x20, 255), "red candle wax");
+        var white = AutoPbr.classify("block/white_candle_lit");
+        var black = AutoPbr.classify("block/black_candle_lit");
+        assertEquals(1f, AutoPbr.pixelEmission(white, argb(255,246,231), 0,6,16,16));
+        assertEquals(1f, AutoPbr.pixelEmission(black, argb(228,110,46), 0,6,16,16));
+        assertEquals(0f, AutoPbr.pixelEmission(white, argb(255,246,231), 0,9,16,16));
+        assertEquals(0f, AutoPbr.pixelEmission(black, argb(228,110,46), 0,9,16,16));
     }
 
     @Test
