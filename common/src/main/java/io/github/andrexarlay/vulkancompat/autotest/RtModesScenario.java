@@ -818,6 +818,15 @@ public final class RtModesScenario implements AutotestScenario {
         return n > 0 ? 1000.0 * hit / n : 0;
     }
 
+    /** Mean luminance (0..255) of a screen image. */
+    private static double meanLuma(int[] a) {
+        double s = 0;
+        for (int p : a) {
+            s += luma8(p);
+        }
+        return a.length > 0 ? s / a.length : 0;
+    }
+
     private static double meanAbsDiff(int[] a, int[] b) {
         double s = 0;
         int n = Math.min(a.length, b.length);
@@ -1065,6 +1074,10 @@ public final class RtModesScenario implements AutotestScenario {
                 ctx.log("scenario", name(), "step", String.valueOf(index), "event", "moving_error", "spec", s.raw(),
                     "pose_idx", String.valueOf(pi), "err", String.format(Locale.ROOT, "%.3f", meanAbsDiff(movingImg, ref)),
                     "rmse", String.format(Locale.ROOT, "%.3f", rmse(movingImg, ref)),
+                    // Signed: err is blind to a light that is systematically too bright or too dim, bias is not.  A reuse stage
+                    // that keeps only the samples that survived a shadow test (or drops the ones that did not) shows here.
+                    "mean_moving", String.format(Locale.ROOT, "%.3f", meanLuma(movingImg)),
+                    "mean_ref", String.format(Locale.ROOT, "%.3f", meanLuma(ref)),
                     "edge_ref", String.format(Locale.ROOT, "%.3f", edgeSharpness(ref, ni.getWidth(), ni.getHeight(), 12f)),
                     "edge_moving", String.format(Locale.ROOT, "%.3f", edgeSharpness(movingImg, ni.getWidth(), ni.getHeight(), 12f)));
             } catch (Throwable t) {

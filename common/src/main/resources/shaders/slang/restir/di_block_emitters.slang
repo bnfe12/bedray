@@ -35,11 +35,11 @@ static const float DI_PLANE_TOLERANCE_MAX = 0.25;
 // Source pdf stored with an imported history sample: any positive value, because it multiplies the estimate and is
 // divided out again by the direct term (see the temporal import).
 static const float DI_IMPORT_SOLID_ANGLE_PDF = 1.0;
-// Visibility reuse (a blocked shadow ray zeroes the record) selects only records that were visible last frame and then shades
-// them with the full 1/M weight: the pixel brightens at every shadow edge, and the zeroed record is dropped with its M, so the
-// next frame restarts from 2 fresh candidates (edge pulsing in motion). Off: the final shadow ray alone removes occluded
-// samples each frame, which keeps the estimate unbiased (2026-11-14 audit of the reservoir code). Left ON: switching it off
-// changed neither the sparkles nor the smear of a fast turn in the autotest, so the audit finding is not acted on without a measurement.
+// Visibility reuse: a blocked shadow ray zeroes the record's weight, its M stays (mergeReservoirs counts the draws of a record
+// with no weight), so the next frame neither imports the blocked sample nor dilutes the estimate with a dropped window.
+// Measured 2026-11-14, autotest rt_modes scene N, fixed exposure, DLSS RR, whole-frame mean against reuse off: ON +0.7 % with
+// temporal reuse and -0.5 % with spatial, OFF +1.6 % and +1.0 %; low-frequency error of the floor region 2.7 / 4.7 ON against
+// 4.2 / 5.3 OFF (two runs of reuse off differ by 1.1).  ON stays.
 static const bool DI_VISIBILITY_REUSE = true;
 static const float DI_NORMAL_DOT_STATIC = 0.8;
 static const float DI_NORMAL_DOT_MOVING = 0.6;
@@ -104,12 +104,16 @@ bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel
         return false;
     }
     DIReservoir stored = reservoirs[slot];
-    if (!(min(stored.stats.x, RESTIR_DI_M_CAP) > 0.0) || !(stored.stats.y > 0.0) || !isFinite(stored.sample.xyz)
-        || !isFinite(stored.receiver.xyz)) {
+    // An empty record (y = 0) is history too: it says "this surface was tried M times and nothing came back", and the merge
+    // counts those draws.  Only a record that was never written, or holds garbage, is no history.
+    if (!(min(stored.stats.x, RESTIR_DI_M_CAP) > 0.0) || !isFinite(stored.sample.xyz)
+        || !isFinite(stored.stats.xyz) || !isFinite(stored.receiver.xyz)) {
         return false;
     }
-    if (stored.source.z != uint(LightKind.Emitter)) {
-        return false;   // this adapter only reuses block emitters
+    // This adapter only reuses block emitters.  An empty record carries no light kind (its source lanes are zero, which
+    // reads as the sun), so the kind is only a test for a record that holds a sample.
+    if (stored.stats.y > 0.0 && stored.source.z != uint(LightKind.Emitter)) {
+        return false;
     }
     float tolerance = DI_DISTANCE_TOLERANCE_RELATIVE * max(previousDistance, 1.0) + DI_DISTANCE_TOLERANCE_ABSOLUTE;
     // The stored receiver and `previousReceiver` are both in the frame that wrote them, so they need no rebase.
@@ -267,13 +271,19 @@ struct BlockEmitterDiSampler : IReuseSampler {
                 LightSample historySample = reservoirLightSample(history, receiver.position);
                 // Target-only: the import's source pdf multiplies the radiance in blockEmitterEstimateSample and divides
                 // it again in pathTraceDirectTerm, so the light-tree walk that computed it cancelled out exactly.
-                LightEvaluation evaluation = emitters().evaluateTarget(receiver, historySample);
-                if (evaluation.valid && evaluation.targetPdf > 0.0) {
-                    // A moving camera reuses a short history: 20 frames of one sample stay stuck on a pixel while the view
-                    // slides under it, and the denoiser reads that persistent outlier as signal (sparkles, smears).
-                    float temporalCap = cameraStatic != 0u ? RESTIR_DI_M_CAP : RESTIR_DI_M_CAP_MOVING;
-                    current = mergeReservoirs(current, history, evaluation.targetPdf,
-                        RESTIR_DI_TEMPORAL_RATIO_CAP, temporalCap, seed);
+                LightEvaluation evaluation = invalidLightEvaluation();
+                if (historySample.valid && history.stats.y > 0.0) {
+                    evaluation = emitters().evaluateTarget(receiver, historySample);
+                }
+                // A moving camera reuses a short history: 20 frames of one sample stay stuck on a pixel while the view
+                // slides under it, and the denoiser reads that persistent outlier as signal (sparkles, smears).
+                float temporalCap = cameraStatic != 0u ? RESTIR_DI_M_CAP : RESTIR_DI_M_CAP_MOVING;
+                bool historyShades = evaluation.valid && evaluation.targetPdf > 0.0;
+                // A history that passed the surface gates counts its draws whether or not its sample survives at this
+                // receiver (an empty record, a light that left range): a target of 0 merges its M and nothing else.
+                current = mergeReservoirs(current, history, historyShades ? evaluation.targetPdf : 0.0,
+                    RESTIR_DI_TEMPORAL_RATIO_CAP, temporalCap, seed);
+                if (historyShades) {
                     // Age even when the roulette kept the batch winner: the lane counts the frames this pixel's
                     // reservoir has survived, which is what a stale-history debug read needs.
                     current.source.y = min(current.source.y + 1u, 0xFFFFu);
