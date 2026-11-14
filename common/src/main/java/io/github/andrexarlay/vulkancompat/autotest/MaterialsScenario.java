@@ -163,16 +163,21 @@ public final class MaterialsScenario implements AutotestScenario {
             List<String> cmds = buildCommands();
             server.execute(() -> {
                 try {
+                    var level = materialLevel(server);
+                    // A frame delay does not prove distant room chunks are loaded after a dimension switch.
+                    for (int i = 0; i < SCENES.length(); i++) loadRoom(level, SCENES.substring(i, i + 1));
                     for (String c : cmds) {
                         server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), inDimension(c));
                     }
+                    mc.execute(() -> {
+                        ctx.log("scenario", name(), "event", "scene_built", "dimension", dimension, "base", bx + "," + by + "," + bz,
+                            "commands", String.valueOf(cmds.size()), "steps", steps.toString().replace(' ', '_'));
+                        ctx.waitFrames(400, () -> step(ctx, steps, 0));
+                    });
                 } catch (Throwable t) {
                     ctx.fail("rt_materials: server command failed: " + t, t);
                 }
             });
-            ctx.log("scenario", name(), "event", "scene_built", "dimension", dimension, "base", bx + "," + by + "," + bz,
-                "commands", String.valueOf(cmds.size()), "steps", steps.toString().replace(' ', '_'));
-            ctx.waitFrames(400, () -> step(ctx, steps, 0));
         });
     }
 
@@ -187,6 +192,19 @@ public final class MaterialsScenario implements AutotestScenario {
     }
 
     private static final int ROOM_Z = 0;
+
+    private net.minecraft.server.level.ServerLevel materialLevel(net.minecraft.server.MinecraftServer server) {
+        return java.util.stream.StreamSupport.stream(server.getAllLevels().spliterator(), false)
+            .filter(candidate -> candidate.dimension().identifier().toString().equals(dimension))
+            .findFirst().orElseThrow(() -> new IllegalStateException("material dimension unavailable: " + dimension));
+    }
+
+    private void loadRoom(net.minecraft.server.level.ServerLevel level, String scene) {
+        int x = bx + roomX(scene), z = bz + roomZ(scene);
+        for (int cx = Math.floorDiv(x, 16); cx <= Math.floorDiv(x + 10, 16); cx++) {
+            for (int cz = Math.floorDiv(z, 16); cz <= Math.floorDiv(z + 10, 16); cz++) level.getChunk(cx, cz);
+        }
+    }
 
     private List<String> buildCommands() {
         List<String> c = new ArrayList<>();
@@ -376,7 +394,7 @@ public final class MaterialsScenario implements AutotestScenario {
         return "execute in " + dimension + " run " + command;
     }
 
-    private void placeCamera(AutotestContext ctx, Step s) {
+    private String cameraCommand(Step s) {
         int x0 = roomX(s.scene());
         double x = bx + x0 + 5.5;
         double z;
@@ -447,7 +465,7 @@ public final class MaterialsScenario implements AutotestScenario {
             aimPitch = Float.parseFloat(yp[1]);
         }
         aimOverride = true;
-        command(ctx, String.format(Locale.ROOT, "tp @a %.2f %.2f %.2f %.1f %.1f", x, (double) by, z, aimYaw, aimPitch));
+        return String.format(Locale.ROOT, "tp @a %.2f %.2f %.2f %.1f %.1f", x, (double) by, z, aimYaw, aimPitch);
     }
 
     private void applySettings(Step s) {
@@ -499,8 +517,19 @@ public final class MaterialsScenario implements AutotestScenario {
         int roomX = roomX(s.scene()), roomZ = roomZ(s.scene());
         boolean open = s.mods().contains("open");
         int roofTop = open ? Math.max(5, mc.level.getMaxY() - by) : 5;
-        command(ctx, fill(roomX + 1, 5, roomZ + 1, roomX + 9, roofTop, roomZ + 9, open ? "air" : "stone_bricks"));
-        placeCamera(ctx, s);
+        String roofCommand = fill(roomX + 1, 5, roomZ + 1, roomX + 9, roofTop, roomZ + 9, open ? "air" : "stone_bricks");
+        String teleportCommand = cameraCommand(s);
+        var server = mc.getSingleplayerServer();
+        server.execute(() -> {
+            try {
+                // Initial chunk requests expire; reacquire this room and edit/teleport in one server task.
+                loadRoom(materialLevel(server), s.scene());
+                server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), inDimension(roofCommand));
+                server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), inDimension(teleportCommand));
+            } catch (Throwable t) {
+                ctx.fail("rt_materials: room preparation failed: " + t, t);
+            }
+        });
         // F1 hides the hand too: only the H scene (item in the hand) keeps the HUD on
         if (mc.gui.hud.isHidden() != !s.scene().equals("H")) {
             mc.gui.hud.toggle();
