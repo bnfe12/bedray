@@ -18,6 +18,7 @@ import java.util.Locale;
  */
 public final class HandScenario implements AutotestScenario {
     public static final String ITEMS_PROPERTY = "vkrtx.autotest.handItems";
+    public static final String TIME_PROPERTY = "vkrtx.autotest.handTime";
     private static final int OX = 260;
 
     private volatile boolean aimOverride;
@@ -62,7 +63,7 @@ public final class HandScenario implements AutotestScenario {
         // Teleport first: /fill only works in loaded chunks, and the stage is far from the spawn.
         String[] prep = {
             "gamerule send_command_feedback false", "gamerule advance_time false", "weather clear", "difficulty peaceful",
-            "time set 6000", "gamemode creative @a", "kill @e[type=!player]",
+            "time set " + System.getProperty(TIME_PROPERTY, "6000"), "gamemode creative @a", "kill @e[type=!player]",
             String.format(Locale.ROOT, "tp @a %.1f %d %.1f 0 5", bx + OX + 0.5, by, bz + 0.5),
         };
         String[] build = {
