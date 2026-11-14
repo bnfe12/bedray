@@ -55,7 +55,7 @@ final class NativePathTraceBackend implements PathTraceBackend {
         SlangProgram ptSpatial = runtime.library().hasNativePt() && !rc
             ? RtPathTraceSlangPass.optionalPtSpatial(runtime, RtPathTraceSlangPass.PT_SPATIAL_PASS_NAME) : null;
         pass = new BedrayPathTraceNative(runtime, trace.nativeHandle(),
-            reuse == null ? 0 : reuse.nativeHandle(), display.nativeHandle(), stats, runtime.atlasSampler(),
+            reuse == null ? 0 : reuse.nativeHandle(), display.nativeHandle(), stats, runtime.mipAtlasSampler(),
             builder == null ? 0 : builder.nativeHandle(), ptSpatial == null ? 0 : ptSpatial.nativeHandle());
     }
 

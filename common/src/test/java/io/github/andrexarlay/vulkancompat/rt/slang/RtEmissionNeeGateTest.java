@@ -21,8 +21,8 @@ class RtEmissionNeeGateTest {
     @Test
     void emissionIsGatedByHowTheRayArrived() throws IOException {
         String source = tracer();
-        assertTrue(source.contains("if (pathSeesEmission(result.surfaceHits, glossyEscape, options.emitterNeeAvailable)"));
-        assertTrue(source.contains("pathEmitterOutsideNeeRadius(options, segmentAdvance + hit.t, ray.direction)"),
+        assertTrue(source.contains("float emissionWeight = pathSeesEmission(result.surfaceHits, glossyEscape, options.emitterNeeAvailable)"));
+        assertTrue(source.contains("pathEmitterResidual(options, segmentAdvance + hit.t, ray.direction)"),
             "the emitter support test includes the distance traversed through panes and cutouts");
         assertFalse(source.contains("\n        result.radiance += throughput * surface.material.emission;\n\n"),
             "no ungated emission add remains");

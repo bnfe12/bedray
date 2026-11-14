@@ -67,6 +67,18 @@ final class RtSlangFrameData {
         frame.skyLightZenith.set(p.skyLightZenith[0], p.skyLightZenith[1], p.skyLightZenith[2], 1f);
         frame.skyLightHorizon.set(p.skyLightHorizon[0], p.skyLightHorizon[1], p.skyLightHorizon[2], 1f);
         frame.cloud.set(0f, 0f, 0f, 0f);
+        if (p.netherAtmosphere && !p.cameraInWater && p.volumetricFogEnabled) {
+            // Low-energy amber scattering, tinted by the biome. It ends at the first surface, leaving nearby
+            // geometry and lamp exposure intact; the reserved cloud.w lane adds no descriptor/ABI dependency.
+            float peak = Math.max(0.01f, Math.max(p.dimensionFogColor[0],
+                Math.max(p.dimensionFogColor[1], p.dimensionFogColor[2])));
+            float r = 0.12f + 0.025f * p.dimensionFogColor[0] / peak;
+            float g = 0.075f + 0.025f * p.dimensionFogColor[1] / peak;
+            float b = 0.025f + 0.025f * p.dimensionFogColor[2] / peak;
+            frame.horizonColor.set(r, g, b, 1f);
+            frame.zenithColor.set(r * 0.6f, g * 0.6f, b * 0.6f, 1f);
+            frame.cloud.w = Math.max(0f, p.fogDensity) * 0.004f / Math.max(0.25f, p.fogDistanceScale);
+        }
 
         // The frame's exposure, in the one lane both backends read: the Java display push takes it from here, and
         // BedrayPathTraceNative forwards it as the native descriptor's lighting.exposure. The other three lanes stay

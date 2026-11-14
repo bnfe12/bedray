@@ -49,6 +49,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle releaseRecordingHandle;
     private final MethodHandle discardRecordingHandle;
     private final MethodHandle atlasSamplerHandle;
+    private final MethodHandle mipAtlasSamplerHandle;
     private final MethodHandle linearSamplerHandle;
     private final MethodHandle renderPhasesHandle;
     private final MethodHandle configurePathTraceHandle;
@@ -114,6 +115,8 @@ public final class BedrayCoreNative implements AutoCloseable {
             discardRecordingHandle = bindOptional(linker, lookup, "bedray_core_discard_recording",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
             atlasSamplerHandle = bind(linker, lookup, "bedray_core_atlas_sampler",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            mipAtlasSamplerHandle = bindOptional(linker, lookup, "bedray_core_mip_atlas_sampler",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             linearSamplerHandle = bind(linker, lookup, "bedray_core_linear_sampler",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
@@ -306,6 +309,10 @@ public final class BedrayCoreNative implements AutoCloseable {
     /** Borrows the core-owned nearest/clamp atlas sampler; the caller must not destroy it. */
     public long atlasSampler(long core) {
         return borrowSampler(core, atlasSamplerHandle);
+    }
+
+    public long mipAtlasSampler(long core) {
+        return borrowSampler(core, mipAtlasSamplerHandle != null ? mipAtlasSamplerHandle : atlasSamplerHandle);
     }
 
     public long linearSampler(long core) {

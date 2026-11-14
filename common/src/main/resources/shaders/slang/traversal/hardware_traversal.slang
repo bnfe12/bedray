@@ -99,6 +99,14 @@ SurfaceHit hardwareHitToSurface(GeometryProvider geometry, Ray ray,
     float3 e2 = p2 - p0;
     float2 d1 = uv1 - uv0;
     float2 d2 = uv2 - uv0;
+    float3 areaNormal = cross(e1, e2);
+    float areaSquared = dot(areaNormal, areaNormal);
+    if (areaSquared > 1.0e-12) {
+        float3 dual1 = cross(e2, areaNormal) / areaSquared;
+        float3 dual2 = cross(areaNormal, e1) / areaSquared;
+        result.uvDensity = float2(length(d1.x * dual1 + d2.x * dual2),
+            length(d1.y * dual1 + d2.y * dual2));
+    }
     float det = d1.x * d2.y - d2.x * d1.y;
     if (abs(det) > 1.0e-12) {
         tangent = safeNormalize((e1 * d2.y - e2 * d1.y) / det, geometricNormal);

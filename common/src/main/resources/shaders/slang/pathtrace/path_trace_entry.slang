@@ -82,6 +82,8 @@ MaterialSamplingOptions pathTraceMaterialOptions(FrameConstants f, PathTracePush
     materialOptions.alphaCutoff = pc.alphaCutoff;
     materialOptions.portalTime = f.camera.origin.w;
     materialOptions.autoNormalStrength = asfloat(pc.entityState.w);
+    materialOptions.pixelAngle = 2.0 * abs(f.camera.forward.w) * max(f.camera.jitter.w,
+        abs(f.camera.right.w) * f.camera.jitter.z);
     // The player's style switch, and it only ever touches the wave field: the realistic style keeps every tilt the
     // analytic field has, the other keeps the legacy damping of the same tilts.  Absorption, IOR and the bent beam are
     // identical with either, so both styles are the same body of water.
@@ -562,6 +564,16 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // would otherwise throw seven away and keep only their noise.
     bool sampleTrusted;
     PathTraceResult result = pathTraceMeanResult(total, sampleTrusted);
+    if (sampleTrusted && f.atmosphere.cloud.w > 0.0) {
+        float distance = (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u
+            ? result.firstHitDistance : options.maxDistance;
+        float transmittance = exp(-max(distance, 0.0) * f.atmosphere.cloud.w);
+        float3 scattering = f.atmosphere.horizonColor.rgb * max(f.atmosphere.horizonColor.w, 0.0);
+        result.radiance = result.radiance * transmittance + scattering * (1.0 - transmittance);
+        result.denoiser.diffuse *= transmittance;
+        result.denoiser.specular *= transmittance;
+        result.primary.direct *= transmittance;
+    }
     pathTraceCountRejects(outPathStats, p, size, f.frame.x, sampleTrusted, total.flags);
 
     // Scene-referred linear radiance: no exposure and no tone map here.  Exposure lives in FrameConstants.exposure and

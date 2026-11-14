@@ -41,6 +41,17 @@ class OpticalMaterialsTintedGlassTest {
     }
 
     @Test
+    void lavaSamplingProfileDoesNotOverrideAuthoredEmissionOrCullFaces() {
+        var optics = new OpticalMaterials();
+        int authored = LabPbr.materialFromSpecular(100, 10, 0, 120);
+        int[] material = {LabPbr.pack(90,10,140,255), authored};
+        optics.apply(material, sprite("block/lava_still"), emptyResources());
+        assertEquals(OpticalMaterials.LAVA_PROFILE_ID, OpticalMaterials.profileId(material[0]));
+        assertEquals(authored, material[1]);
+        assertTrue(!optics.cullsGlass(OpticalMaterials.LAVA_PROFILE_ID));
+    }
+
+    @Test
     void tintedGlassResolvesToTheBlockerProfileId() {
         OpticalMaterials optics = new OpticalMaterials();
         int[] material = {LabPbr.pack(2, 10, 0, 255)};

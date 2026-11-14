@@ -511,6 +511,10 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_atlas_sampler(
 /* Same ownership, normalized coordinates and mip-0 range, with linear filtering. */
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_linear_sampler(
     BedrayCore* core, uint64_t* out_sampler, BedrayError* error);
+/* Same ownership; nearest texels within a level, linear interpolation between
+ * available mip levels. Explicit ray-footprint LOD is supplied by the shader. */
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_mip_atlas_sampler(
+    BedrayCore* core, uint64_t* out_sampler, BedrayError* error);
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program(
     BedrayCore* core,

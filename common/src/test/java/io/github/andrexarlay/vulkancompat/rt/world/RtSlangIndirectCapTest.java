@@ -35,7 +35,7 @@ class RtSlangIndirectCapTest {
     @Test
     void theWindowOpensAfterTheFirstSurfacesOwnLightAndBeforeTheReuseSnapshots() {
         String tracer = read(TRACER);
-        int emission = tracer.indexOf("result.radiance += throughput * surface.material.emission;");
+        int emission = tracer.indexOf("result.radiance += throughput * surface.material.emission * emissionWeight;");
         int direct = tracer.indexOf("result.radiance += directContribution;");
         int open = tracer.indexOf("if (!indirectStarted && !bsdf.delta) {");
         int ptBefore = tracer.indexOf("result.pt.radianceBefore = result.radiance;");

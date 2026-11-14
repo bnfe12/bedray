@@ -40,7 +40,7 @@ struct AtmosphereState {
     float4 horizonColor;    // rgb: horizon radiance, w: intensity
     float4 skyLightZenith;  // rgb: the sky as a light at the zenith (what a bounce receives), w: intensity
     float4 skyLightHorizon; // rgb: the sky as a light at the horizon, w: intensity
-    float4 cloud;           // x: coverage, y: speed, z: base height, w: reserved
+    float4 cloud;           // xyz: cloud coverage/speed/base height; w: aerial extinction (0 = off)
 };
 
 struct ExposureState {

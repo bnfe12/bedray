@@ -50,6 +50,8 @@ void exception_boundaries() {
         require(sampler == 0 && error.status == expected);
         require(bedray_core_linear_sampler(core, &sampler, &error) == expected);
         require(sampler == 0 && error.status == expected);
+        require(bedray_core_mip_atlas_sampler(core, &sampler, &error) == expected);
+        require(sampler == 0 && error.status == expected);
         core->atlas_sampler = reinterpret_cast<VkSampler>(100);
         core->destroy_sampler = throwing_destroy;
         require(bedray_core_destroy(core) == expected);
@@ -63,17 +65,19 @@ VKAPI_ATTR VkResult VKAPI_CALL create(VkDevice, const VkSamplerCreateInfo* info,
     require(info->sType == VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
     require((info->minFilter == VK_FILTER_NEAREST || info->minFilter == VK_FILTER_LINEAR)
         && info->magFilter == info->minFilter);
-    require(info->mipmapMode == VK_SAMPLER_MIPMAP_MODE_NEAREST);
+    bool mip = info->maxLod == VK_LOD_CLAMP_NONE;
+    require(info->mipmapMode == (mip ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST));
     require(info->addressModeU == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
         && info->addressModeV == info->addressModeU && info->addressModeW == info->addressModeU);
-    require(info->minLod == 0 && info->maxLod == 0 && !info->unnormalizedCoordinates);
+    require(info->minLod == 0 && (mip || info->maxLod == 0) && !info->unnormalizedCoordinates);
     require(!info->anisotropyEnable && !info->compareEnable);
     if (fail_next) { fail_next = false; return VK_ERROR_OUT_OF_HOST_MEMORY; }
-    *out = reinterpret_cast<VkSampler>(static_cast<uintptr_t>(info->minFilter == VK_FILTER_LINEAR ? 101 : 100));
+    *out = reinterpret_cast<VkSampler>(static_cast<uintptr_t>(mip ? 102 : info->minFilter == VK_FILTER_LINEAR ? 101 : 100));
     return VK_SUCCESS;
 }
 VKAPI_ATTR void VKAPI_CALL destroy(VkDevice, VkSampler sampler, const VkAllocationCallbacks*) {
-    require(sampler == reinterpret_cast<VkSampler>(100) || sampler == reinterpret_cast<VkSampler>(101));
+    require(sampler == reinterpret_cast<VkSampler>(100) || sampler == reinterpret_cast<VkSampler>(101)
+        || sampler == reinterpret_cast<VkSampler>(102));
     ++destroys;
 }
 }
@@ -113,10 +117,11 @@ int main() {
     require(bedray_core_atlas_sampler(core, &handle, &error) == BEDRAY_OK && handle == 100);
     require(bedray_core_atlas_sampler(core, &handle, &error) == BEDRAY_OK && handle == 100 && creates == 2);
     require(bedray_core_linear_sampler(core, &handle, &error) == BEDRAY_OK && handle == 101 && creates == 3);
-    require(bedray_core_linear_sampler(core, &handle, &error) == BEDRAY_OK && handle == 101 && creates == 3);
+    require(bedray_core_mip_atlas_sampler(core, &handle, &error) == BEDRAY_OK && handle == 102 && creates == 4);
+    require(bedray_core_mip_atlas_sampler(core, &handle, &error) == BEDRAY_OK && handle == 102 && creates == 4);
     core->recordings.push_back({reinterpret_cast<VkCommandBuffer>(1), VK_NULL_HANDLE, nullptr, VK_NULL_HANDLE});
     require(bedray_core_destroy(core) == BEDRAY_ERROR_IN_USE && destroys == 0);
     core->recordings.clear(); // Host proof of discarded/completed recording.
-    require(bedray_core_destroy(core) == BEDRAY_OK && destroys == 2);
+    require(bedray_core_destroy(core) == BEDRAY_OK && destroys == 3);
     return 0;
 }

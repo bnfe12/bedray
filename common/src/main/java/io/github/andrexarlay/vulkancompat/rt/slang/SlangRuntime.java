@@ -234,6 +234,11 @@ public final class SlangRuntime implements AutoCloseable {
         return library.linearSampler(core);
     }
 
+    public long mipAtlasSampler() {
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
+        return library.mipAtlasSampler(core);
+    }
+
     /** Creates a native image owner on the same game-owned logical device. */
     public BedrayGpuImagesNative createImageOwner(long budgetBytes) {
         if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");

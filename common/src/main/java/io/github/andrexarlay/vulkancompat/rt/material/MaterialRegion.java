@@ -102,6 +102,7 @@ public final class MaterialRegion {
                 e = AutoPbr.isEmissiveTexel(c, mixed) ? 1.0f : 0f;
             } else if (auto.emissionMode() == AutoPbr.Emission.WHOLE) {
                 e = a < 128 ? 0f : auto.emission() * (0.15f + 0.85f * AutoPbr.smoothstep(lumLo, lumHi, luminance(c)));
+                if (a >= 128 && "lava".equals(auto.rule())) e = 0.55f * auto.emission();
             } else if (auto.emissionMode() == AutoPbr.Emission.BRIGHT) {
                 e = AutoPbr.pixelEmission(auto, c);
             }
@@ -221,6 +222,9 @@ public final class MaterialRegion {
                     } else if (auto.emissionMode() == AutoPbr.Emission.BRIGHT && albedo != null) {
                         e = AutoPbr.pixelEmission(auto, c);
                     }
+                    // The animated lava colour already carries its pattern. A second high-contrast emission mask
+                    // aliases independently of the colour mip chain and defeats temporal reconstruction in motion.
+                    if ("lava".equals(auto.rule()) && auto.emission() > 0f) e = 0.55f * auto.emission();
                     mat = LabPbr.materialFromAuto(auto, e);
                     if (perPixel) {
                             float l = lum[y * w + x];

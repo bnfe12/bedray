@@ -91,8 +91,6 @@ public class RtEmittersStabilityTest {
             "with every light in range selected, only lights crossing the range sphere change: rescan rarely");
         assertTrue(RtEmitters.moveRebuild(128f, true) > 0.0 && RtEmitters.moveRebuild(128f, true) <= 2.0,
             "a budget-limited list follows the camera closely; the hysteresis keeps its membership steady");
-        assertTrue(RtEmitters.COLD_SCAN_BUDGET_NS > RtEmitters.SCAN_BUDGET_NS,
-            "a cold scan (no list, or a teleport) finishes faster than a warm one: the room rendered black for seconds");
         runCameraInvarianceChecks();
     }
 

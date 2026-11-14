@@ -64,7 +64,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
             nextBuffers = runtime.createBufferOwner(bufferBudget(bytes));
             display = runtime.program(DISPLAY_PASS).orElseThrow();
             requireDisplayManifest(display);
-            sampler = runtime.atlasSampler();
+            sampler = runtime.mipAtlasSampler();
             spatialReuse = RtSpatialReuseSlangPass.create(runtime, trace.entityFallback()).orElse(null);
             statistics = RtFrameStatsSlangPass.create(runtime).orElse(null);
         } catch (RuntimeException | Error failure) {

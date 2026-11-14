@@ -112,6 +112,7 @@ public final class RtEmitters {
     private record Entry(DecodedSection src, float[] records) {
     }
 
+    private final QuadEmissionCache quadEmissionCache = new QuadEmissionCache();
     private final EmitterCaptureBuffers buffers;
     private final EmitterFrameSelection frameSelection = new EmitterFrameSelection();
     private final Long2ObjectOpenHashMap<Entry> cache = new Long2ObjectOpenHashMap<>();
@@ -155,11 +156,12 @@ public final class RtEmitters {
     }
 
     /**
-     * CPU budget per frame of a cold scan: no list yet, or the camera jumped past passAbortDistance (teleport, respawn).
-     * The 4 ms warm budget spread a 3000-section cold scan over seconds of unlit frames (testbed: 2.5-7.5 s after a
-     * teleport into a torch-lit room, which rendered black until the list arrived).
+     * CPU budget of a cold scan. Nearby prefixes are published before the whole scan completes, so first light no
+     * longer requires a 16 ms render-thread slice while chunk generation is also competing for the CPU.
      */
-    static final long COLD_SCAN_BUDGET_NS = 16_000_000L;
+    static final long COLD_SCAN_BUDGET_NS = 4_000_000L;
+    static final long COLD_PUBLICATION_INTERVAL_NS = 100_000_000L;
+    private long lastColdPublicationNs;
     /** True while the pass in flight is a cold scan (see COLD_SCAN_BUDGET_NS). */
     private boolean coldScan;
     private long lastLogNs;
@@ -313,7 +315,7 @@ public final class RtEmitters {
         seen.add(d.key);
         Entry e = cache.get(d.key);
         if (e == null || e.src != d) {
-            e = new Entry(d, currentMat == null ? EMPTY : extract(d, currentMat.material(), currentMat.width(), currentMat.height()));
+            e = new Entry(d, currentMat == null ? EMPTY : extract(d, currentMat.material(), currentMat.width(), currentMat.height(), quadEmissionCache));
             cache.put(d.key, e);
         }
         float[] r = e.records;
@@ -474,6 +476,7 @@ public final class RtEmitters {
         entityInRange = 0;
         seen.clear();
         scanStartNs = System.nanoTime();
+        lastColdPublicationNs = 0;
         java.util.ArrayList<DecodedSection> list = new java.util.ArrayList<>();
         world.forEachBuiltSection(list::add);
         // nearest first: after a cold invalidate (pack switch, world change) the world lights up from the camera outwards
@@ -492,14 +495,22 @@ public final class RtEmitters {
     private void continueScan(double camX, double camY, double camZ, float range, int budget,
                               float[] entityQuads, int entityCount) {
         boolean complete = scan.advance(System.nanoTime() + (coldScan ? COLD_SCAN_BUDGET_NS : SCAN_BUDGET_NS), scanStep);
+        long now = System.nanoTime();
+        boolean partial = !complete && coldScan && heapSize > 0
+            && (lastColdPublicationNs == 0 || now - lastColdPublicationNs >= COLD_PUBLICATION_INTERVAL_NS);
         if (complete) {
             scanStale = scan.stale();
             scanMs = (System.nanoTime() - scanStartNs) / 1.0e6;
             scan = null;
             completeStaticSelection();
+        } else if (partial) {
+            // Only a cold invalidate may replace the old selection with a growing nearest-first prefix.
+            // A warm refresh retains the complete old set until its successor is ready.
+            snapshotStaticSelection();
+            lastColdPublicationNs = now;
         }
         // A slow cold section scan must not freeze moving entity lights or use its old camera for new entity records.
-        if (complete || entityCount != 0 || lastEntityCount != 0) {
+        if (complete || partial || entityCount != 0 || lastEntityCount != 0) {
             publishSelection(camX, camY, camZ, range, budget, entityQuads, entityCount);
         }
     }
@@ -581,6 +592,10 @@ public final class RtEmitters {
         while (cachedKeys.hasNext()) {
             if (!seen.contains(cachedKeys.nextLong())) cachedKeys.remove();
         }
+        snapshotStaticSelection();
+    }
+
+    private void snapshotStaticSelection() {
         // snapshot the static selection: a frame where only entity lights changed skips the whole section scan
         ensureStaticHeapCapacity(Math.max(targetBudget, heapSize));
         for (int i = 0; i < heapSize; i++) {
@@ -669,10 +684,15 @@ public final class RtEmitters {
      * Emitter records of one section, positions section-local (pure, unit-tested through {@link #extractQuads}).
      */
     static float[] extract(DecodedSection d, int[] material, int atlasW, int atlasH) {
-        EmissiveTexelIndex candidates = EmissiveTexelIndex.of(material, atlasW, atlasH,
-            io.github.andrexarlay.vulkancompat.rt.material.RtMaterialAtlas.cpuMaterialVersion());
+        return extract(d, material, atlasW, atlasH, null);
+    }
+
+    private static float[] extract(DecodedSection d, int[] material, int atlasW, int atlasH, QuadEmissionCache emissionCache) {
+        long version = io.github.andrexarlay.vulkancompat.rt.material.RtMaterialAtlas.cpuMaterialVersion();
+        if (emissionCache != null) emissionCache.bind(material, version, atlasW, atlasH);
+        EmissiveTexelIndex candidates = EmissiveTexelIndex.of(material, atlasW, atlasH, version);
         return extractQuads(d.positions, d.uvs, d.colors, d.totalQuads(), material, atlasW, atlasH,
-            d.passQuadStart(DecodedSection.PASS_CUTOUT), candidates);
+            d.passQuadStart(DecodedSection.PASS_CUTOUT), candidates, emissionCache);
     }
 
     /** {@code positions}: 12 floats per quad, {@code uvs}: 8 floats per quad (DecodedSection layout). */
@@ -688,11 +708,11 @@ public final class RtEmitters {
     public static float[] extractQuads(float[] positions, float[] uvs, int[] colors, int quads, int[] material, int atlasW, int atlasH,
                                        int solidQuads) {
         return extractQuads(positions, uvs, colors, quads, material, atlasW, atlasH, solidQuads,
-            EmissiveTexelIndex.build(material, atlasW, atlasH));
+            EmissiveTexelIndex.build(material, atlasW, atlasH), null);
     }
 
     private static float[] extractQuads(float[] positions, float[] uvs, int[] colors, int quads, int[] material, int atlasW,
-                                        int atlasH, int solidQuads, EmissiveTexelIndex candidates) {
+                                        int atlasH, int solidQuads, EmissiveTexelIndex candidates, QuadEmissionCache emissionCache) {
         float[] tmp = null;
         int n = 0;
         TexelEmission tex = new TexelEmission() {
@@ -730,7 +750,7 @@ public final class RtEmitters {
             }
             // cutout pass quads (torches, lanterns, campfires, fire) are open sources: they radiate to both sides
             float redstoneSignal = quadRedstoneSignal(colors, q * 4);
-            if (buildQuadRecord(tmp, n * FLOATS, positions, q * 12, uvs, uvOffset, tex, q >= solidQuads, redstoneSignal)) {
+            if (buildQuadRecord(tmp, n * FLOATS, positions, q * 12, uvs, uvOffset, tex, q >= solidQuads, redstoneSignal, emissionCache)) {
                 n++;
             }
         }
@@ -783,11 +803,40 @@ public final class RtEmitters {
      */
     public static boolean buildQuadRecord(float[] dst, int o, float[] positions, int po, float[] uvs, int uo, TexelEmission tex,
                                           boolean twoSidedSource) {
-        return buildQuadRecord(dst, o, positions, po, uvs, uo, tex, twoSidedSource, 1f);
+        return buildQuadRecord(dst, o, positions, po, uvs, uo, tex, twoSidedSource, 1f, null);
     }
 
-    private static boolean buildQuadRecord(float[] dst, int o, float[] positions, int po, float[] uvs, int uo, TexelEmission tex,
-                                           boolean twoSidedSource, float redstoneSignal) {
+    private record QuadEmission(float aMin, float aMax, float bMin, float bMax,
+                                float mean, float best, boolean redstoneSource) { }
+    private static final QuadEmission NO_EMISSION = new QuadEmission(0, 0, 0, 0, 0, 0, false);
+    private record QuadUv(float u0, float v0, float u1, float v1, float u2, float v2,
+                          float u3, float v3, float signal) { }
+
+    /** Bounded per-atlas UV statistics. Geometry, sidedness and power remain per-quad calculations. */
+    static final class QuadEmissionCache {
+        private final java.util.HashMap<QuadUv, QuadEmission> entries = new java.util.HashMap<>();
+        private Object material;
+        private long revision;
+        private int width, height;
+
+        void bind(Object atlas, long version, int w, int h) {
+            if (material != atlas || revision != version || width != w || height != h) {
+                entries.clear(); material = atlas; revision = version; width = w; height = h;
+            }
+        }
+        void clear() { entries.clear(); material = null; }
+        QuadEmission sample(float[] uv, int offset, TexelEmission tex, float signal) {
+            var key = new QuadUv(uv[offset], uv[offset+1], uv[offset+2], uv[offset+3], uv[offset+4],
+                uv[offset+5], uv[offset+6], uv[offset+7], signal);
+            var cached = entries.get(key);
+            if (cached != null) return cached;
+            var result = scanQuadEmission(uv, offset, tex, signal);
+            if (entries.size() < 4096) entries.put(key, result);
+            return result;
+        }
+    }
+
+    private static QuadEmission scanQuadEmission(float[] uvs, int uo, TexelEmission tex, float redstoneSignal) {
         int w = tex.width();
         int h = tex.height();
         float uMin = Float.MAX_VALUE;
@@ -808,20 +857,6 @@ public final class RtEmitters {
         int y1 = Math.max(y0 + 1, Math.min(h, (int) Math.ceil(vMax * h)));
         int stepX = Math.max(1, (x1 - x0 + MAX_SCAN - 1) / MAX_SCAN);
         int stepY = Math.max(1, (y1 - y0 + MAX_SCAN - 1) / MAX_SCAN);
-        // quad geometry: p0, edges to p1 and p3
-        float px = positions[po];
-        float py = positions[po + 1];
-        float pz = positions[po + 2];
-        float e1x = positions[po + 3] - px;
-        float e1y = positions[po + 4] - py;
-        float e1z = positions[po + 5] - pz;
-        float e2x = positions[po + 9] - px;
-        float e2y = positions[po + 10] - py;
-        float e2z = positions[po + 11] - pz;
-        float areaFull = cross(e1x, e1y, e1z, e2x, e2y, e2z);
-        if (areaFull < 1.0e-6f) {
-            return false;
-        }
         // uv of p0 and of its two edges, to map a texel centre back to the quad coordinates (a along e1, b along e2):
         // uv = uv0 + A a + B b
         float u0 = uvs[uo];
@@ -880,7 +915,7 @@ public final class RtEmitters {
             }
         }
         if (emissive == 0 || sum / k <= MIN_EMISSION) {
-            return false;
+            return NO_EMISSION;
         }
         if (!invertible) {
             aMin = 0f;
@@ -893,7 +928,7 @@ public final class RtEmitters {
         aMax = Math.min(1f, aMax);
         bMax = Math.min(1f, bMax);
         if (aMax <= aMin || bMax <= bMin) {
-            return false;
+            return NO_EMISSION;
         }
         // mean emission and brightest texel inside the emitter rectangle
         float inSum = 0f;
@@ -908,8 +943,36 @@ public final class RtEmitters {
         }
         float mean = inCount > 0 ? inSum / inCount : 0f;
         if (mean <= MIN_EMISSION) {
+            return NO_EMISSION;
+        }
+        return new QuadEmission(aMin, aMax, bMin, bMax, mean, best, redstoneSource);
+    }
+
+    static boolean buildQuadRecord(float[] dst, int o, float[] positions, int po, float[] uvs, int uo, TexelEmission tex,
+                                           boolean twoSidedSource, float redstoneSignal, QuadEmissionCache emissionCache) {
+        // quad geometry: p0, edges to p1 and p3
+        float px = positions[po];
+        float py = positions[po + 1];
+        float pz = positions[po + 2];
+        float e1x = positions[po + 3] - px;
+        float e1y = positions[po + 4] - py;
+        float e1z = positions[po + 5] - pz;
+        float e2x = positions[po + 9] - px;
+        float e2y = positions[po + 10] - py;
+        float e2z = positions[po + 11] - pz;
+        float areaFull = cross(e1x, e1y, e1z, e2x, e2y, e2z);
+        if (areaFull < 1.0e-6f) {
             return false;
         }
+        QuadEmission patch = emissionCache == null ? scanQuadEmission(uvs, uo, tex, redstoneSignal)
+            : emissionCache.sample(uvs, uo, tex, redstoneSignal);
+        if (patch.mean <= MIN_EMISSION) return false;
+        float aMin = patch.aMin, aMax = patch.aMax, bMin = patch.bMin, bMax = patch.bMax;
+        float mean = patch.mean, best = patch.best;
+        boolean redstoneSource = patch.redstoneSource;
+        float u0 = uvs[uo], v0 = uvs[uo + 1];
+        float ax = uvs[uo + 2] - u0, ay = uvs[uo + 3] - v0;
+        float bx = uvs[uo + 6] - u0, by = uvs[uo + 7] - v0;
         float da = aMax - aMin;
         float db = bMax - bMin;
         float area = areaFull * da * db;
@@ -976,6 +1039,7 @@ public final class RtEmitters {
         cache.clear();
         seen.clear();
         currentMat = null;
+        quadEmissionCache.clear();
         scan = null; // the snapshot would otherwise keep every decoded section of the pass alive
     }
 

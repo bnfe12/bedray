@@ -39,6 +39,7 @@ struct SurfaceHit {
     float3    tangent;         // optional orthonormal tangent frame; zero when unavailable
     float3    bitangent;
     float2    uv;
+    float2    uvDensity;       // lengths of world-space gradients of atlas u/v (per block)
     float2    barycentrics;
     float2    light;           // x: block light 0..1, y: sky light 0..1
     float3    tint;            // biome tint * baked AO, already linear
@@ -90,6 +91,7 @@ SurfaceHit missHit(float tMax) {
     result.tangent = float3(0.0);
     result.bitangent = float3(0.0);
     result.uv = float2(0.0);
+    result.uvDensity = float2(0.0);
     result.barycentrics = float2(0.0);
     result.light = float2(0.0);
     result.tint = float3(1.0);

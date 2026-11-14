@@ -242,11 +242,11 @@ bool pathSeesEmission(uint surfaceHits, bool previousLobeNotDiffuse, bool emitte
     return surfaceHits == 1u || previousLobeNotDiffuse || !emitterNeeAvailable;
 }
 
-// Allow for the launch bias and the source quad offset (0.08 blocks for two-sided horizontal emitters).
-bool pathEmitterOutsideNeeRadius(PathTraceOptions options, float distanceFromLaunch, float3 direction) {
+// Smooth residual of the legacy windowed NEE model. This is a hybrid handover, not an MIS weight.
+float pathEmitterResidual(PathTraceOptions options, float distanceFromLaunch, float3 direction) {
     float listRange = options.emitterListRange > 0.0 ? options.emitterListRange : options.maxDistance;
-    float bound = min(listRange, EMITTER_RADIUS) + abs(options.rayBias) + 0.1;
-    return distanceFromLaunch * distanceFromLaunch * dot(direction, direction) > bound * bound;
+    return 1.0 - emitterWindow(distanceFromLaunch * distanceFromLaunch * dot(direction, direction),
+        min(listRange, EMITTER_RADIUS));
 }
 
 PathTraceOptions defaultPathTraceOptions() {
@@ -613,6 +613,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     bool ambientOnlyPending = false;
     // Keep the displacement within this segment when cutouts and panes advance its ray origin.
     float segmentAdvance = 0.0;
+    float previousDiffuseTracedShare = 1.0;
     uint step = 0u;
     // The diffuse continuation of the primary vertex is in flight and its first vertex is not recorded yet.
     bool ptArmed = false;
@@ -830,11 +831,10 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         // NEE; a sampler that reads the emitter list rejects the receiver's own quad through LightReceiver.emission.
         // With an emitter proposal, use NEE for diffuse emitter transport and keep BSDF emission along the eye and
         // non-diffuse paths. A BSDF hit beyond the proposal's reach is also the only source of that emission.
-        if (pathSeesEmission(result.surfaceHits, glossyEscape, options.emitterNeeAvailable)
-            || (any(surface.material.emission > 0.0)
-                && pathEmitterOutsideNeeRadius(options, segmentAdvance + hit.t, ray.direction))) {
-            result.radiance += throughput * surface.material.emission;
-        }
+        float emissionWeight = pathSeesEmission(result.surfaceHits, glossyEscape, options.emitterNeeAvailable)
+            ? 1.0 : previousDiffuseTracedShare
+                * pathEmitterResidual(options, segmentAdvance + hit.t, ray.direction);
+        result.radiance += throughput * surface.material.emission * emissionWeight;
 
         // ---- Next-event estimation ----
         LightReceiver receiver = lightReceiver(hit.position, normal, surface.material.emissionMask);
@@ -1134,6 +1134,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             pathDenoiserBegin(denoiserContinuation, bsdf.lobe,
                 wantDenoiserSignals ? result.radiance : float3(0.0), hit.position);
         }
+        previousDiffuseTracedShare = 1.0 - emitterFar;
         ray = makeRay(origin, bsdf.direction, 0.0, continuationDistance);
         segmentAdvance = 0.0;
         ambientOnlyPending = continuationAmbientOnly;

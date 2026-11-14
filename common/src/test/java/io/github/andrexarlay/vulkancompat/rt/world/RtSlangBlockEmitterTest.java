@@ -112,7 +112,7 @@ class RtSlangBlockEmitterTest {
             "the path tracer marks the primary vertex, the only one whose light point is reused");
         assertTrue(tracer.contains("lights.sample(receiver, seed)"),
             "and passes the receiver, so the emission mask of the face being shaded travels with the call");
-        assertTrue(tracer.contains("result.radiance += throughput * surface.material.emission;"),
+        assertTrue(tracer.contains("result.radiance += throughput * surface.material.emission * emissionWeight;"),
             "and still adds the face it sees: the look of an emitter and the light it casts are two terms");
         assertTrue(read(SURFACE).contains("material.emissionMask = max(materialTexel.b, 0.0);"),
             "the mask is the atlas channel the emitter sampler reads, not a luminance of the colour");

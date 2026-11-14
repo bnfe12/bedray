@@ -1003,6 +1003,9 @@ public final class RtFrameRenderer {
         // The medium a primary ray starts in: the same fluid state that decides the fog above, so a swimmer's paths
         // absorb through their own water column instead of through clear air.
         params.cameraInWater = fogState.medium == 1;
+        params.netherAtmosphere = Minecraft.getInstance().level != null
+            && Minecraft.getInstance().level.dimension().identifier().toString().equals("minecraft:the_nether");
+        System.arraycopy(skyState.fogColor, 0, params.dimensionFogColor, 0, 3);
         if (sky.skyColor != null) {
             params.skyColor[0] = sky.skyColor.x();
             params.skyColor[1] = sky.skyColor.y();

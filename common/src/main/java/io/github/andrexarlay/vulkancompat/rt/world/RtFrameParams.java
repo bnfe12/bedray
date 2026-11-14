@@ -101,6 +101,9 @@ public final class RtFrameParams {
     public boolean sceneChanged;
     /** The camera stands in water ({@code FogType.WATER}), so a primary ray starts inside the medium. */
     public boolean cameraInWater;
+    /** CPU dimension state; the reserved atmospheric lane carries bounded Nether aerial extinction. */
+    public boolean netherAtmosphere;
+    public final float[] dimensionFogColor = new float[3];
     // ---- emitter list of this frame, for the Slang path tracer's block-emitter NEE (StatsBuf mirrors these) ----
     /** VkBuffer of the immutable BEM1 table published by {@link RtEmitters}. */
     public long emitterHandle;

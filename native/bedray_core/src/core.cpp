@@ -133,6 +133,7 @@ struct BedrayCore {
     std::vector<RecordingUse> recordings;
     uint64_t next_program_handle = 1;
     VkSampler atlas_sampler = VK_NULL_HANDLE;
+    VkSampler mip_atlas_sampler = VK_NULL_HANDLE;
     VkSampler linear_sampler = VK_NULL_HANDLE;
 
     bedray::core::DeviceFns device_fns{};
@@ -731,6 +732,8 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) try {
     core->programs.clear();
     if (core->atlas_sampler != VK_NULL_HANDLE)
         core->destroy_sampler(core->device, core->atlas_sampler, nullptr);
+    if (core->mip_atlas_sampler != VK_NULL_HANDLE)
+        core->destroy_sampler(core->device, core->mip_atlas_sampler, nullptr);
     if (core->linear_sampler != VK_NULL_HANDLE)
         core->destroy_sampler(core->device, core->linear_sampler, nullptr);
     delete core;
@@ -742,21 +745,22 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) try {
 }
 
 static BedrayStatus acquire_sampler(
-    BedrayCore* core, bool linear, uint64_t* out_sampler, BedrayError* error) try {
+    BedrayCore* core, bool linear, uint64_t* out_sampler, BedrayError* error, bool mip = false) try {
     clear_error(error);
     if (out_sampler != nullptr) *out_sampler = 0;
     if (core == nullptr || out_sampler == nullptr)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/out_sampler is null");
-    VkSampler& cached = linear ? core->linear_sampler : core->atlas_sampler;
+    VkSampler& cached = mip ? core->mip_atlas_sampler : linear ? core->linear_sampler : core->atlas_sampler;
     if (cached == VK_NULL_HANDLE) {
         VkSamplerCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         info.magFilter = info.minFilter = linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-        info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        info.mipmapMode = mip ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
         info.addressModeU = info.addressModeV = info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         info.maxAnisotropy = 1.0f;
         info.compareOp = VK_COMPARE_OP_NEVER;
-        // Zero LOD range, normalized coordinates, no comparison/anisotropy.
+        // Preserve nearest texels within a level; blend levels only for the ray-footprint atlas.
+        info.maxLod = mip ? VK_LOD_CLAMP_NONE : 0.0f;
         VkSampler sampler = VK_NULL_HANDLE;
         VkResult result = core->create_sampler(core->device, &info, nullptr, &sampler);
         if (result != VK_SUCCESS)
@@ -787,6 +791,11 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_linear_sampler(
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate linear sampler state");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception acquiring linear sampler");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_mip_atlas_sampler(
+    BedrayCore* core, uint64_t* out_sampler, BedrayError* error) {
+    return acquire_sampler(core, false, out_sampler, error, true);
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_query_capabilities(

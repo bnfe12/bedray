@@ -129,7 +129,7 @@ class RtSlangSampleRejectionTest {
             "the refused sample has to be the zero the caller already tests for");
 
         String tracer = read(TRACER);
-        int emission = tracer.indexOf("result.radiance += throughput * surface.material.emission;");
+        int emission = tracer.indexOf("result.radiance += throughput * surface.material.emission * emissionWeight;");
         int contribution = tracer.indexOf("float3 directContribution = throughput * direct;");
         int direct = tracer.indexOf("result.radiance += directContribution;");
         int sampled = tracer.indexOf("BSDFSample bsdf = bsdfSample(surface.material, view, normal,");

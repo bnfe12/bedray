@@ -35,6 +35,7 @@ static const uint MATERIAL_FLAG_BLOCKS_LIGHT = 1u << 5u;
 // Optical-profile sentinel for vanilla tinted_glass, carried in the high source-metadata bits of the atlas.
 // Must equal OpticalMaterials.TINTED_GLASS_PROFILE_ID, which the baker writes into those bits.
 static const uint OPTICAL_PROFILE_TINTED_GLASS = 5u;
+static const uint OPTICAL_PROFILE_LAVA = 6u;
 
 struct MaterialSample {
     float3 albedo;              // linear diffuse albedo

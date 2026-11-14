@@ -51,6 +51,30 @@ class RtSlangSkyLightTest {
     }
 
     @Test
+    void netherHazeIsBoundedAndRespectsTheMediumAndFogSwitch() {
+        var params = new RtFrameParams();
+        var frame = new RtPathTraceSlangPass.Frame();
+        params.netherAtmosphere = true;
+        params.dimensionFogColor[0] = 0.2f;
+        params.dimensionFogColor[1] = 0.03f;
+        params.dimensionFogColor[2] = 0.01f;
+        RtSlangFrameData.fill(frame, params, 1920, 1080, 0, 0);
+        assertEquals(0.004f, frame.cloud.w, 1e-6f);
+        assertTrue(frame.horizonColor.x < 0.2f && frame.horizonColor.y > frame.horizonColor.z);
+        params.cameraInWater = true;
+        RtSlangFrameData.fill(frame, params, 1920, 1080, 0, 0);
+        assertEquals(0f, frame.cloud.w);
+        params.cameraInWater = false;
+        params.volumetricFogEnabled = false;
+        RtSlangFrameData.fill(frame, params, 1920, 1080, 0, 0);
+        assertEquals(0f, frame.cloud.w);
+        params.volumetricFogEnabled = true;
+        params.netherAtmosphere = false;
+        RtSlangFrameData.fill(frame, params, 1920, 1080, 0, 0);
+        assertEquals(0f, frame.cloud.w);
+    }
+
+    @Test
     void bouncesAndSkySamplesReceiveTheLightDome() throws IOException {
         String sky = Files.readString(SKY).replace("\r\n", "\n");
         assertTrue(sky.contains("    float3 skyRadiance(float3 direction) {\n        return lightRadiance(direction);\n    }"),

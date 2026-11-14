@@ -22,11 +22,14 @@ public final class OpticalMaterials {
     public static final int SHIFT = 3;
     /** Fixed palette slot of the vanilla tinted_glass light blocker; the Slang sentinel OPTICAL_PROFILE_TINTED_GLASS must match. */
     public static final int TINTED_GLASS_PROFILE_ID = 5;
+    /** Opaque emissive fluid: enables footprint-filtered colour without filtering selective emission masks. */
+    public static final int LAVA_PROFILE_ID = 6;
     private static final Logger LOG = LoggerFactory.getLogger("VKB-RT");
     private static final AtomicInteger WARNINGS = new AtomicInteger();
     private static final Set<String> KEYS = Set.of("ior", "thickness", "measurementDistance", "diffuseLayer", "transmittance", "kind", "cullSharedFaces");
     // Zero transmittance: the visibility walk stops light here, while the camera path keeps the pane a translucent filter.
     private static final Profile TINTED_GLASS_BLOCKER = new Profile(1.52f, 1f, 1f, 0f, 0f, 0f, 0f, 1, true);
+    private static final Profile LAVA = new Profile(1.5f, 0f, 1f, 1f, 1f, 1f, 1f, 4, false);
 
     public record Profile(float ior, float thickness, float distance, float diffuse,
                           float red, float green, float blue, int kind, boolean cullShared) {
@@ -45,6 +48,7 @@ public final class OpticalMaterials {
         profiles.add(defaults(2));
         profiles.add(defaults(3));
         profiles.add(TINTED_GLASS_BLOCKER); // slot TINTED_GLASS_PROFILE_ID
+        profiles.add(LAVA); // slot LAVA_PROFILE_ID; sampling hint, never transmissive
     }
 
     public synchronized int intern(Profile profile) {
@@ -70,7 +74,10 @@ public final class OpticalMaterials {
     public void apply(int[] material, Identifier sprite, ResourceProvider resources) {
         int id = intern(read(sprite, resources));
         if (id == 0) return;
-        for (int i = 0; i < material.length; i++) material[i] = LabPbr.withSourceFlag(material[i], id << SHIFT);
+        for (int i = 0; i < material.length; i++) {
+            if (id == LAVA_PROFILE_ID && LabPbr.hasSourceFlag(material[i], 1)) continue;
+            material[i] = LabPbr.withSourceFlag(material[i], id << SHIFT);
+        }
     }
 
     private static Profile read(Identifier sprite, ResourceProvider resources) {
@@ -80,8 +87,9 @@ public final class OpticalMaterials {
         if (texture.equals("tinted_glass")) return TINTED_GLASS_BLOCKER;
         int kind = texture.contains("glass") ? 1
             : (texture.equals("water_still") || texture.equals("water_flow") || texture.equals("water_overlay")) ? 2
-            : (texture.equals("ice") || texture.equals("packed_ice") || texture.equals("blue_ice") || texture.startsWith("frosted_ice_")) ? 3 : 0;
-        Profile fallback = kind == 0 ? null : defaults(kind);
+            : (texture.equals("ice") || texture.equals("packed_ice") || texture.equals("blue_ice") || texture.startsWith("frosted_ice_")) ? 3
+            : (texture.equals("lava_still") || texture.equals("lava_flow")) ? 4 : 0;
+        Profile fallback = kind == 0 ? null : kind == 4 ? LAVA : defaults(kind);
         if (fallback != null && kind == 1 && (path.equals("block/glass") || path.equals("glass")))
             fallback = new Profile(1.52f, 1f, 1f, 1f, 0.97f, 0.97f, 0.97f, 1, true);
         Identifier sidecar = sprite.withPath("textures/" + path + ".bedray.json");

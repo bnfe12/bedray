@@ -66,11 +66,13 @@ void main() {
 
     float3 straight = float3(0, 0, 1);
     defaults.emitterListRange = 128.0;
-    sink[5] = !pathEmitterOutsideNeeRadius(defaults, 24.05, straight)
-        && pathEmitterOutsideNeeRadius(defaults, 10.0 + 15.0, straight);
+    sink[5] = abs(pathEmitterResidual(defaults, 12.0, straight) - 0.4375) < 1e-6
+        && abs(pathEmitterResidual(defaults, 18.0, straight) - 0.80859375) < 1e-6
+        && pathEmitterResidual(defaults, 24.0, straight) == 1.0
+        && pathEmitterResidual(defaults, 10.0 + 15.0, straight) == 1.0;
     defaults.emitterListRange = 8.0;
-    sink[6] = !pathEmitterOutsideNeeRadius(defaults, 8.05, straight)
-        && pathEmitterOutsideNeeRadius(defaults, 9.0, straight);
+    sink[6] = abs(pathEmitterResidual(defaults, 4.0, straight) - 0.4375) < 1e-6
+        && pathEmitterResidual(defaults, 9.0, straight) == 1.0;
 
     MaterialSample glass = {};
     glass.alphaMode = AlphaMode.Translucent;

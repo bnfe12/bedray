@@ -15,6 +15,21 @@ class DimensionMaterialTest {
     }
 
     @Test
+    void lavaPatternLivesInColourWhileAuthoredSpecularMapsKeepTheirMask() {
+        var lava = AutoPbr.classify("block/lava_still");
+        int[] colors = {rgba(255,180,25),rgba(80,10,0)};
+        var albedo = new MaterialRegion.Image(2, 1, colors);
+        int[] material = new int[2], normal = new int[2];
+        MaterialRegion.fill(material,normal,2,0,0,2,1,lava,albedo,null,null);
+        assertEquals((material[0] >>> 16) & 255, (material[1] >>> 16) & 255);
+        assertTrue(((material[0] >>> 16) & 255) > 0);
+        var authored = new MaterialRegion.Image(2,1,new int[]{0x00640a00,0xfe640a00});
+        MaterialRegion.fill(material,normal,2,0,0,2,1,lava,albedo,authored,null);
+        assertEquals(0,(material[0] >>> 16) & 255);
+        assertEquals(255,(material[1] >>> 16) & 255);
+    }
+
+    @Test
     void stemsEmitFromVeinsWhileBarkAndCutWoodStayDark() {
         for (int bark : new int[] {rgba(82, 24, 16), rgba(68, 33, 49), rgba(75, 39, 55), rgba(86, 44, 62)}) {
             assertEquals(0f, emission("crimson_stem", bark));

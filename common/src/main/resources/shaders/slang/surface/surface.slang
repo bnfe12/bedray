@@ -109,6 +109,7 @@ struct MaterialSamplingOptions {
     float defaultIor;         // dielectric IOR when the atlas has no optical profile
     float defaultThickness;   // slab thickness in blocks
     float waterWaveMix;       // how much of the analytic wave field a fluid face keeps: 1 realistic, WATER_WAVE_MIX_VANILLA damped
+    float pixelAngle;         // diameter of one trace pixel at unit distance; zero disables footprint filtering
     uint  flags;              // MATERIAL_SAMPLING_FLAG_*
 };
 
@@ -124,6 +125,7 @@ MaterialSamplingOptions defaultMaterialSamplingOptions() {
     // Realistic waves are the player's default (RtSettings.waterStyle), and an
     // option that never met a frame keeps the same full wave field.
     options.waterWaveMix = 1.0;
+    options.pixelAngle = 0.0;
     options.flags = MATERIAL_SAMPLING_FLAG_NORMAL_MAP |
                     MATERIAL_SAMPLING_FLAG_MATERIAL_ATLAS |
                     MATERIAL_SAMPLING_FLAG_APPLY_TINT |
@@ -437,6 +439,19 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
     } else {
         // Triangle: sample the block atlas at the interpolated UV.
         float4 albedoTexel = atlas.albedo.SampleLevel(hit.uv, 0.0);
+        float3 emissionColor = albedoTexel.rgb;
+        // Filter opaque colour at the actual trace resolution. Alpha and material tags retain mip-0 semantics:
+        // filtered cutouts must never acquire a different silhouette or turn a dark texel into an emitter.
+        if (options.pixelAngle > 0.0 && (hit.flags & (HIT_FLAG_CUTOUT | HIT_FLAG_TRANSLUCENT)) == 0u) {
+            uint width, height, levels;
+            atlas.albedo.GetDimensions(0u, width, height, levels);
+            float texelsPerBlock = max(hit.uvDensity.x * float(width), hit.uvDensity.y * float(height));
+            float colorFootprint = length(hit.position) * options.pixelAngle
+                / max(abs(dot(rayDirection, geometricNormal)), 0.15);
+            // Minecraft's sprite mip chain is isolated through level 4; never blend neighbouring sprites above it.
+            float lod = clamp(log2(max(colorFootprint * texelsPerBlock, 1.0)), 0.0, float(min(levels - 1u, 4u)));
+            if (lod > 0.0) albedoTexel.rgb = atlas.albedo.SampleLevel(hit.uv, lod).rgb;
+        }
         float4 materialTexel = float4(0.9, 0.04, 0.0, 1.0);
         if ((options.flags & MATERIAL_SAMPLING_FLAG_MATERIAL_ATLAS) != 0u) {
             materialTexel = atlas.material.SampleLevel(hit.uv, 0.0);
@@ -448,7 +463,6 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         material.metallic = materialTexel.g > (229.0 / 255.0) ? 1.0 : 0.0;
         material.f0 = material.metallic > 0.5 ? float3(0.04) : float3(max(materialTexel.g, 0.0));
         material.emissionMask = max(materialTexel.b, 0.0);
-        material.emission = albedoTexel.rgb * material.emissionMask;
         material.ior = max(options.defaultIor, 1.0);
         material.thickness = max(options.defaultThickness, 0.0);
         material.ambientOcclusion = 1.0;
@@ -456,6 +470,8 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         // the LabPBR normal marker, bit 2 is redstone, bits 3+ are an optical
         // profile.  Do not copy that byte into MATERIAL_SOURCE_* directly.
         uint legacySourceFlags = uint(255.0 - materialTexel.a * 255.0 + 0.5);
+        material.emission = ((legacySourceFlags >> 3u) == OPTICAL_PROFILE_LAVA ? albedoTexel.rgb : emissionColor)
+            * material.emissionMask;
         material.sourceFlags = MATERIAL_SOURCE_NONE;
         if ((legacySourceFlags & 4u) != 0u) {
             material.sourceFlags |= MATERIAL_SOURCE_REDSTONE;

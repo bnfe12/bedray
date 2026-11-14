@@ -77,7 +77,7 @@ class EmissiveTexelIndexTest {
     void theLiveExtractionKeysOnTheAtlasContentVersion() throws java.io.IOException {
         String emitters = java.nio.file.Files.readString(java.nio.file.Path.of(
             "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtEmitters.java"));
-        assertTrue(emitters.contains("RtMaterialAtlas.cpuMaterialVersion());"), "extract() passes the mirror's content version");
+        assertTrue(emitters.contains("RtMaterialAtlas.cpuMaterialVersion();"), "extract() passes the mirror's content version");
         String atlas = java.nio.file.Files.readString(java.nio.file.Path.of(
             "src/main/java/io/github/andrexarlay/vulkancompat/rt/material/RtMaterialAtlas.java"));
         int bumps = atlas.split("CPU_MATERIAL_VERSION\\.incrementAndGet\\(\\);", -1).length - 1;
