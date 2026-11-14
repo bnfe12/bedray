@@ -98,19 +98,19 @@ public final class AutoPbr {
             return new Material(0.35f, 0.04f, true, 0f, Emission.NONE, "mixed_redstone_lamp");
         }
         if (n.startsWith("copper_bulb_lit") || n.matches("(exposed|weathered|oxidized)_copper_bulb_lit.*")) {
-            return new Material(0.35f, 0.04f, true, 1.0f, Emission.BRIGHT, "mixed_copper_bulb");
+            return new Material(hasCopperPatina(n) ? 0.62f : 0.35f, 0.04f, !hasCopperPatina(n), 1.0f, Emission.BRIGHT, "mixed_copper_bulb");
         }
         if (n.equals("copper_bulb") || n.matches("(exposed|weathered|oxidized)_copper_bulb.*")) {
-            return new Material(0.35f, 0.04f, true, 0f, Emission.NONE, "mixed_copper_bulb");
+            return new Material(hasCopperPatina(n) ? 0.62f : 0.35f, 0.04f, !hasCopperPatina(n), 0f, Emission.NONE, "mixed_copper_bulb");
         }
         if (n.equals("lantern")) {
             return new Material(0.35f, 0.04f, true, 1.0f, Emission.BRIGHT, "mixed_lantern");
         }
         // copper lanterns (all oxidation steps, waxed ones share the textures): copper casing, green flame
         if (n.matches("(exposed_|weathered_|oxidized_)?copper_lantern")) {
-            return new Material(0.35f, 0.04f, true, 1.0f, Emission.BRIGHT, "mixed_copper_lantern");
+            return new Material(hasCopperPatina(n) ? 0.62f : 0.35f, 0.04f, !hasCopperPatina(n), 1.0f, Emission.BRIGHT, "mixed_copper_lantern");
         }
-        // candles (lit): only the flame pixels glow, not the wax body
+        // A small cap proxy lights the raster flame; generated atlases select its model UVs, never the wax sides.
         if (n.equals("candle_lit") || n.endsWith("_candle_lit")) {
             return new Material(0.7f, 0.04f, false, 1.0f, Emission.BRIGHT, RULE_CANDLE);
         }
@@ -178,7 +178,7 @@ public final class AutoPbr {
         // ---- emissive, whole sprite ----
         if (n.equals("glowstone") || n.equals("sea_lantern") || n.equals("beacon")
             || n.endsWith("froglight_top") || n.endsWith("froglight_side")
-            || n.startsWith("fire_") || n.startsWith("soul_fire_")) {
+            || n.equals("fire_0") || n.equals("fire_1") || n.equals("soul_fire_0") || n.equals("soul_fire_1")) {
             return new Material(0.6f, 0.04f, false, 1.0f, Emission.WHOLE, "emissive_whole");
         }
         if (n.startsWith("lava_")) {
@@ -221,6 +221,15 @@ public final class AutoPbr {
             return new Material(0.85f, 0.04f, false, 0.25f, Emission.BRIGHT, RULE_ENCHANTING_TABLE);
         }
         // ---- emissive, bright pixels only ----
+        if (n.equals("glow_lichen")) {
+            return new Material(0.90f, 0.04f, false, 0.35f, Emission.WHOLE, "lichen_glow");
+        }
+        if (n.equals("open_eyeblossom_emissive")) {
+            return new Material(0.90f, 0.04f, false, 0.65f, Emission.WHOLE, "eyeblossom_eyes");
+        }
+        if (n.equals("jack_o_lantern")) {
+            return new Material(0.85f, 0.04f, false, 1f, Emission.BRIGHT, "pumpkin_windows");
+        }
         if (n.equals("torch") || n.equals("soul_torch") || n.equals("redstone_torch")
             || n.equals("jack_o_lantern")
             || n.equals("glow_lichen") || n.equals("crying_obsidian") || n.equals("respawn_anchor_top")
@@ -244,6 +253,18 @@ public final class AutoPbr {
         }
         if (n.equals("netherite_block")) {
             return new Material(0.4f, 0.04f, true, 0f, Emission.NONE, "metal_netherite");
+        }
+        if (n.equals("bell") || n.startsWith("bell_")) {
+            return new Material(0.30f, 0.04f, true, 0f, Emission.NONE, "metal_bell");
+        }
+        if (isRail(n) || n.equals("tripwire_hook") || n.equals("stonecutter_saw")) {
+            return new Material(0.82f, 0.04f, false, 0f, Emission.NONE, "mixed_hardware");
+        }
+        if (n.equals("lightning_rod") || n.equals("lightning_rod_on")) {
+            return new Material(0.35f, 0.04f, true, 0f, Emission.NONE, "metal_copper");
+        }
+        if (hasCopperPatina(n) && n.contains("lightning_rod")) {
+            return new Material(0.62f, 0.04f, false, 0f, Emission.NONE, "copper_patina");
         }
         if (n.equals("netherrack") || n.equals("soul_sand") || n.equals("soul_soil")
             || n.equals("end_stone") || n.equals("end_stone_bricks") || n.endsWith("nylium") || n.endsWith("nylium_side")) {
@@ -337,8 +358,8 @@ public final class AutoPbr {
     }
 
     /**
-     * Per-pixel emission of a lit candle sprite: the flame (near white, or saturated orange) glows, the wax body (cream / coloured,
-     * value < 0.9 or low saturation and luminance) does not.
+     * Colour-only compatibility approximation. Atlas baking uses the UV-aware pixelEmission overload: wax colour alone
+     * cannot locate the lit cap consistently across all seventeen candle colours.
      */
     public static float candleEmission(int r, int g, int b, int a) {
         if (a < 128) {
@@ -426,6 +447,7 @@ public final class AutoPbr {
             case RULE_FLAME -> flameEmission(r, g, b, a);
             case RULE_REDSTONE -> 1f; // Signal power is supplied by the quad's vertex tint on the GPU.
             case RULE_CANDLE -> candleEmission(r, g, b, a);
+            case "pumpkin_windows" -> r >= 200 && g >= 170 && g > b * 1.25f ? 1f : 0f;
             case RULE_ANCHOR -> anchorEmission(r, g, b, a);
             case RULE_END_ROD -> endRodEmission(r, g, b, a);
             case RULE_MAGMA -> magmaEmission(r, g, b, a);
@@ -453,6 +475,25 @@ public final class AutoPbr {
             default -> brightPixelEmission(r, g, b, a);
         };
         return material.emission() * mask;
+    }
+
+    /** Vanilla candle top UV [0,6,2,8] is a small warm cap proxy for its raster flame; wax sides never emit.
+     * Layout is from models/block/template_candle.json, scaled for higher-resolution textures. */
+    public static float pixelEmission(Material material, int argb, int x, int y, int width, int height) {
+        if (!RULE_CANDLE.equals(material.rule())) return pixelEmission(material, argb);
+        if (width <= 0 || height <= 0 || (argb >>> 24) < 128) return 0f;
+        float u = (x + 0.5f) * 16f / width;
+        float v = (y + 0.5f) * 16f / height;
+        return u < 2f && v >= 6f && v < 8f ? material.emission() : 0f;
+    }
+
+    private static boolean hasCopperPatina(String n) {
+        return n.startsWith("exposed_") || n.startsWith("weathered_") || n.startsWith("oxidized_");
+    }
+
+    private static boolean isRail(String n) {
+        return n.equals("rail") || n.equals("rail_corner") || n.startsWith("powered_rail")
+            || n.startsWith("detector_rail") || n.startsWith("activator_rail");
     }
 
     /**
@@ -550,7 +591,9 @@ public final class AutoPbr {
         CHAIN,
         CHEST,
         COPPER_LANTERN,
-        COPPER_PATINA
+        COPPER_PATINA,
+        RAIL,
+        IRON_HARDWARE
     }
 
     public static MixedKind mixedKind(String spritePath) {
@@ -579,7 +622,7 @@ public final class AutoPbr {
         if (n.contains("redstone_lamp")) {
             return MixedKind.REDSTONE_LAMP;
         }
-        if ((n.startsWith("exposed_") || n.startsWith("weathered_") || n.startsWith("oxidized_")) && n.contains("copper")) {
+        if (hasCopperPatina(n) && (n.contains("copper") || n.contains("lightning_rod"))) {
             return MixedKind.COPPER_PATINA;
         }
         if (n.startsWith("cauldron")) {
@@ -597,6 +640,8 @@ public final class AutoPbr {
         if (n.equals("chain") || n.equals("iron_chain")) {
             return MixedKind.CHAIN;
         }
+        if (isRail(n)) return MixedKind.RAIL;
+        if (n.equals("tripwire_hook") || n.equals("stonecutter_saw")) return MixedKind.IRON_HARDWARE;
         return MixedKind.NONE;
     }
 
@@ -624,17 +669,19 @@ public final class AutoPbr {
                 // Frame and chains are neutral grey / dark metallic (sat < 0.25, lum < 0.75)
                 return sat < 0.25f && lum < 0.75f;
             case COPPER_LANTERN:
-                // everything that does not glow is copper casing / chain (the green flame is excluded by isEmissiveTexel)
-                return !isEmissiveTexel(argb, kind);
+                return !isEmissiveTexel(argb, kind) && r > g * 1.12f && g > b * 1.05f && sat > 0.18f;
             case COPPER_PATINA:
                 // Bare reddish copper reflects as metal; green/blue corrosion is a rough dielectric coating.
                 return r > g * 1.12f && g > b * 1.05f && sat > 0.18f;
             case COPPER_BULB:
-                // Copper casing (reddish-orange or weathered/oxidized turquoise) or dark metal border
-                boolean isCopper = (r > g && g >= b * 0.75f && sat > 0.18f)
-                    || (g > r && b > r * 0.7f && sat > 0.15f);
+                // Warm exposed copper and neutral dark hardware are metallic; blue-green corrosion is dielectric.
+                boolean isCopper = r > g * 1.12f && g > b * 1.05f && sat > 0.18f;
                 boolean isDarkMetal = sat < 0.25f && lum < 0.55f;
                 return isCopper || isDarkMetal;
+            case RAIL:
+                return sat < 0.20f || (r > 0.45f && g > r * 0.78f && b < g * 0.40f);
+            case IRON_HARDWARE:
+                return sat < 0.25f;
             case REDSTONE_LAMP:
                 // Border frame is dark metallic rim / casing
                 return lum < 0.45f && sat < 0.35f;
@@ -648,6 +695,24 @@ public final class AutoPbr {
             default:
                 return false;
         }
+    }
+
+    /** The bulb's four glass apertures do not become metal when their lit texture turns orange. */
+    public static boolean isMetalTexel(int argb, MixedKind kind, int x, int y, int w, int h) {
+        return !(kind == MixedKind.COPPER_BULB && bulbWindow(x, y, w, h)) && isMetalTexel(argb, kind);
+    }
+
+    public static boolean isEmissiveTexel(int argb, MixedKind kind, int x, int y, int w, int h) {
+        return (kind != MixedKind.COPPER_BULB || bulbWindow(x, y, w, h)) && isEmissiveTexel(argb, kind);
+    }
+
+    static boolean bulbWindow(int x, int y, int w, int h) {
+        if (w <= 0 || h <= 0) return false;
+        int u = (int) ((x + .5f) * 16 / w), v = (int) ((y + .5f) * 16 / h);
+        // Vanilla copper_bulb's four apertures, shared by all oxidation/power variants and scaled with the sprite.
+        if ((v >= 1 && v <= 3) || (v >= 12 && v <= 14)) return (u >= 4 && u <= 6) || (u >= 9 && u <= 11);
+        if ((v >= 4 && v <= 6) || (v >= 9 && v <= 11)) return (u >= 1 && u <= 6) || (u >= 9 && u <= 14);
+        return false;
     }
 
     /**
@@ -675,8 +740,7 @@ public final class AutoPbr {
                 return mx >= 0.68f && g >= r * 0.98f;
             }
             case COPPER_BULB:
-                return lum > 0.55f && (brightPixelEmission((argb >>> 16) & 255, (argb >>> 8) & 255, argb & 255, (argb >>> 24) & 255) > 0.05f
-                    || (r > 0.6f && g > 0.5f));
+                return r >= 200f / 255f && g >= 160f / 255f && r > b * 1.25f && g > b * 1.12f && g <= r * 1.05f;
             case REDSTONE_LAMP:
                 return brightPixelEmission((argb >>> 16) & 255, (argb >>> 8) & 255, argb & 255, (argb >>> 24) & 255) > 0.05f
                     || (lum > 0.48f && r > 0.55f);

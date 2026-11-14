@@ -123,11 +123,11 @@ public final class MaterialRegion {
             int a = (c >>> 24) & 255;
             float e = 0f;
             if (mixed != AutoPbr.MixedKind.NONE && auto.emission() > 0f) {
-                e = AutoPbr.isEmissiveTexel(c, mixed) ? 1.0f : 0f;
+                e = AutoPbr.isEmissiveTexel(c, mixed, i % w, i / w, w, h) ? 1.0f : 0f;
             } else if (auto.emissionMode() == AutoPbr.Emission.WHOLE) {
                 e = a < 128 ? 0f : wholeMaskEmission(auto, AutoPbr.smoothstep(lumLo, lumHi, luminance(c)), luminance(c) / Math.max(lumHi, 1.0e-4f));
             } else if (auto.emissionMode() == AutoPbr.Emission.BRIGHT) {
-                e = AutoPbr.pixelEmission(auto, c);
+                e = AutoPbr.pixelEmission(auto, c, i % w, i / w, w, h);
             }
             mask[i] = e;
             any |= e > 0f;
@@ -230,7 +230,7 @@ public final class MaterialRegion {
                     mat = LabPbr.materialFromSpecular((s >>> 16) & 255, (s >>> 8) & 255, s & 255, (s >>> 24) & 255);
                 } else {
                     float e = 0f;
-                    boolean isEmissive = auto.emission() > 0f && AutoPbr.isEmissiveTexel(c, mixed);
+                    boolean isEmissive = auto.emission() > 0f && AutoPbr.isEmissiveTexel(c, mixed, x, y, w, h);
 
                     if (mixed != AutoPbr.MixedKind.NONE && auto.emission() > 0f) {
                         if (isEmissive) {
@@ -243,7 +243,7 @@ public final class MaterialRegion {
                                 : wholeMaskEmission(auto, AutoPbr.smoothstep(lumLo, lumHi, luminance(c)), luminance(c) / Math.max(lumHi, 1.0e-4f));
                         }
                     } else if (auto.emissionMode() == AutoPbr.Emission.BRIGHT && albedo != null) {
-                        e = AutoPbr.pixelEmission(auto, c);
+                        e = AutoPbr.pixelEmission(auto, c, x, y, w, h);
                     }
                     mat = LabPbr.materialFromAuto(auto, e);
                     if (perPixel) {
@@ -336,13 +336,15 @@ public final class MaterialRegion {
                                     metal = false;
                                     rough = 0.5f;
                                     f0 = 0.04f;
-                                } else if (opts.metallic() && AutoPbr.isMetalTexel(c, mixed)) {
+                                } else if (opts.metallic() && AutoPbr.isMetalTexel(c, mixed, x, y, w, h)) {
                                     metal = true;
                                     rough = 0.35f;
                                 } else {
                                     metal = false;
-                                    rough = (mixed == AutoPbr.MixedKind.COPPER_BULB || mixed == AutoPbr.MixedKind.REDSTONE_LAMP) ? 0.45f
-                                          : (mixed == AutoPbr.MixedKind.CHEST ? 0.85f : 0.7f);
+                                    rough = mixed == AutoPbr.MixedKind.COPPER_BULB
+                                        ? (AutoPbr.bulbWindow(x, y, w, h) ? 0.45f : auto.roughness())
+                                        : mixed == AutoPbr.MixedKind.REDSTONE_LAMP ? 0.45f
+                                        : mixed == AutoPbr.MixedKind.CHEST ? 0.85f : 0.7f;
                                     f0 = 0.04f;
                                 }
                             }
