@@ -449,6 +449,10 @@ public final class FrameGenRuntime {
                 worldFail = "raster_guides_missing_current_frame";
                 return;
             }
+            if (!WorldTargetManager.hasCurrentWorldColor()) {
+                worldFail = "world_color_missing_current_frame";
+                return;
+            }
             if (world == null || (!rrFrame && (depthCopy == null || mvTarget == null)) || main == null) {
                 worldFail = "missing_targets";
                 if (!unsupportedLogged) {
@@ -533,7 +537,7 @@ public final class FrameGenRuntime {
                 validFrames++;
                 sendFrameGenConstants(sl);
                 tag(sl);
-                want = allowed && validFrames > WARMUP_FRAMES;
+                want = validFrames > WARMUP_FRAMES;
             } else {
                 validFrames = 0;
                 clearTags(sl);

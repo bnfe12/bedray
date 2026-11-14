@@ -405,6 +405,10 @@ public final class Fsr3FrameGen {
                 worldFail = "raster_guides_missing_current_frame";
                 return;
             }
+            if (!WorldTargetManager.hasCurrentWorldColor()) {
+                worldFail = "world_color_missing_current_frame";
+                return;
+            }
             if (world == null || (!rrFrame && (depthCopy == null || mvTarget == null)) || main == null) {
                 worldFail = "missing_targets";
                 return;
