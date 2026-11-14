@@ -15,13 +15,14 @@ selects the old build policy when the scene is created, for an A/B comparison.
 
 ## BLAS and published attributes
 
-An entity with unchanged topology may refit only when its previous BLAS has no
-outstanding readers. If it is still pinned, native builds a separate BLAS from
-the current capture and publishes that generation's address immediately. It no
-longer defers the geometry while the host shades current UV/material/position
-attributes. Old BLAS and buffers retain their exact completion lifetimes. Changes
-in shape/topology, unavailable update capability or non-finite positions force
-full builds. Non-finite current/previous positions cannot cross Vulkan's
+An entity can refit its current BLAS after outstanding readers have finished.
+While that BLAS is pinned, the scene can refit a spare for the same topology.
+The scene retains at most one spare per entity. It comes from retired BLAS
+once all frame and cached TLAS references have cleared. While the spare warms
+up, the scene builds a new BLAS from the current capture. Both paths publish the
+current geometry before tracing. A native index snapshot guards refits against
+changed indices with a reused topology revision. Shape or topology changes,
+unavailable update capability or non-finite positions force full builds. Non-finite current/previous positions cannot cross Vulkan's
 active/inactive primitive boundary through UPDATE. Static sections retain full
 builds and do not request unnecessary ALLOW_UPDATE storage.
 
@@ -57,4 +58,5 @@ The actual old/new core probe returned ABI 2 with features 0/1 respectively.
 builds/updates, copy-on-write frames, deferred updates and entity topology revision.
 These are work counts, not GPU timings. RTX image/validation-layer checks,
 residency under the owner's gameplay and native 1080p/60 remain unmeasured.
-Pipelined entity BLAS reuse beyond safe COW remains separate work.
+The native scene suite also covers steady refits with two frames in flight,
+unchanged revisions with reordered indices, and releasing the spare on removal.

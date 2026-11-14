@@ -128,8 +128,10 @@ struct GeometryJob {
     Entity* entity = nullptr;
     const PendingMesh* mesh = nullptr;
     GeometryResource* previous = nullptr;
-    bool refit = false;
+    Acceleration* refit_target = nullptr;
     bool finite_positions = false;
+    bool recycle_previous_blas = false;
+    std::shared_ptr<const std::vector<uint8_t>> topology_indices;
     std::unique_ptr<GeometryResource> created;
     uint64_t build_scratch = 0;
     uint64_t update_scratch = 0;
@@ -286,6 +288,15 @@ void collect_garbage(Scene& scene) {
         if (can_collect(scene, it->after_frame)
                 && !blas_referenced_by_outstanding(scene, it->acceleration.handle)
                 && !blas_referenced_by_cached_tlas(scene, it->acceleration.handle)) {
+            if (it->topology_indices) {
+                auto entity = scene.entities.find(it->entity_id);
+                if (entity != scene.entities.end()
+                        && entity->second.topology_indices == it->topology_indices
+                        && entity->second.finite_positions
+                        && entity->second.spare_blas.handle == VK_NULL_HANDLE) {
+                    entity->second.spare_blas = std::exchange(it->acceleration, Acceleration{});
+                }
+            }
             destroy_acceleration(scene, it->acceleration);
             it = scene.retired_accelerations.erase(it);
         } else {
@@ -635,7 +646,7 @@ bool build_job_resource(Scene& scene, GeometryJob& job, BedraySceneError* error)
     const BlasView view = blas_view(mesh, created->gpu, index_offset, job.is_section);
     uint64_t storage_size = 0;
     BlasView sized_view = view;
-    if (job.is_section && !job.refit) {
+    if (job.is_section) {
         uint32_t slot = 0;
         if (alloc_compaction_slot(scene, slot)) {
             job.compaction_query = slot;
@@ -650,7 +661,7 @@ bool build_job_resource(Scene& scene, GeometryJob& job, BedraySceneError* error)
         destroy_buffer(scene, created->gpu);
         return false;
     }
-    if (!job.refit) {
+    if (job.refit_target == nullptr) {
         if (!create_acceleration_object(scene, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
                 storage_size, created->blas, error)) {
             if (job.compaction_query != UINT32_MAX) {
@@ -724,7 +735,6 @@ bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
         job.section = &section;
         job.mesh = &section.pending;
         job.previous = section.geometry.get();
-        job.refit = false;
         plan.jobs.push_back(std::move(job));
         if (!build_job_resource(scene, plan.jobs.back(), error)) {
             return false;
@@ -757,22 +767,33 @@ bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
             && entity.vertex_stride == mesh.vertex_stride
             && entity.index_type == mesh.index_type;
 
+        const bool same_topology = can_refit && job.previous != nullptr && same_shape && !topology_changed
+            && entity.topology_indices && *entity.topology_indices == mesh.indices;
+        if (can_refit) {
+            job.topology_indices = same_topology ? entity.topology_indices
+                : std::make_shared<const std::vector<uint8_t>>(mesh.indices);
+        }
         job.finite_positions = finite_positions(mesh);
-        // UPDATE cannot change active/inactive primitives. Non-finite inputs keep the full-build path.
-        const bool refit_eligible = job.previous != nullptr && !topology_changed && can_refit && same_shape
-            && entity.finite_positions && job.finite_positions;
-        const bool pinned_refit = refit_eligible && blas_referenced_by_outstanding(scene, job.previous->blas.handle);
-        const bool refit = refit_eligible && !pinned_refit;
-        job.refit = refit;
+        // UPDATE requires unchanged indices and cannot change active or inactive primitives.
+        job.recycle_previous_blas = same_topology && entity.finite_positions && job.finite_positions;
+        const bool pinned = job.recycle_previous_blas && blas_referenced_by_outstanding(scene, job.previous->blas.handle);
+        if (job.recycle_previous_blas) {
+            if (!pinned) {
+                job.refit_target = &job.previous->blas;
+            } else if (entity.spare_blas.handle != VK_NULL_HANDLE) {
+                job.refit_target = &entity.spare_blas;
+            }
+        }
+        const bool refit = job.refit_target != nullptr;
         plan.jobs.push_back(std::move(job));
         if (!build_job_resource(scene, plan.jobs.back(), error)) return false;
         if (refit) {
             plan.blas_refits++;
         } else {
             plan.blas_rebuilds++;
-            plan.blas_copy_on_write |= pinned_refit;
+            plan.blas_copy_on_write |= pinned;
         }
-        // Never shade current host attributes with an older, deferred BLAS. A pinned refit becomes a COW build.
+        // The TLAS must reference the geometry from this capture, including when an older frame pins the previous BLAS.
         tlas_changed = true;
     }
 
@@ -797,7 +818,7 @@ struct GeometryRef {
    vertex/index buffer, so instances must reference the previous BLAS. */
 GeometryRef planned_geometry(const GeometryResource* committed, const GeometryJob* job, const CompactionCopy* compaction) {
     if (job != nullptr) {
-        const auto& blas = job->refit ? job->previous->blas : job->created->blas;
+        const auto& blas = job->refit_target ? *job->refit_target : job->created->blas;
         return { blas.address, blas.handle, job->created->vertex_address };
     }
     if (compaction != nullptr) {
@@ -1117,7 +1138,7 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, BedraySceneErro
 bool plan_blas_scratch(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
     uint64_t total = 0;
     for (GeometryJob& job : plan.jobs) {
-        uint64_t size = align_up(job.refit ? job.update_scratch : job.build_scratch,
+        uint64_t size = align_up(job.refit_target ? job.update_scratch : job.build_scratch,
             scene.scratch_alignment);
         if (size == 0) {
             size = scene.scratch_alignment;
@@ -1196,11 +1217,19 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
         barriers.clear();
     }
 
+    if (plan.blas_refits != 0) {
+        // Completion frees a refit destination for writing. Make its earlier AS writes visible to UPDATE.
+        record_memory_barrier(scene, command_buffer,
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+            VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+    }
     for (const GeometryJob& job : plan.jobs) {
         const uint64_t scratch_address = plan.blas_scratch.address + job.scratch_offset;
-        if (job.refit) {
-            record_blas_build(scene, command_buffer, blas_view_of(job), job.previous->blas.handle,
-                job.previous->blas.handle, true, scratch_address);
+        if (job.refit_target != nullptr) {
+            record_blas_build(scene, command_buffer, blas_view_of(job), job.refit_target->handle,
+                job.refit_target->handle, true, scratch_address);
         } else {
             record_blas_build(scene, command_buffer, blas_view_of(job), job.created->blas.handle,
                 VK_NULL_HANDLE, false, scratch_address);
@@ -1343,19 +1372,11 @@ void commit_plan(
     for (GeometryJob& job : plan.jobs) {
         if (job.is_section) {
             Section& section = *job.section;
-            if (job.refit) {
+            if (section.geometry) {
                 scene.retired_buffers.push_back({ section.geometry->gpu, retire_after });
-                section.geometry->gpu = job.created->gpu;
-                section.geometry->vertex_address = job.created->vertex_address;
-                section.geometry->index_address = job.created->index_address;
-                job.created->gpu = Buffer{};
-            } else {
-                if (section.geometry) {
-                    scene.retired_buffers.push_back({ section.geometry->gpu, retire_after });
-                    scene.retired_accelerations.push_back({ section.geometry->blas, retire_after });
-                }
-                section.geometry = std::move(job.created);
+                scene.retired_accelerations.push_back({ section.geometry->blas, retire_after });
             }
+            section.geometry = std::move(job.created);
             section.revision = job.mesh->geometry_revision;
             section.vertex_count = job.mesh->vertex_count;
             section.index_count = job.mesh->index_count;
@@ -1374,19 +1395,21 @@ void commit_plan(
             }
         } else {
             Entity& entity = *job.entity;
-            if (job.refit) {
-                scene.retired_buffers.push_back({ entity.geometry->gpu, retire_after });
-                entity.geometry->gpu = job.created->gpu;
-                entity.geometry->vertex_address = job.created->vertex_address;
-                entity.geometry->index_address = job.created->index_address;
-                job.created->gpu = Buffer{};
-            } else {
-                if (entity.geometry) {
-                    scene.retired_buffers.push_back({ entity.geometry->gpu, retire_after });
-                    scene.retired_accelerations.push_back({ entity.geometry->blas, retire_after });
-                }
-                entity.geometry = std::move(job.created);
+            if (job.refit_target != nullptr) {
+                job.created->blas = std::exchange(*job.refit_target, Acceleration{});
             }
+            if (entity.geometry) {
+                scene.retired_buffers.push_back({ entity.geometry->gpu, retire_after });
+                if (entity.geometry->blas.handle != VK_NULL_HANDLE) {
+                    scene.retired_accelerations.push_back({ entity.geometry->blas, retire_after, entity.id,
+                        job.recycle_previous_blas ? entity.topology_indices : nullptr });
+                }
+            }
+            if (entity.topology_indices != job.topology_indices || !job.finite_positions) {
+                destroy_acceleration(scene, entity.spare_blas);
+            }
+            entity.topology_indices = std::move(job.topology_indices);
+            entity.geometry = std::move(job.created);
             entity.geometry_revision = job.mesh->geometry_revision;
             entity.topology_revision = job.mesh->topology_revision;
             entity.vertex_count = job.mesh->vertex_count;
@@ -1788,6 +1811,7 @@ void apply_entities(
             scene.retired_buffers.push_back({ it->second.geometry->gpu, retire_after });
             scene.retired_accelerations.push_back({ it->second.geometry->blas, retire_after });
         }
+        destroy_acceleration(scene, it->second.spare_blas);
         scene.entities.erase(it);
         scene.membership_changed = true;
     }
@@ -2359,6 +2383,7 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_destroy(Bedray
             }
         }
         for (auto& [id, entity] : impl.entities) {
+            destroy_acceleration(impl, entity.spare_blas);
             if (entity.geometry) {
                 destroy_geometry(impl, *entity.geometry);
                 entity.geometry.reset();
