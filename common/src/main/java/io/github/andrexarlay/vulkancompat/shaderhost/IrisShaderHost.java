@@ -121,6 +121,10 @@ public final class IrisShaderHost implements ShaderHost {
         this.activeFolder = graph == null ? "" : graph.folder();
     }
 
+    public void setActiveFullGraphForTesting(IrisPassGraph.FullResult full) {
+        this.activeFullGraph = full;
+    }
+
     /** Releases the compiled pass graphs and cached probe state. */
     public void teardown() {
         graphs = Map.of();

@@ -94,18 +94,30 @@ public final class IrisFrameHook {
                         VulkanCommandEncoder encoder = device.createCommandEncoder();
                         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
                         VkBarriers.fullMemoryBarrier(cmd);
-                        recorded = IrisRenderBridge.render(cmd, host, colorImage, colorView, depthView, width, height,
-                            camera, levelState, IrisRenderBridge.frameTimeCounter(), IrisRenderBridge.frameCounter(),
-                            cam.near(), cam.far(), IrisRenderBridge.frameTime());
-                        if (recorded) {
-                            VkBarriers.fullMemoryBarrier(cmd);
-                            RtFailure.check(VK10.vkEndCommandBuffer(cmd), "iris_end_command_buffer");
-                            encoder.execute(cmd);
-                            reason = null;
-                        } else {
-                            reason = "executor_failed";
-                            failureReason = "Iris executor could not record the frame";
-                        }
+                        IrisRenderBridge.RenderOutcome outcome = IrisRenderBridge.renderWithOutcome(cmd, host, colorImage,
+                            colorView, depthView, width, height, camera, levelState, IrisRenderBridge.frameTimeCounter(),
+                            IrisRenderBridge.frameCounter(), cam.near(), cam.far(), IrisRenderBridge.frameTime());
+                        reason = switch (outcome) {
+                            case RECORDED -> {
+                                VkBarriers.fullMemoryBarrier(cmd);
+                                RtFailure.check(VK10.vkEndCommandBuffer(cmd), "iris_end_command_buffer");
+                                encoder.execute(cmd);
+                                recorded = true;
+                                yield null;
+                            }
+                            case SKIPPED -> {
+                                // No gbuffers geometry this frame (capture warmup). Leave the engine image untouched and
+                                // retry next frame; this is NOT a failure, so the host is not disabled for the session.
+                                RtFailure.check(VK10.vkEndCommandBuffer(cmd), "iris_end_command_buffer_skip");
+                                recorded = false;
+                                yield "no_geometry";
+                            }
+                            case FAILED -> {
+                                recorded = false;
+                                failureReason = "Iris executor could not record the frame";
+                                yield "executor_failed";
+                            }
+                        };
                     } catch (RuntimeException | LinkageError error) {
                         recorded = false;
                         reason = "exception:" + error.getClass().getSimpleName();
