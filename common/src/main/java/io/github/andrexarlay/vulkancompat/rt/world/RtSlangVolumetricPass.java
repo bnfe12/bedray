@@ -71,7 +71,7 @@ final class RtSlangVolumetricPass implements AutoCloseable {
             float aerialSigma = RtAerialFog.sigma(RtAtmosphereSettings.fogAerial(), renderDistanceBlocks(), rainOf(p), p.key.dir[1],
                 p.cameraInWater);
             fillPush(march, apply, p, steps, strength, range, aerialSigma,
-                RtAerialFog.packedColor(p.skyColor, p.key.color, p.key.dir[1]));
+                RtAerialFog.pack(RtAerialFog.packedColor(p.skyColor, p.key.color, p.key.dir[1]), p.cameraY));
             int flags = BedrayVolumetricNative.NATIVE_SCENE
                 | (reset || settingsHash != hash ? BedrayVolumetricNative.RESET_HISTORY : 0);
             pass.record(cmd.address(), views.output(), views.depth(), views.tlas(), views.table().handle(), views.table().bytes(),

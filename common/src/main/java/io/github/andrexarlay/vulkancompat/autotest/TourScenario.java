@@ -23,6 +23,9 @@ import java.util.Random;
  */
 public final class TourScenario implements AutotestScenario {
     public static final String SEED_PROPERTY = "vkrtx.autotest.tourSeed";
+    /** {@code -Dvkrtx.autotest.tourLate=true}: after every shot wait {@link #LATE_SECONDS} and take the same view again ({@code *_late.png}). */
+    private static final boolean LATE = Boolean.getBoolean("vkrtx.autotest.tourLate");
+    private static final double LATE_SECONDS = 12.0;
 
     /** biome, time of day (ticks), weather, pitch (degrees, positive looks down), idea of the shot. */
     private record Stop(ResourceKey<Biome> biome, int time, String weather, float pitch, String idea) { }
@@ -120,7 +123,15 @@ public final class TourScenario implements AutotestScenario {
                 ScenarioTime.waitSeconds(ctx, 16.0, () -> ctx.waitFrames(90, () -> {
                     String file = "%02d_%s_t%d_%s.png".formatted(index, actual, s.time(), s.weather());
                     ctx.log("scenario", name(), "stop", String.valueOf(index), "event", "shoot", "pass", String.valueOf(RtFrameRenderer.lastPassMode()));
-                    ctx.shot(file, () -> stop(ctx, random, index + 1, found + 1));
+                    ctx.shot(file, () -> {
+                        if (!LATE) {
+                            stop(ctx, random, index + 1, found + 1);
+                            return;
+                        }
+                        // second shot of the same view after more time: shows what is still being built or faded in
+                        ScenarioTime.waitSeconds(ctx, LATE_SECONDS, () -> ctx.shot(file.replace(".png", "_late.png"),
+                            () -> stop(ctx, random, index + 1, found + 1)));
+                    });
                 }));
             });
         });
