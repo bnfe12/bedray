@@ -1514,9 +1514,9 @@ public final class RtFrameRenderer {
         }
     }
 
-    /** True when this frame's denoiser layout consumes {@code entity_motion_px}; both of them read it as IN_MV input. */
+    /** Plan IN_MV storage from the requested layout, before the denoiser owner is created during resource preflight. */
     private static boolean wantsEntityMotion() {
-        return (denoiser != null || dlssRrDenoiser != null) && !Boolean.getBoolean("vkrtx.entityMotion.off");
+        return (denoiseMode.isNrd() || denoiseMode.isDlssRr()) && !Boolean.getBoolean("vkrtx.entityMotion.off");
     }
 
     private static boolean wantsWorldMotion() {
