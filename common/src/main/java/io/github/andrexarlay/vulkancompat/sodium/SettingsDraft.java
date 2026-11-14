@@ -29,20 +29,26 @@ final class SettingsDraft {
     record RuntimeStatus(Badge badge, Component reason) {
         Component text() { return Component.translatable("bedray.settings.status." + badge.name().toLowerCase(Locale.ROOT)).copy().append(": ").append(reason); }
     }
-    enum Category { OVERVIEW, UPSCALING, LIGHTING, WORLD, PRESETS, SYSTEM;
+    enum Category { OVERVIEW, UPSCALING, LIGHTING, WORLD, EFFECTS, PRESETS, SYSTEM;
         Component title() { return Component.translatable("bedray.settings.category." + name().toLowerCase(Locale.ROOT)); }
     }
     record Entry(String path, SettingsCatalog.Info info, StatefulOption<?> option, Category category, String searchText) {}
 
     private static final List<String> PRIMARY_ROWS = List.of(
-        "renderer", "shader_host", "path_quality_profile", "voxel_quality_profile",
+        "renderer", "shader_host", "path_quality_profile", "voxel_quality_profile", "self_shadow",
         "upscaler_backend", "quality_preset", "custom_scale", "dlss_mode", "dlss_custom_scale", "xess_mode",
         "xess_custom_scale", "fsr_mode", "fsr_custom_scale", "fsr1_mode", "fsr1_custom_scale", "nis_custom_scale",
         "path_denoiser", "frame_generation_mode", "frame_generation_provider", "frame_generation_status",
         "frame_generation_reflex", "frame_generation_limit",
-        "dlss_rr_preset", "dlss_sr_preset", "fsr_sharpness",
-        "path_spp", "path_bounces", "path_distance", "adaptive_quality",
-        "water_style", "auto_normals", "point_sampling_sharpness", "texture_lod_bias_offset"
+        "dlss_rr_preset", "dlss_sr_preset", "fsr_sharpness", "fsr1_sharpness", "nis_sharpness",
+        "path_spp", "path_bounces", "path_distance", "adaptive_quality", "sun_size_tenths", "sun_tilt_deg",
+        "water_style", "auto_normals", "auto_normal_strength", "point_sampling_sharpness", "texture_lod_bias_offset",
+        "path_auto_exposure", "path_exposure_ev", "tonemapper", "vibrant_visuals",
+        "atm_bloom", "atm_bloom_strength", "atm_bloom_threshold", "atm_bloom_scatter",
+        "atm_godrays", "atm_godrays_strength", "atm_godrays_quality", "atm_godrays_range",
+        "atm_sunglare", "atm_sunglare_strength",
+        "rt_fog", "rt_fog_density", "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_aerial", "atm_fog_vanilla", "atm_chunk_fade",
+        "vignette", "film_grain"
     );
 
     static int rowOrder(String path) {
@@ -269,7 +275,10 @@ final class SettingsDraft {
         if (p.equals("path_quality_profile") && !hasQualityProfile()) return false;
         if (p.startsWith("voxel_") || p.startsWith("compute_")) return voxel() && !e.option().shouldHideControl();
         if (p.equals("dlss_rr_preset") && !e.option().isEnabled()) return false;
-        if (p.endsWith("custom_scale") && !e.option().isEnabled()) return false;
+        if ((p.endsWith("custom_scale") || Set.of("fsr_sharpness", "fsr1_sharpness", "nis_sharpness",
+                "atm_bloom_threshold", "atm_bloom_scatter", "atm_godrays_quality", "atm_godrays_range", "atm_sunglare_strength",
+                "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_vanilla", "auto_normal_strength").contains(p))
+                && !e.option().isEnabled()) return false;
         if (!voxel()) return !e.option().shouldHideControl();
         return Set.of("renderer", "renderer_status", "quality_preset", "custom_scale", "debug_overlay", "ui_expert").contains(p)
             && !e.option().shouldHideControl();
@@ -284,9 +293,11 @@ final class SettingsDraft {
         if (p.contains("mode") && (p.startsWith("dlss") || p.startsWith("fsr") || p.startsWith("xess"))
             || p.startsWith("upscaler") || p.startsWith("frame_generation") || p.startsWith("fsr_")
             || p.endsWith("custom_scale") || Set.of("quality_preset", "dlss_sr_preset", "path_denoiser",
-                "dlss_rr_preset").contains(p)) return Category.UPSCALING;
-        if (p.startsWith("atm_") || p.startsWith("water_") || p.startsWith("waving_") || p.startsWith("auto_normal")
-            || p.startsWith("texture_") || p.startsWith("rt_fog") || Set.of("point_sampling_sharpness",
+                "dlss_rr_preset", "fsr1_sharpness", "nis_sharpness").contains(p)) return Category.UPSCALING;
+        if (p.startsWith("atm_") || p.startsWith("rt_fog") || Set.of("path_auto_exposure", "path_exposure_ev",
+                "tonemapper", "vibrant_visuals", "vignette", "film_grain").contains(p)) return Category.EFFECTS;
+        if (p.startsWith("water_") || p.startsWith("waving_") || p.startsWith("auto_normal")
+            || p.startsWith("texture_") || Set.of("point_sampling_sharpness", "rt_particles", "rt_weather",
                 "rays_optical_materials", "rays_cull_shared_glass", "rays_direct_translucent_shadows",
                 "rays_indirect_translucent_shadows").contains(p)) return Category.WORLD;
         return Category.LIGHTING;
@@ -404,6 +415,7 @@ final class SettingsDraft {
     private static String key(String path) {
         return switch (path) {
             case "upscaler_backend" -> "active_backend";
+            case "rt_fog_distance_scale" -> "fog_distance_scale";
             case "frame_generation_mode" -> "framegen_mode";
             case "frame_generation_provider" -> "framegen_provider";
             case "frame_generation_reflex" -> "reflex_mode";
@@ -413,7 +425,11 @@ final class SettingsDraft {
     }
 
     private static boolean fractional(String p) {
-        return p.equals("fsr_sharpness") || p.equals("texture_lod_bias_offset") || p.startsWith("atm_") && !p.equals("atm_godrays");
+        return switch (p) {
+            case "fsr_sharpness", "fsr1_sharpness", "nis_sharpness", "texture_lod_bias_offset", "rt_fog_distance_scale" -> true;
+            case "atm_godrays", "atm_godrays_range", "atm_godrays_quality" -> false;
+            default -> p.startsWith("atm_");
+        };
     }
 
     private static String unquote(String raw) {

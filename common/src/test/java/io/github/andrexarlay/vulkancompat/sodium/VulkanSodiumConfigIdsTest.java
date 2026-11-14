@@ -89,6 +89,10 @@ public class VulkanSodiumConfigIdsTest {
             "point_sampling_sharpness must be registered without expert UI");
         assertTrue(ids.contains(Identifier.fromNamespaceAndPath("bedray", "texture_lod_bias_offset")),
             "texture_lod_bias_offset must be registered without expert UI (the Texture style presets stage it)");
+        for (String path : List.of("sun_tilt_deg", "sun_size_tenths", "auto_normal_strength", "rt_fog_distance_scale",
+                "atm_bloom_threshold", "atm_bloom_scatter", "atm_godrays_range", "fsr1_sharpness", "nis_sharpness")) {
+            assertTrue(ids.contains(Identifier.fromNamespaceAndPath("bedray", path)), path + " is available without expert UI");
+        }
     }
 
     private static ConfigBuilder recordingBuilder(List<Identifier> ids, List<Identifier> dependencies) {

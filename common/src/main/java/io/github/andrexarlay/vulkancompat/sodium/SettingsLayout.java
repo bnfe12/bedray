@@ -13,7 +13,7 @@ record SettingsLayout(int contentX, int contentWidth, int listTop, int listBotto
 
     static SettingsLayout measure(int width, int height) {
         int contentWidth = Math.max(1, Math.min(MAX_WIDTH, width - 2 * MARGIN));
-        int columns = contentWidth >= 450 ? TAB_COUNT : 3;
+        int columns = contentWidth >= 450 ? TAB_COUNT : 4;
         int listTop = TABS_Y + Math.ceilDiv(TAB_COUNT, columns) * (CONTROL_HEIGHT + GAP) + GAP;
         int footerY = height - CONTROL_HEIGHT - MARGIN;
         return new SettingsLayout((width - contentWidth) / 2, contentWidth, listTop,

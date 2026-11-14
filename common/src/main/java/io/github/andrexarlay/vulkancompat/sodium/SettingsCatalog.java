@@ -545,19 +545,34 @@ public final class SettingsCatalog {
             "", "", "A distance setting; see its numbers.");
         putNoImage("rt_light_budget", Tier.EXPERT, "RT Light Budget", "Most important glowing block faces that cast traced light.",
             "", "", "A budget has no look of its own; too small drops far lamps, and light next to the cut flickers as lamps swap in and out.");
-        putNoImage("sun_size_tenths", Tier.EXPERT, "Sun/Moon Size", "Disk diameter in tenths of a degree (real sun about 5). Bigger means softer shadows.",
+        putNoImage("atm_chunk_fade", Tier.ADVANCED, "Terrain Fade-in",
+            "Sets how long newly visible traced terrain fades in. Zero makes it appear immediately.", "", "Hardware ray tracing.",
+            "Fade-in is visible as new terrain loads.");
+        putNoImage("sun_tilt_deg", Tier.ADVANCED, "Sun and Moon Angle",
+            "Tilts the path of the sun and moon to change the direction of shadows through the day.", "", "Hardware ray tracing.",
+            "The effect depends on the time of day.");
+        putNoImage("rt_fog_distance_scale", Tier.ADVANCED, "Fog Distance",
+            "Changes the distance over which volumetric fog builds up.", "", "Volumetric fog.",
+            "Compare fog falloff while looking across the world.");
+        putNoImage("fsr1_sharpness", Tier.ADVANCED, "FSR 1 Sharpening",
+            "Controls the RCAS filter in spatial FSR 1. Zero skips the sharpening pass.", "", "FSR 1.",
+            "Check fine textures at your selected render scale.");
+        putNoImage("nis_sharpness", Tier.ADVANCED, "NIS Sharpening",
+            "Controls sharpening in NVIDIA Image Scaling.", "", "NIS.",
+            "Check fine textures at your selected render scale.");
+        putNoImage("sun_size_tenths", Tier.ADVANCED, "Sun/Moon Size", "Disk diameter in tenths of a degree (real sun about 5). Bigger means softer shadows.",
             "", "", "Visible only as shadow softness at a moment of day; not captured.");
-        putNoImage("auto_normal_strength", Tier.EXPERT, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",
+        putNoImage("auto_normal_strength", Tier.ADVANCED, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",
             "Shares the Surface Relief screenshots.");
         putNoImage("texture_lod_bias_offset", Tier.ADVANCED, "Texture Sharpness Offset",
             "Extra mipmap bias; negative values make textures sharper (-0.2 to -0.5 suits pixel art). The automatic bias for upscalers is always on.",
             "", "", "A sub-pixel sharpness bias is not visible in a downscaled screenshot.");
-        putNoImage("atm_godrays_range", Tier.EXPERT, "Light Shaft Range", "Distance in blocks the beams are computed over.", "", "", "A range value.");
-        putNoImage("atm_bloom_threshold", Tier.EXPERT, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "", "", "Shares the Bloom screenshots.");
-        putNoImage("atm_bloom_scatter", Tier.EXPERT, "Bloom Spread", "Balance between a tight and a wide glow.", "", "", "Shares the Bloom screenshots.");
-        putNoImage("atm_sunglare_strength", Tier.EXPERT, "Sun Glare Strength", "Brightness of the sun halo.", "", "", "Shares the Sun Glare screenshots.");
-        putNoImage("atm_fog_vanilla", Tier.EXPERT, "Vanilla Fog Weight", "How much of the game's own fog is used.", "", "", "Shares the Fog screenshots.");
-        putNoImage("rt_fog_in_scattering", Tier.EXPERT, "Fog In-scattering", "Sunlight and skylight scattering through the fog.", "", "", "Shares the Fog screenshots.");
+        putNoImage("atm_godrays_range", Tier.ADVANCED, "Light Shaft Range", "Distance in blocks the beams are computed over.", "", "", "A range value.");
+        putNoImage("atm_bloom_threshold", Tier.ADVANCED, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "", "", "Shares the Bloom screenshots.");
+        putNoImage("atm_bloom_scatter", Tier.ADVANCED, "Bloom Spread", "Balance between a tight and a wide glow.", "", "", "Shares the Bloom screenshots.");
+        putNoImage("atm_sunglare_strength", Tier.ADVANCED, "Sun Glare Strength", "Brightness of the sun halo.", "", "", "Shares the Sun Glare screenshots.");
+        putNoImage("atm_fog_vanilla", Tier.ADVANCED, "Vanilla Fog Weight", "How much of the game's own fog is used.", "", "", "Shares the Fog screenshots.");
+        putNoImage("rt_fog_in_scattering", Tier.ADVANCED, "Fog In-scattering", "Sunlight and skylight scattering through the fog.", "", "", "Shares the Fog screenshots.");
         putNoImage("rt_debug_view", Tier.EXPERT, "RT Debug Buffer", "Replaces the world with an internal buffer (normals, depth, albedo...). For diagnosis only.",
             "", "", "A diagnostic view, not a look.");
         putNoImage("voxel_quality_profile", Tier.ESSENTIAL, "Voxel Quality", "Fast lowers the memory budget and turns off the diffuse bounce and layered transparent optics. Beautiful enables them. Both follow Minecraft's distance; Custom unlocks those settings. The upscaler, frame generation and lighting stay editable in every profile.", "", "Experimental renderer.", "No voxel quality comparison has been captured.");

@@ -1014,6 +1014,8 @@ public final class RtSettings {
         w.write("# Post-cinema display looks (tone-mapped image, both RT modes)\n");
         w.write("vignette = " + vignette + "\n");
         w.write("film_grain = " + filmGrain + "\n");
+        w.write("rt_particles = " + rtParticles + "\n");
+        w.write("rt_weather = " + rtWeather + "\n");
         for (Map.Entry<String, BoolSetting> e : BOOLS.entrySet()) {
             if (e.getKey().startsWith("rays_")) {
                 w.write(e.getKey() + " = " + e.getValue().get().getAsBoolean() + "\n");

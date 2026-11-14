@@ -36,5 +36,10 @@ class SettingsLayoutTest {
         assertTrue(SettingsDraft.rowOrder("frame_generation_mode") < SettingsDraft.rowOrder("dlss_rr_preset"));
         assertEquals(SettingsDraft.Category.WORLD, SettingsDraft.category("rays_indirect_translucent_shadows"));
         assertEquals(SettingsDraft.Category.SYSTEM, SettingsDraft.category("renderer_status"));
+        assertEquals(SettingsDraft.Category.EFFECTS, SettingsDraft.category("atm_bloom_threshold"));
+        assertEquals(SettingsDraft.Category.EFFECTS, SettingsDraft.category("rt_fog_distance_scale"));
+        assertEquals(SettingsDraft.Category.LIGHTING, SettingsDraft.category("sun_tilt_deg"));
+        assertEquals(SettingsDraft.Category.UPSCALING, SettingsDraft.category("nis_sharpness"));
+        assertTrue(SettingsDraft.rowOrder("atm_bloom") < SettingsDraft.rowOrder("atm_bloom_threshold"));
     }
 }
