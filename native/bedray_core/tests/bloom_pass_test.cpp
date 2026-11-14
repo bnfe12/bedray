@@ -6,14 +6,14 @@
 struct BedrayCore {};
 namespace bedray::core {
 bool program_contract(BedrayCore*, std::uint64_t handle, ProgramContract& out) noexcept {
-    if (handle < 1 || handle > 4) return false;
-    out = {128, handle == 1 || handle == 4 ? 3u : 2u};
+    if (handle < 1 || handle > 5) return false;
+    out = {128, handle == 5 ? 4u : handle == 1 || handle == 4 ? 3u : 2u};
     return true;
 }
 bool program_has_binding(BedrayCore*, std::uint64_t handle, std::uint32_t binding, std::uint32_t type) noexcept {
-    const auto dst = handle == 4 ? 2u : 1u;
+    const auto dst = handle >= 4 ? 2u : 1u;
     if (binding == dst) return type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    if (binding == 0 || (binding == 3 && (handle == 1 || handle == 4)))
+    if (binding == 0 || (binding == 3 && (handle == 1 || handle >= 4)) || (binding == 4 && handle == 5))
         return type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     return false;
 }
@@ -160,7 +160,30 @@ void device_loss_keeps_other_recordings_until_proof() {
     CHECK(pass.destroy() == BEDRAY_OK); clean();
 }
 }
+void hdr_base_reaches_the_apply_stage() {
+    fake::reset();
+    BedrayCore core;
+    BedrayError error{};
+    bedray::core::BloomPass pass;
+    auto config = configuration();
+    config.programs[3] = 5;
+    CHECK(pass.configure(&core, make_device_fns(), config, &error) == BEDRAY_OK);
+    std::array<unsigned char,128> push{};
+    auto input = frame(17, push.data());
+    input.source_view = 777;
+    CHECK(pass.render(input, &error) == BEDRAY_OK);
+    const auto& apply = fake::render_calls.back();
+    CHECK(apply.program == 5 && apply.resources.size() == 4);
+    CHECK(apply.resources[3].binding == 4 && apply.resources[3].handle == 777);
+    CHECK(apply.resources[3].sampler == 101);
+    CHECK(apply.resources[3].descriptor_type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+    CHECK(pass.release_recording(17) == BEDRAY_OK);
+    CHECK(pass.destroy() == BEDRAY_OK);
+    clean();
+}
+
 int main() {
+    hdr_base_reaches_the_apply_stage();
     chain_and_validation(); resize_discard_and_partial_failure(); device_loss_keeps_other_recordings_until_proof();
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

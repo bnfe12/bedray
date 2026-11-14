@@ -23,9 +23,12 @@ struct BloomPush {
     float4x4 invViewProj;   //   0 clip -> camera-relative world (no jitter)
     float4 sunDir;          //  64 xyz towards the key light, w glare strength (0 = off)
     float4 camOrigin;       //  80 xyz bob origin of the camera, w 1 = flip Y
-    float4 p0;              //  96 x threshold (scene units), y knee, z bloom strength, w star amount
-    float4 p1;              // 112 x 1 = image is tone mapped, y scatter, zw sun position in NDC
+    float4 p0;              //  96 x threshold (scene units), y knee, z bloom strength, w exposure of an HDR source (p1.x = 2)
+    float4 p1;              // 112 x packed integer: low 2 bits source mode (0 linear, 1 LDR, 2 HDR), next 3 tone mode; y scatter, zw sun NDC
 };
+
+uint bloomSourceMode(BloomPush pc) { return uint(max(pc.p1.x, 0.0)) & 3u; }
+uint bloomToneMode(BloomPush pc) { return (uint(max(pc.p1.x, 0.0)) >> 2u) & 7u; }
 
 static const float3 BLOOM_LUMA = float3(0.2126, 0.7152, 0.0722);
 /** Ray distance the path tracer writes for a miss: anything at or beyond it is sky. */
@@ -36,7 +39,10 @@ float bloomPeak(float3 c) {
 }
 
 float3 bloomToScene(float3 display, BloomPush pc) {
-    return pc.p1.x > 0.5 ? tonemapInverse(display) : display;
+    if (bloomSourceMode(pc) == 0u) return display;
+    // Without HDR, standard curves use a conservative display-linear glow approximation.
+    // They must never be inverted through the unrelated custom peak curve.
+    return bloomToneMode(pc) == TM_MODE_PEAK ? tonemapInverse(display) : tmDecodeSrgb(display);
 }
 
 // Soft threshold on the peak channel: 0 below threshold - knee, linear above threshold + knee, quadratic between.
@@ -64,6 +70,26 @@ bool bloomIsSky(Sampler2D depth, int2 p) {
     return depth.Load(int3(p, 0)).r >= BLOOM_SKY_DISTANCE;
 }
 
+// The bloom reads the tonemapped RGBA8 image, and the inverse curve tops out at ~4.8 scene units: a torch flame that is
+// hundreds of times brighter than the floor arrives as the same 1.0 as a lit white wall, so a scene-space threshold
+// left nothing to glow (bloom on/off differed by < 0.1 of 255 at night, autotest rt_modes A/H, 2026-11-11). A pixel the
+// tonemap pushed into its shoulder is therefore taken as clipped: its glow is the rebuilt colour times
+// BLOOM_CLIP_GAIN, ramped in from the display value of the scene threshold up to white. Bedrock RTX torches carry a
+// halo about one block wide; this is the LDR stand-in until the pass reads the HDR resolve.
+// One gain day and night: a night gain of 16 and then 6 read as a harsh star around every flame (owner, 2026-11-12).
+// The day/night split of the source is the threshold alone (RtAtmosphere lowers it without daylight).
+static const float BLOOM_CLIP_GAIN = 3.0;
+
+float3 bloomClippedSource(float3 display, BloomPush pc) {
+    float md = bloomPeak(display);
+    float t0 = bloomPeak(tonemapColorMode(float3(max(pc.p0.x, 0.05)), bloomToneMode(pc)));
+    float w = smoothstep(clamp(t0, 0.97, 0.99), 0.995, md);
+    if (w <= 0.0) {
+        return float3(0.0);
+    }
+    return bloomToScene(display, pc) * (w * BLOOM_CLIP_GAIN);
+}
+
 // One prefiltered tap of the first downsample. The sky contributes nothing, so its bright edge cannot glow.
 float3 bloomFetchPre(Sampler2D src, Sampler2D depth, float2 uv, BloomPush pc) {
     uint2 size;
@@ -72,7 +98,24 @@ float3 bloomFetchPre(Sampler2D src, Sampler2D depth, float2 uv, BloomPush pc) {
     if (bloomIsSky(depth, dp)) {
         return float3(0.0);
     }
-    return bloomPrefilter(bloomToScene(src.SampleLevel(uv, 0.0).rgb, pc), pc);
+    float3 display = src.SampleLevel(uv, 0.0).rgb;
+    if (bloomSourceMode(pc) == 2u) {
+        // The denoiser's scene-linear resolve: a lamp face or a flame keeps the brightness the tone map folds into its
+        // shoulder, so the threshold separates them from a lit wall and the glow scales with the real source (Bedrock
+        // RTX builds gBloomBuffer from the HDR frame the same way). The clipped-LDR rebuild below is the fallback of
+        // a frame without a resolve.
+        // Soft weight instead of a hard knee: a pixel at the threshold gives half its light, a lamp face nearly all of
+        // it, a lit wall a little, so the glow is the wide soft haze Bedrock RTX has around every bright area and not a
+        // rim on the few pixels above a cut (owner, 2026-11-12: "the bloom is too small, not only on torches").
+        float3 c = max(display, float3(0.0)) * max(pc.p0.w, 0.0);
+        float m = bloomPeak(c);
+        float t = max(pc.p0.x, 1.0e-3);
+        return c * (m * m / (m * m + t * t));
+    }
+    if (bloomSourceMode(pc) != 0u) {
+        return bloomClippedSource(display, pc);
+    }
+    return bloomPrefilter(display, pc);
 }
 
 // 13 tap downsample, Jimenez 2014 ("Next Generation Post Processing in Call of Duty: Advanced Warfare").
@@ -114,12 +157,10 @@ float3 bloomDown13Prefilter(Sampler2D src, Sampler2D depth, float2 uv, float2 te
     float3 g2 = (d + e + g + h) * 0.25;
     float3 g3 = (e + f + h + i) * 0.25;
     float3 g4 = (j + k + l + m) * 0.25;
-    float w0 = bloomKaris(g0) * 0.125;
-    float w1 = bloomKaris(g1) * 0.125;
-    float w2 = bloomKaris(g2) * 0.125;
-    float w3 = bloomKaris(g3) * 0.125;
-    float w4 = bloomKaris(g4) * 0.5;
-    return (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4) / (w0 + w1 + w2 + w3 + w4);
+    // Plain Jimenez weights, no Karis average: Karis (1 / (1 + luma)) exists to stop single-pixel fireflies of an HDR
+    // source, and on this clipped-LDR source it is exactly the torch flame (a few clipped pixels) that it suppressed
+    // to nothing. The source is already denoised and sanitised, so there are no fireflies left to guard against.
+    return g0 * 0.125 + g1 * 0.125 + g2 * 0.125 + g3 * 0.125 + g4 * 0.5;
 }
 
 // 3x3 tent upsample (radius 1 texel of the source).
@@ -171,6 +212,9 @@ float bloomSunVisibility(Sampler2D depth, Sampler2D frame, int2 size, BloomPush 
         int2 t = clamp(int2(center + o), int2(0), size - 1);
         float sky = depth.Load(int3(t, 0)).r >= BLOOM_SKY_DISTANCE ? 1.0 : 0.0;
         float3 sc = frame.Load(int3(t, 0)).rgb;
+        if (bloomSourceMode(pc) == 2u) {
+            sc = tonemapColorMode(max(sc, float3(0.0)) * max(pc.p0.w, 0.0), bloomToneMode(pc));
+        }
         // Daytime blue sky has high blue (~0.9) but lower red/green; the sun disk is warm-white (all channels high).
         float sunLum = dot(sc, BLOOM_LUMA);
         float bright = smoothstep(0.88, 0.98, sunLum) * smoothstep(0.85, 0.96, sc.r);

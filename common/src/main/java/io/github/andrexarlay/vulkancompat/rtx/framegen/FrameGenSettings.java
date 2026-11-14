@@ -17,7 +17,7 @@ import java.util.Locale;
  * (written by {@code VulkanRtxConfig.save}, read by {@code VulkanRtxConfig.applyKeyValue}; UTF-8 without BOM).
  * <pre>
  * [frame_generation]
- * framegen_mode = "OFF"        # OFF, X2, X3, X4 (X3/X4 = DLSS Multi Frame Generation, only when the driver reports it)
+ * framegen_mode = "OFF"        # OFF, X2..X6 (X3 and up = DLSS Multi Frame Generation, only as far as the driver reports it)
  * reflex_mode = "ON"           # OFF, ON, BOOST
  * framegen_frame_limit = 0     # presented frames per second cap through Reflex (0 = off)
  * </pre>
@@ -31,7 +31,7 @@ public final class FrameGenSettings {
 
     /** Requested multiplier: {@link #frames()} real + generated frames per rendered frame. */
     public enum Mode {
-        OFF(1), X2(2), X3(3), X4(4);
+        OFF(1), X2(2), X3(3), X4(4), X5(5), X6(6);
 
         private final int multiplier;
 
@@ -122,8 +122,10 @@ public final class FrameGenSettings {
             case "2x", "x2", "dlss", "on", "true" -> Mode.X2;
             case "3x", "x3" -> Mode.X3;
             case "4x", "x4" -> Mode.X4;
+            case "5x", "x5" -> Mode.X5;
+            case "6x", "x6" -> Mode.X6;
             default -> {
-                LOGGER.warn("[VKB-FG] unknown frame generation mode '{}' (off, 2x, 3x, 4x)", raw);
+                LOGGER.warn("[VKB-FG] unknown frame generation mode '{}' (off, 2x, 3x, 4x, 5x, 6x)", raw);
                 yield null;
             }
         };
@@ -196,7 +198,7 @@ public final class FrameGenSettings {
         w.write("\n[frame_generation]\n");
         w.write("# NVIDIA DLSS Frame Generation through Streamline (needs the Streamline binaries, see docs/framegen/FINDINGS.md, an RTX 40/50 GPU,\n");
         w.write("# a temporal upscaler (FSR/DLSS/XeSS) and a game restart to load Streamline; the mode below switches live).\n");
-        w.write("# framegen_mode: OFF, X2, X3, X4 (X3/X4 = Multi Frame Generation, RTX 50 only). JVM property -Dvkrtx.framegen=off|2x|3x|4x overrides it.\n");
+        w.write("# framegen_mode: OFF, X2, X3, X4, X5, X6 (X3 and up = Multi Frame Generation, RTX 50 only; the driver caps it, e.g. 6x). JVM property -Dvkrtx.framegen=off|2x|3x|4x overrides it.\n");
         w.write("framegen_mode = \"" + mode.name() + "\"\n");
         w.write("# framegen_provider: AUTO, NVIDIA (DLSS-G through Streamline), AMD (FSR 3 frame generation, any GPU, 2x only; not tested on AMD/Intel hardware).\n");
         w.write("# Changing the provider needs a game restart (both replace the swapchain). JVM property -Dvkrtx.framegen.provider overrides it.\n");

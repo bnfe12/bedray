@@ -1,13 +1,9 @@
 package io.github.andrexarlay.vulkancompat.rtx.config;
 
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.spatial.SpatialUpscaler;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler;
+import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrQuality;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.spatial.Fsr1Constants;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessRuntime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -304,68 +300,9 @@ public final class TextureLodBias {
         return bias;
     }
 
-    /**
-     * Resolves the current active render scale, preferring live runtime metrics if active.
-     */
+    /** The raster grid used by this frame, including native raster under combined DLSS Ray Reconstruction. */
     public static double getActiveRenderScale() {
-        if (SpatialUpscaler.isSelected()) {
-            return SpatialUpscaler.renderScale();
-        }
-        if (TemporalUpscaler.isActive()) {
-            double s = TemporalUpscaler.scale();
-            if (s > 0.0) {
-                return 1.0 / s;
-            }
-        }
-
-        UpscalerBackend backend = VulkanRtxConfig.activeBackend;
-        if (backend == null) {
-            return 1.0;
-        }
-
-        if (backend == UpscalerBackend.DLSS) {
-            if (DlssRuntime.isActive()) {
-                double dlssScale = DlssRuntime.scale();
-                if (dlssScale > 0.0) {
-                    return 1.0 / dlssScale;
-                }
-            }
-            return getRenderScaleFor(UpscalerBackend.DLSS, VulkanRtxConfig.dlssMode);
-        }
-
-        if (backend == UpscalerBackend.FSR) {
-            if (FsrRuntime.isActive()) {
-                double fsrScale = FsrRuntime.scale();
-                if (fsrScale > 0.0) {
-                    return 1.0 / fsrScale;
-                }
-            }
-            return getRenderScaleFor(UpscalerBackend.FSR, VulkanRtxConfig.fsrMode);
-        }
-
-        if (backend == UpscalerBackend.XESS) {
-            if (XessRuntime.isActive()) {
-                double xessScale = XessRuntime.scale();
-                if (xessScale > 0.0) {
-                    return 1.0 / xessScale;
-                }
-            }
-            return getRenderScaleFor(UpscalerBackend.XESS, VulkanRtxConfig.xessMode);
-        }
-
-        if (backend == UpscalerBackend.FSR1) {
-            return getRenderScaleFor(UpscalerBackend.FSR1, VulkanRtxConfig.fsr1Mode);
-        }
-
-        if (backend == UpscalerBackend.NIS) {
-            return getRenderScaleFor(UpscalerBackend.NIS, UpscalerMode.CUSTOM);
-        }
-
-        if (backend == UpscalerBackend.BILINEAR) {
-            return VulkanRtxConfig.qualityPreset.getScaleFactor();
-        }
-
-        return 1.0;
+        return WorldTargetManager.textureRenderScale();
     }
 
     public static float clamp(float val) {

@@ -1699,10 +1699,56 @@ BedrayStatus PathTracePass::record_stats(std::uint64_t command_buffer, std::uint
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path-trace statistics");
 }
 
+BedrayStatus PathTracePass::record_hdr(std::uint64_t command_buffer, std::uint64_t program,
+    std::uint64_t output_view, std::uint32_t width, std::uint32_t height, BedrayError* error) try {
+    const auto it = recordings_.find(command_buffer);
+    if (it == recordings_.end() || it->second.discarded) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "HDR export has no live pending path-trace recording");
+    }
+    const RecordingPins& recording = it->second;
+    if (program == 0 || output_view == 0 || width == 0 || height == 0
+        || width != recording.width || height != recording.height) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "HDR export needs a program, output and matching recording extent");
+    }
+    if (recording.accum.view == VK_NULL_HANDLE || as_view(output_view) == recording.accum.view) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "HDR export requires a distinct output image view");
+    }
+    ProgramContract contract{};
+    if (!program_contract(core_, program, contract) || contract.push_constant_bytes != 0 || contract.binding_count != 2
+        || contract.ray_generation
+        || !program_has_binding(core_, program, 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+        || !program_has_binding(core_, program, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "HDR export program must have two storage images and no push constants");
+    }
+    std::array<BedrayResource, 2> resources{};
+    resources[0] = image_resource(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, recording.accum.view);
+    resources[1] = image_resource(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, as_view(output_view));
+    BedrayFrameDesc desc{};
+    desc.abi_version = BEDRAY_CORE_ABI_VERSION;
+    desc.command_buffer = command_buffer;
+    desc.program = program;
+    desc.group_count_x = groups(width);
+    desc.group_count_y = groups(height);
+    desc.group_count_z = 1;
+    desc.resource_count = static_cast<std::uint32_t>(resources.size());
+    desc.resources = resources.data();
+    // The render exit barrier made this recording's pinned mean readable.
+    // Generic frame recording retains its program/descriptor set under the
+    // same command-buffer proof as the path recording and the borrowed output.
+    const BedrayStatus status = bedray_core_render_frame(core_, &desc, error);
+    if (status == BEDRAY_ERROR_DEVICE_LOST) device_lost();
+    return status;
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace HDR export state");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path-trace HDR export");
+}
+
 bool PathTracePass::rc_history_ready() const noexcept { return rc_field_ && rc_field_->has_history(); }
 
 void PathTracePass::discard_recording(std::uint64_t command_buffer) noexcept {
     if (recordings_.find(command_buffer) == recordings_.end()) return;
+    recordings_.at(command_buffer).discarded = true;
     // A discarded recording never ran, so the RC field it built is not a history the next frame may read.
     if (rc_field_) rc_field_->forget_history();
     history_written_ = false;

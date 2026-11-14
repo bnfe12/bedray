@@ -95,7 +95,7 @@ class SpatialAotTest {
     }
     @Test void resizingBorrowedViewsRequiresProducerProofBeforeAnyOldImageIsDestroyed() throws IOException {
         String host = Files.readString(Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rtx/WorldTargetManager.java"));
-        String world = method(host,"public static void ensureTargets(");
+        String world = method(host,"private static void ensureTargets(");
         precedes(world,"drainBorrowedWorldTargetRecordings()","worldTarget.resize(");
         String temporal = method(host,"private static void ensureTemporalTargets(");
         for (String target : new String[]{"depthCopy.resize(","motionVectorsTarget.resize("}) {

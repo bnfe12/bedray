@@ -402,9 +402,10 @@ aligned to `minAccelerationStructureScratchOffsetAlignment`, with a minimum of
 3. **BLAS work**: `vkCmdBuildAccelerationStructuresKHR` for every job.
    A refit uses `ALLOW_UPDATE`, source = destination = the committed BLAS and
    the update scratch size. A rebuild targets the new BLAS.
-4. **AS writes -> TLAS build**: a barrier makes previous AS writes visible to
-   the TLAS build or update. It covers reads of new BLAS and the update source,
-   and writes when the build overwrites the slot's TLAS storage.
+4. **AS writes -> compaction queries and TLAS build**: one barrier per frame
+   makes BLAS builds and compaction copies visible to size queries and the TLAS.
+   It also covers reads of the update source and writes when a build overwrites
+   the slot's TLAS storage.
 5. **TLAS build/update**: `vkCmdBuildAccelerationStructuresKHR` on the TLAS.
    Update mode requires the same instance count. The source BLAS stay alive
    through the update recording.

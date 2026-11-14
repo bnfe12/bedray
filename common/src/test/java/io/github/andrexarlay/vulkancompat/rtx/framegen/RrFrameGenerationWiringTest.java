@@ -46,6 +46,8 @@ class RrFrameGenerationWiringTest {
         int gateAt = vendor.indexOf(gate, worldReady);
         assertTrue(worldReady >= 0 && gateAt > worldReady && gateAt < vendor.indexOf("producerCommands.record(", worldReady));
         assertTrue(vendor.contains("!rrFrame && !WorldTargetManager.hasCurrentRasterMotion()"));
+        int colorAt = vendor.indexOf("if (!WorldTargetManager.hasCurrentWorldColor())", worldReady);
+        assertTrue(colorAt > gateAt && colorAt < vendor.indexOf("producerCommands.record(", worldReady));
     }
 
     @Test void rrSdkAndVelocityUseTheActualPrimaryProducerJitter() throws IOException {

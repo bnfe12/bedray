@@ -37,5 +37,6 @@ private:
     std::uint32_t width_ = 0, height_ = 0;
     std::uint64_t generation_ = 0;
     bool initialize_ = false, invalidated_ = false, lost_ = false;
+    bool apply_hdr_base_ = false;
 };
 }

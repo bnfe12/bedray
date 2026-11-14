@@ -36,7 +36,7 @@ import java.util.Locale;
  * {@code tm=peak|aces|pbr_neutral|gt|agx}, {@code fixed} (fixed exposure), {@code ev=<tenths>}, {@code dn=off|nrd|rr},
  * {@code aim=<yaw>_<pitch>}, {@code cx=<dx>}, {@code cz=<dz>}.
  * {@code -Dvkrtx.autotest.materialDimension=nether|end|overworld} selects the real dimension (default overworld).
- * Nether/End reference rooms are built at y=200, clear of natural terrain; they are controlled material scenes, not biome captures.
+ * Nether/End reference rooms use y=64/80 and clear their own volume; they are controlled material scenes, not biome captures.
  * Shots: {@code NN_<step>.png}; a {@code [VKB-AUTOTEST] scenario=rt_materials ... event=state} line per step.
  */
 public final class MaterialsScenario implements AutotestScenario {
@@ -148,7 +148,7 @@ public final class MaterialsScenario implements AutotestScenario {
         by = mc.player.getBlockY();
         bz = mc.player.getBlockZ();
         if (!dimension.equals("minecraft:overworld")) {
-            by = 200;
+            by = dimension.equals("minecraft:the_nether") ? 64 : 80;
         }
         if (!listening) {
             listening = true;
@@ -163,16 +163,21 @@ public final class MaterialsScenario implements AutotestScenario {
             List<String> cmds = buildCommands();
             server.execute(() -> {
                 try {
+                    var level = materialLevel(server);
+                    // A frame delay does not prove distant room chunks are loaded after a dimension switch.
+                    for (int i = 0; i < SCENES.length(); i++) loadRoom(level, SCENES.substring(i, i + 1));
                     for (String c : cmds) {
                         server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), inDimension(c));
                     }
+                    mc.execute(() -> {
+                        ctx.log("scenario", name(), "event", "scene_built", "dimension", dimension, "base", bx + "," + by + "," + bz,
+                            "commands", String.valueOf(cmds.size()), "steps", steps.toString().replace(' ', '_'));
+                        ctx.waitFrames(400, () -> step(ctx, steps, 0));
+                    });
                 } catch (Throwable t) {
                     ctx.fail("rt_materials: server command failed: " + t, t);
                 }
             });
-            ctx.log("scenario", name(), "event", "scene_built", "dimension", dimension, "base", bx + "," + by + "," + bz,
-                "commands", String.valueOf(cmds.size()), "steps", steps.toString().replace(' ', '_'));
-            ctx.waitFrames(400, () -> step(ctx, steps, 0));
         });
     }
 
@@ -187,6 +192,19 @@ public final class MaterialsScenario implements AutotestScenario {
     }
 
     private static final int ROOM_Z = 0;
+
+    private net.minecraft.server.level.ServerLevel materialLevel(net.minecraft.server.MinecraftServer server) {
+        return java.util.stream.StreamSupport.stream(server.getAllLevels().spliterator(), false)
+            .filter(candidate -> candidate.dimension().identifier().toString().equals(dimension))
+            .findFirst().orElseThrow(() -> new IllegalStateException("material dimension unavailable: " + dimension));
+    }
+
+    private void loadRoom(net.minecraft.server.level.ServerLevel level, String scene) {
+        int x = bx + roomX(scene), z = bz + roomZ(scene);
+        for (int cx = Math.floorDiv(x, 16); cx <= Math.floorDiv(x + 10, 16); cx++) {
+            for (int cz = Math.floorDiv(z, 16); cz <= Math.floorDiv(z + 10, 16); cz++) level.getChunk(cx, cz);
+        }
+    }
 
     private List<String> buildCommands() {
         List<String> c = new ArrayList<>();
@@ -376,7 +394,7 @@ public final class MaterialsScenario implements AutotestScenario {
         return "execute in " + dimension + " run " + command;
     }
 
-    private void placeCamera(AutotestContext ctx, Step s) {
+    private String cameraCommand(Step s) {
         int x0 = roomX(s.scene());
         double x = bx + x0 + 5.5;
         double z;
@@ -447,7 +465,7 @@ public final class MaterialsScenario implements AutotestScenario {
             aimPitch = Float.parseFloat(yp[1]);
         }
         aimOverride = true;
-        command(ctx, String.format(Locale.ROOT, "tp @a %.2f %.2f %.2f %.1f %.1f", x, (double) by, z, aimYaw, aimPitch));
+        return String.format(Locale.ROOT, "tp @a %.2f %.2f %.2f %.1f %.1f", x, (double) by, z, aimYaw, aimPitch);
     }
 
     private void applySettings(Step s) {
@@ -498,8 +516,20 @@ public final class MaterialsScenario implements AutotestScenario {
         command(ctx, "effect clear @a minecraft:slow_falling");
         int roomX = roomX(s.scene()), roomZ = roomZ(s.scene());
         boolean open = s.mods().contains("open");
-        command(ctx, fill(roomX + 1, 5, roomZ + 1, roomX + 9, open ? 20 : 5, roomZ + 9, open ? "air" : "stone_bricks"));
-        placeCamera(ctx, s);
+        int roofTop = open ? Math.max(5, mc.level.getMaxY() - by) : 5;
+        String roofCommand = fill(roomX + 1, 5, roomZ + 1, roomX + 9, roofTop, roomZ + 9, open ? "air" : "stone_bricks");
+        String teleportCommand = cameraCommand(s);
+        var server = mc.getSingleplayerServer();
+        server.execute(() -> {
+            try {
+                // Initial chunk requests expire; reacquire this room and edit/teleport in one server task.
+                loadRoom(materialLevel(server), s.scene());
+                server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), inDimension(roofCommand));
+                server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), inDimension(teleportCommand));
+            } catch (Throwable t) {
+                ctx.fail("rt_materials: room preparation failed: " + t, t);
+            }
+        });
         // F1 hides the hand too: only the H scene (item in the hand) keeps the HUD on
         if (mc.gui.hud.isHidden() != !s.scene().equals("H")) {
             mc.gui.hud.toggle();
@@ -529,6 +559,17 @@ public final class MaterialsScenario implements AutotestScenario {
         ctx.log("scenario", name(), "step", String.valueOf(index), "event", "apply", "spec", s.raw(), "mode", s.mode().logName(),
             "frame", String.valueOf(ctx.frames()));
         ctx.waitFrames(s.frames(), () -> {
+            var floor = mc.level.getBlockState(new net.minecraft.core.BlockPos(bx + roomX + 5, by - 1, bz + roomZ + 1));
+            var expected = switch (s.scene()) {
+                case "C" -> net.minecraft.world.level.block.Blocks.CRIMSON_NYLIUM;
+                case "F" -> net.minecraft.world.level.block.Blocks.WARPED_NYLIUM;
+                case "X" -> net.minecraft.world.level.block.Blocks.END_STONE;
+                default -> net.minecraft.world.level.block.Blocks.STONE_BRICKS;
+            };
+            if (!floor.is(expected) || Math.abs(mc.player.getY() - by) > 0.1) {
+                ctx.fail("rt_materials: reference room was not built or the camera left its floor", null);
+                return;
+            }
             RtMode pass = RtFrameRenderer.lastPassMode();
             String file = String.format(Locale.ROOT, "%02d_%s.png", index, s.label());
             ctx.log("scenario", name(), "step", String.valueOf(index), "event", "state", "spec", s.raw(),

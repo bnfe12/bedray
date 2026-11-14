@@ -49,7 +49,7 @@ public final class FrameGenScenario implements AutotestScenario {
     private int baselineWindows;
     private long modeBaseRendered;
     private long modeBasePresented;
-    private static final Mode[] MODE_SWEEP = {Mode.X3, Mode.X4, Mode.X2, Mode.OFF, Mode.X2};
+    private static final Mode[] MODE_SWEEP = {Mode.X3, Mode.X4, Mode.X6, Mode.X2, Mode.OFF, Mode.X2};
 
     @Override
     public String name() {

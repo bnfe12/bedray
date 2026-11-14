@@ -38,7 +38,7 @@ public final class FrameGenOptions {
     private FrameGenOptions() {}
 
     /** Choices of the mode control (Mode itself has no 1x entry besides OFF). */
-    public enum UiMode { OFF, X2, X3, X4 }
+    public enum UiMode { OFF, X2, X3, X4, X5, X6 }
 
     public enum UiStatus { STATUS }
 
@@ -77,6 +77,8 @@ public final class FrameGenOptions {
                 case X2 -> tr("bedray.fg.x2", "2x");
                 case X3 -> tr("bedray.fg.x3", "3x (Multi Frame Generation)");
                 case X4 -> tr("bedray.fg.x4", "4x (Multi Frame Generation)");
+                case X5 -> tr("bedray.fg.x5", "5x (Multi Frame Generation)");
+                case X6 -> tr("bedray.fg.x6", "6x (Multi Frame Generation)");
             })
             .setEnabledProvider(state -> state.readEnumOption(id("renderer"), VulkanRtxConfig.RendererSelection.class)
                 == VulkanRtxConfig.RendererSelection.HARDWARE_RT && (FrameGenRuntime.availability() == Availability.READY
@@ -160,7 +162,7 @@ public final class FrameGenOptions {
         return java.util.List.of(reflex, limit, status);
     }
 
-    /** Values the mode control offers right now (3x/4x only when NVIDIA DLSS-G is selected and the driver reports numFramesToGenerateMax >= 2/3). */
+    /** Values the mode control offers right now (3x..6x only when NVIDIA DLSS-G is selected and the driver reports numFramesToGenerateMax >= 2..5). */
     static Set<UiMode> allowedModes() {
         Availability a = FrameGenRuntime.availability();
         EnumSet<UiMode> set = EnumSet.of(UiMode.OFF);
@@ -175,11 +177,19 @@ public final class FrameGenOptions {
             if (!isAmd && max >= 4) {
                 set.add(UiMode.X4);
             }
+            if (!isAmd && max >= 5) {
+                set.add(UiMode.X5);
+            }
+            if (!isAmd && max >= 6) {
+                set.add(UiMode.X6);
+            }
         } else if (a == Availability.NEEDS_RESTART) {
             set.add(UiMode.X2);
             if (!isAmd) {
                 set.add(UiMode.X3);
                 set.add(UiMode.X4);
+                set.add(UiMode.X5);
+                set.add(UiMode.X6);
             }
         }
         // the stored value stays selectable so the control never shows a value that is not in the list
@@ -191,10 +201,9 @@ public final class FrameGenOptions {
         if (VulkanRtxConfig.voxelRendererSelected()) {
             return tr("bedray.fg.voxel_unavailable", "Disabled for voxel diagnostics: matching depth and motion guides are not implemented.");
         }
-        String base = "Frame Generation inserts generated frames between rendered ones (2x with AMD FSR 3 or NVIDIA DLSS-G; 3x/4x Multi Frame Generation on RTX 50). "
-            + "Choose the method (Auto / NVIDIA DLSS-G / AMD FSR 3) in the row above. Needs a temporal upscaler (FSR, DLSS or XeSS); it switches off in menus, while loading and when the window loses focus. ";
+        String base = tr("bedray.fg.mode_info", "Inserts frames between rendered frames. Works at native resolution and with upscaling. Pauses while loading, in menus and when the window loses focus. ").getString();
         String extra = switch (FrameGenRuntime.availability()) {
-            case READY -> "Applied immediately, no restart. " + (FrameGenRuntime.maxMultiplier() < 3 ? "3x/4x are not offered on this provider/GPU." : "");
+            case READY -> "Applied immediately, no restart. " + (FrameGenRuntime.maxMultiplier() < 3 ? "3x and up are not offered on this provider/GPU." : "");
             case NEEDS_RESTART -> "The frame generation swapchain is hooked when the game starts: your choice is saved and takes effect after a restart.";
             case NO_BINARIES -> "Unavailable: install amd_fidelityfx_vk.dll (FSR 3) or Streamline DLLs via the 'Upscaler & Frame Gen DLLs...' button below.";
             case FAILED -> "Failed: " + FrameGenRuntime.statusLine();

@@ -37,7 +37,7 @@ public final class RtModesScenario implements AutotestScenario {
      * pocket, L night street with lamp posts and lit windows, M snowfield around a lava pit with a campfire (the owner
      * screenshot), N a base mixing every block light type.
      */
-    static final java.util.Set<String> LIGHT_SCENES = java.util.Set.of("J", "K", "L", "M", "N");
+    static final java.util.Set<String> LIGHT_SCENES = java.util.Set.of("J", "K", "L", "M", "N", "Y", "Z");
     public static final String DEFAULT_STEPS = "A:off,A:rays,A:rays+ao+soft+q2,A:rays+refl,B:off,B:rays,B:path+b3+f400";
     private static final int TIME_OF_DAY = Integer.getInteger("vkrtx.autotest.rtTime", 2500);
 
@@ -118,8 +118,8 @@ public final class RtModesScenario implements AutotestScenario {
             for (int i = 1; i < parts.length; i++) {
                 String m = parts[i].trim().toLowerCase(Locale.ROOT);
                 if (!(m.equals("ao") || m.equals("gi") || m.equals("break") || m.equals("ui") || m.equals("soft") || m.equals("refl") || m.equals("noshadow") || m.equals("noemis")
-                    || m.equals("rr") || m.equals("ref") || m.equals("cmp") || m.equals("ent") || m.equals("entabove") || m.equals("noent") || m.equals("label") || m.matches("pack=(on|off)") || m.equals("entmove") || m.matches("mv=(still|walk|turn|strafe|realwalk|realturn)") || m.equals("noaccum") || m.equals("noexp") || m.equals("noautonorm") || m.matches("an\\d+") || m.matches("t\\d+") || m.matches("aim=-?\\d+_-?\\d+") || m.equals("nrd") || m.matches("[qbsf]\\d+") || m.matches("dist\\d+") || m.startsWith("dbg=") || m.matches("up=(off|dlss_[a-z_]+|xess_[a-z_]+|fsr_[a-z_]+|fsr1_[a-z_]+|nis_\\d+|bil_\\d+)") || m.matches("js=(d|-?1_-?1)") || m.matches("shp=[0-9.]+") || m.matches("tm=[a-z0-9_]+") || m.matches("jv=[a-z0-9_]+") || m.matches("p=(off|low|medium|high|ultra|path_tracing|custom)")
-                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)") || m.matches("di=(off|temporal|full)") || m.matches("pt=(off|temporal|full)") || m.matches("sway\\d+") || m.matches("ptp=(fast|quality)") || m.matches("ltm=[0-9.]+"))) {
+                    || m.equals("rr") || m.equals("ref") || m.equals("cmp") || m.equals("ent") || m.equals("entabove") || m.equals("noent") || m.equals("label") || m.matches("pack=(on|off)") || m.equals("entmove") || m.matches("mv=(still|walk|turn|strafe|realwalk|realturn|fastturn|fastwalk)") || m.equals("noaccum") || m.equals("noexp") || m.equals("noautonorm") || m.matches("an\\d+") || m.matches("t\\d+") || m.matches("aim=-?\\d+_-?\\d+") || m.equals("nrd") || m.matches("[qbsf]\\d+") || m.matches("dist\\d+") || m.startsWith("dbg=") || m.matches("up=(off|dlss_[a-z_]+|xess_[a-z_]+|fsr_[a-z_]+|fsr1_[a-z_]+|nis_\\d+|bil_\\d+)") || m.matches("js=(d|-?1_-?1)") || m.matches("shp=[0-9.]+") || m.matches("tm=[a-z0-9_]+") || m.matches("jv=[a-z0-9_]+") || m.matches("p=(off|low|medium|high|ultra|path_tracing|custom)")
+                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)") || m.matches("di=(off|temporal|full)") || m.matches("pt=(off|temporal|full)") || m.matches("sway\\d+") || m.matches("ptp=(fast|quality)") || m.matches("ltm=[0-9.]+") || m.matches("item=[a-z_]+"))) {
                     throw new IllegalArgumentException("step '" + item + "': unknown modifier " + m);
                 }
                 if (m.startsWith("dbg=") && RtConfig.isUnknownMode(m.substring(4))) {
@@ -256,6 +256,27 @@ public final class RtModesScenario implements AutotestScenario {
 
     /** Geometry of the light-placement scenes J..N (see {@link #LIGHT_SCENES}); all within ~70 blocks of the base. */
     private void lightScenes(List<String> c) {
+        // Y: the owner screenshots of 2026-11-14: a closed dark room, a sea lantern panel on the west wall and dark-oak fence rails
+        // in front of it; with ReSTIR DI the wall behind the rails shows hard black wedges, without it soft shadows
+        c.add(fill(110, -2, -30, 124, 8, -16, "deepslate_bricks"));
+        c.add(fill(111, 0, -29, 123, 6, -17, "air"));
+        c.add(fill(111, 2, -25, 111, 4, -21, "sea_lantern"));
+        c.add(fill(115, 1, -29, 115, 1, -17, "dark_oak_fence"));
+        c.add(fill(115, 3, -29, 115, 3, -17, "dark_oak_fence"));
+        for (int pz : new int[] {-28, -24, -20, -18}) {
+            c.add(fill(115, 0, pz, 115, 4, pz, "dark_oak_fence"));
+        }
+        // Z: dense light field (the owner hub: 2048 of 2463 lights in range). 90x90 stone floor, a lamp every 2 blocks in a
+        // cycle of lantern / soul lantern / glowstone / lit redstone lamp / torch (~2000 emitters), camera at its south edge
+        c.add(fill(10, -2, 50, 100, -1, 140, "stone"));
+        c.add(fill(10, 0, 50, 100, 8, 140, "air"));
+        String[] hubLamps = {"lantern", "soul_lantern", "glowstone", "redstone_lamp[lit=true]", "torch"};
+        int hubIndex = 0;
+        for (int hx = 12; hx <= 98; hx += 2) {
+            for (int hz = 52; hz <= 138; hz += 2) {
+                c.add(set(hx, 0, hz, hubLamps[hubIndex++ % hubLamps.length]));
+            }
+        }
         // J: house, interior x -69..-61, y 0..3, z -3..5; spruce walls, plank floor, a window and a door gap; few lights
         c.add(fill(-71, -2, -5, -59, -1, 7, "oak_planks"));
         c.add(fill(-71, 0, -5, -59, 6, 7, "air"));
@@ -455,6 +476,8 @@ public final class RtModesScenario implements AutotestScenario {
                 case "walk" -> z += 0.05 * k;
                 case "strafe" -> x += 0.05 * k;
                 case "turn" -> aimYaw = motionYaw + 0.5f * k;
+                case "fastturn" -> aimYaw = motionYaw + 3.0f * k;   // a quick flick of the mouse: ~270 deg/s at 90 fps
+                case "fastwalk" -> z += 0.25 * k;                   // sprint-jumping speed
                 default -> { }
             }
             player.getAbilities().flying = true;
@@ -537,6 +560,12 @@ public final class RtModesScenario implements AutotestScenario {
             // snowfield: above the south-west of the pit looking down at the lava (the owner screenshot)
             x = bx + 33.5; y = by + 6; z = bz + 22.5; aimYaw = -45f; aimPitch = 32f;
             flyScene = true;
+        } else if (scene.equals("Y")) {
+            // dark room: south-east corner looking north-west at the lantern behind the rails
+            x = bx + 122.5; y = by; z = bz - 18.5; aimYaw = 125f; aimPitch = 5f;
+        } else if (scene.equals("Z")) {
+            // hub: at the south edge of the lamp field looking north (+Z) across it
+            x = bx + 55.5; y = by; z = bz + 49.0; aimYaw = 0f; aimPitch = 8f;
         } else if (scene.equals("N")) {
             // base: just inside the doorway looking north (+Z) across the row of light blocks
             x = bx - 61.5; y = by; z = bz + 36.5; aimYaw = 0f; aimPitch = 10f;
@@ -979,6 +1008,12 @@ public final class RtModesScenario implements AutotestScenario {
             spark /= (STAB_FRAMES - 1);
             java.nio.file.Path dir = ctx.minecraft().gameDirectory.toPath().resolve("autotest").resolve(name());
             String base = file.replace(".png", "");
+            if (Boolean.getBoolean("vkrtx.autotest.stabDump")) {
+                // every frame of the run, for an external judder / flicker analysis (the pair below shows one step only)
+                for (int i = 0; i < STAB_FRAMES; i++) {
+                    writePng(dir.resolve(String.format(Locale.ROOT, "%s_s%02d.png", base, i)), imgs[i], sw, sh, null);
+                }
+            }
             writePng(dir.resolve(base + "_mA.png"), imgs[STAB_FRAMES - 2], sw, sh, null);
             writePng(dir.resolve(base + "_mB.png"), imgs[STAB_FRAMES - 1], sw, sh, null);
             writePng(dir.resolve(base + "_mdiff.png"), imgs[STAB_FRAMES - 1], sw, sh, imgs[STAB_FRAMES - 2]);
@@ -1138,6 +1173,16 @@ public final class RtModesScenario implements AutotestScenario {
                 var server = ctx.minecraft().getSingleplayerServer();
                 String cmd = "time set " + m.substring(1);
                 server.execute(() -> server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), cmd));
+            }
+        }
+        // item=<id>: the player holds that item (a glowing item in the hand is a light that moves with the camera)
+        for (String m : s.mods()) {
+            if (m.startsWith("item=")) {
+                var heldServer = ctx.minecraft().getSingleplayerServer();
+                if (heldServer != null) {
+                    String heldCmd = "item replace entity @a weapon.mainhand with minecraft:" + m.substring(5);
+                    heldServer.execute(() -> heldServer.getCommands().performPrefixedCommand(heldServer.createCommandSourceStack(), heldCmd));
+                }
             }
         }
         applySettings(s);

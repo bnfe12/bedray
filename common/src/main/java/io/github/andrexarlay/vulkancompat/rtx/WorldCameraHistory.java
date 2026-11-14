@@ -24,6 +24,8 @@ final class WorldCameraHistory {
     private static Matrix4f prevViewRotationMatrix;
     private static Vec3 currCameraPos;
     private static Vec3 prevCameraPos;
+    private static boolean projectionCaptured;
+    private static boolean cameraCaptured;
 
     private static final Matrix4f invViewProj = new Matrix4f();
     private static final Matrix4f prevViewProj = new Matrix4f();
@@ -38,7 +40,15 @@ final class WorldCameraHistory {
         return currProjMatrix == null ? null : new Matrix4f(currProjMatrix);
     }
 
+    /** Reuse matrix storage without treating the previous frame's input as current. */
+    static void beginFrame() {
+        projectionCaptured = false;
+        cameraCaptured = false;
+        cameraMatricesValidThisFrame = false;
+    }
+
     static void setCurrentProjectionMatrix(Matrix4f projMatrix) {
+        projectionCaptured = projMatrix != null;
         if (projMatrix != null) {
             if (currProjMatrix == null) {
                 currProjMatrix = new Matrix4f(projMatrix);
@@ -49,6 +59,7 @@ final class WorldCameraHistory {
     }
 
     static void setCameraState(Matrix4f viewRotationMatrix, Vec3 pos) {
+        cameraCaptured = viewRotationMatrix != null && pos != null;
         if (viewRotationMatrix != null) {
             if (currViewRotationMatrix == null) {
                 currViewRotationMatrix = new Matrix4f(viewRotationMatrix);
@@ -77,7 +88,12 @@ final class WorldCameraHistory {
      */
     static boolean computeMatrices() {
         cameraMatricesValidThisFrame = false;
-        if (currCameraPos != null && !isFinite(currCameraPos)) {
+        if (!projectionCaptured || !cameraCaptured) {
+            resetHistory = true;
+            logDegenerateCamera("projection_captured=" + projectionCaptured + " camera_captured=" + cameraCaptured);
+            return false;
+        }
+        if (!isFinite(currCameraPos)) {
             resetHistory = true;
             logDegenerateCamera("camera_position=" + currCameraPos);
             return false;
@@ -150,8 +166,8 @@ final class WorldCameraHistory {
 
     /** Drops the whole temporal camera state: called when the world targets are released. */
     static void reset() {
+        beginFrame();
         resetHistory = true;
-        cameraMatricesValidThisFrame = false;
         lastDegenerateCameraLogNanos = 0L;
         invViewProj.identity();
         prevViewProj.identity();

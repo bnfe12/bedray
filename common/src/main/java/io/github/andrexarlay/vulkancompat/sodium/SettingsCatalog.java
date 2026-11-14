@@ -126,8 +126,7 @@ public final class SettingsCatalog {
     private static UpscalerMode nativeMode(UpscalerBackend b) {
         return switch (b) {
             case DLSS -> UpscalerMode.DLAA;
-            case FSR -> UpscalerMode.NATIVE_AA;
-            case XESS -> UpscalerMode.ULTRA_QUALITY_PLUS;
+            case FSR, XESS -> UpscalerMode.NATIVE_AA;
             default -> null;
         };
     }
@@ -282,9 +281,24 @@ public final class SettingsCatalog {
         };
         for (String id : new String[] {"dlss_mode", "xess_mode", "fsr_mode", "quality_preset"}) {
             put(id, Tier.ESSENTIAL, id.equals("quality_preset") ? "3D Scale" : "Upscaler Quality",
-                "How small the 3D world is drawn before it is rebuilt to full size. Quality is nearly as sharp as native; Ultra Performance is soft but fastest.",
+                "Sets the number of pixels rendered before reconstruction. Native AA keeps the output resolution. Lower scales improve render performance and can lose fine detail.",
                 "",
                 "The screenshots were taken with the first available upscaler (see the caption).", Scene.DAY, 0.55f, 0.6f, "upscaler_mode", modes, modeKey);
+        }
+        putNoImage("fsr1_mode", Tier.ADVANCED, "FSR 1 Quality",
+            "Sets the 3D resolution for the spatial FSR 1 filter. Custom exposes the render scale below.", "", "FSR 1.",
+            "The preview catalog uses temporal upscalers. Inspect spatial FSR 1 in the world.");
+        for (UpscalerBackend backend : UpscalerBackend.values()) {
+            if (backend == UpscalerBackend.BILINEAR) continue;
+            String id = backend.name().toLowerCase(Locale.ROOT) + "_custom_scale";
+            String requirement = switch (backend) {
+                case DLSS, XESS -> "The SDK can clamp the requested scale. F3 shows the effective resolution.";
+                case NIS -> "NIS supports 50% to 100%.";
+                default -> "";
+            };
+            putNoImage(id, Tier.ESSENTIAL, "Custom Render Scale",
+                "Percentage of the output resolution rendered on each axis. Higher values preserve more detail.",
+                "", requirement, "Check the current render and output sizes in F3 after applying the scale.");
         }
         INFOS.put("frame_generation_provider", new Info("frame_generation_provider", Tier.ESSENTIAL, "Frame Generation Method",
             "Auto uses NVIDIA DLSS Frame Generation (Streamline) when the NVIDIA driver and Streamline files are installed, otherwise AMD FSR 3 Frame Generation (works on any GPU with amd_fidelityfx_vk.dll, 2x mode).",
@@ -295,8 +309,7 @@ public final class SettingsCatalog {
             "Inserts frames the game did not draw: motion looks smoother and the reported FPS rises, while input latency grows a little."
                 + " 2x adds one frame, 3x and 4x add more and need an RTX 40/50 card.",
             "",
-            "Hardware renderer only. Needs a frame generation runtime (see Frame Generation Method) and a temporal upscaler;"
-                + " the voxel renderer forces it off.", Scene.DAY, 0.5f, 0.5f,
+            "Requires a supported frame generation provider and current-frame depth and motion data from the hardware renderer.", Scene.DAY, 0.5f, 0.5f,
             "frame_generation_mode", List.of(), "Generated frames need motion: a still image cannot show them.", null));
 
         // ===================== ADVANCED =====================
@@ -319,7 +332,7 @@ public final class SettingsCatalog {
         put("path_denoiser", Tier.ADVANCED, "Denoiser",
             "Removes the grain of traced light. NRD is the default; DLSS Ray Reconstruction replaces denoiser and upscaler (RTX only). Off leaves raw grain.",
             "",
-            "NRD needs its library, Ray Reconstruction needs an NVIDIA RTX GPU and the DLSS files; a missing one falls back to accumulation.",
+            "Ray Reconstruction needs NVIDIA RTX, the DLSS files and either DLSS or native built-in scale. Other scales and upscalers use NRD when available.",
             Scene.INTERIOR, 0.5f, 0.55f, "path_denoiser", List.of(
                 p("off", "Off", () -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.OFF),
                 p("nrd", "NRD", () -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.NRD),
@@ -463,7 +476,7 @@ public final class SettingsCatalog {
                 double d = asNumber(v);
                 return d < 25 ? "0" : d < 75 ? "50" : "100";
             });
-        putNoImage("custom_scale", Tier.ADVANCED, "Custom 3D Scale",
+        putNoImage("custom_scale", Tier.ESSENTIAL, "Custom 3D Scale",
             "Exact render size for the built-in upscaler, 25% to 100%.", "", "Built-in upscaler with 3D Scale set to Custom.",
             "It is the same effect as the 3D Scale presets; see the 3D Scale screenshots.");
         putNoImage("frame_generation_reflex", Tier.ADVANCED, "NVIDIA Reflex",

@@ -1566,6 +1566,20 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_record_path_trace_stats(
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path-trace statistics");
 }
 
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_record_path_trace_hdr(
+    BedrayCore* core, uint64_t command_buffer, uint64_t program, uint64_t output_view,
+    uint32_t width, uint32_t height, BedrayError* error) try {
+    clear_error(error);
+    if (core == nullptr || !core->path_trace) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "HDR export needs a configured core");
+    }
+    return core->path_trace->record_hdr(command_buffer, program, output_view, width, height, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate HDR export dispatch");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording HDR export");
+}
+
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_path_trace(BedrayCore* core) try {
     if (core == nullptr) {
         return BEDRAY_ERROR_INVALID_ARGUMENT;

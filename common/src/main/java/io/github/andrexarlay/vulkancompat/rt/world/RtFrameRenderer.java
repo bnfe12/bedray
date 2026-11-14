@@ -1017,6 +1017,7 @@ public final class RtFrameRenderer {
         RtSky.dimensionSkyLight(skyState.isEnd, skyState.isNether, skyState.fogColor, skyLight);
         System.arraycopy(skyLight.zenith, 0, params.skyLightZenith, 0, 3);
         System.arraycopy(skyLight.horizon, 0, params.skyLightHorizon, 0, 3);
+        io.github.andrexarlay.vulkancompat.rt.hand.HandRtProbe.publishSky(params.key.color, skyLight.horizon, skyLight.zenith);
         params.volumetricFogEnabled = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.volumetricFogEnabled();
         params.fogDensity = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.fogDensity();
         params.fogInScattering = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.fogInScattering();
@@ -1106,9 +1107,7 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutInt(hdr + RtStatsLayout.ENT_ATLAS_SIZE, eg.atlasAddress() != 0L ? io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.SIZE : 0);
         float jitterPxX = 0.0f;
         float jitterPxY = 0.0f;
-        boolean upscalerJittered = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
-            && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isActive()
-            && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isScalingActive();
+        boolean upscalerJittered = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive();
         if (upscalerJittered) {
             jitterPxX = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterX();
             jitterPxY = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterY();
@@ -1214,9 +1213,7 @@ public final class RtFrameRenderer {
                 try {
                     // The frame's own exposure, decided once above: the pack's tonemap and the path display cannot diverge.
                     float composeExposure = params.exposure;
-                    boolean nrdJittered = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
-                        && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isActive()
-                        && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isScalingActive();
+                    boolean nrdJittered = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive();
                     float nrdJitterX = nrdJittered
                         ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterX() : 0.0f;
                     float nrdJitterY = nrdJittered
@@ -1248,6 +1245,12 @@ public final class RtFrameRenderer {
         }
 
         RtMemory.Img presented = frameOutput(), presentedDepth = frameDepth();
+        // Only raw presentation needs this export; a successful denoiser has its own signal.
+        boolean rawHdrExported = !frameColorTemporallyResolved
+            && (RtAtmosphereSettings.bloom() || RtAtmosphereSettings.sunGlare())
+            && frameResources.postHdr().width == presented.width && frameResources.postHdr().height == presented.height
+            && pass.exportHdr(cmd, frameResources.postHdr().view, w, h);
+        if (rawHdrExported) VkBarriers.fullMemoryBarrier(cmd);
         if (WorldTargetManager.rrResolvesOutput()) {
             RtComputeCheckpoints.mark(vulkanDevice, cmd, "output_resolve");
             outputResolve.record(cmd, params, frameResources, rrColorResolved);
@@ -1262,7 +1265,7 @@ public final class RtFrameRenderer {
                 && dlssRrDenoiser.outDiffuse().width == presented.width && dlssRrDenoiser.outDiffuse().height == presented.height) {
             RtComputeCheckpoints.mark(vulkanDevice, cmd, "local_tonemap");
             localTonemap.record(cmd, dlssRrDenoiser.outDiffuse(), presented, frameResources.localLum(), presentedDepth,
-                params.exposure);
+                params.exposure, params.frame);
             VkBarriers.fullMemoryBarrier(cmd);
         }
         // Raster particles/weather and world depth match the presentation grid and stay outside RR.
@@ -1275,6 +1278,13 @@ public final class RtFrameRenderer {
             gpuTimer.stamp(cmd, SPAN_ATMO, false);
         }
         RtComputeCheckpoints.mark(vulkanDevice, cmd, "atmosphere");
+        // The bloom reads the denoiser's HDR resolve when it has the presented extent (DLSS RR at its output size).
+        boolean hdrBloom = rrColorResolved && dlssRrDenoiser != null && dlssRrDenoiser.outDiffuse() != null
+            && dlssRrDenoiser.outDiffuse().width == presented.width && dlssRrDenoiser.outDiffuse().height == presented.height;
+        RtMemory.Img postHdr = hdrBloom ? dlssRrDenoiser.outDiffuse() : !frameColorTemporallyResolved && rawHdrExported
+            && frameResources.postHdr().width == presented.width && frameResources.postHdr().height == presented.height
+            ? frameResources.postHdr() : null;
+        atmosphere.bloomSource(postHdr != null ? postHdr.view : 0L, params.exposure);
         atmosphere.record(cmd, vulkanDevice, world.memory(), params, curViewProj,
             new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), presented.view, atlasView, materials.materialView(),
                 materials.normalView(), 0L, null, presentedDepth.view, lightmapView),
@@ -1302,9 +1312,9 @@ public final class RtFrameRenderer {
         }
     }
 
-    /** True when this frame's denoiser layout consumes {@code entity_motion_px}; both of them read it as IN_MV input. */
+    /** Plan IN_MV storage from the requested layout, before the denoiser owner is created during resource preflight. */
     private static boolean wantsEntityMotion() {
-        return (denoiser != null || dlssRrDenoiser != null) && !Boolean.getBoolean("vkrtx.entityMotion.off");
+        return (denoiseMode.isNrd() || denoiseMode.isDlssRr()) && !Boolean.getBoolean("vkrtx.entityMotion.off");
     }
 
     /** Once per world: locates the NRD natives and logs the denoiser that will be used. */
@@ -1349,11 +1359,13 @@ public final class RtFrameRenderer {
             frameGenOwnsNgx = io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.isReady()
                 && !io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.rrViaStreamline();
         }
+        boolean rrOutputAllowed = !WorldTargetManager.isInWorldPhase() || WorldTargetManager.rrResolvesOutput()
+            || Boolean.getBoolean("bedray.rt.disableRrOutput");
         DenoiserResolution.Result resolved = DenoiserResolution.resolve(want, dlssRrFailed, nrdFailed,
-            dlssUsable, dlssReason, frameGenOwnsNgx, nrdUsable, nrdReason, DenoiserConfig.requested());
+            dlssUsable, dlssReason, frameGenOwnsNgx, nrdUsable, nrdReason, DenoiserConfig.requested(), rrOutputAllowed);
         DenoiserMode mode = resolved.mode();
         String reason = resolved.reason();
-        String line = "requested=" + want + " active=" + mode.logName() + (mode == DenoiserMode.OFF && want != RtSettings.PathDenoiser.OFF ? " reason=" + reason : "");
+        String line = "requested=" + want + " active=" + mode.logName() + ("setting".equals(reason) ? "" : " reason=" + reason);
         denoiserResolutionReason = reason;
         if (!line.equals(lastDenoiserLog)) {
             lastDenoiserLog = line;

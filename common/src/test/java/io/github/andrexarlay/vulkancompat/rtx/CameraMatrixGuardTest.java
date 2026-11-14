@@ -87,6 +87,47 @@ class CameraMatrixGuardTest {
     }
 
     @Test
+    void missingCurrentCameraComponentsCannotReuseTheLastFramesInputs() {
+        Matrix4f projection = perspective();
+        Matrix4f rotation = new Matrix4f().rotationY(0.31f);
+        var position = new net.minecraft.world.phys.Vec3(12, 62, 33);
+        WorldCameraHistory.reset();
+        try {
+            WorldCameraHistory.beginFrame();
+            WorldCameraHistory.setCameraState(rotation, position);
+            WorldCameraHistory.setCurrentProjectionMatrix(projection);
+            assertTrue(WorldCameraHistory.computeMatrices());
+            WorldCameraHistory.advanceFrameHistory();
+
+            WorldCameraHistory.beginFrame();
+            WorldCameraHistory.setCameraState(rotation, position);
+            assertFalse(WorldCameraHistory.computeMatrices(), "a missing projection must skip the world frame");
+
+            WorldCameraHistory.beginFrame();
+            WorldCameraHistory.setCurrentProjectionMatrix(projection);
+            assertFalse(WorldCameraHistory.computeMatrices(), "a missing view or position must skip the world frame");
+
+            WorldCameraHistory.setCameraState(rotation, position);
+            assertTrue(WorldCameraHistory.computeMatrices());
+            assertTrue(WorldCameraHistory.resetHistory());
+        } finally {
+            WorldCameraHistory.reset();
+        }
+    }
+
+    @Test
+    void absentPreviousProjectionOrViewForcesAReset() {
+        Matrix4f projection = perspective();
+        Matrix4f rotation = new Matrix4f().rotationY(0.31f);
+        Matrix4f inverse = new Matrix4f();
+        Matrix4f previous = new Matrix4f();
+        var update = CameraMatrixGuard.update(projection, rotation, null, rotation, false, inverse, previous);
+        assertTrue(update.usable());
+        assertTrue(update.resetHistory());
+        assertEquals(new Matrix4f(projection).mul(rotation), previous);
+    }
+
+    @Test
     void aDegeneratePreviousFrameForcesAResetWithoutLosingTheCurrentFrame() {
         Matrix4f projection = perspective();
         Matrix4f rotation = new Matrix4f().rotationY(0.31f);

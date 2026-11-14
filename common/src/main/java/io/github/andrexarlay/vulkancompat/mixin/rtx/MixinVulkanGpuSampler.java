@@ -26,11 +26,7 @@ public abstract class MixinVulkanGpuSampler {
         index = 0
     )
     private float vkb$applyNegativeLodBias(float originalBias) {
-        float bias = TextureLodBias.getEffectiveLodBias();
-        if (TextureLodBias.autoTextureLodBias && TextureLodBias.getActiveRenderScale() < 0.999) {
-            bias = TextureLodBias.clamp(bias - 0.35f);
-        }
-        return bias;
+        return TextureLodBias.getEffectiveLodBias();
     }
 
     @ModifyArg(

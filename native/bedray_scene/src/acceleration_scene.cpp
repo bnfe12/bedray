@@ -809,13 +809,7 @@ void record_compaction_query(
     VkAccelerationStructureKHR blas,
     uint32_t query_slot) {
     scene.fns.cmd_reset_query_pool(command_buffer, scene.compaction_pool, query_slot, 1);
-    /* The compacted-size query reads the finished BLAS, so the build's writes
-       must be visible before the property write executes. */
-    record_memory_barrier(scene, command_buffer,
-        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    // The scene records one dependency from BLAS writes to all queries in the frame.
     scene.fns.cmd_write_as_properties(command_buffer, 1, &blas,
         VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
         scene.compaction_pool, query_slot);
@@ -832,12 +826,6 @@ void record_compaction_copy(
     info.dst = dst;
     info.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
     scene.fns.cmd_copy_as(command_buffer, &info);
-    /* The compacted BLAS is consumed by this frame's TLAS build and trace. */
-    record_memory_barrier(scene, command_buffer,
-        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
 }
 
 } // namespace bedray_scene

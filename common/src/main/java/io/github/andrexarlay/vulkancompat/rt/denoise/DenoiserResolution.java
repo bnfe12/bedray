@@ -24,10 +24,11 @@ public final class DenoiserResolution {
      * @param nrdUsable      the NRD natives ({@code NRD.dll} + {@code vkb_nrd.dll}) are usable
      * @param nrdReason      why they are not ({@code "null"} when the availability object is missing)
      * @param requestedFlag  {@code -Dvkrtx.denoiser} when it names an NRD variant; {@code null}/other values keep REBLUR
+     * @param rrOutputAllowed whether RR can resolve directly to the output or the diagnostic override is active
      */
     public static Result resolve(RtSettings.PathDenoiser want, boolean dlssRrFailed, boolean nrdFailed,
                                  boolean dlssUsable, String dlssReason, boolean frameGenOwnsNgx,
-                                 boolean nrdUsable, String nrdReason, DenoiserMode requestedFlag) {
+                                 boolean nrdUsable, String nrdReason, DenoiserMode requestedFlag, boolean rrOutputAllowed) {
         return switch (want) {
             case OFF -> new Result(DenoiserMode.OFF, "setting");
             case DLSS_RR -> {
@@ -41,6 +42,8 @@ public final class DenoiserResolution {
                     reason = "frame_generation_needs_sl.dlss_d.dll+nvngx_dlssd.dll_in_the_streamline_folder";
                 } else if (!dlssUsable) {
                     reason = "dlss_library_unusable " + dlssReason;
+                } else if (!rrOutputAllowed) {
+                    reason = "dlss_rr_needs_dlss_or_native_scale";
                 } else {
                     mode = DenoiserMode.DLSS_RR;
                 }
