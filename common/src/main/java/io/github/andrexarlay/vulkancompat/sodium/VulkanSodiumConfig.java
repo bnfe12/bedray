@@ -79,8 +79,31 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/SodiumPage");
 
     public enum WaterStyle { VANILLA, REALISTIC }
-    /** Ordinals match {@code RtSettings.SELF_SHADOW_*}. */
-    public enum SelfShadow { FULL, NO_FOOTPRINT, OFF }
+    public enum SelfShadow {
+        FULL(RtSettings.SELF_SHADOW_FULL), OFF(RtSettings.SELF_SHADOW_OFF);
+
+        private final int storedValue;
+
+        SelfShadow(int storedValue) {
+            this.storedValue = storedValue;
+        }
+
+        int storedValue() {
+            return storedValue;
+        }
+
+        static SelfShadow fromStored(int value) {
+            return value == RtSettings.SELF_SHADOW_OFF ? OFF : FULL;
+        }
+
+        static SelfShadow parsePreset(String value) {
+            return switch (value.toUpperCase(Locale.ROOT)) {
+                case "0", "1", "FULL", "NO_FOOTPRINT" -> FULL;
+                case "2", "OFF" -> OFF;
+                default -> throw new IllegalArgumentException("Unknown player shadow mode: " + value);
+            };
+        }
+    }
     public enum RendererStatus { STATUS }
     public enum GiExecutionStatusRow { STATUS }
     public enum QualityProfile { FAST, BEAUTIFUL, CUSTOM }
@@ -434,16 +457,15 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setImpact(OptionImpact.LOW).setStorageHandler(st);
         rt.addOption(track("water_style", water));
         EnumOptionBuilder<SelfShadow> selfShadow = builder.createEnumOption(id("self_shadow"), SelfShadow.class);
-        selfShadow.setName(nameOf("self_shadow")).setTooltip(v -> tipOf("self_shadow")).setDefaultValue(SelfShadow.NO_FOOTPRINT)
+        selfShadow.setName(nameOf("self_shadow")).setTooltip(v -> tipOf("self_shadow")).setDefaultValue(SelfShadow.FULL)
             .setAllowedValues(EnumSet.allOf(SelfShadow.class))
             .setElementNameProvider(v -> switch (v) {
                 case FULL -> tr("bedray.self_shadow.full", "Full");
-                case NO_FOOTPRINT -> tr("bedray.self_shadow.no_footprint", "No blot underfoot");
                 case OFF -> tr("bedray.self_shadow.off", "Off");
             })
             .setEnabledProvider(anyRt, dMode).setControlHiddenWhenDisabled(false)
-            .setBinding(v -> RtSettings.selfShadow = v.ordinal(),
-                () -> SelfShadow.values()[Math.max(0, Math.min(2, RtSettings.selfShadow))])
+            .setBinding(v -> RtSettings.selfShadow = v.storedValue(),
+                () -> SelfShadow.fromStored(RtSettings.selfShadow))
             .setImpact(OptionImpact.LOW).setStorageHandler(st);
         rt.addOption(track("self_shadow", selfShadow));
         rt.addOption(boolOpt(builder, "rays_optical_materials", true, v -> RtSettings.opticalMaterials = v,
@@ -488,10 +510,10 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     private static OptionBuilder godRaysOption(ConfigBuilder builder, Function<ConfigState, Boolean> anyRt, Identifier[] dMode, StorageEventHandler st) {
         EnumOptionBuilder<RtAtmosphereSettings.GodRays> g = builder.createEnumOption(id("atm_godrays"), RtAtmosphereSettings.GodRays.class);
         g.setName(nameOf("atm_godrays")).setTooltip(v -> tipOf("atm_godrays")).setDefaultValue(RtAtmosphereSettings.GodRays.POST)
-            .setAllowedValues(EnumSet.of(RtAtmosphereSettings.GodRays.OFF, RtAtmosphereSettings.GodRays.POST, RtAtmosphereSettings.godRays()))
+            .setAllowedValues(EnumSet.allOf(RtAtmosphereSettings.GodRays.class))
             .setElementNameProvider(v -> switch (v) {
                 case OFF -> tr("bedray.onoff.off", "Off");
-                case POST -> tr("bedray.onoff.on", "On");
+                case POST -> tr("bedray.godrays.post", "Detailed");
                 case INLINE -> tr("bedray.godrays.inline", "Simple (older)");
             })
             .setEnabledProvider(anyRt, dMode).setControlHiddenWhenDisabled(false)
@@ -810,6 +832,11 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setBinding(v -> RtSettings.tonemapper = v, () -> RtSettings.tonemapper)
             .setImpact(OptionImpact.LOW).setStorageHandler(st);
         look.addOption(track("tonemapper", tm));
+        Function<ConfigState, Boolean> localToneOn = state -> pathOn.apply(state)
+            && state.readEnumOption(denId, RtSettings.PathDenoiser.class) == RtSettings.PathDenoiser.DLSS_RR;
+        Identifier[] dLocalTone = rtDependencies(modeId, denId);
+        look.addOption(atmSlider(builder, "atm_local_highlights", "local_highlights", 100, 0, 200, 5, localToneOn, dLocalTone, true, st));
+        look.addOption(atmSlider(builder, "atm_local_shadows", "local_shadows", 100, 0, 200, 5, localToneOn, dLocalTone, true, st));
         look.addOption(boolOpt(builder, "vibrant_visuals", false, v -> RtSettings.vibrantVisuals = v,
             () -> RtSettings.vibrantVisuals, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(boolOpt(builder, "vignette", false, v -> RtSettings.vignette = v,
@@ -828,13 +855,36 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             && anyRt.apply(s);
         Identifier[] dShafts = rtDependencies(modeId, godId);
         look.addOption(atmSlider(builder, "atm_godrays_strength", "godrays_strength", 100, 0, 200, 5, shaftsOn, dShafts, true, st));
+        look.addOption(intOpt(builder, "atm_godrays_quality", 2, 0, 3, 1,
+            value -> Component.literal(Integer.toString(RtAtmosphereSettings.stepsFor(value))),
+            value -> RtAtmosphereSettings.set("godrays_quality", value), () -> (int) RtAtmosphereSettings.get("godrays_quality"),
+            state -> anyRt.apply(state) && state.readEnumOption(godId, RtAtmosphereSettings.GodRays.class) == RtAtmosphereSettings.GodRays.POST,
+            dShafts, Mark.NONE, OptionImpact.MEDIUM, true, st));
+        look.addOption(intOpt(builder, "atm_godrays_range", 160, 32, 256, 16, unit(" m"),
+            value -> RtAtmosphereSettings.set("godrays_range", value), () -> RtAtmosphereSettings.godRayRange(),
+            shaftsOn, dShafts, Mark.NONE, OptionImpact.LOW, true, st));
         Identifier bloomId = id("atm_bloom");
         look.addOption(boolOpt(builder, "atm_bloom", true, v -> RtAtmosphereSettings.set("bloom", v ? 1 : 0),
             () -> RtAtmosphereSettings.get("bloom") >= 0.5, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
-        look.addOption(atmSlider(builder, "atm_bloom_strength", "bloom_strength", 25, 0, 200, 5,
-            s -> s.readBooleanOption(bloomId) && anyRt.apply(s), rtDependencies(modeId, bloomId), true, st));
+        Function<ConfigState, Boolean> bloomOn = s -> anyRt.apply(s) && s.readBooleanOption(bloomId);
+        Identifier[] dBloom = rtDependencies(modeId, bloomId);
+        look.addOption(atmSlider(builder, "atm_bloom_strength", "bloom_strength", 25, 0, 200, 5, bloomOn, dBloom, true, st));
+        look.addOption(atmSlider(builder, "atm_bloom_threshold", "bloom_threshold", 600, 50, 1000, 5, bloomOn, dBloom, true, st));
+        look.addOption(atmSlider(builder, "atm_bloom_scatter", "bloom_scatter", 62, 30, 95, 1, bloomOn, dBloom, true, st));
+        look.addOption(boolOpt(builder, "atm_bloom_sky", false, value -> RtAtmosphereSettings.set("bloom_sky", value ? 1 : 0),
+            RtAtmosphereSettings::bloomSky, bloomOn, dBloom, Mark.NONE, OptionImpact.LOW, true, st));
         look.addOption(boolOpt(builder, "atm_sunglare", true, v -> RtAtmosphereSettings.set("sunglare", v ? 1 : 0),
             () -> RtAtmosphereSettings.get("sunglare") >= 0.5, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        Identifier glareId = id("atm_sunglare");
+        look.addOption(atmSlider(builder, "atm_sunglare_strength", "sunglare_strength", 100, 0, 200, 5,
+            s -> anyRt.apply(s) && s.readBooleanOption(glareId), rtDependencies(modeId, glareId), true, st));
+        look.addOption(intOpt(builder, "sun_size_tenths", 5, 1, 50, 1,
+            value -> Component.literal(String.format(Locale.ROOT, "%.1f°", value / 10.0)),
+            value -> RtSettings.sunSizeTenths = value, () -> RtSettings.sunSizeTenths,
+            anyRt, dMode, Mark.NONE, OptionImpact.LOW, true, st));
+        look.addOption(intOpt(builder, "sun_tilt_deg", 24, 0, 45, 1, unit("°"),
+            value -> RtSettings.sunTiltDeg = value, () -> RtSettings.sunTiltDeg,
+            anyRt, dMode, Mark.NONE, OptionImpact.LOW, true, st));
         Identifier fogId = id("rt_fog");
         look.addOption(boolOpt(builder, "rt_fog", true, v -> RtSettings.volumetricFogEnabled = RtSettings.rtFog = v, () -> RtSettings.rtFog,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
@@ -844,8 +894,17 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                 RtSettings.fogDensity = RtSettings.clampFloat(v / 100f, 0.0f, 2.0f);
             }, () -> RtSettings.rtFogDensity, s -> s.readBooleanOption(fogId) && anyRt.apply(s),
             rtDependencies(modeId, fogId), Mark.NONE, OptionImpact.MEDIUM, true, st));
-        look.addOption(atmSlider(builder, "atm_fog_aerial", "fog_aerial", 100, 0, 200, 5,
-            s -> s.readBooleanOption(fogId) && anyRt.apply(s), rtDependencies(modeId, fogId), true, st));
+        Function<ConfigState, Boolean> fogOn = s -> anyRt.apply(s) && s.readBooleanOption(fogId);
+        Identifier[] dFog = rtDependencies(modeId, fogId);
+        look.addOption(atmSlider(builder, "atm_fog_aerial", "fog_aerial", 100, 0, 200, 5, fogOn, dFog, true, st));
+        look.addOption(atmSlider(builder, "atm_fog_vanilla", "fog_vanilla", 100, 0, 100, 5, fogOn, dFog, true, st));
+        look.addOption(intOpt(builder, "rt_fog_in_scattering", 100, 0, 200, 5, percent(), value -> {
+            RtSettings.rtFogInScattering = value;
+            RtSettings.fogInScattering = value / 100f;
+        }, () -> RtSettings.rtFogInScattering, fogOn, dFog, Mark.NONE, OptionImpact.MEDIUM, true, st));
+        look.addOption(intOpt(builder, "rt_fog_distance_scale", 100, 20, 200, 5, percent(),
+            value -> RtSettings.fogDistanceScale = value / 100f, () -> Math.round(RtSettings.fogDistanceScale * 100f),
+            fogOn, dFog, Mark.NONE, OptionImpact.LOW, true, st));
         Identifier waveId = id("waving_foliage");
         Identifier pixelShadowsId = id("rays_pixel_shadows");
         look.addOption(boolOpt(builder, "rays_pixel_shadows", false, v -> RtSettings.raysPixelShadows = v, () -> RtSettings.raysPixelShadows,
@@ -853,6 +912,11 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         look.addOption(intOpt(builder, "rays_pixel_shadow_size", 1, 1, 16, 1, unit(" texels"), v -> RtSettings.raysPixelShadowSize = v,
             () -> RtSettings.raysPixelShadowSize,
             s -> anyRt.apply(s) && s.readBooleanOption(pixelShadowsId), rtDependencies(modeId, pixelShadowsId), Mark.RT, OptionImpact.LOW, false, st));
+        look.addOption(intOpt(builder, "atm_chunk_fade", 150, 0, 400, 10,
+            value -> tr("bedray.unit.seconds", "%s s", String.format(Locale.ROOT, "%.1f", value / 100.0)),
+            value -> RtAtmosphereSettings.set("chunk_fade", value / 100.0),
+            () -> (int) Math.round(RtAtmosphereSettings.get("chunk_fade") * 100.0),
+            anyRt, dMode, Mark.NONE, OptionImpact.LOW, true, st));
         look.addOption(boolOpt(builder, "waving_foliage", true, v -> RtSettings.wavingFoliage = v, () -> RtSettings.wavingFoliage,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(intOpt(builder, "waving_foliage_strength", 100, 0, 200, 5, percent(),
@@ -865,18 +929,36 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         OptionGroupBuilder img = collapsible(builder, CollapsibleGroups.ADV_IMAGE, "Image & Upscaling Details", "adv_image");
         img.addOption(boolOpt(builder, "auto_normals", true, v -> RtSettings.autoNormals = v, () -> RtSettings.autoNormals,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        Identifier reliefId = id("auto_normals");
+        img.addOption(intOpt(builder, "auto_normal_strength", 100, 0, 400, 10, percent(),
+            value -> RtSettings.autoNormalStrength = value, () -> RtSettings.autoNormalStrength,
+            state -> anyRt.apply(state) && state.readBooleanOption(reliefId), rtDependencies(modeId, reliefId),
+            Mark.NONE, OptionImpact.LOW, true, st));
         img.addOption(boolOpt(builder, "point_sampling_sharpness", false, v -> {
             VulkanRtxConfig.pointSamplingSharpness = v;
             TextureLodBias.setPointSamplingSharpness(v);
         }, () -> VulkanRtxConfig.pointSamplingSharpness, null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
-        // Always registered (not expert-only): the Texture style presets stage this row, so it must exist for every player.
+        Identifier autoLodId = id("auto_texture_lod_bias");
+        img.addOption(boolOpt(builder, "auto_texture_lod_bias", true, value -> {
+            VulkanRtxConfig.autoTextureLodBias = value;
+            TextureLodBias.autoTextureLodBias = value;
+        }, () -> VulkanRtxConfig.autoTextureLodBias, null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
+        img.addOption(intOpt(builder, "manual_texture_lod_bias", 0, -40, 20, 1,
+            value -> Component.literal(String.format(Locale.ROOT, "%.1f", value / 10.0)),
+            value -> {
+                VulkanRtxConfig.manualTextureLodBias = value / 10f;
+                TextureLodBias.manualTextureLodBias = value / 10f;
+            }, () -> Math.round(TextureLodBias.clamp(VulkanRtxConfig.manualTextureLodBias) * 10f),
+            state -> !state.readBooleanOption(autoLodId), new Identifier[] {autoLodId}, Mark.NONE, OptionImpact.LOW, true, st));
+        // Always registered because Texture Style presets stage this option.
         img.addOption(intOpt(builder, "texture_lod_bias_offset", 0, -20, 10, 1,
             v -> Component.literal(String.format(Locale.ROOT, "%.1f", v / 10.0f)),
             v -> {
                 float offset = v / 10.0f;
                 VulkanRtxConfig.textureLodBiasOffset = offset;
                 TextureLodBias.textureLodBiasOffset = offset;
-            }, () -> Math.round(VulkanRtxConfig.textureLodBiasOffset * 10.0f), null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
+            }, () -> Math.round(VulkanRtxConfig.textureLodBiasOffset * 10.0f),
+            state -> state.readBooleanOption(autoLodId), new Identifier[] {autoLodId}, Mark.NONE, OptionImpact.LOW, true, st));
         img.addOption(intOpt(builder, "fsr_sharpness", 0, 0, 100, 5,
             v -> v == 0 ? tr("bedray.onoff.off", "Off") : Component.literal(v + "%"),
             v -> {
@@ -885,6 +967,14 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             }, () -> Math.round(VulkanRtxConfig.fsrSharpness * 100.0f),
             s -> s.readEnumOption(backendId, UpscalerChoice.class).backend() == UpscalerBackend.FSR, new Identifier[] {backendId}, Mark.NONE,
             OptionImpact.LOW, true, st));
+        img.addOption(intOpt(builder, "fsr1_sharpness", 30, 0, 100, 1, percent(),
+            value -> VulkanRtxConfig.fsr1Sharpness = value / 100f, () -> Math.round(VulkanRtxConfig.fsr1Sharpness * 100f),
+            state -> state.readEnumOption(backendId, UpscalerChoice.class).backend() == UpscalerBackend.FSR1,
+            new Identifier[] {backendId}, Mark.NONE, OptionImpact.LOW, true, st));
+        img.addOption(intOpt(builder, "nis_sharpness", 20, 0, 100, 1, percent(),
+            value -> VulkanRtxConfig.nisSharpness = value / 100f, () -> Math.round(VulkanRtxConfig.nisSharpness * 100f),
+            state -> state.readEnumOption(backendId, UpscalerChoice.class).backend() == UpscalerBackend.NIS,
+            new Identifier[] {backendId}, Mark.NONE, OptionImpact.LOW, true, st));
         endGroup(builder, page, img, "adv_image");
 
         // ---- Frame generation details
@@ -1078,19 +1168,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             Mark.RT, OptionImpact.MEDIUM, true, st));
         ex.addOption(intOpt(builder, "rt_light_budget", 2048, 16, 8192, 16, unit(""), v -> RtSettings.lightBudget = v,
             () -> RtSettings.lightBudget, anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
-        ex.addOption(intOpt(builder, "sun_size_tenths", 5, 1, 50, 1, unit(""), v -> RtSettings.sunSizeTenths = v,
-            () -> RtSettings.sunSizeTenths, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
-        ex.addOption(intOpt(builder, "auto_normal_strength", 100, 0, 400, 10, percent(), v -> RtSettings.autoNormalStrength = v,
-            () -> RtSettings.autoNormalStrength, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
-        ex.addOption(atmSlider(builder, "atm_godrays_range", "godrays_range", 128, 32, 256, 16, anyRt, dMode, false, st));
-        ex.addOption(atmSlider(builder, "atm_bloom_threshold", "bloom_threshold", 400, 50, 800, 10, anyRt, dMode, false, st));
-        ex.addOption(atmSlider(builder, "atm_bloom_scatter", "bloom_scatter", 70, 30, 95, 5, anyRt, dMode, false, st));
-        ex.addOption(atmSlider(builder, "atm_sunglare_strength", "sunglare_strength", 100, 0, 200, 5, anyRt, dMode, false, st));
-        ex.addOption(atmSlider(builder, "atm_fog_vanilla", "fog_vanilla", 100, 0, 100, 5, anyRt, dMode, false, st));
-        ex.addOption(intOpt(builder, "rt_fog_in_scattering", 100, 0, 200, 5, percent(), v -> {
-            RtSettings.rtFogInScattering = v;
-            RtSettings.fogInScattering = RtSettings.clampFloat(v / 100f, 0.0f, 2.0f);
-        }, () -> RtSettings.rtFogInScattering, anyRt, dMode, Mark.NONE, OptionImpact.MEDIUM, false, st));
     }
 
     public static void afterPresetApplied() {

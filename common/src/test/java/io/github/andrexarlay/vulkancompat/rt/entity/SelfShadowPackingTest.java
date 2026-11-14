@@ -20,7 +20,7 @@ class SelfShadowPackingTest {
     @Test
     void countAndModeRoundTripThroughTheShaderUnpacking() {
         int[] counts = {0, 1, 3_000, SelfAvatarGate.COUNT_MASK};
-        int[] modes = {RtSettings.SELF_SHADOW_FULL, RtSettings.SELF_SHADOW_NO_FOOTPRINT, RtSettings.SELF_SHADOW_OFF};
+        int[] modes = {RtSettings.SELF_SHADOW_FULL, RtSettings.SELF_SHADOW_OFF};
         for (int count : counts) {
             for (int mode : modes) {
                 int word = SelfAvatarGate.packCountAndShadow(count, mode);
@@ -38,8 +38,25 @@ class SelfShadowPackingTest {
     }
 
     @Test
-    void theDefaultKeepsTheBodyShadowWithoutTheBlotUnderfoot() {
-        assertEquals(RtSettings.SELF_SHADOW_NO_FOOTPRINT, RtSettings.selfShadow);
+    void firstPersonShadowRoundTripsAndMigratesTheFormerFootprintMode() throws IOException {
+        int old = RtSettings.selfShadow;
+        try {
+            for (int mode : new int[] {RtSettings.SELF_SHADOW_FULL, RtSettings.SELF_SHADOW_OFF}) {
+                RtSettings.selfShadow = mode;
+                var saved = new java.io.StringWriter();
+                io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.writeAll(saved);
+                String line = saved.toString().lines().filter(value -> value.startsWith("self_shadow = ")).findFirst().orElseThrow();
+                RtSettings.selfShadow = -1;
+                io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.applyKeyValue("self_shadow",
+                    line.substring(line.indexOf('=') + 1).trim());
+                assertEquals(mode, RtSettings.selfShadow);
+            }
+            assertTrue(RtSettings.applyKeyValue("self_shadow", "1"));
+            assertEquals(RtSettings.SELF_SHADOW_FULL, RtSettings.selfShadow);
+            assertEquals(RtSettings.SELF_SHADOW_FULL, SelfAvatarGate.packCountAndShadow(24, 1) >>> 30);
+        } finally {
+            RtSettings.selfShadow = old;
+        }
     }
 
     @Test
