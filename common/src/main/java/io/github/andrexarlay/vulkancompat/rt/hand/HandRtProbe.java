@@ -17,13 +17,15 @@ public final class HandRtProbe {
 
     private static volatile float[] keyColor = {0f, 0f, 0f};
     private static volatile float[] skyAmbient = {0.3f, 0.3f, 0.3f};
+    private static volatile float exposure = 1f;
     private static volatile boolean published;
 
     private HandRtProbe() {
     }
 
     /** Called from the RT frame setup: key light colour and the horizon ambient of the sky model (already weather-aware). */
-    public static void publishSky(float[] key, float[] horizon, float[] zenith) {
+    public static void publishSky(float[] key, float[] horizon, float[] zenith, float appliedExposure) {
+        exposure = Float.isFinite(appliedExposure) && appliedExposure > 0f ? appliedExposure : 1f;
         float[] amb = new float[3];
         for (int i = 0; i < 3; i++) amb[i] = 0.5f * (horizon[i] + zenith[i]);
         keyColor = key.clone();
@@ -37,19 +39,22 @@ public final class HandRtProbe {
 
     /** Opaque ARGB of the hand light for packed vanilla block and sky levels (0..15 each), using the published sky. */
     public static int argb(int blockLevel, int skyLevel) {
-        return argb(blockLevel, skyLevel, keyColor, skyAmbient);
+        return argb(blockLevel, skyLevel, keyColor, skyAmbient, exposure);
     }
 
-    static int argb(int blockLevel, int skyLevel, float[] key, float[] ambient) {
+    static int argb(int blockLevel, int skyLevel, float[] key, float[] ambient, float exposure) {
         float sky = clamp01(skyLevel / 15f);
         float block = clamp01(blockLevel / 15f);
         float blockPower = block * block * 1.2f;
         int out = 0xFF000000;
         for (int i = 0; i < 3; i++) {
             float c = sky * (ambient[i] + KEY_SHARE * key[i]) + blockPower * BLOCK_TINT[i];
+            // Same exposure the traced frame is tone mapped with, so the hand matches the scene brightness (owner screenshot
+            // 2026-11-14: the unexposed estimate made the hand near-white on a dim scene).
+            c *= exposure;
             c = Math.max(c, FLOOR);
             // Reinhard keeps the HDR sum inside the LDR lightmap; 1 maps to white only asymptotically.
-            c = c / (1f + c) * 2f;
+            c = c / (1f + c);
             int v = Math.round(clamp01(c) * 255f);
             out |= v << (16 - 8 * i);
         }
