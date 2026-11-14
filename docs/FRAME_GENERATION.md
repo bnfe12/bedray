@@ -27,7 +27,8 @@ rendered one. It is done through NVIDIA **Streamline**. Reflex lowers latency.
 ## Requirements
 
 * NVIDIA RTX 40 or 50 series GPU, a current driver, Windows with hardware-accelerated GPU scheduling.
-* A temporal upscaler selected (DLSS, FSR or XeSS), or initialized native-resolution RR with current depth/motion guides.
+* Current-frame depth and motion guides from the hardware renderer. A temporal upscaler or Ray Reconstruction is optional:
+  frame generation also works at native resolution and with the built-in spatial scale.
 * Streamline files (not included) in `bedray/natives/streamline/` inside the game folder (`<instance>/minecraft/bedray/natives/streamline/`):
   `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.reflex.dll`, `sl.pcl.dll`, `nvngx_dlssg.dll`, and `vkb_sl.dll`, which you
   build from `native/sl_bridge` ([BUILDING.md](BUILDING.md)). Use a Streamline 2.14.x release. The old folder
