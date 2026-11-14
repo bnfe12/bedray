@@ -202,8 +202,7 @@ final class SettingsDraft {
             };
             return new RuntimeStatus(badge, Component.literal(io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.statusLine()));
         }
-        if (entry.category() == Category.UPSCALING && !entry.path().startsWith("frame_generation")
-                && !entry.path().equals("quality_preset") && !entry.path().equals("custom_scale")) {
+        if (entry.category() == Category.UPSCALING && !entry.path().equals("quality_preset") && !entry.path().equals("custom_scale")) {
             var choice = config.readEnumOption(id("upscaler_backend"), UpscalerChoice.class);
             var backend = choice.backend();
             if (entry.path().equals("dlss_sr_preset")) {

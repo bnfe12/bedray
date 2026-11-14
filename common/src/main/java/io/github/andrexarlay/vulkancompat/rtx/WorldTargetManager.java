@@ -1037,7 +1037,8 @@ public final class WorldTargetManager {
             int winW = mc.getWindow().getWidth();
             int winH = mc.getWindow().getHeight();
             TemporalUpscaler.onFrameBegin(winW, winH);
-            if (mc.level != null && RtFrameRenderer.rrOutputReady() && temporalMatchesOutput(winW, winH)
+            if (mc.level != null && !RtGeometryGate.irisActive() && RtFrameRenderer.rrOutputReady()
+                    && temporalMatchesOutput(winW, winH)
                     && TemporalUpscaler.active() == UpscalerBackend.DLSS && !Boolean.getBoolean("bedray.rt.disableRrOutput")) {
                 DlssRuntime.suspendSrFeatureForRr();
             }

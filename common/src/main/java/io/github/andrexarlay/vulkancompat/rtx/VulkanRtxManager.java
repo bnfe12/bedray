@@ -2,16 +2,7 @@ package io.github.andrexarlay.vulkancompat.rtx;
 
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 
-/**
- * Resolution scaling of Minecraft's 3D render target.
- * <p>
- * Real part only: computes the 3D target size from {@link VulkanRtxConfig} and resizes
- * {@code GameRenderer} accordingly. The stretch to the swapchain is done by the bilinear
- * blit in MixinVulkanGpuSurface.
- * <p>
- * STUB layers (DLSS/FSR/XeSS upscalers, NRD, ray tracing pipeline, velocity buffer) are intentionally
- * NOT called from here; see the {@code // STUB:} headers in their files.
- */
+/** Window target synchronization and built-in 3D scale calculations. */
 public final class VulkanRtxManager {
 
     private static volatile boolean frameRendering = false;

@@ -286,7 +286,8 @@ public final class SettingsCatalog {
                 "The screenshots were taken with the first available upscaler (see the caption).", Scene.DAY, 0.55f, 0.6f, "upscaler_mode", modes, modeKey);
         }
         putNoImage("fsr1_mode", Tier.ADVANCED, "FSR 1 Quality",
-            "Sets the 3D resolution for the spatial FSR 1 filter. Custom exposes the render scale below.", "", "FSR 1.", "");
+            "Sets the 3D resolution for the spatial FSR 1 filter. Custom exposes the render scale below.", "", "FSR 1.",
+            "The preview catalog uses temporal upscalers. Inspect spatial FSR 1 in the world.");
         for (UpscalerBackend backend : UpscalerBackend.values()) {
             if (backend == UpscalerBackend.BILINEAR) continue;
             String id = backend.name().toLowerCase(Locale.ROOT) + "_custom_scale";
@@ -297,7 +298,7 @@ public final class SettingsCatalog {
             };
             putNoImage(id, Tier.ESSENTIAL, "Custom Render Scale",
                 "Percentage of the output resolution rendered on each axis. Higher values preserve more detail.",
-                "", requirement, "");
+                "", requirement, "Check the current render and output sizes in F3 after applying the scale.");
         }
         INFOS.put("frame_generation_provider", new Info("frame_generation_provider", Tier.ESSENTIAL, "Frame Generation Method",
             "Auto uses NVIDIA DLSS Frame Generation (Streamline) when the NVIDIA driver and Streamline files are installed, otherwise AMD FSR 3 Frame Generation (works on any GPU with amd_fidelityfx_vk.dll, 2x mode).",
