@@ -79,8 +79,31 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/SodiumPage");
 
     public enum WaterStyle { VANILLA, REALISTIC }
-    /** Ordinals match {@code RtSettings.SELF_SHADOW_*}. */
-    public enum SelfShadow { FULL, NO_FOOTPRINT, OFF }
+    public enum SelfShadow {
+        FULL(RtSettings.SELF_SHADOW_FULL), OFF(RtSettings.SELF_SHADOW_OFF);
+
+        private final int storedValue;
+
+        SelfShadow(int storedValue) {
+            this.storedValue = storedValue;
+        }
+
+        int storedValue() {
+            return storedValue;
+        }
+
+        static SelfShadow fromStored(int value) {
+            return value == RtSettings.SELF_SHADOW_OFF ? OFF : FULL;
+        }
+
+        static SelfShadow parsePreset(String value) {
+            return switch (value.toUpperCase(Locale.ROOT)) {
+                case "0", "1", "FULL", "NO_FOOTPRINT" -> FULL;
+                case "2", "OFF" -> OFF;
+                default -> throw new IllegalArgumentException("Unknown player shadow mode: " + value);
+            };
+        }
+    }
     public enum RendererStatus { STATUS }
     public enum GiExecutionStatusRow { STATUS }
     public enum QualityProfile { FAST, BEAUTIFUL, CUSTOM }
@@ -434,16 +457,15 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setImpact(OptionImpact.LOW).setStorageHandler(st);
         rt.addOption(track("water_style", water));
         EnumOptionBuilder<SelfShadow> selfShadow = builder.createEnumOption(id("self_shadow"), SelfShadow.class);
-        selfShadow.setName(nameOf("self_shadow")).setTooltip(v -> tipOf("self_shadow")).setDefaultValue(SelfShadow.NO_FOOTPRINT)
+        selfShadow.setName(nameOf("self_shadow")).setTooltip(v -> tipOf("self_shadow")).setDefaultValue(SelfShadow.FULL)
             .setAllowedValues(EnumSet.allOf(SelfShadow.class))
             .setElementNameProvider(v -> switch (v) {
                 case FULL -> tr("bedray.self_shadow.full", "Full");
-                case NO_FOOTPRINT -> tr("bedray.self_shadow.no_footprint", "No blot underfoot");
                 case OFF -> tr("bedray.self_shadow.off", "Off");
             })
             .setEnabledProvider(anyRt, dMode).setControlHiddenWhenDisabled(false)
-            .setBinding(v -> RtSettings.selfShadow = v.ordinal(),
-                () -> SelfShadow.values()[Math.max(0, Math.min(2, RtSettings.selfShadow))])
+            .setBinding(v -> RtSettings.selfShadow = v.storedValue(),
+                () -> SelfShadow.fromStored(RtSettings.selfShadow))
             .setImpact(OptionImpact.LOW).setStorageHandler(st);
         rt.addOption(track("self_shadow", selfShadow));
         rt.addOption(boolOpt(builder, "rays_optical_materials", true, v -> RtSettings.opticalMaterials = v,

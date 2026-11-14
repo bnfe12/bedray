@@ -140,12 +140,16 @@ public final class RtSettings {
     // ---- First-person body shadow ----
     /** The body casts its shadow like any other geometry, also onto the floor patch its own (unseen) feet cover. */
     public static final int SELF_SHADOW_FULL = 0;
-    /** The body casts its shadow, but rays leaving the floor inside its own column ignore it (no black blot underfoot). */
-    public static final int SELF_SHADOW_NO_FOOTPRINT = 1;
+    /** Former footprint filter value, accepted when reading old settings and presets. */
+    private static final int LEGACY_SELF_SHADOW_NO_FOOTPRINT = 1;
     /** The body never occludes light; only mirror rays still see it. */
     public static final int SELF_SHADOW_OFF = 2;
     /** First-person body shadow ({@code self_shadow}); third person always uses the full model. */
-    public static int selfShadow = SELF_SHADOW_NO_FOOTPRINT;
+    public static int selfShadow = SELF_SHADOW_FULL;
+
+    public static int normalizeSelfShadow(int mode) {
+        return mode == LEGACY_SELF_SHADOW_NO_FOOTPRINT ? SELF_SHADOW_FULL : mode;
+    }
 
     // ---- Water & Liquids ----
     public static final int WATER_STYLE_VANILLA = 0;
@@ -321,7 +325,7 @@ public final class RtSettings {
         bool("rt_show_expert", () -> showExpert, v -> showExpert = v);
         integer("auto_normal_strength", () -> autoNormalStrength, v -> autoNormalStrength = v, 0, 400);
         integer("water_style", () -> waterStyle, v -> waterStyle = v, 0, 1);
-        integer("self_shadow", () -> selfShadow, v -> selfShadow = v, SELF_SHADOW_FULL, SELF_SHADOW_OFF);
+        integer("self_shadow", () -> selfShadow, v -> selfShadow = normalizeSelfShadow(v), SELF_SHADOW_FULL, SELF_SHADOW_OFF);
         bool("waving_foliage", () -> wavingFoliage, v -> wavingFoliage = v);
         integer("waving_foliage_strength", () -> wavingFoliageStrength, v -> wavingFoliageStrength = v, 0, 200);
         bool("rt_fog", () -> volumetricFogEnabled, v -> { volumetricFogEnabled = v; rtFog = v; });
@@ -1001,6 +1005,8 @@ public final class RtSettings {
         w.write("rt_fog_in_scattering = " + rtFogInScattering + "\n");
         w.write("# Water style: 0 = Vanilla, 1 = Realistic\n");
         w.write("water_style = " + waterStyle + "\n");
+        w.write("# First-person body shadow: 0 = Full, 2 = Off\n");
+        w.write("self_shadow = " + normalizeSelfShadow(selfShadow) + "\n");
         w.write("waving_foliage = " + wavingFoliage + "\n");
         w.write("waving_foliage_strength = " + wavingFoliageStrength + "\n");
         w.write("# Vibrant Visuals (Mojang vibrant palette)\n");

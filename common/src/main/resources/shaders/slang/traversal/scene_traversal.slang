@@ -138,14 +138,13 @@ struct SceneTraversal : ITriangleTracer {
         desc.TMin = ray.tMin;
         desc.TMax = ray.tMax;
 
-        // The first-person body casts its shadow per the self_shadow setting;
-        // by default not onto the floor patch its own feet cover.
+        // Apply the first-person body shadow setting before committing a blocker.
         RayQuery<RAY_FLAG_NONE> query;
         query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);
         while (query.Proceed()) {
             if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
             if (selfOccluderSkipped(selfShadowMode, entityInstance(query.CandidateInstanceID()),
-                query.CandidatePrimitiveIndex(), selfAvatarTriStart, selfAvatarTriCount, ray.origin)) continue;
+                query.CandidatePrimitiveIndex(), selfAvatarTriStart, selfAvatarTriCount)) continue;
             query.CommitNonOpaqueTriangleHit();
         }
 

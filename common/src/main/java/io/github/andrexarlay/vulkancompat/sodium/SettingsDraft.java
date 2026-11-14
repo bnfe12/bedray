@@ -472,6 +472,8 @@ final class SettingsDraft {
         } else if (current instanceof VulkanSodiumConfig.WaterStyle) {
             next = value.equals("0") ? VulkanSodiumConfig.WaterStyle.VANILLA : value.equals("1")
                 ? VulkanSodiumConfig.WaterStyle.REALISTIC : Enum.valueOf(VulkanSodiumConfig.WaterStyle.class, value.toUpperCase(Locale.ROOT));
+        } else if (current instanceof VulkanSodiumConfig.SelfShadow) {
+            next = VulkanSodiumConfig.SelfShadow.parsePreset(value);
         } else if (current instanceof RtAtmosphereSettings.GodRays) {
             double parsed = Double.parseDouble(value);
             int ordinal = (int)parsed;
@@ -489,6 +491,7 @@ final class SettingsDraft {
         if (value instanceof UpscalerChoice choice) return "\"" + choice.backend().name() + "\"";
         if (value instanceof RtMode mode) return "\"" + mode.logName() + "\"";
         if (value instanceof VulkanSodiumConfig.WaterStyle style) return style == VulkanSodiumConfig.WaterStyle.VANILLA ? "0" : "1";
+        if (value instanceof VulkanSodiumConfig.SelfShadow mode) return Integer.toString(mode.storedValue());
         if (value instanceof RtAtmosphereSettings.GodRays mode) return mode.ordinal() + ".0";
         if (value instanceof Boolean on && e.path().startsWith("atm_")) return on ? "1.0" : "0.0";
         if (value instanceof Number n && fractional(e.path())) return String.valueOf(n.doubleValue() / (e.path().equals("texture_lod_bias_offset") ? 10 : 100));

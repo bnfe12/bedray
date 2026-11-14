@@ -1,5 +1,7 @@
 package io.github.andrexarlay.vulkancompat.rt.entity;
 
+import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
+
 /**
  * The one decision behind adding the local player's model to the RT scene: <b>first person only</b>. In third person the
  * game submits the player through {@code EntityRenderDispatcher} like any other entity, and a second submission would put a
@@ -28,6 +30,7 @@ public final class SelfAvatarGate {
         if (selfShadowMode < 0 || selfShadowMode > 2) {
             throw new IllegalArgumentException("self_shadow mode out of range: " + selfShadowMode);
         }
-        return triCount | (selfShadowMode << 30);
+        int mode = RtSettings.normalizeSelfShadow(selfShadowMode);
+        return triCount | (mode << 30);
     }
 }
