@@ -57,6 +57,11 @@ public class MixinSubmitNodeCollection {
             capture.noteHandSubmit("item", "quads=" + (itemQuads == null ? "null" : itemQuads.all().size()), null, light, overlay, poseStack);
         }
         EntityCaptureManager.HandItemSplit split = capture.captureHandItem(poseStack, itemQuads, tintColors);
+        if (EntityCaptureManager.handGeometryEnabled() && capture.stageHandGeometry(poseStack, itemQuads, tintColors, light) > 0) {
+            // the held item is traced as scene geometry of the next frame: no raster copy of it
+            ci.cancel();
+            return;
+        }
         if (split != null) {
             if (!split.emissive().isEmpty()) {
                 // The two subsets are disjoint: base quads retain vanilla light, while only emitter-eligible quads get

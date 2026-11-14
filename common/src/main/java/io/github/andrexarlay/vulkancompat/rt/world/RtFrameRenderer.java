@@ -449,6 +449,7 @@ public final class RtFrameRenderer {
             // the first-person camera never draws the player's own model; without it a reflection has nothing to show
             io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().captureSelfAvatar(camera,
                 levelState != null ? levelState.playerRenderState : null);
+            io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().captureHandGeometry(camera);
         }
         io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().endFrame();
         if (RtGeometryGate.irisActive()) {
