@@ -1402,6 +1402,33 @@ static void test_idle_frame_reuses_slot_state() {
     fixture.release(2);
 }
 
+static void test_reused_tlas_pins_blas_across_a_table_only_frame() {
+    Fixture fixture(2);
+    const Mesh mesh = triangle_mesh(0.0f, 0.0f, 0.0f);
+    CHECK_STATUS(fixture.add_entity(entity_input(9, 1, 1, mesh)), BEDRAY_SCENE_OK);
+    const auto first = fixture.prepare(1, 0x270);
+    const auto initial_blas = fake::g.builds.front().dst;
+    fixture.release(1);
+
+    CHECK_STATUS(fixture.update_table(BEDRAY_SCENE_TABLE_LIGHT, 1, std::vector<uint8_t>(32, 0xBA)),
+        BEDRAY_SCENE_OK);
+    const auto reused = fixture.prepare(2, 0x271);
+    CHECK(reused.tlas == first.tlas);
+    CHECK(reused.instance_count == first.instance_count && reused.instance_count == 1);
+    CHECK(fixture.resources().instance_count == 1);
+    CHECK((reused.flags & BEDRAY_SCENE_FRAME_TABLES_UPLOADED) != 0);
+    CHECK((reused.flags & (BEDRAY_SCENE_FRAME_TLAS_REBUILT | BEDRAY_SCENE_FRAME_TLAS_UPDATED)) == 0);
+
+    const Mesh moved = triangle_mesh(1.0f, 0.0f, 0.0f);
+    CHECK_STATUS(fixture.add_entity(entity_input(9, 2, 1, moved)), BEDRAY_SCENE_OK);
+    const auto replacement = fixture.prepare(3, 0x272);
+    CHECK((replacement.flags & BEDRAY_SCENE_FRAME_BLAS_COPY_ON_WRITE) != 0);
+    CHECK(replacement.blas_refits == 0);
+    CHECK(fake::accel_is_alive(initial_blas));
+    fixture.release(2);
+    fixture.release(3);
+}
+
 static void test_transform_update_touches_only_tlas() {
     Fixture fixture(1);
     const Mesh mesh = quad_mesh(0.0f, 0.0f, 0.0f);
@@ -1461,6 +1488,46 @@ static void test_transform_update_touches_only_tlas() {
     fixture.release(3);
 }
 
+static void test_tlas_full_build_reuses_released_storage_when_it_fits() {
+    Fixture fixture(2);
+    const Mesh mesh = quad_mesh(0.0f, 0.0f, 0.0f);
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(2, 1, mesh), BEDRAY_SCENE_OK);
+    const auto initial = fixture.prepare(1, 0xCE0);
+    const auto concurrent = fixture.prepare(2, 0xCE1);
+    CHECK(initial.tlas != concurrent.tlas);
+    fixture.release(1);
+
+    CHECK_STATUS(fixture.remove_section(2), BEDRAY_SCENE_OK);
+    const auto smaller = fixture.prepare(3, 0xCE2);
+    CHECK(smaller.instance_count == 1);
+    CHECK(smaller.tlas == initial.tlas);
+    CHECK((smaller.flags & BEDRAY_SCENE_FRAME_TLAS_REBUILT) != 0);
+    const auto& build = fake::g.builds.back();
+    CHECK(build.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR);
+    CHECK(build.src == VK_NULL_HANDLE);
+    CHECK(fake::accel_is_alive(reinterpret_cast<VkAccelerationStructureKHR>(
+        static_cast<uintptr_t>(concurrent.tlas))));
+    fixture.release(3);
+
+    CHECK_STATUS(bedray_scene_set_view(fixture.scene, 1.0, 0.0, 0.0, &g_error), BEDRAY_SCENE_OK);
+    const size_t queries_before_move = fake::g.size_queries.size();
+    const auto moved = fixture.prepare(4, 0xCE3);
+    CHECK(moved.tlas == initial.tlas);
+    CHECK((moved.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
+    CHECK(fake::g.size_queries.size() == queries_before_move);
+    fixture.release(4);
+
+    CHECK_STATUS(fixture.add_section(2, 2, mesh), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(3, 1, mesh), BEDRAY_SCENE_OK);
+    const auto grown = fixture.prepare(5, 0xCE4);
+    CHECK(grown.instance_count == 3);
+    CHECK(grown.tlas != initial.tlas && grown.tlas != concurrent.tlas);
+    CHECK((grown.flags & BEDRAY_SCENE_FRAME_TLAS_REBUILT) != 0);
+    fixture.release(5);
+    fixture.release(2);
+}
+
 static void test_section_instances_follow_view() {
     Fixture fixture(1);
     const Mesh section_mesh = quad_mesh(0.0f, 0.0f, 0.0f);
@@ -1501,6 +1568,7 @@ static void test_section_instances_follow_view() {
     CHECK(near_value(transform[7], 6.0));
     CHECK(near_value(transform[11], 7.0));
     fixture.release(1);
+    const size_t initial_size_queries = fake::g.size_queries.size();
 
     /* A section is placed at translate(origin - view) in the camera-relative
        space the renderer traces; the entity transform is unchanged. */
@@ -1538,6 +1606,7 @@ static void test_section_instances_follow_view() {
     CHECK(moved.upload_bytes == 0);
     CHECK(moved.tlas == placed.tlas);
     CHECK(fake::g.builds.size() == builds_before + 1);
+    CHECK(fake::g.size_queries.size() == initial_size_queries);
     if (fake::g.builds.size() == builds_before + 1) {
         const fake::BuildRecord& build = fake::g.builds.back();
         CHECK(build.type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
@@ -1803,6 +1872,42 @@ static void test_compacted_section_table_keeps_vertex_address() {
     CHECK(record.vertex_address == committed_vertex);
     CHECK(record.vertex_address != 0);
     fixture.release(2);
+}
+
+static void test_instance_planning_merges_builds_and_out_of_order_compactions() {
+    Fixture fixture(2);
+    const Mesh terrain = compaction_mesh();
+    CHECK_STATUS(fixture.add_section(30, 1, terrain), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x750);
+
+    CHECK_STATUS(fixture.add_section(10, 1, terrain), BEDRAY_SCENE_OK);
+    fixture.prepare(2, 0x751);
+    const auto before = fixture.resources();
+    const auto vertex10 = read_section_record(before, 0).vertex_address;
+    const auto vertex30 = read_section_record(before, 1).vertex_address;
+    fixture.release(1);
+    fixture.release(2);
+
+    CHECK_STATUS(fixture.add_section(20, 1, terrain), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_entity(entity_input(20, 1, 1, triangle_mesh(0.0f, 0.0f, 0.0f))),
+        BEDRAY_SCENE_OK);
+    const auto mixed = fixture.prepare(3, 0x752);
+    CHECK(mixed.instance_count == 4 && mixed.blas_builds == 2);
+    CHECK(fake::g.as_copies.size() == 2);
+    const auto resources = fixture.resources();
+    CHECK(read_section_record(resources, 0).vertex_address == vertex10);
+    CHECK(read_section_record(resources, 2).vertex_address == vertex30);
+    CHECK(instance_custom_index(resources, 3) == 0x800000u);
+    if (fake::g.as_copies.size() == 2) {
+        const auto tlas = reinterpret_cast<VkAccelerationStructureKHR>(static_cast<uintptr_t>(mixed.tlas));
+        const auto* state = fake::find_accel(tlas);
+        CHECK(state != nullptr && state->blas_references.size() == 4);
+        if (state != nullptr && state->blas_references.size() == 4) {
+            CHECK(state->blas_references[0] == fake::find_accel(fake::g.as_copies[0].dst)->address);
+            CHECK(state->blas_references[2] == fake::find_accel(fake::g.as_copies[1].dst)->address);
+        }
+    }
+    fixture.release(3);
 }
 
 static void test_compaction_allocation_retry_keeps_query_slots_unique() {
@@ -2278,8 +2383,11 @@ static void test_tlas_custom_indices_follow_table_slots() {
     /* Removing the lowest id compacts the slots: id 20 moves from slot 1 to
        slot 0, keeps its identity hash, and the instances follow the table. */
     CHECK_STATUS(fixture.remove_section(10), BEDRAY_SCENE_OK);
+    const size_t queries_before_removal = fake::g.size_queries.size();
     const BedraySceneFrameInfo after = fixture.prepare(3, 0xB22);
     CHECK(after.instance_count == 3);
+    CHECK(fake::g.size_queries.size() == queries_before_removal + 1);
+    CHECK(fake::g.size_queries.back().type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
     const BedraySceneResources compacted = fixture.resources();
     CHECK(compacted.section_table_bytes == 2 * BEDRAY_SCENE_SECTION_RECORD_BYTES);
     const BedraySceneSectionRecord record20 = read_section_record(compacted, 0);
@@ -2390,9 +2498,11 @@ int main() {
     test_geometry_vertex_section_stride();
     test_section_quad_limit();
     test_idle_frame_reuses_slot_state();
+    test_reused_tlas_pins_blas_across_a_table_only_frame();
     test_update_copies_inputs_and_coalesces_pending();
     test_transform_update_touches_only_tlas();
     test_section_instances_follow_view();
+    test_tlas_full_build_reuses_released_storage_when_it_fits();
     test_refit_copies_pinned_geometry_and_updates_after_completion();
     test_pipelined_cow_tlas_updates_keep_dependencies_bounded();
     test_nonfinite_activation_changes_rebuild_instead_of_refitting();
@@ -2400,6 +2510,7 @@ int main() {
     test_rebuild_without_update_capability_retires_after_frame();
     test_section_blas_compacts_after_release();
     test_compacted_section_table_keeps_vertex_address();
+    test_instance_planning_merges_builds_and_out_of_order_compactions();
     test_compaction_allocation_retry_keeps_query_slots_unique();
     test_stale_compaction_query_waits_for_build_completion();
     test_failed_prepare_retries_all_planned_compactions();

@@ -180,6 +180,7 @@ struct FrameSlot {
     Buffer instance_buffer;
     Buffer tlas_scratch;
     uint64_t tlas_scratch_capacity = 0;
+    uint64_t tlas_update_scratch_bytes = 0;
     uint32_t instance_count = 0;
     bool tlas_valid = false;
     uint64_t built_version = 0;
@@ -188,9 +189,11 @@ struct FrameSlot {
        TLAS work path even when the scene version matches. */
     std::array<double, 3> view{};
     bool view_valid = false;
-    std::vector<VkAccelerationStructureKHR> blas_in_use;
-    /* Valid cached TLAS references, even after its last trace completed. An UPDATE still reads that source TLAS. */
+    /* Current TLAS references. While the slot is outstanding, they pin the BLAS for tracing.
+       When the slot is free, an update-capable scene can still use them as TLAS UPDATE inputs. */
     std::vector<VkAccelerationStructureKHR> cached_blas_refs;
+    /* Extra references read by this outstanding TLAS UPDATE from the previous slot contents. */
+    std::vector<VkAccelerationStructureKHR> update_source_blas_refs;
 };
 
 struct Scene {

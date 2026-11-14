@@ -36,7 +36,7 @@ static_assert(sizeof(BedraySceneResources) == 112, "scene ABI: resources must st
 static_assert(sizeof(BedraySceneSectionRange) == 8, "scene ABI: section range must stay 8 bytes");
 static_assert(sizeof(BedraySceneSectionRecord) == 64, "scene ABI: section record must stay 64 bytes");
 static_assert(sizeof(BedraySceneStatus) == 4, "scene ABI: status enum must stay 4 bytes");
-static_assert(sizeof(VkAccelerationStructureInstanceKHR) == 64,
+static_assert(sizeof(VkAccelerationStructureInstanceKHR) == BEDRAY_SCENE_INSTANCE_RECORD_BYTES,
     "scene ABI: a TLAS instance record must stay 64 bytes");
 
 /* The shader reads both records as raw bytes, so field offsets are part of the
@@ -181,6 +181,7 @@ struct PreparePlan {
     uint64_t section_table_upload_offset = 0;
 
     std::unique_ptr<Acceleration> new_tlas;
+    uint64_t tlas_update_scratch_bytes = 0;
     std::unique_ptr<Buffer> new_tlas_scratch;
     std::unique_ptr<Buffer> new_instance_buffer;
 
@@ -192,6 +193,7 @@ struct PreparePlan {
     uint64_t blas_refits = 0;
     uint64_t deferred_updates = 0;
     bool blas_copy_on_write = false;
+    bool reuse_instances = false;
     bool tlas_action = false;
     bool tlas_update = false;
     bool tlas_clear = false;
@@ -213,10 +215,11 @@ bool blas_referenced_by_outstanding(const Scene& scene, VkAccelerationStructureK
         if (slot.free) {
             continue;
         }
-        for (VkAccelerationStructureKHR candidate : slot.blas_in_use) {
-            if (candidate == handle) {
-                return true;
-            }
+        const auto references = [handle](const auto& handles) {
+            return std::find(handles.begin(), handles.end(), handle) != handles.end();
+        };
+        if (references(slot.cached_blas_refs) || references(slot.update_source_blas_refs)) {
+            return true;
         }
     }
     return false;
@@ -327,7 +330,7 @@ bool process_compaction(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
             it = scene.compaction_jobs.erase(it);
             continue;
         }
-        CompactionCopy copy;
+        CompactionCopy& copy = plan.compactions.emplace_back();
         copy.section_id = job.section_id;
         copy.query_slot = job.query_slot;
         copy.section = &sec->second;
@@ -341,7 +344,6 @@ bool process_compaction(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
         /* Ownership of the slot stays with the job until commit_plan frees it.
            Erasing here would lose the job if a later step of this prepare fails
            and cleanup_plan rolls the compact back. */
-        plan.compactions.push_back(std::move(copy));
         ++it;
         tlas_changed = true;
     }
@@ -712,8 +714,6 @@ void cleanup_plan(Scene& scene, PreparePlan& plan) {
 }
 
 bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, BedraySceneError* error) {
-    plan.jobs.reserve(scene.sections.size() + scene.entities.size());
-
     for (auto& [id, section] : scene.sections) {
         if (!section.has_pending) {
             continue;
@@ -725,12 +725,12 @@ bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
         job.mesh = &section.pending;
         job.previous = section.geometry.get();
         job.refit = false;
-        if (!build_job_resource(scene, job, error)) {
+        plan.jobs.push_back(std::move(job));
+        if (!build_job_resource(scene, plan.jobs.back(), error)) {
             return false;
         }
         plan.blas_rebuilds++;
         tlas_changed = true;
-        plan.jobs.push_back(std::move(job));
     }
 
     const bool can_refit = (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0;
@@ -762,9 +762,11 @@ bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
         const bool refit_eligible = job.previous != nullptr && !topology_changed && can_refit && same_shape
             && entity.finite_positions && job.finite_positions;
         const bool pinned_refit = refit_eligible && blas_referenced_by_outstanding(scene, job.previous->blas.handle);
-        job.refit = refit_eligible && !pinned_refit;
-        if (!build_job_resource(scene, job, error)) return false;
-        if (job.refit) {
+        const bool refit = refit_eligible && !pinned_refit;
+        job.refit = refit;
+        plan.jobs.push_back(std::move(job));
+        if (!build_job_resource(scene, plan.jobs.back(), error)) return false;
+        if (refit) {
             plan.blas_refits++;
         } else {
             plan.blas_rebuilds++;
@@ -772,7 +774,6 @@ bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
         }
         // Never shade current host attributes with an older, deferred BLAS. A pinned refit becomes a COW build.
         tlas_changed = true;
-        plan.jobs.push_back(std::move(job));
     }
 
     if (!tlas_changed) {
@@ -794,22 +795,14 @@ struct GeometryRef {
 
 /* A refit job keeps the previous acceleration structure and only replaces the
    vertex/index buffer, so instances must reference the previous BLAS. */
-GeometryRef planned_geometry(const PreparePlan& plan, bool is_section, uint64_t id, const GeometryResource* committed) {
-    for (const GeometryJob& job : plan.jobs) {
-        if (job.is_section == is_section && job.id == id && job.created) {
-            const auto& blas = job.refit ? job.previous->blas : job.created->blas;
-            return { blas.address, blas.handle, job.created->vertex_address };
-        }
+GeometryRef planned_geometry(const GeometryResource* committed, const GeometryJob* job, const CompactionCopy* compaction) {
+    if (job != nullptr) {
+        const auto& blas = job->refit ? job->previous->blas : job->created->blas;
+        return { blas.address, blas.handle, job->created->vertex_address };
     }
-    if (is_section) {
-        for (const CompactionCopy& compaction : plan.compactions) {
-            if (compaction.section_id == id) {
-                // Compaction replaces only the BLAS; the vertex buffer stays put,
-                // so the section record must keep the committed vertex address.
-                return { compaction.compact.address, compaction.compact.handle,
-                         committed != nullptr ? committed->vertex_address : 0 };
-            }
-        }
+    if (compaction != nullptr) {
+        // Compaction replaces the BLAS and retains the committed vertex buffer.
+        return { compaction->compact.address, compaction->compact.handle, committed->vertex_address };
     }
     if (committed != nullptr) {
         return { committed->blas.address, committed->blas.handle, committed->vertex_address };
@@ -846,19 +839,41 @@ BedraySceneSectionRecord section_record(const Section& section, uint64_t vertex_
     return record;
 }
 
-void plan_instances(const Scene& scene, PreparePlan& plan) {
+void plan_instances(const Scene& scene, PreparePlan& plan, const FrameSlot& slot) {
     const bool section_job = std::any_of(plan.jobs.begin(), plan.jobs.end(),
         [](const GeometryJob& job) { return job.is_section; });
     plan.section_table_rebuild = scene.section_table_dirty || section_job;
+    if (!plan.section_table_rebuild && slot.tlas_valid
+            && slot.built_version == plan.target_version && !view_differs(scene, slot)) {
+        plan.reuse_instances = true;
+        plan.instance_count = slot.instance_count;
+        return;
+    }
     if (plan.section_table_rebuild) {
         plan.section_records.reserve(scene.sections.size());
     }
     plan.instances.reserve(scene.sections.size() + scene.entities.size());
 
-    // Section IDs are ordered by the scene map. Append records and instances
-    // together so the same order is used even when reusing the committed table.
+    // Build jobs follow the section map and then the entity map. Compaction queries
+    // can complete out of order, so sort their results once before walking the maps.
+    std::sort(plan.compactions.begin(), plan.compactions.end(),
+        [](const CompactionCopy& a, const CompactionCopy& b) { return a.section_id < b.section_id; });
+    auto next_job = plan.jobs.cbegin();
+    const auto jobs_end = plan.jobs.cend();
+    auto next_compaction = plan.compactions.cbegin();
+    const auto compactions_end = plan.compactions.cend();
+
+    // Append terrain records and instances in the same section ID order.
     for (const auto& [id, section] : scene.sections) {
-        const GeometryRef geometry = planned_geometry(plan, true, id, section.geometry.get());
+        const GeometryJob* job = nullptr;
+        if (next_job != jobs_end && next_job->is_section && next_job->id == id) {
+            job = &*next_job++;
+        }
+        const CompactionCopy* compaction = nullptr;
+        if (next_compaction != compactions_end && next_compaction->section_id == id) {
+            compaction = &*next_compaction++;
+        }
+        const GeometryRef geometry = planned_geometry(section.geometry.get(), job, compaction);
         if (geometry.blas_handle == VK_NULL_HANDLE) {
             continue;
         }
@@ -878,7 +893,11 @@ void plan_instances(const Scene& scene, PreparePlan& plan) {
 
     uint32_t entity_index = 0;
     for (const auto& [id, entity] : scene.entities) {
-        const GeometryRef geometry = planned_geometry(plan, false, id, entity.geometry.get());
+        const GeometryJob* job = nullptr;
+        if (next_job != jobs_end && next_job->id == id) {
+            job = &*next_job++;
+        }
+        const GeometryRef geometry = planned_geometry(entity.geometry.get(), job, nullptr);
         if (geometry.blas_handle == VK_NULL_HANDLE) {
             continue;
         }
@@ -987,18 +1006,22 @@ bool plan_uploads(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
     }
     if (plan.section_table_present) {
         const uint64_t bytes = plan.new_section_table.size;
-        std::memset(base + plan.section_table_upload_offset, 0, static_cast<size_t>(bytes));
-        if (!plan.section_records.empty())
-            std::memcpy(base + plan.section_table_upload_offset, plan.section_records.data(),
-                plan.section_records.size() * BEDRAY_SCENE_SECTION_RECORD_BYTES);
+        auto* dst = base + plan.section_table_upload_offset;
+        if (plan.section_records.empty()) {
+            std::memset(dst, 0, static_cast<size_t>(bytes));
+        } else {
+            std::memcpy(dst, plan.section_records.data(), static_cast<size_t>(bytes));
+        }
         plan.copies.push_back({ plan.section_table_upload_offset, &plan.new_section_table, 0, bytes });
     }
 
     return flush_buffer(scene, plan.staging, 0, plan.staging.size, error);
 }
 
-bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_changed, BedraySceneError* error) {
-    plan.target_version = scene.version + (tlas_changed ? 1u : 0u);
+bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, BedraySceneError* error) {
+    if (plan.reuse_instances) {
+        return true;
+    }
     plan.instance_count = static_cast<uint32_t>(plan.instances.size());
 
     if (plan.instances.empty()) {
@@ -1021,23 +1044,26 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_chang
         && (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0
         && slot.instance_count == plan.instance_count;
 
-    uint64_t storage_size = 0;
-    uint64_t build_scratch = 0;
-    uint64_t update_scratch = 0;
-    if (!query_tlas_sizes(scene, plan.instance_count, storage_size, build_scratch, update_scratch, error)) {
-        return false;
-    }
-
+    // UPDATE uses the same device, flags, geometry type and instance count as the slot's build.
+    uint64_t scratch_bytes = slot.tlas_update_scratch_bytes;
     if (!plan.tlas_update) {
-        plan.new_tlas = std::make_unique<Acceleration>();
-        if (!create_acceleration_object(scene, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-                storage_size, *plan.new_tlas, error)) {
+        uint64_t storage_size = 0;
+        if (!query_tlas_sizes(scene, plan.instance_count, storage_size, scratch_bytes,
+                plan.tlas_update_scratch_bytes, error)) {
             return false;
+        }
+        // The caller selected a released slot. BUILD can overwrite its TLAS if the storage fits.
+        if (!slot.tlas_valid || slot.tlas.capacity < storage_size) {
+            plan.new_tlas = std::make_unique<Acceleration>();
+            if (!create_acceleration_object(scene, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+                    storage_size, *plan.new_tlas, error)) {
+                return false;
+            }
         }
     }
 
     const uint64_t scratch_need = std::max(
-        align_up(plan.tlas_update ? update_scratch : build_scratch, scene.scratch_alignment),
+        align_up(scratch_bytes, scene.scratch_alignment),
         scene.scratch_alignment);
     if (slot.tlas_scratch.handle == VK_NULL_HANDLE || slot.tlas_scratch_capacity < scratch_need) {
         plan.new_tlas_scratch = std::make_unique<Buffer>();
@@ -1065,8 +1091,7 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_chang
         fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "instance buffer is not mapped");
         return false;
     }
-    std::memset(instance_buffer.mapped, 0,
-        plan.instances.size() * BEDRAY_SCENE_INSTANCE_RECORD_BYTES);
+    // Each record write covers the entire instance stride.
     auto* base = static_cast<uint8_t*>(instance_buffer.mapped);
     for (size_t i = 0; i < plan.instances.size(); ++i) {
         const InstanceEntry& instance = plan.instances[i];
@@ -1079,7 +1104,8 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_chang
         record.accelerationStructureReference = instance.blas_address;
         std::memcpy(base + i * BEDRAY_SCENE_INSTANCE_RECORD_BYTES, &record, sizeof(record));
     }
-    if (!flush_buffer(scene, instance_buffer, 0, instance_buffer.size, error)) {
+    const uint64_t instance_bytes = static_cast<uint64_t>(plan.instance_count) * BEDRAY_SCENE_INSTANCE_RECORD_BYTES;
+    if (!flush_buffer(scene, instance_buffer, 0, instance_bytes, error)) {
         return false;
     }
 
@@ -1117,6 +1143,10 @@ BlasView blas_view_of(const GeometryJob& job);
 
 void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuffer command_buffer) {
     std::vector<VkBufferMemoryBarrier> barriers;
+    if (plan.jobs.empty() && !plan.tlas_action && plan.compactions.empty()
+            && !plan.tables_uploaded && !plan.section_table_uploaded) {
+        return;
+    }
     barriers.reserve(plan.jobs.size() * 2 + BEDRAY_SCENE_TABLE_COUNT + 3);
 
     auto buffer_barrier = [&barriers](const Buffer& buffer, VkAccessFlags src, VkAccessFlags dst) {
@@ -1186,12 +1216,21 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
         record_compaction_copy(scene, command_buffer, compaction.src_handle, compaction.compact.handle);
     }
 
-    if (plan.tlas_action && (!plan.jobs.empty() || plan.tlas_update || !plan.compactions.empty())) {
-        record_memory_barrier(scene, command_buffer,
-            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-            VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    if (plan.tlas_action) {
+        const bool overwrites_tlas = !plan.new_tlas;
+        VkAccessFlags dst_access = 0;
+        if (!plan.jobs.empty() || !plan.compactions.empty() || plan.tlas_update) {
+            dst_access |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        }
+        if (overwrites_tlas) {
+            dst_access |= VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        }
+        if (dst_access != 0) {
+            record_memory_barrier(scene, command_buffer,
+                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, dst_access);
+        }
     }
 
     if (plan.tlas_action) {
@@ -1275,8 +1314,12 @@ void commit_plan(
     scene.retired_accelerations.reserve(scene.retired_accelerations.size() + plan.jobs.size());
     slot.transient.clear();
     slot.transient.reserve(2);
-    slot.blas_in_use.reserve(plan.instances.size() + (plan.tlas_update ? slot.cached_blas_refs.size() : 0));
-    slot.cached_blas_refs.reserve(plan.instances.size());
+    // An UPDATE publishes new references and retains its source references until completion.
+    if (plan.tlas_update) {
+        slot.update_source_blas_refs.reserve(plan.instance_count);
+    } else if (plan.tlas_action) {
+        slot.cached_blas_refs.reserve(plan.instance_count);
+    }
 
     /* Compaction swaps the section's BLAS for the compacted copy. The original
        is the copy source recorded in THIS frame, so it must survive until this
@@ -1399,6 +1442,7 @@ void commit_plan(
 
     if (plan.tlas_clear && slot.tlas_valid) {
         destroy_acceleration(scene, slot.tlas);
+        slot.tlas_update_scratch_bytes = 0;
     }
     if (plan.new_tlas) {
         if (slot.tlas_valid) {
@@ -1406,6 +1450,9 @@ void commit_plan(
         }
         slot.tlas = *plan.new_tlas;
         plan.new_tlas.reset();
+    }
+    if (plan.tlas_action && !plan.tlas_update) {
+        slot.tlas_update_scratch_bytes = plan.tlas_update_scratch_bytes;
     }
     if (plan.new_tlas_scratch) {
         destroy_buffer(scene, slot.tlas_scratch);
@@ -1419,21 +1466,21 @@ void commit_plan(
         plan.new_instance_buffer.reset();
     }
 
-    slot.tlas_valid = !plan.instances.empty();
+    slot.tlas_valid = plan.instance_count != 0;
     slot.built_version = plan.target_version;
     slot.instance_count = plan.instance_count;
     slot.view = scene.view;
     slot.view_valid = scene.view_set;
-    slot.blas_in_use.clear();
-    if (plan.tlas_update) {
-        // The update reads the old source bindings until this recording completes.
-        for (VkAccelerationStructureKHR handle : slot.cached_blas_refs) slot.blas_in_use.push_back(handle);
-    }
-    slot.cached_blas_refs.clear();
-    for (const InstanceEntry& instance : plan.instances) {
-        slot.blas_in_use.push_back(instance.blas_handle);
-        if ((scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0)
+    if (plan.tlas_action) {
+        if (plan.tlas_update) {
+            slot.cached_blas_refs.swap(slot.update_source_blas_refs);
+        }
+        slot.cached_blas_refs.clear();
+        for (const InstanceEntry& instance : plan.instances) {
             slot.cached_blas_refs.push_back(instance.blas_handle);
+        }
+    } else if (plan.tlas_clear) {
+        slot.cached_blas_refs.clear();
     }
 
     if (plan.staging_present) {
@@ -2154,15 +2201,13 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
             cleanup_plan(impl, plan);
             return err->status;
         }
-        if (impl.membership_changed) {
-            tlas_changed = true;
-        }
-        plan_instances(impl, plan);
+        plan.target_version = impl.version + ((tlas_changed || impl.membership_changed) ? 1u : 0u);
+        plan_instances(impl, plan, *slot);
         if (!plan_uploads(impl, plan, err)) {
             cleanup_plan(impl, plan);
             return err->status;
         }
-        if (!plan_tlas(impl, plan, *slot, tlas_changed, err)) {
+        if (!plan_tlas(impl, plan, *slot, err)) {
             cleanup_plan(impl, plan);
             return err->status;
         }
@@ -2245,7 +2290,7 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_release_frame(
     slot->free = true;
     slot->frame_index = 0;
     slot->command_buffer = 0;
-    slot->blas_in_use.clear();
+    slot->update_source_blas_refs.clear();
     if (impl.outstanding > 0) {
         impl.outstanding--;
     }
