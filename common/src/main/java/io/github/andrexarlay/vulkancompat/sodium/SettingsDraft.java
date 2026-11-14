@@ -29,10 +29,26 @@ final class SettingsDraft {
     record RuntimeStatus(Badge badge, Component reason) {
         Component text() { return Component.translatable("bedray.settings.status." + badge.name().toLowerCase(Locale.ROOT)).copy().append(": ").append(reason); }
     }
-    enum Category { OVERVIEW, LIGHTING, WORLD, UPSCALING, PRESETS, SYSTEM;
+    enum Category { OVERVIEW, UPSCALING, LIGHTING, WORLD, PRESETS, SYSTEM;
         Component title() { return Component.translatable("bedray.settings.category." + name().toLowerCase(Locale.ROOT)); }
     }
     record Entry(String path, SettingsCatalog.Info info, StatefulOption<?> option, Category category, String searchText) {}
+
+    private static final List<String> PRIMARY_ROWS = List.of(
+        "renderer", "shader_host", "path_quality_profile", "voxel_quality_profile",
+        "upscaler_backend", "quality_preset", "custom_scale", "dlss_mode", "dlss_custom_scale", "xess_mode",
+        "xess_custom_scale", "fsr_mode", "fsr_custom_scale", "fsr1_mode", "fsr1_custom_scale", "nis_custom_scale",
+        "path_denoiser", "frame_generation_mode", "frame_generation_provider", "frame_generation_status",
+        "frame_generation_reflex", "frame_generation_limit",
+        "dlss_rr_preset", "dlss_sr_preset", "fsr_sharpness",
+        "path_spp", "path_bounces", "path_distance", "adaptive_quality",
+        "water_style", "auto_normals", "point_sampling_sharpness", "texture_lod_bias_offset"
+    );
+
+    static int rowOrder(String path) {
+        int index = PRIMARY_ROWS.indexOf(path);
+        return index >= 0 ? index : PRIMARY_ROWS.size();
+    }
     enum Experience { VANILLA, PATH, RAYS, VOXEL;
         Component title() { return Component.translatable("bedray.settings.experience." + name().toLowerCase(Locale.ROOT)); }
         Component description() { return Component.translatable("bedray.settings.experience." + name().toLowerCase(Locale.ROOT) + ".desc"); }
@@ -71,6 +87,7 @@ final class SettingsDraft {
                 entries.add(new Entry(path, info, value, category, searchText));
             }
         });
+        entries.sort(java.util.Comparator.comparingInt(entry -> rowOrder(entry.path())));
     }
 
     static Identifier id(String path) { return Identifier.fromNamespaceAndPath("bedray", path); }
@@ -202,7 +219,10 @@ final class SettingsDraft {
             };
             return new RuntimeStatus(badge, Component.literal(io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.statusLine()));
         }
-        if (entry.category() == Category.UPSCALING && !entry.path().equals("quality_preset") && !entry.path().equals("custom_scale")) {
+        if (entry.category() == Category.UPSCALING && switch (entry.path()) {
+            case "quality_preset", "custom_scale", "path_denoiser", "dlss_rr_preset" -> false;
+            default -> true;
+        }) {
             var choice = config.readEnumOption(id("upscaler_backend"), UpscalerChoice.class);
             var backend = choice.backend();
             if (entry.path().equals("dlss_sr_preset")) {
@@ -248,22 +268,27 @@ final class SettingsDraft {
         if (p.equals("pt_preset") || p.equals("rt_mode")) return false;
         if (p.equals("path_quality_profile") && !hasQualityProfile()) return false;
         if (p.startsWith("voxel_") || p.startsWith("compute_")) return voxel() && !e.option().shouldHideControl();
+        if (p.equals("dlss_rr_preset") && !e.option().isEnabled()) return false;
         if (p.endsWith("custom_scale") && !e.option().isEnabled()) return false;
         if (!voxel()) return !e.option().shouldHideControl();
         return Set.of("renderer", "renderer_status", "quality_preset", "custom_scale", "debug_overlay", "ui_expert").contains(p)
             && !e.option().shouldHideControl();
     }
 
-    private static Category category(String p) {
-        if (p.equals("rays_transparency_stats")) return Category.SYSTEM;
-        if (p.equals("rays_cull_shared_glass") || p.equals("rays_optical_materials")) return Category.WORLD;
-        if (p.equals("renderer") || p.equals("renderer_status") || p.startsWith("voxel_") || p.equals("path_quality_profile")) return Category.OVERVIEW;
-        if (p.startsWith("compute_") || p.startsWith("debug_") || p.equals("rt_debug_view") || p.equals("ui_expert")) return Category.SYSTEM;
+    static Category category(String p) {
+        if (p.equals("renderer") || p.equals("shader_host") || p.startsWith("voxel_") || p.equals("path_quality_profile")) {
+            return Category.OVERVIEW;
+        }
+        if (p.startsWith("compute_") || p.startsWith("debug_") || Set.of("renderer_status", "gi_execution_status",
+                "rays_transparency_stats", "rt_debug_view", "ui_expert").contains(p)) return Category.SYSTEM;
         if (p.contains("mode") && (p.startsWith("dlss") || p.startsWith("fsr") || p.startsWith("xess"))
             || p.startsWith("upscaler") || p.startsWith("frame_generation") || p.startsWith("fsr_")
-            || p.equals("quality_preset") || p.endsWith("custom_scale") || p.equals("dlss_sr_preset")) return Category.UPSCALING;
+            || p.endsWith("custom_scale") || Set.of("quality_preset", "dlss_sr_preset", "path_denoiser",
+                "dlss_rr_preset").contains(p)) return Category.UPSCALING;
         if (p.startsWith("atm_") || p.startsWith("water_") || p.startsWith("waving_") || p.startsWith("auto_normal")
-            || p.startsWith("texture_") || p.equals("point_sampling_sharpness") || p.startsWith("rt_fog")) return Category.WORLD;
+            || p.startsWith("texture_") || p.startsWith("rt_fog") || Set.of("point_sampling_sharpness",
+                "rays_optical_materials", "rays_cull_shared_glass", "rays_direct_translucent_shadows",
+                "rays_indirect_translucent_shadows").contains(p)) return Category.WORLD;
         return Category.LIGHTING;
     }
 
