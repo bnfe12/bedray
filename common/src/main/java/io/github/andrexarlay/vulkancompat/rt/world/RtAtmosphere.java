@@ -54,10 +54,12 @@ final class RtAtmosphere {
         RtAtmosphereSettings.GodRays gr = RtAtmosphereSettings.godRays();
         boolean shafts = gr == RtAtmosphereSettings.GodRays.POST && p.volumetricFogEnabled && p.fogDensity > 0f
             && RtAtmosphereSettings.godRayStrength() > 0f;
+        // distance haze rides on the volumetric pass (its apply stage reads the depth); it needs the volumetric fog switch, not the shafts
+        boolean aerial = p.volumetricFogEnabled && RtAtmosphereSettings.fogAerial() > 0f && !p.cameraInWater;
         boolean glow = RtAtmosphereSettings.bloom();
         boolean glare = RtAtmosphereSettings.sunGlare();
         logIfChanged(shafts);
-        if (!shafts && !glow && !glare) {
+        if (!shafts && !aerial && !glow && !glare) {
             return;
         }
         SlangRuntime runtime = slangRuntime(vulkanDevice);
@@ -74,7 +76,7 @@ final class RtAtmosphere {
         if (timer != null) {
             timer.beginFrame(cmd);
         }
-        if (shafts && !shaftsUnavailable && volumetric == null) {
+        if ((shafts || aerial) && !shaftsUnavailable && volumetric == null) {
             try {
                 volumetric = new RtSlangVolumetricPass(runtime);
             } catch (RuntimeException e) {
@@ -82,9 +84,9 @@ final class RtAtmosphere {
                 LOGGER.warn("[VKB-ATMO] light shafts unavailable: {}", e.getMessage());
             }
         }
-        if (shafts && volumetric != null) {
+        if ((shafts || aerial) && volumetric != null) {
             if (timer != null) timer.stamp(cmd, 0, false);
-            volumetric.record(cmd, views, p, w, h);
+            volumetric.record(cmd, views, p, w, h, shafts);
             if (timer != null) timer.stamp(cmd, 0, true);
         }
         if (glow || glare) {

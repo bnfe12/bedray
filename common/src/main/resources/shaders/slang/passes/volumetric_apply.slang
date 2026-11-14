@@ -24,9 +24,13 @@ struct VolumetricApplyPush {
     float range;        // shaft range in blocks (same value the march used)
     uint  tonemapped;   // 1 when outImage holds the tone-mapped display colour
     uint  frameIndex;
-    uint  pad0;
-    uint  pad1;
+    float aerialSigma;  // distance haze: extinction per block of the air (0 = off); was pad0
+    uint  aerialColor;  // distance haze colour, 8 bits per channel R | G << 8 | B << 16 (display space); was pad1
 };
+
+// Distance haze ("air perspective"): the picture of a hit at distance d is blended towards the horizon colour by
+// 1 - exp(-sigma * d). Sky pixels (no hit) are left alone, the shafts are added on top afterwards.
+static const float AERIAL_MAX_FOG = 0.92;   // the farthest terrain keeps 8 % of its own colour
 
 [[vk::push_constant]] VolumetricApplyPush pc;
 
@@ -52,43 +56,59 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         hw != expectedHalfSize.x || hh != expectedHalfSize.y) return;
     uint cur = pc.frameIndex & 1u;
 
-    float depth = outDepth[p];
-    if (isnan(depth) || depth <= 0.0) depth = 1.0e6;
-    float range = max(pc.range, 8.0);
-    float tEnd = min(depth, range);
-    if (tEnd <= 0.5) return;
-
-    // Bilateral upsample: bilinear weights x similarity of the shaft range,
-    // nearest sample when every weight is rejected.
-    float2 hp = (float2(p) + 0.5) * 0.5 - 0.5;
-    int2 base = int2(floor(hp));
-    float2 f = frac(hp);
-    float3 sum = float3(0.0);
-    float weightSum = 0.0;
-    float3 nearest = float3(0.0);
-    float nearestDifference = 1.0e9;
-    for (int j = 0; j < 4; ++j) {
-        int2 o = int2(j & 1, j >> 1);
-        int2 t = clamp(base + o, int2(0, 0), int2(hw, hh) - int2(1, 1));
-        float4 h = accumImage[int2(t.x, t.y + int(cur * hh))];
-        float difference = abs(h.a - tEnd);
-        float w = (o.x == 0 ? 1.0 - f.x : f.x) * (o.y == 0 ? 1.0 - f.y : f.y) *
-            exp(-difference / (0.06 * tEnd + 0.25));
-        sum += h.rgb * w;
-        weightSum += w;
-        if (difference < nearestDifference) {
-            nearestDifference = difference;
-            nearest = h.rgb;
-        }
-    }
-    float3 scatter = weightSum > 1.0e-3 ? sum / weightSum : nearest;
-    if (max(scatter.r, max(scatter.g, scatter.b)) <= 1.0e-5) return;
+    float rawDepth = outDepth[p];
+    bool sky = isnan(rawDepth) || rawDepth <= 0.0 || rawDepth >= 1.0e5;
+    float depth = sky ? 1.0e6 : rawDepth;
 
     float exposure = pc.exposure;
     if (!isFinite(exposure) || exposure <= 0.0) exposure = 1.1;
 
     float4 colour = outImage[p];
-    float3 updated = colour.rgb +
-        shaftDisplayComposite(colour.rgb, scatter, exposure, pc.tonemapped != 0u);
+    float3 updated = colour.rgb;
+    bool changed = false;
+
+    // Distance haze first (it dims the surface), the light shafts are scattered in front of it.
+    if (pc.aerialSigma > 0.0 && !sky) {
+        float fog = min(1.0 - exp(-pc.aerialSigma * depth), AERIAL_MAX_FOG);
+        float3 fogColour = float3(float(pc.aerialColor & 255u), float((pc.aerialColor >> 8u) & 255u),
+            float((pc.aerialColor >> 16u) & 255u)) * (1.0 / 255.0);
+        updated = lerp(updated, fogColour, fog);
+        changed = true;
+    }
+
+    float range = max(pc.range, 8.0);
+    float tEnd = min(depth, range);
+    if (tEnd > 0.5) {
+        // Bilateral upsample: bilinear weights x similarity of the shaft range,
+        // nearest sample when every weight is rejected.
+        float2 hp = (float2(p) + 0.5) * 0.5 - 0.5;
+        int2 base = int2(floor(hp));
+        float2 f = frac(hp);
+        float3 sum = float3(0.0);
+        float weightSum = 0.0;
+        float3 nearest = float3(0.0);
+        float nearestDifference = 1.0e9;
+        for (int j = 0; j < 4; ++j) {
+            int2 o = int2(j & 1, j >> 1);
+            int2 t = clamp(base + o, int2(0, 0), int2(hw, hh) - int2(1, 1));
+            float4 h = accumImage[int2(t.x, t.y + int(cur * hh))];
+            float difference = abs(h.a - tEnd);
+            float w = (o.x == 0 ? 1.0 - f.x : f.x) * (o.y == 0 ? 1.0 - f.y : f.y) *
+                exp(-difference / (0.06 * tEnd + 0.25));
+            sum += h.rgb * w;
+            weightSum += w;
+            if (difference < nearestDifference) {
+                nearestDifference = difference;
+                nearest = h.rgb;
+            }
+        }
+        float3 scatter = weightSum > 1.0e-3 ? sum / weightSum : nearest;
+        if (max(scatter.r, max(scatter.g, scatter.b)) > 1.0e-5) {
+            updated += shaftDisplayComposite(updated, scatter, exposure, pc.tonemapped != 0u);
+            changed = true;
+        }
+    }
+
+    if (!changed) return;
     outImage[p] = float4(clamp(updated, float3(0.0), float3(1.0)), colour.a);
 }

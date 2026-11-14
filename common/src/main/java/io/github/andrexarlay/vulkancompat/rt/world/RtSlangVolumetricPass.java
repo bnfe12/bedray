@@ -51,11 +51,16 @@ final class RtSlangVolumetricPass implements AutoCloseable {
     }
 
     void record(VkCommandBuffer cmd, RtFrameBindings.Views views, RtFrameParams p, int width, int height) {
+        record(cmd, views, p, width, height, true);
+    }
+
+    /** {@code shafts} false: only the distance haze is wanted, the march runs with zero strength (adds nothing). */
+    void record(VkCommandBuffer cmd, RtFrameBindings.Views views, RtFrameParams p, int width, int height, boolean shafts) {
         if (closed) throw new IllegalStateException("volumetric pass is closed");
         if (views.table() == null) throw new IllegalArgumentException("volumetric pass requires the scene section table");
         int steps = RtAtmosphereSettings.godRaySteps();
-        float strength = RtAtmosphereSettings.godRayStrength(), range = RtAtmosphereSettings.godRayRange();
-        int hash = java.util.Objects.hash(steps, strength, range, p.fogDensity, p.fogInScattering);
+        float strength = shafts ? RtAtmosphereSettings.godRayStrength() : 0f, range = RtAtmosphereSettings.godRayRange();
+        int hash = java.util.Objects.hash(steps, strength, range, p.fogDensity, p.fogInScattering, shafts);
         RtSlangFrameData.fill(frame, p, width, height, 0, 0);
         if (!recordings.add(cmd.address())) throw new IllegalStateException("volumetric recording still pending");
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -63,7 +68,10 @@ final class RtSlangVolumetricPass implements AutoCloseable {
             var march = stack.calloc(BedrayVolumetricNative.MARCH_BYTES);
             var apply = stack.calloc(BedrayVolumetricNative.APPLY_BYTES);
             frame.writeTo(constants);
-            fillPush(march, apply, p, steps, strength, range);
+            float aerialSigma = RtAerialFog.sigma(RtAtmosphereSettings.fogAerial(), renderDistanceBlocks(), rainOf(p), p.key.dir[1],
+                p.cameraInWater);
+            fillPush(march, apply, p, steps, strength, range, aerialSigma,
+                RtAerialFog.packedColor(p.skyColor, p.key.color, p.key.dir[1]));
             int flags = BedrayVolumetricNative.NATIVE_SCENE
                 | (reset || settingsHash != hash ? BedrayVolumetricNative.RESET_HISTORY : 0);
             pass.record(cmd.address(), views.output(), views.depth(), views.tlas(), views.table().handle(), views.table().bytes(),
@@ -72,7 +80,22 @@ final class RtSlangVolumetricPass implements AutoCloseable {
         reset = false; settingsHash = hash;
     }
 
+    private static float rainOf(RtFrameParams p) {
+        return Math.max(0f, Math.min(1f, 1f - p.key.bodyAlpha));
+    }
+
+    private static float renderDistanceBlocks() {
+        var mc = net.minecraft.client.Minecraft.getInstance();
+        return mc != null && mc.options != null ? mc.options.getEffectiveRenderDistance() * 16f : 256f;
+    }
+
     static void fillPush(ByteBuffer march, ByteBuffer apply, RtFrameParams p, int steps, float strength, float range) {
+        fillPush(march, apply, p, steps, strength, range, 0f, 0);
+    }
+
+    /** {@code aerialSigma} / {@code aerialColor}: distance haze of {@link RtAerialFog}, the two words that were padding. */
+    static void fillPush(ByteBuffer march, ByteBuffer apply, RtFrameParams p, int steps, float strength, float range,
+                         float aerialSigma, int aerialColor) {
         // The shafts are added to the tone-mapped picture, so they are scaled by the exposure that picture was made with:
         // the frame's own number, which the display step reads too.
         float exposure = p.exposure;
@@ -86,7 +109,8 @@ final class RtSlangVolumetricPass implements AutoCloseable {
         march.putFloat(60, (float) p.cameraY).putFloat(64, 0.01f).putInt(68, steps);
         march.putInt(72, p.frame).putInt(76, 0).putInt(80, p.flipY ? 1 : 0).putInt(84, 1);
         march.putInt(88, 0).putInt(92, 0);
-        apply.putFloat(0, exposure).putFloat(4, range).putInt(8, 1).putInt(12, p.frame).putInt(16, 0).putInt(20, 0);
+        apply.putFloat(0, exposure).putFloat(4, range).putInt(8, 1).putInt(12, p.frame)
+            .putFloat(16, Float.isFinite(aerialSigma) ? Math.max(0f, aerialSigma) : 0f).putInt(20, aerialColor);
     }
 
     void resetHistory() { reset = true; }
