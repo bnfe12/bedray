@@ -12,6 +12,8 @@ final class RtAerialFog {
     /** Share of the surface colour that is left at the render distance with the setting at 1.0 (clear air, sun high). */
     static final float TRANSMITTANCE_AT_RENDER_DISTANCE = 0.55f;
     /** Render distances (blocks) the extinction is derived for; keeps a tiny or huge value from giving no haze or a wall. */
+    /** Same constant as HAZE_DISTANCE_REF in volumetric_apply.slang. */
+    static final float DISTANCE_REF = 128f;
     static final float MIN_RENDER_DISTANCE = 64f;
     static final float MAX_RENDER_DISTANCE = 1024f;
 
@@ -29,7 +31,8 @@ final class RtAerialFog {
             return 0f;
         }
         float rd = Math.min(Math.max(renderDistanceBlocks, MIN_RENDER_DISTANCE), MAX_RENDER_DISTANCE);
-        float base = (float) -Math.log(TRANSMITTANCE_AT_RENDER_DISTANCE) / rd;
+        // the shader's tau = sigma * d * (d / DISTANCE_REF): sigma is chosen so that tau(render distance) gives the share
+        float base = (float) -Math.log(TRANSMITTANCE_AT_RENDER_DISTANCE) / (rd * rd / DISTANCE_REF);
         float r = Math.min(Math.max(rain, 0f), 1f);
         return base * Math.min(setting, 2f) * weather(keyDirY, r);
     }
@@ -41,8 +44,24 @@ final class RtAerialFog {
         return (1f + 1.2f * lowSun) * (1f + 1.4f * rain);
     }
 
+    /** Camera heights (blocks) the 14 bits of the packed word cover: [-64, 576). */
+    static final float HEIGHT_MIN = -64f;
+    static final float HEIGHT_SPAN = 640f;
+    static final int HEIGHT_STEPS = 16383;
+
+    /** Packs the 18-bit haze colour ({@link #packedColor}) with the camera world height into the word the shader reads. */
+    static int pack(int color18, double cameraY) {
+        double h = (Math.min(Math.max(cameraY, HEIGHT_MIN), HEIGHT_MIN + HEIGHT_SPAN) - HEIGHT_MIN) / HEIGHT_SPAN;
+        return (color18 & 0x3FFFF) | (int) Math.round(h * HEIGHT_STEPS) << 18;
+    }
+
+    /** Inverse of the height part of {@link #pack}, as the shader decodes it. */
+    static float unpackHeight(int packed) {
+        return (packed >>> 18) * (HEIGHT_SPAN / HEIGHT_STEPS) + HEIGHT_MIN;
+    }
+
     /**
-     * Haze colour in display space, packed {@code R | G << 8 | B << 16}: the visible sky colour made paler (air towards the horizon
+     * Haze colour in display space, 6 bits per channel packed {@code R | G << 6 | B << 12}: the visible sky colour made paler (air towards the horizon
      * is lighter and less saturated than the zenith) and, with a low sun, tinted by the key light. It follows the sky colour, so
      * it is dark at night and grey in a storm without extra rules.
      */
@@ -56,7 +75,7 @@ final class RtAerialFog {
             float pale = skyColor[i] + (max - skyColor[i]) * 0.45f;
             float tint = max * (keyColor[i] / keyMax);
             float c = pale + (tint - pale) * 0.35f * lowSun;
-            packed |= Math.round(Math.min(Math.max(c, 0f), 1f) * 255f) << (8 * i);
+            packed |= Math.round(Math.min(Math.max(c, 0f), 1f) * 63f) << (6 * i);
         }
         return packed;
     }
