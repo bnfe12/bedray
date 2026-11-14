@@ -185,6 +185,7 @@ struct State {
     int fail_create_buffer_countdown = -1;
     VkResult create_buffer_failure = VK_ERROR_DEVICE_LOST;
     bool zero_device_address = false;
+    uint64_t blas_build_scratch_override = 0;
     int faults = 0;
 };
 
@@ -434,7 +435,9 @@ static void VKAPI_CALL fakeGetAccelerationStructureBuildSizes(
     const uint64_t count = max_counts != nullptr ? *max_counts : 0;
     out->accelerationStructureSize = 4096 + 256 * count;
     out->updateScratchSize = 1024 + 64 * count;
-    out->buildScratchSize = 2048 + 128 * count;
+    out->buildScratchSize = info != nullptr && info->type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR
+            && fake::g.blas_build_scratch_override != 0
+        ? fake::g.blas_build_scratch_override : 2048 + 128 * count;
 }
 
 static VkResult VKAPI_CALL fakeCreateAccelerationStructure(
@@ -2105,6 +2108,100 @@ static void test_capacity_limits() {
         BEDRAY_SCENE_ERROR_LIMIT);
 }
 
+static void test_build_buffers_follow_frame_slots() {
+    Fixture fixture(2);
+    const Mesh mesh = triangle_mesh(0, 0, 0);
+    CHECK_STATUS(fixture.add_entity(entity_input(9, 1, 1, mesh)), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x8D0);
+    const auto first_staging = fake::g.copies.front().src;
+    const auto first_scratch = fake::g.builds.front().scratch;
+
+    const size_t second_copy = fake::g.copies.size();
+    const size_t second_build = fake::g.builds.size();
+    CHECK_STATUS(fixture.add_entity(entity_input(9, 2, 1, mesh)), BEDRAY_SCENE_OK);
+    fixture.prepare(2, 0x8D1);
+    const auto second_staging = fake::g.copies[second_copy].src;
+    const auto second_scratch = fake::g.builds[second_build].scratch;
+    CHECK(second_staging != first_staging);
+    CHECK(second_scratch != first_scratch);
+    fixture.release(2);
+
+    const size_t third_copy = fake::g.copies.size();
+    const size_t third_build = fake::g.builds.size();
+    const Mesh moved = triangle_mesh(1, 0, 0);
+    CHECK_STATUS(fixture.add_entity(entity_input(9, 3, 1, moved)), BEDRAY_SCENE_OK);
+    fixture.prepare(3, 0x8D2);
+    CHECK(fake::g.copies[third_copy].src == second_staging);
+    CHECK(fake::g.copies[third_copy].payload == moved.vertex_bytes());
+    CHECK(fake::g.builds[third_build].scratch == second_scratch);
+    const int barrier = fake::find_barrier(VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT
+        | VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, false);
+    CHECK(barrier >= 0);
+    bool orders_reused_scratch = false;
+    if (barrier >= 0) {
+        for (const auto& dependency : fake::g.barriers[barrier].buffers) {
+            const auto* buffer = fake::find_buffer(dependency.buffer);
+            if (buffer != nullptr && buffer->address != 0 && second_scratch >= buffer->address
+                    && second_scratch - buffer->address < 256) {
+                orders_reused_scratch = dependency.srcAccessMask == VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR
+                    && dependency.dstAccessMask == (VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
+                        | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+            }
+        }
+    }
+    CHECK(orders_reused_scratch);
+    CHECK(fake::find_buffer(first_staging) != nullptr);
+    fixture.release(1);
+    fixture.release(3);
+}
+
+static void test_large_build_releases_temporary_buffers_and_keeps_small_ones() {
+    Fixture fixture(1, 0, 8u << 20);
+    const Mesh small = triangle_mesh(0, 0, 0);
+    CHECK_STATUS(fixture.add_entity(entity_input(1, 1, 1, small)), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x8E0);
+    const auto small_staging = fake::g.copies.front().src;
+    const auto small_scratch = fake::g.builds.front().scratch;
+    fixture.release(1);
+
+    // Fake the driver's large scratch requirement without allocating a very large mesh.
+    fake::g.blas_build_scratch_override = 5u << 20;
+    Mesh large;
+    large.vertices.resize((5u << 20) / sizeof(float));
+    large.vertices.resize(large.vertices.size() / 9 * 9);
+    BedraySceneEntityInput input = entity_input(1, 2, 2, large);
+    input.index_type = BEDRAY_SCENE_INDEX_NONE;
+    CHECK_STATUS(fixture.add_entity(input), BEDRAY_SCENE_OK);
+    const size_t copy = fake::g.copies.size();
+    const size_t build = fake::g.builds.size();
+    fixture.prepare(2, 0x8E1);
+    const auto large_staging = fake::g.copies[copy].src;
+    const auto large_scratch = fake::g.builds[build].scratch;
+    CHECK(large_staging != small_staging);
+    CHECK(large_scratch != small_scratch);
+    fixture.release(2);
+    CHECK(fake::find_buffer(large_staging) == nullptr);
+    CHECK(fake::find_buffer(small_staging) != nullptr);
+    bool large_scratch_resident = false;
+    for (const auto& [id, buffer] : fake::g.buffers) {
+        if (buffer.address != 0 && large_scratch >= buffer.address
+                && large_scratch - buffer.address < 256) {
+            large_scratch_resident = true;
+        }
+    }
+    CHECK(!large_scratch_resident);
+
+    fake::g.blas_build_scratch_override = 0;
+    CHECK_STATUS(fixture.add_entity(entity_input(1, 3, 3, small)), BEDRAY_SCENE_OK);
+    const size_t next_copy = fake::g.copies.size();
+    const size_t next_build = fake::g.builds.size();
+    fixture.prepare(3, 0x8E2);
+    CHECK(fake::g.copies[next_copy].src == small_staging);
+    CHECK(fake::g.builds[next_build].scratch == small_scratch);
+    fixture.release(3);
+}
+
 static void test_remove_entity_clears_tlas_and_retires_now() {
     Fixture fixture(1);
     const Mesh mesh = triangle_mesh(0.0f, 0.0f, 0.0f);
@@ -2518,6 +2615,8 @@ int main() {
     test_stale_in_use_and_destroy();
     test_update_is_transactional();
     test_capacity_limits();
+    test_build_buffers_follow_frame_slots();
+    test_large_build_releases_temporary_buffers_and_keeps_small_ones();
     test_remove_entity_clears_tlas_and_retires_now();
     test_device_loss_poisons_scene();
 
