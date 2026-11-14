@@ -16,7 +16,7 @@ class RtSlangVolumetricPassTest {
         assertEquals(1.35f, frame.exposure.x); assertEquals(19, frame.width); assertEquals(9, frame.height);
         assertEquals(0f, frame.jitter.x); assertEquals(1f / 19, frame.jitter.z);
         var march = ByteBuffer.allocate(96).order(ByteOrder.nativeOrder());
-        var apply = ByteBuffer.allocate(24).order(ByteOrder.nativeOrder());
+        var apply = ByteBuffer.allocate(32).order(ByteOrder.nativeOrder());
         RtSlangVolumetricPass.fillPush(march, apply, p, 12, 0.5f, 64);
         assertEquals(1f, march.getFloat(32)); assertEquals(2f, march.getFloat(36)); assertEquals(3f, march.getFloat(40));
         assertEquals(0.75f, march.getFloat(44)); assertEquals(80f, march.getFloat(60));
@@ -34,7 +34,7 @@ class RtSlangVolumetricPassTest {
         assertEquals(p.bobX, frame.origin.x);
         assertEquals(p.bobY, frame.origin.y);
         var march = ByteBuffer.allocate(96).order(ByteOrder.nativeOrder());
-        var apply = ByteBuffer.allocate(24).order(ByteOrder.nativeOrder());
+        var apply = ByteBuffer.allocate(32).order(ByteOrder.nativeOrder());
         RtSlangVolumetricPass.fillPush(march, apply, p, 12, 0.5f, 64);
         assertEquals(80f, march.getFloat(60), "raw camera height excludes bob; shader sample origin adds it once");
         assertNotEquals(0f, frame.jitter.x);

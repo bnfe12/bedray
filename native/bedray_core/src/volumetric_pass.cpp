@@ -8,7 +8,7 @@
 
 namespace bedray::core {
 namespace {
-constexpr std::size_t frame_bytes = 608, march_bytes = 96, apply_bytes = 24;
+constexpr std::size_t frame_bytes = 608, march_bytes = 96, apply_bytes = 32;
 BedrayStatus fail(BedrayError* error, BedrayStatus status, const char* message) noexcept {
     if (error) { error->status = status; std::snprintf(error->message, sizeof(error->message), "%s", message); }
     return status;

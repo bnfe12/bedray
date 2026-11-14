@@ -46,11 +46,11 @@ BedrayVolumetricDesc configuration() { return {BEDRAY_CORE_ABI_VERSION, sizeof(B
 struct Input {
     std::array<unsigned char,608> constants{};
     std::array<unsigned char,96> march{};
-    std::array<unsigned char,24> apply{};
+    std::array<unsigned char,32> apply{};
     BedrayVolumetricFrameDesc frame{};
     explicit Input(std::uint64_t command = 11, std::uint32_t index = 1) {
         frame = {BEDRAY_CORE_ABI_VERSION, sizeof(frame), command, 200, 201, 202, 203, 64, 128,
-            19, 11, BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE, index, constants.data(), 608, 96, march.data(), apply.data(), 24, 0};
+            19, 11, BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE, index, constants.data(), 608, 96, march.data(), apply.data(), 32, 0};
         extent(19, 11);
         put(march, 12, 0.75f); put(march, 28, 64.0f); put(march, 48, 1.1f); put(march, 56, 1.0f);
         put(march, 64, 0.01f); put(march, 68, 8u); put(march, 72, 999u); put(march, 76, 999u);
@@ -95,7 +95,7 @@ void configure_and_frame_validation() {
     invalid([](auto& i) { i.frame.reserved = 1; });
     invalid([](auto& i) { i.frame.frame_constants_bytes = 607; });
     invalid([](auto& i) { i.frame.march_push_bytes = 95; });
-    invalid([](auto& i) { i.frame.apply_push_bytes = 23; });
+    invalid([](auto& i) { i.frame.apply_push_bytes = 31; });
     invalid([](auto& i) { put(i.constants, 400, 20u); });
     invalid([](auto& i) { put(i.march, 12, std::numeric_limits<float>::quiet_NaN()); });
     invalid([](auto& i) { put(i.march, 84, 3u); }); // No entity bindings in this world-only contract.
@@ -111,7 +111,7 @@ void dispatch_payloads_and_history() {
     const auto march = fake::render_calls[0], apply = fake::render_calls[1];
     CHECK(march.program == 2 && apply.program == 3);
     CHECK(march.group_x == 2 && march.group_y == 1 && apply.group_x == 3 && apply.group_y == 2);
-    CHECK(march.resources.size() == 5 && apply.resources.size() == 4 && march.push_bytes == 96 && apply.push_bytes == 24);
+    CHECK(march.resources.size() == 5 && apply.resources.size() == 4 && march.push_bytes == 96 && apply.push_bytes == 32);
     CHECK(get<std::uint32_t>(march.push, 72) == 1 && get<std::uint32_t>(march.push, 76) == 0);
     CHECK(get<std::uint32_t>(apply.push, 12) == 1);
     auto expected_march = first.march; put(expected_march, 72, 1u); put(expected_march, 76, 0u);
