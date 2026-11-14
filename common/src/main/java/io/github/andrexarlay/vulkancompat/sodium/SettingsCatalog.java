@@ -231,11 +231,11 @@ public final class SettingsCatalog {
                 p("realistic", "Realistic", () -> RtSettings.waterStyle = RtSettings.WATER_STYLE_REALISTIC)),
             v -> v instanceof Enum<?> e ? e.name().toLowerCase(Locale.ROOT) : String.valueOf(v));
         putNoImage("self_shadow", Tier.ESSENTIAL, "Player Shadow (first person)",
-            "Full: your body casts its shadow everywhere, also the dark patch right under your feet. No blot underfoot: the shadow stays, but the floor your unseen feet cover is lit. Off: your body casts no shadow. Water and glass reflect you in every mode.",
+            "Full keeps your body's entire shadow, including the ground under your feet. Off hides the shadow. Water and glass reflect your body in both modes.",
             "No measurable cost difference; the same rays are traced.", "Ray tracing on, first person.",
             "No comparison image captured yet.");
         put("atm_godrays", Tier.ESSENTIAL, "Light Shafts",
-            "Visible beams of sun and moon light through leaves, windows and cave openings; strongest at sunrise and sunset.",
+            "Visible shafts from the sun and moon. Detailed uses a separate ray-marched pass. Simple uses the cheaper inline effect.",
             "", "Needs ray tracing on.", Scene.SUNSET, 0.5f, 0.45f, "godrays", List.of(
                 p("off", "Off", () -> RtAtmosphereSettings.set("godrays", RtAtmosphereSettings.GodRays.OFF.ordinal())),
                 p("on", "On", () -> RtAtmosphereSettings.set("godrays", RtAtmosphereSettings.GodRays.POST.ordinal()))),
@@ -545,19 +545,49 @@ public final class SettingsCatalog {
             "", "", "A distance setting; see its numbers.");
         putNoImage("rt_light_budget", Tier.EXPERT, "RT Light Budget", "Most important glowing block faces that cast traced light.",
             "", "", "A budget has no look of its own; too small drops far lamps, and light next to the cut flickers as lamps swap in and out.");
-        putNoImage("sun_size_tenths", Tier.EXPERT, "Sun/Moon Size", "Disk diameter in tenths of a degree (real sun about 5). Bigger means softer shadows.",
+        putNoImage("atm_chunk_fade", Tier.ADVANCED, "Terrain Fade-in",
+            "Sets how long newly visible traced terrain fades in. Zero makes it appear immediately.", "", "Hardware ray tracing.",
+            "Fade-in is visible as new terrain loads.");
+        putNoImage("sun_tilt_deg", Tier.ADVANCED, "Sun and Moon Angle",
+            "Tilts the path of the sun and moon to change the direction of shadows through the day.", "", "Hardware ray tracing.",
+            "The effect depends on the time of day.");
+        putNoImage("rt_fog_distance_scale", Tier.ADVANCED, "Fog Distance",
+            "Changes the distance over which volumetric fog builds up.", "", "Volumetric fog.",
+            "Compare fog falloff while looking across the world.");
+        putNoImage("fsr1_sharpness", Tier.ADVANCED, "FSR 1 Sharpening",
+            "Controls the RCAS filter in spatial FSR 1. Zero skips the sharpening pass.", "", "FSR 1.",
+            "Check fine textures at your selected render scale.");
+        putNoImage("nis_sharpness", Tier.ADVANCED, "NIS Sharpening",
+            "Controls sharpening in NVIDIA Image Scaling.", "", "NIS.",
+            "Check fine textures at your selected render scale.");
+        putNoImage("sun_size_tenths", Tier.ADVANCED, "Sun/Moon Size", "Disk diameter in tenths of a degree (real sun about 5). Bigger means softer shadows.",
             "", "", "Visible only as shadow softness at a moment of day; not captured.");
-        putNoImage("auto_normal_strength", Tier.EXPERT, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",
+        putNoImage("auto_normal_strength", Tier.ADVANCED, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",
             "Shares the Surface Relief screenshots.");
         putNoImage("texture_lod_bias_offset", Tier.ADVANCED, "Texture Sharpness Offset",
-            "Extra mipmap bias; negative values make textures sharper (-0.2 to -0.5 suits pixel art). The automatic bias for upscalers is always on.",
+            "Fine-tune automatic mipmap selection. Negative values keep more detail and can increase shimmer in motion.",
             "", "", "A sub-pixel sharpness bias is not visible in a downscaled screenshot.");
-        putNoImage("atm_godrays_range", Tier.EXPERT, "Light Shaft Range", "Distance in blocks the beams are computed over.", "", "", "A range value.");
-        putNoImage("atm_bloom_threshold", Tier.EXPERT, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "", "", "Shares the Bloom screenshots.");
-        putNoImage("atm_bloom_scatter", Tier.EXPERT, "Bloom Spread", "Balance between a tight and a wide glow.", "", "", "Shares the Bloom screenshots.");
-        putNoImage("atm_sunglare_strength", Tier.EXPERT, "Sun Glare Strength", "Brightness of the sun halo.", "", "", "Shares the Sun Glare screenshots.");
-        putNoImage("atm_fog_vanilla", Tier.EXPERT, "Vanilla Fog Weight", "How much of the game's own fog is used.", "", "", "Shares the Fog screenshots.");
-        putNoImage("rt_fog_in_scattering", Tier.EXPERT, "Fog In-scattering", "Sunlight and skylight scattering through the fog.", "", "", "Shares the Fog screenshots.");
+        putNoImage("auto_texture_lod_bias", Tier.ADVANCED, "Automatic Texture Detail",
+            "Adjusts mipmap selection to the actual raster render scale. Turn it off to enter a fixed bias.",
+            "", "", "Check terrain textures while moving.");
+        putNoImage("manual_texture_lod_bias", Tier.ADVANCED, "Fixed Mipmap Bias",
+            "Offsets mipmap selection by a fixed amount. Negative values keep more detail. Positive values soften textures.",
+            "", "Automatic Texture Detail off.", "Check terrain textures while moving.");
+        putNoImage("atm_local_highlights", Tier.ADVANCED, "Local Highlight Recovery",
+            "Preserves texture in bright areas such as blocks around a torch. Zero disables highlight compression.",
+            "", "Active DLSS Ray Reconstruction.", "Compare detail around bright lights.");
+        putNoImage("atm_local_shadows", Tier.ADVANCED, "Local Shadow Lift",
+            "Reveals detail in dark areas behind bright lights. Zero disables shadow lift.",
+            "", "Active DLSS Ray Reconstruction.", "Compare dark areas near bright lights.");
+        putNoImage("atm_bloom_sky", Tier.ADVANCED, "Sky Bloom",
+            "Lets bright sky pixels contribute to bloom. Use a higher threshold if daylight looks washed out.",
+            "", "Bloom on.", "Compare bright horizons and clouds.");
+        putNoImage("atm_godrays_range", Tier.ADVANCED, "Light Shaft Range", "Distance in blocks the beams are computed over.", "", "", "A range value.");
+        putNoImage("atm_bloom_threshold", Tier.ADVANCED, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "", "", "Shares the Bloom screenshots.");
+        putNoImage("atm_bloom_scatter", Tier.ADVANCED, "Bloom Spread", "Balance between a tight and a wide glow.", "", "", "Shares the Bloom screenshots.");
+        putNoImage("atm_sunglare_strength", Tier.ADVANCED, "Sun Glare Strength", "Brightness of the sun halo.", "", "", "Shares the Sun Glare screenshots.");
+        putNoImage("atm_fog_vanilla", Tier.ADVANCED, "Vanilla Fog Weight", "How much of the game's own fog is used.", "", "", "Shares the Fog screenshots.");
+        putNoImage("rt_fog_in_scattering", Tier.ADVANCED, "Fog In-scattering", "Sunlight and skylight scattering through the fog.", "", "", "Shares the Fog screenshots.");
         putNoImage("rt_debug_view", Tier.EXPERT, "RT Debug Buffer", "Replaces the world with an internal buffer (normals, depth, albedo...). For diagnosis only.",
             "", "", "A diagnostic view, not a look.");
         putNoImage("voxel_quality_profile", Tier.ESSENTIAL, "Voxel Quality", "Fast lowers the memory budget and turns off the diffuse bounce and layered transparent optics. Beautiful enables them. Both follow Minecraft's distance; Custom unlocks those settings. The upscaler, frame generation and lighting stay editable in every profile.", "", "Experimental renderer.", "No voxel quality comparison has been captured.");

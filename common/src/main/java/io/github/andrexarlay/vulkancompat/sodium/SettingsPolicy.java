@@ -1,7 +1,6 @@
 package io.github.andrexarlay.vulkancompat.sodium;
 
 import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
-import io.github.andrexarlay.vulkancompat.rtx.config.TextureLodBias;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 
 /**
@@ -19,7 +18,5 @@ public final class SettingsPolicy {
         }
         RtSettings.pathAccumulate = true;
         RtSettings.rtDistanceAuto = true;
-        VulkanRtxConfig.autoTextureLodBias = true;
-        TextureLodBias.autoTextureLodBias = true;
     }
 }

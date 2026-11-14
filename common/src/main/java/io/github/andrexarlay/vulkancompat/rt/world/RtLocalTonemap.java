@@ -26,9 +26,6 @@ public final class RtLocalTonemap {
     /** Exposed luminance the operator leaves unchanged: the knee of the global curve (TM_KNEE 0.6 / TM_GAIN 1.2). */
     static final float PIVOT_LOG2 = -1.0f;
 
-    static volatile float highlights = clampStrength(Float.parseFloat(System.getProperty("vkrtx.rt.localTonemap", "1.0")));
-    static volatile float shadows = clampStrength(Float.parseFloat(System.getProperty("vkrtx.rt.localTonemap.shadows", "1.0")));
-
     private final SlangRuntime runtime;
     private final SlangProgram lum;
     private final SlangProgram apply;
@@ -43,14 +40,14 @@ public final class RtLocalTonemap {
             throw new IllegalStateException("Invalid local tone map manifests");
     }
 
-    /** Session strengths (autotest ltm=, later the settings page): 0..2 each. */
+    /** Session override used by the look scenarios. Strengths are 0..2. */
     public static void setStrength(float highlightStrength, float shadowStrength) {
-        highlights = clampStrength(highlightStrength);
-        shadows = clampStrength(shadowStrength);
+        RtAtmosphereSettings.set("local_highlights", Float.isFinite(highlightStrength) ? highlightStrength : 1f);
+        RtAtmosphereSettings.set("local_shadows", Float.isFinite(shadowStrength) ? shadowStrength : 1f);
     }
 
     static boolean enabled() {
-        return highlights > 0f || shadows > 0f;
+        return RtAtmosphereSettings.localHighlights() > 0f || RtAtmosphereSettings.localShadows() > 0f;
     }
 
     /** Overwrites {@code output} from {@code hdr} (same size); {@code exposure} is the factor the compose pass applied. */
@@ -62,7 +59,8 @@ public final class RtLocalTonemap {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer push = stack.malloc(PUSH_BYTES).order(ByteOrder.nativeOrder());
             push.putInt(0, output.width).putInt(4, output.height).putInt(8, blockLum.width).putInt(12, blockLum.height);
-            push.putFloat(16, exposure).putFloat(20, highlights).putFloat(24, shadows).putFloat(28, PIVOT_LOG2);
+            push.putFloat(16, exposure).putFloat(20, RtAtmosphereSettings.localHighlights())
+                .putFloat(24, RtAtmosphereSettings.localShadows()).putFloat(28, PIVOT_LOG2);
             push.putInt(32, io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.tonemapper().ordinal())
                 .putInt(36, RtSlangPathPass.postCinemaBits() | RtSlangPathPass.vibrantBit()).putInt(40, frameIndex).putInt(44, 0);
             recordings.add(command.address()); // retain even when native recording fails partway
@@ -87,7 +85,4 @@ public final class RtLocalTonemap {
 
     void afterHostDrain() { for (long command : List.copyOf(recordings)) release(command, false); }
 
-    private static float clampStrength(float v) {
-        return Float.isFinite(v) ? Math.max(0f, Math.min(2f, v)) : 1f;
-    }
 }

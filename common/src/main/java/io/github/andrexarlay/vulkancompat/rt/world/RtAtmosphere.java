@@ -172,6 +172,7 @@ final class RtAtmosphere {
         h = 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.godRayStrength());
         h = 0x100000001b3L * h + RtAtmosphereSettings.godRayRange();
         h = 0x100000001b3L * h + (RtAtmosphereSettings.bloom() ? 1 : 0);
+        h = 0x100000001b3L * h + (RtAtmosphereSettings.bloomSky() ? 1 : 0);
         h = 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.bloomStrength());
         h = 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.bloomThreshold());
         h = 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.bloomScatter());
