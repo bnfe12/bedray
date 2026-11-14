@@ -181,7 +181,7 @@ struct PreparePlan {
     uint64_t section_table_upload_offset = 0;
 
     std::unique_ptr<Acceleration> new_tlas;
-    uint64_t new_tlas_update_scratch_bytes = 0;
+    uint64_t tlas_update_scratch_bytes = 0;
     std::unique_ptr<Buffer> new_tlas_scratch;
     std::unique_ptr<Buffer> new_instance_buffer;
 
@@ -1006,10 +1006,12 @@ bool plan_uploads(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
     }
     if (plan.section_table_present) {
         const uint64_t bytes = plan.new_section_table.size;
-        std::memset(base + plan.section_table_upload_offset, 0, static_cast<size_t>(bytes));
-        if (!plan.section_records.empty())
-            std::memcpy(base + plan.section_table_upload_offset, plan.section_records.data(),
-                plan.section_records.size() * BEDRAY_SCENE_SECTION_RECORD_BYTES);
+        auto* dst = base + plan.section_table_upload_offset;
+        if (plan.section_records.empty()) {
+            std::memset(dst, 0, static_cast<size_t>(bytes));
+        } else {
+            std::memcpy(dst, plan.section_records.data(), static_cast<size_t>(bytes));
+        }
         plan.copies.push_back({ plan.section_table_upload_offset, &plan.new_section_table, 0, bytes });
     }
 
@@ -1047,13 +1049,16 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, BedraySceneErro
     if (!plan.tlas_update) {
         uint64_t storage_size = 0;
         if (!query_tlas_sizes(scene, plan.instance_count, storage_size, scratch_bytes,
-                plan.new_tlas_update_scratch_bytes, error)) {
+                plan.tlas_update_scratch_bytes, error)) {
             return false;
         }
-        plan.new_tlas = std::make_unique<Acceleration>();
-        if (!create_acceleration_object(scene, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-                storage_size, *plan.new_tlas, error)) {
-            return false;
+        // The caller selected a released slot. BUILD can overwrite its TLAS if the storage fits.
+        if (!slot.tlas_valid || slot.tlas.capacity < storage_size) {
+            plan.new_tlas = std::make_unique<Acceleration>();
+            if (!create_acceleration_object(scene, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+                    storage_size, *plan.new_tlas, error)) {
+                return false;
+            }
         }
     }
 
@@ -1211,12 +1216,21 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
         record_compaction_copy(scene, command_buffer, compaction.src_handle, compaction.compact.handle);
     }
 
-    if (plan.tlas_action && (!plan.jobs.empty() || plan.tlas_update || !plan.compactions.empty())) {
-        record_memory_barrier(scene, command_buffer,
-            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-            VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    if (plan.tlas_action) {
+        const bool overwrites_tlas = !plan.new_tlas;
+        VkAccessFlags dst_access = 0;
+        if (!plan.jobs.empty() || !plan.compactions.empty() || plan.tlas_update) {
+            dst_access |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        }
+        if (overwrites_tlas) {
+            dst_access |= VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        }
+        if (dst_access != 0) {
+            record_memory_barrier(scene, command_buffer,
+                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, dst_access);
+        }
     }
 
     if (plan.tlas_action) {
@@ -1435,8 +1449,10 @@ void commit_plan(
             destroy_acceleration(scene, slot.tlas);
         }
         slot.tlas = *plan.new_tlas;
-        slot.tlas_update_scratch_bytes = plan.new_tlas_update_scratch_bytes;
         plan.new_tlas.reset();
+    }
+    if (plan.tlas_action && !plan.tlas_update) {
+        slot.tlas_update_scratch_bytes = plan.tlas_update_scratch_bytes;
     }
     if (plan.new_tlas_scratch) {
         destroy_buffer(scene, slot.tlas_scratch);

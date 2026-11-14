@@ -319,6 +319,8 @@ The policy is capability-driven (`AS_UPDATE`), never GPU-name-driven.
   enabled, and the instance count is unchanged. The update can change BLAS
   references, transforms, masks and custom indices. The slot uses the update
   scratch size returned by the driver when the TLAS was built.
+- A full build queries the driver for the required sizes. It uses the released
+  slot's TLAS storage when that allocation is large enough.
 - Geometry rebuild/refit and membership changes bump the scene version, which
   forces TLAS work on every slot that prepared with older state.
 - An empty scene destroys the slot TLAS and reports `TLAS_REBUILT`.
@@ -400,12 +402,9 @@ aligned to `minAccelerationStructureScratchOffsetAlignment`, with a minimum of
 3. **BLAS work**: `vkCmdBuildAccelerationStructuresKHR` for every job.
    A refit uses `ALLOW_UPDATE`, source = destination = the committed BLAS and
    the update scratch size. A rebuild targets the new BLAS.
-4. **BLAS -> TLAS**: if the TLAS references a BLAS written this frame, or the
-   TLAS itself is updated in place, a memory barrier
-   `ACCELERATION_STRUCTURE_BUILD`/`ACCELERATION_STRUCTURE_WRITE` ->
-   `ACCELERATION_STRUCTURE_BUILD`/`ACCELERATION_STRUCTURE_READ` is recorded
-   before the TLAS build. A BLAS update invalidates and requires this
-   ordering for any TLAS that references it.
+4. **AS writes -> TLAS build**: a barrier makes previous AS writes visible to
+   the TLAS build or update. It covers reads of new BLAS and the update source,
+   and writes when the build overwrites the slot's TLAS storage.
 5. **TLAS build/update**: `vkCmdBuildAccelerationStructuresKHR` on the TLAS.
    Update mode requires the same instance count. The source BLAS stay alive
    through the update recording.

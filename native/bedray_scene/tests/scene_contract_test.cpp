@@ -1488,6 +1488,46 @@ static void test_transform_update_touches_only_tlas() {
     fixture.release(3);
 }
 
+static void test_tlas_full_build_reuses_released_storage_when_it_fits() {
+    Fixture fixture(2);
+    const Mesh mesh = quad_mesh(0.0f, 0.0f, 0.0f);
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(2, 1, mesh), BEDRAY_SCENE_OK);
+    const auto initial = fixture.prepare(1, 0xCE0);
+    const auto concurrent = fixture.prepare(2, 0xCE1);
+    CHECK(initial.tlas != concurrent.tlas);
+    fixture.release(1);
+
+    CHECK_STATUS(fixture.remove_section(2), BEDRAY_SCENE_OK);
+    const auto smaller = fixture.prepare(3, 0xCE2);
+    CHECK(smaller.instance_count == 1);
+    CHECK(smaller.tlas == initial.tlas);
+    CHECK((smaller.flags & BEDRAY_SCENE_FRAME_TLAS_REBUILT) != 0);
+    const auto& build = fake::g.builds.back();
+    CHECK(build.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR);
+    CHECK(build.src == VK_NULL_HANDLE);
+    CHECK(fake::accel_is_alive(reinterpret_cast<VkAccelerationStructureKHR>(
+        static_cast<uintptr_t>(concurrent.tlas))));
+    fixture.release(3);
+
+    CHECK_STATUS(bedray_scene_set_view(fixture.scene, 1.0, 0.0, 0.0, &g_error), BEDRAY_SCENE_OK);
+    const size_t queries_before_move = fake::g.size_queries.size();
+    const auto moved = fixture.prepare(4, 0xCE3);
+    CHECK(moved.tlas == initial.tlas);
+    CHECK((moved.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
+    CHECK(fake::g.size_queries.size() == queries_before_move);
+    fixture.release(4);
+
+    CHECK_STATUS(fixture.add_section(2, 2, mesh), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(3, 1, mesh), BEDRAY_SCENE_OK);
+    const auto grown = fixture.prepare(5, 0xCE4);
+    CHECK(grown.instance_count == 3);
+    CHECK(grown.tlas != initial.tlas && grown.tlas != concurrent.tlas);
+    CHECK((grown.flags & BEDRAY_SCENE_FRAME_TLAS_REBUILT) != 0);
+    fixture.release(5);
+    fixture.release(2);
+}
+
 static void test_section_instances_follow_view() {
     Fixture fixture(1);
     const Mesh section_mesh = quad_mesh(0.0f, 0.0f, 0.0f);
@@ -2462,6 +2502,7 @@ int main() {
     test_update_copies_inputs_and_coalesces_pending();
     test_transform_update_touches_only_tlas();
     test_section_instances_follow_view();
+    test_tlas_full_build_reuses_released_storage_when_it_fits();
     test_refit_copies_pinned_geometry_and_updates_after_completion();
     test_pipelined_cow_tlas_updates_keep_dependencies_bounded();
     test_nonfinite_activation_changes_rebuild_instead_of_refitting();
