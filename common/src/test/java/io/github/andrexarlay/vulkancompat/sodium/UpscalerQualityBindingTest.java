@@ -23,6 +23,7 @@ class UpscalerQualityBindingTest {
     @Test
     void everyQualityCanBeSavedAndNamedWithoutQueryingAnAbsentTableRatio() throws Exception {
         Map<String, Consumer<UpscalerMode>> setters = new HashMap<>();
+        Map<String, Consumer<Integer>> scales = new HashMap<>();
         Map<String, Function<UpscalerMode, ?>> names = new HashMap<>();
         var oldBackend = VulkanRtxConfig.activeBackend;
         var oldDlss = VulkanRtxConfig.dlssMode;
@@ -30,13 +31,17 @@ class UpscalerQualityBindingTest {
         var oldFsr = VulkanRtxConfig.fsrMode;
         var oldFsr1 = VulkanRtxConfig.fsr1Mode;
         var oldType = VulkanRtxConfig.upscalerType;
+        Map<UpscalerBackend, Integer> oldScales = new java.util.EnumMap<>(UpscalerBackend.class);
+        for (UpscalerBackend backend : UpscalerBackend.values()) {
+            if (backend != UpscalerBackend.BILINEAR) oldScales.put(backend, VulkanRtxConfig.customPercent(backend));
+        }
         var requestField = UpscalerRequest.class.getDeclaredField("current");
         requestField.setAccessible(true);
         var oldRequest = requestField.get(null);
         try {
             // Store inactive quality settings without native libraries or a GPU.
             VulkanRtxConfig.activeBackend = UpscalerBackend.BILINEAR;
-            new VulkanSodiumConfig().registerSettings(recorder(ConfigBuilder.class, null, setters, names));
+            new VulkanSodiumConfig().registerSettings(recorder(ConfigBuilder.class, null, setters, names, scales));
             for (var backend : new UpscalerBackend[]{UpscalerBackend.DLSS, UpscalerBackend.XESS, UpscalerBackend.FSR, UpscalerBackend.FSR1}) {
                 String path = backend.name().toLowerCase(Locale.ROOT) + "_mode";
                 assertNotNull(setters.get(path), path);
@@ -46,6 +51,13 @@ class UpscalerQualityBindingTest {
                     assertEquals(mode, VulkanRtxConfig.modeOf(backend), path + " stores " + mode);
                     assertNotNull(assertDoesNotThrow(() -> names.get(path).apply(mode)), path + " names " + mode);
                 }
+            }
+            for (UpscalerBackend backend : oldScales.keySet()) {
+                String path = backend.name().toLowerCase(Locale.ROOT) + "_custom_scale";
+                assertNotNull(scales.get(path), path);
+                scales.get(path).accept(73);
+                assertEquals(73, VulkanRtxConfig.customPercent(backend), path);
+                assertEquals(UpscalerBackend.BILINEAR, VulkanRtxConfig.activeBackend, "editing a stored scale keeps the selected backend");
             }
             assertEquals("runtime-ngx", VulkanSodiumConfig.qualityRatioForLog(UpscalerBackend.DLSS, UpscalerMode.QUALITY));
             assertEquals("runtime-ngx", VulkanSodiumConfig.qualityRatioForLog(UpscalerBackend.DLSS, UpscalerMode.CUSTOM));
@@ -57,13 +69,14 @@ class UpscalerQualityBindingTest {
             VulkanRtxConfig.fsrMode = oldFsr;
             VulkanRtxConfig.fsr1Mode = oldFsr1;
             VulkanRtxConfig.upscalerType = oldType;
+            oldScales.forEach(VulkanRtxConfig::setCustomPercent);
             requestField.set(null, oldRequest);
         }
     }
 
     @SuppressWarnings("unchecked")
     private static <T> T recorder(Class<T> type, String path, Map<String, Consumer<UpscalerMode>> setters,
-                                   Map<String, Function<UpscalerMode, ?>> names) {
+                                   Map<String, Function<UpscalerMode, ?>> names, Map<String, Consumer<Integer>> scales) {
         return (T) Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (proxy, method, args) -> {
             if (method.getDeclaringClass() == Object.class) return switch (method.getName()) {
                 case "hashCode" -> System.identityHashCode(proxy);
@@ -78,10 +91,13 @@ class UpscalerQualityBindingTest {
                 if (method.getName().equals("setBinding")) setters.put(path, (Consumer<UpscalerMode>) args[0]);
                 if (method.getName().equals("setElementNameProvider")) names.put(path, (Function<UpscalerMode, ?>) args[0]);
             }
+            if (path != null && path.endsWith("_custom_scale") && method.getName().equals("setBinding")) {
+                scales.put(path, (Consumer<Integer>) args[0]);
+            }
             Class<?> ret = method.getReturnType();
             if (ret == void.class) return null;
             if (ret.isInstance(proxy)) return proxy;
-            if (ret.isInterface()) return recorder(ret, childPath, setters, names);
+            if (ret.isInterface()) return recorder(ret, childPath, setters, names, scales);
             if (ret == boolean.class) return false;
             if (ret.isPrimitive()) return 0;
             return null;

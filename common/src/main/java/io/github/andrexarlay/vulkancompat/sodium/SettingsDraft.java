@@ -7,6 +7,7 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrVersion;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.spatial.SpatialUpscaler;
 import net.caffeinemc.mods.sodium.client.config.structure.Config;
 import net.caffeinemc.mods.sodium.client.config.structure.EnumOption;
 import net.caffeinemc.mods.sodium.client.config.structure.IntegerOption;
@@ -201,7 +202,8 @@ final class SettingsDraft {
             };
             return new RuntimeStatus(badge, Component.literal(io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.statusLine()));
         }
-        if (entry.path().equals("upscaler_backend") || entry.path().equals("dlss_mode") || entry.path().equals("dlss_sr_preset") || entry.path().equals("xess_mode") || entry.path().startsWith("fsr_")) {
+        if (entry.category() == Category.UPSCALING && !entry.path().startsWith("frame_generation")
+                && !entry.path().equals("quality_preset") && !entry.path().equals("custom_scale")) {
             var choice = config.readEnumOption(id("upscaler_backend"), UpscalerChoice.class);
             var backend = choice.backend();
             if (entry.path().equals("dlss_sr_preset")) {
@@ -219,6 +221,7 @@ final class SettingsDraft {
                 case UNSUPPORTED_GPU -> Badge.UNSUPPORTED_HARDWARE;
             };
             var active = TemporalUpscaler.active();
+            if (active == null) active = SpatialUpscaler.selected();
             String activeLabel = active == null ? UpscalerBackend.BILINEAR.name() : active.name();
             if (active == UpscalerBackend.FSR) activeLabel = "FSR " + FsrRuntime.activeProvider();
             if (backend == UpscalerBackend.FSR && FsrRuntime.failureReason() != null
@@ -246,6 +249,7 @@ final class SettingsDraft {
         if (p.equals("pt_preset") || p.equals("rt_mode")) return false;
         if (p.equals("path_quality_profile") && !hasQualityProfile()) return false;
         if (p.startsWith("voxel_") || p.startsWith("compute_")) return voxel() && !e.option().shouldHideControl();
+        if (p.endsWith("custom_scale") && !e.option().isEnabled()) return false;
         if (!voxel()) return !e.option().shouldHideControl();
         return Set.of("renderer", "renderer_status", "quality_preset", "custom_scale", "debug_overlay", "ui_expert").contains(p)
             && !e.option().shouldHideControl();
@@ -258,7 +262,7 @@ final class SettingsDraft {
         if (p.startsWith("compute_") || p.startsWith("debug_") || p.equals("rt_debug_view") || p.equals("ui_expert")) return Category.SYSTEM;
         if (p.contains("mode") && (p.startsWith("dlss") || p.startsWith("fsr") || p.startsWith("xess"))
             || p.startsWith("upscaler") || p.startsWith("frame_generation") || p.startsWith("fsr_")
-            || p.equals("quality_preset") || p.equals("custom_scale") || p.equals("dlss_sr_preset")) return Category.UPSCALING;
+            || p.equals("quality_preset") || p.endsWith("custom_scale") || p.equals("dlss_sr_preset")) return Category.UPSCALING;
         if (p.startsWith("atm_") || p.startsWith("water_") || p.startsWith("waving_") || p.startsWith("auto_normal")
             || p.startsWith("texture_") || p.equals("point_sampling_sharpness") || p.startsWith("rt_fog")) return Category.WORLD;
         return Category.LIGHTING;

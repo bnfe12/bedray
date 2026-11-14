@@ -119,6 +119,7 @@ public final class WorldTargetManager {
     private static WorldResolutionPlan resolutionPlan;
 
     private static WorldFrame.Stamp resolutionStamp;
+    private static WorldFrame.Stamp lastWorldPhaseStamp;
     private static WorldFrame.Stamp rasterMotionStamp;
     private static boolean rasterMotionReset;
     private static boolean temporalForFrame;
@@ -342,6 +343,13 @@ public final class WorldTargetManager {
         resolutionPlan = plan;
         textureRenderScale = plan.rasterScale(winW, winH);
         resolutionStamp = WorldFrames.stampOrNull();
+        if (resolutionStamp != null && (lastWorldPhaseStamp == null
+                || lastWorldPhaseStamp.worldEpoch() != resolutionStamp.worldEpoch()
+                || lastWorldPhaseStamp.frameNumber() != resolutionStamp.frameNumber() - 1)) {
+            WorldCameraHistory.markReset();
+            CameraJitterManager.reset();
+        }
+        lastWorldPhaseStamp = resolutionStamp;
         ensureTargets(resolutionPlan.worldWidth(), resolutionPlan.worldHeight());
         if (!resolutionPlan.equals(lastLoggedResolutionPlan)) {
             lastLoggedResolutionPlan = resolutionPlan;
@@ -1163,6 +1171,8 @@ public final class WorldTargetManager {
         }
         worldTargetHasStorage = false;
         lastRtEnabled = null;
+        lastWorldPhaseStamp = null;
+        textureRenderScale = 1.0;
         lastLoggedSkyTargetId = -1;
         CameraJitterManager.reset();
         WorldLevelProjection.reset();

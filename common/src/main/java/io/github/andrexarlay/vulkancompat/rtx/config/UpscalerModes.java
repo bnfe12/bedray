@@ -35,8 +35,8 @@ public final class UpscalerModes {
     /** How trustworthy a ratio is. */
     public enum Source { SDK_DOC, RESEARCH_NOTE, UNVERIFIED, RUNTIME_QUERY, USER }
 
-    /** Range of the custom render scale slider in percent. NIS raises the minimum to 50 (NisConstants). */
     public static final int CUSTOM_DEFAULT_PERCENT = 67;
+    /** Range of the custom render scale slider in percent. NIS raises the minimum to 50. */
     public static final int CUSTOM_MIN_PERCENT = 25;
     public static final int CUSTOM_MAX_PERCENT = 100;
 
