@@ -65,7 +65,7 @@ class RtTraceCostTest {
     @Test
     void theDiTemporalImportNoLongerWalksTheLightTree() throws IOException {
         String di = read("restir/di_block_emitters.slang");
-        assertTrue(di.contains("LightEvaluation evaluation = emitters().evaluateTarget(receiver, historySample);"));
+        assertTrue(di.contains("evaluation = emitters().evaluateTarget(receiver, historySample);"));
         assertFalse(di.contains("emitters().evaluate(receiver, historySample)"));
         assertTrue(di.contains("imported.solidAnglePdf = DI_IMPORT_SOLID_ANGLE_PDF;"),
             "the stored source pdf only cancels between the estimate and the direct term");

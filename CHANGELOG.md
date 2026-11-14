@@ -17,6 +17,13 @@
 
 ### Unreleased details
 
+* Fixed ReSTIR Direct Light brightening the image. A history (or a spatial neighbour) with no weight to give - an empty record, or
+  one zeroed by its own shadow ray - was dropped together with its M, so the sample the pixel kept was divided by the fresh batch
+  alone whenever the history happened to be empty, which is most of the time on a dim wall. Such a record now adds its draws and
+  nothing else. Autotest `rt_modes` scene N, fixed exposure, DLSS RR, whole-frame mean against ReSTIR off: temporal reuse +9.6 % ->
+  +0.7 %, with spatial reuse +6.1 % -> -0.5 %. The low-frequency deviation of the floor under a lone light source (orange wedge and
+  dark patches) from the reuse-off frame drops from 11.2 to 2.7 with temporal and from 8.1 to 4.7 with spatial reuse; two runs of
+  reuse off differ by 1.1. The `moving_error` line of the autotest now also logs `mean_moving` and `mean_ref`.
 * Added an experimental direct Vulkan DLSS 5 Neural Rendering pass after raster DLSS SR or DLAA. The standard wrapper keeps
   its existing SR and RR support. The local NR build uses the official RTX Remix SDK overlay. See the [DLSS 5 guide](docs/experiments/dlss5.md).
 * Added the [Bedray documentation site](https://bnfe12.github.io/bedray/) with installation, settings, feature status and add-on development links.
