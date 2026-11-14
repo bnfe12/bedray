@@ -101,8 +101,9 @@ float3 tonemapInverse(float3 y) {
 
 // ---- Player-selectable tone curves (settings: tonemapper). Mirror of RtTonemap.applyMode; keep the constants in sync. ----
 // Mode 0 is the peak-channel curve above. The RT display pass writes the result straight to the RGBA8 output with no
-// separate gamma stage, so every mode returns a final display value 0..1: ACES, GT and PBR Neutral are filmic curves
-// that already output display-referred colour, while AgX outputs display-linear and carries its own sRGB EOTF here.
+// separate encoding stage. ACES, GT and PBR Neutral return display-linear Rec.709; the dispatcher encodes them to sRGB
+// exactly once. The custom peak curve above is already display-encoded. AgX first decodes its 2.2 reference display
+// signal, then encodes that display-linear value for the same sRGB output.
 
 static const uint TM_MODE_PEAK = 0u;
 static const uint TM_MODE_ACES = 1u;
@@ -183,6 +184,10 @@ float tmSrgbChannel(float c) {
     return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
 }
 
+float3 tmEncodeSrgb(float3 c) {
+    return float3(tmSrgbChannel(c.r), tmSrgbChannel(c.g), tmSrgbChannel(c.b));
+}
+
 float3 tmAgx(float3 c) {
     c = tmSanitize(c);
     float minEv = -12.47393;
@@ -200,14 +205,16 @@ float3 tmAgx(float3 c) {
     v = (v - minEv) / (maxEv - minEv);
     v = tmAgxContrast(v);
     v = mul(outset, v);
-    return saturate(float3(tmSrgbChannel(v.r), tmSrgbChannel(v.g), tmSrgbChannel(v.b)));
+    // AgX's contrast polynomial is a signal for the reference 2.2 display, not linear light.
+    // Decode that reference EOTF before applying the sRGB encoding of our UNORM output.
+    return tmEncodeSrgb(pow(saturate(v), float3(2.2)));
 }
 
 // Scene-linear colour -> display colour 0..1 with the player's chosen curve (mode 0 = the peak-channel curve).
 float3 tonemapColorMode(float3 c, uint mode) {
-    if (mode == TM_MODE_ACES) { return tmAces(c); }
-    if (mode == TM_MODE_PBR_NEUTRAL) { return tmPbrNeutral(c); }
-    if (mode == TM_MODE_GT) { return tmGranTurismo(c); }
+    if (mode == TM_MODE_ACES) { return tmEncodeSrgb(tmAces(c)); }
+    if (mode == TM_MODE_PBR_NEUTRAL) { return tmEncodeSrgb(tmPbrNeutral(c)); }
+    if (mode == TM_MODE_GT) { return tmEncodeSrgb(tmGranTurismo(c)); }
     if (mode == TM_MODE_AGX) { return tmAgx(c); }
     return tonemapColor(c);
 }

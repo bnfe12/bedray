@@ -120,7 +120,8 @@ public final class LookScenario implements AutotestScenario {
             for (int i = 1; i < parts.length; i++) {
                 String m = parts[i].trim().toLowerCase(Locale.ROOT);
                 if (!(m.matches("[tbfvsd]\\d+") || m.matches("c[xyz]=-?\\d+(\\.\\d+)?") || m.matches("aim=-?\\d+_-?\\d+") || m.equals("refl")
-                    || m.equals("gi") || m.equals("ao") || m.equals("perf") || m.matches("water=(vanilla|realistic)") || m.matches("self=(full|nofoot|off)") || m.equals("dn=rr") || m.matches("lb=\\d+") || m.matches("pan=-?\\d+") || m.equals("noaccum") || m.equals("noglass") || m.equals("glass"))) {
+                    || m.equals("gi") || m.equals("ao") || m.equals("perf") || m.matches("water=(vanilla|realistic)") || m.matches("self=(full|nofoot|off)") || m.equals("dn=rr") || m.matches("lb=\\d+") || m.matches("pan=-?\\d+") || m.equals("noaccum") || m.equals("noglass") || m.equals("glass")
+                    || m.matches("tm=(peak|aces|pbr_neutral|gt|agx)") || m.equals("fixed") || m.matches("ev=-?\\d{1,2}"))) {
                     throw new IllegalArgumentException("step '" + item + "': unknown modifier " + m);
                 }
                 mods.add(m);
@@ -498,7 +499,11 @@ public final class LookScenario implements AutotestScenario {
                 RtSettings.pathDistance = Integer.parseInt(m.substring(1));
             }
         }
-        RtSettings.pathAutoExposure = true;
+        RtSettings.pathAutoExposure = !s.mods().contains("fixed");
+        RtSettings.pathExposureEvTenths = s.value("ev") == null ? 0 : Integer.parseInt(s.value("ev"));
+        RtSettings.tonemapper = s.value("tm") == null ? RtSettings.Tonemapper.PEAK
+            : RtSettings.Tonemapper.valueOf(s.value("tm").toUpperCase(Locale.ROOT));
+        RtSettings.filmGrain = false;
         RtSettings.pathDenoiser = RtSettings.PathDenoiser.OFF;
         RtSettings.autoNormals = true;
         RtSettings.autoNormalStrength = 100;

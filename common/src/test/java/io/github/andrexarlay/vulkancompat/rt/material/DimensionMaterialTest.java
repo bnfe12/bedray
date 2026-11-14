@@ -6,6 +6,23 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** L2 material behaviour using representative unlit texels from the vanilla Nether/End palettes. */
 class DimensionMaterialTest {
+    @Test
+    void referenceRoomsCanBeSelectedForTheLiveMaterialAudit() {
+        var steps = io.github.andrexarlay.vulkancompat.autotest.MaterialsScenario.parseSteps(
+            "C:path+b4+s8+tm=pbr_neutral+fixed+ev=-5+dn=nrd,F:path+b4,X:path+b4+open");
+        assertEquals(java.util.List.of("C", "F", "X"), steps.stream().map(s -> s.scene()).toList());
+        assertThrows(IllegalArgumentException.class,
+            () -> io.github.andrexarlay.vulkancompat.autotest.MaterialsScenario.parseSteps("C:path+s0"));
+        assertThrows(IllegalArgumentException.class,
+            () -> io.github.andrexarlay.vulkancompat.autotest.MaterialsScenario.parseSteps("C:path+s9"));
+        assertThrows(IllegalArgumentException.class,
+            () -> io.github.andrexarlay.vulkancompat.autotest.MaterialsScenario.parseSteps("C:path+tm=typo"));
+        assertEquals("minecraft:the_nether", io.github.andrexarlay.vulkancompat.autotest.MaterialsScenario.dimensionId("nether"));
+        assertEquals("minecraft:the_end", io.github.andrexarlay.vulkancompat.autotest.MaterialsScenario.dimensionId("end"));
+        assertThrows(IllegalArgumentException.class,
+            () -> io.github.andrexarlay.vulkancompat.autotest.MaterialsScenario.dimensionId("typo"));
+    }
+
     private static int rgba(int r, int g, int b) {
         return 0xff000000 | r << 16 | g << 8 | b;
     }

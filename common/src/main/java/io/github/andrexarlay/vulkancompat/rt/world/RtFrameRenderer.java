@@ -1014,6 +1014,7 @@ public final class RtFrameRenderer {
         RtSky.SkyLight skyLight = new RtSky.SkyLight();
         RtSky.skyLight(params.skyColor, params.key.day, sunY, -sunY, skyState.moonLight, skyState.rainBrightness,
             params.key.color, hasSky, skyLight);
+        RtSky.dimensionSkyLight(skyState.isEnd, skyState.isNether, skyState.fogColor, skyLight);
         System.arraycopy(skyLight.zenith, 0, params.skyLightZenith, 0, 3);
         System.arraycopy(skyLight.horizon, 0, params.skyLightHorizon, 0, 3);
         params.volumetricFogEnabled = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.volumetricFogEnabled();
