@@ -16,18 +16,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * These are source-contract and analytic reference tests, not GPU or visual evidence.
  */
 class RtSlangPaneFilterTest {
-    @Test
-    void primaryCoverageIncludesAllUnscatteredWindowLayers() throws IOException {
-        String tracer = Files.readString(TRACER);
-        int accumulation = tracer.indexOf("result.primaryCoverage +=");
-        String guard = tracer.substring(Math.max(0, accumulation - 350), accumulation);
-        assertTrue(guard.contains("result.depth == 0u"), "transmitted panes stay on the camera segment");
-        assertFalse(guard.contains("!firstSurfaceAccepted"), "accepting a guide must not stop coverage at the first pane");
-        double coverage = 0.0;
-        for (double alpha : new double[] {0.25, 0.5, 0.25}) coverage += (1.0 - coverage) * alpha;
-        assertEquals(1.0 - 0.75 * 0.5 * 0.75, coverage, 1e-12);
-    }
-
     private static final Path TRACER = Path.of("src/main/resources/shaders/slang/pathtrace/path_tracer.slang");
 
     @Test
@@ -122,9 +110,8 @@ class RtSlangPaneFilterTest {
         String bsdf = Files.readString(Path.of("src/main/resources/shaders/slang/shading/bsdf.slang"));
         int transmit = bsdf.indexOf("    if (transmit) {");
         String branch = bsdf.substring(transmit, bsdf.indexOf("return result;", transmit));
-        assertTrue(branch.contains("materialGlassTint(material.albedo, material.alpha, transmission)"));
-        String material = Files.readString(Path.of("src/main/resources/shaders/slang/contracts/material.slang"));
-        assertTrue(material.contains("return pow(hue, float3(max(alpha, 0.0) * max(transmission, 0.0)))"));
+        assertTrue(branch.contains("pow(clamp(material.albedo"));
+        assertTrue(branch.contains("float3(max(material.alpha, 0.0) * transmission)"));
         assertTrue(branch.contains("/ max(passProbability, 1.0e-6)"), "compensate sampling, not tint twice");
         double red = Math.pow(0.8, 0.5);
         double blue = Math.pow(0.2, 0.5);

@@ -5,6 +5,8 @@ import io.github.andrexarlay.vulkancompat.rt.material.LabPbr;
 import io.github.andrexarlay.vulkancompat.rt.sodium.DecodedSection;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import java.util.HashMap;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
