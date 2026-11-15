@@ -204,6 +204,13 @@ public final class RtSettings {
      * four first-edge visibility rays a pixel and no memory of its own.
      */
     public static boolean pathRestirPtSpatial = true;
+    /**
+     * NVIDIA shader execution reordering (SER) for the path-trace pass. Off by default: the last A/B on an RTX 5060 Ti
+     * measured the trace pass 2.14x slower with it (docs/FEATURE_MATRIX.md). The device feature is requested while the
+     * Vulkan device is created and the trace program is picked when the pass is built, so a change applies after a game
+     * restart; {@code -Dbedray.rt.ser=true|false} overrides the saved value for one session.
+     */
+    public static boolean pathSer = false;
     /** NRD by default: used when the NRD natives are installed, otherwise the path tracer falls back to accumulation (logged). */
     public static PathDenoiser pathDenoiser = PathDenoiser.NRD;
     public static int pathDistance = 256;
@@ -298,6 +305,7 @@ public final class RtSettings {
         bool("path_restir_spatial", () -> pathRestirSpatial, v -> pathRestirSpatial = v);
         bool("path_restir_pt", () -> pathRestirPt, v -> pathRestirPt = v);
         bool("path_restir_pt_spatial", () -> pathRestirPtSpatial, v -> pathRestirPtSpatial = v);
+        bool("path_ser", () -> pathSer, v -> pathSer = v);
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("path_auto_exposure", () -> pathAutoExposure, v -> pathAutoExposure = v);
         integer("path_exposure_ev", () -> pathExposureEvTenths, v -> pathExposureEvTenths = v, -40, 40);
@@ -503,6 +511,8 @@ public final class RtSettings {
     public static boolean pathRestirPt() { return b("path_restir_pt"); }
     /** The PT spatial stage; see {@link #pathRestirPtSpatial}. */
     public static boolean pathRestirPtSpatial() { return b("path_restir_pt_spatial"); }
+    /** Shader execution reordering of the path-trace pass; see {@link #pathSer}. */
+    public static boolean pathSer() { return b("path_ser"); }
     public static int bounces() { return i("path_bounces"); }
     public static int spp() { return i("path_spp"); }
     public static boolean accumulate() { return b("path_accumulate"); }

@@ -776,6 +776,12 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             () -> RtSettings.pathRestirPtSpatial,
             s -> pathOn.apply(s) && s.readBooleanOption(pathDiId) && s.readBooleanOption(pathPtId),
             rtDependencies(modeId, pathDiId, pathPtId), Mark.PATH, OptionImpact.MEDIUM, false, st));
+        // Shader execution reordering: the device feature is requested while the Vulkan device is created and the trace
+        // program is picked when the pass is built, so the row asks for a game restart.
+        BooleanOptionBuilder serOption = boolOpt(builder, "path_ser", false, v -> RtSettings.pathSer = v,
+            () -> RtSettings.pathSer, pathOn, rtDependencies(modeId), Mark.PATH, OptionImpact.HIGH, false, st);
+        serOption.setFlags(OptionFlag.REQUIRES_GAME_RESTART);
+        pt.addOption(serOption);
         EnumOptionBuilder<RtSettings.AdaptiveQuality> aq = builder.createEnumOption(id("adaptive_quality"), RtSettings.AdaptiveQuality.class);
         aq.setName(nameOf("adaptive_quality")).setTooltip(v -> tipOf("adaptive_quality")).setDefaultValue(RtSettings.AdaptiveQuality.OFF)
             .setAllowedValues(EnumSet.allOf(RtSettings.AdaptiveQuality.class))

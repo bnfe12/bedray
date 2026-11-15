@@ -74,7 +74,7 @@ public final class GiExecutionStatus {
             return "Open a world to read the device feature mask.";
         }
         boolean raygen = Boolean.getBoolean(RtRayPipelineDeviceRequirements.RAYGEN_PROPERTY);
-        boolean ser = Boolean.getBoolean(RtRayPipelineDeviceRequirements.SER_PROPERTY);
+        boolean ser = RtRayPipelineDeviceRequirements.serRequested();
         return describe(device.capabilityMask(), raygen, ser);
     }
 

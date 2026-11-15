@@ -362,6 +362,16 @@ public final class SettingsCatalog {
             "Path Tracing with ReSTIR Path Reuse on, on the default (Java-recorded) backend. Shows up one frame after the "
                 + "pooling: the pooled path is drawn by the next frame's reuse.",
             "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
+        putNoImage("path_ser", Tier.ADVANCED, "Shader Execution Reordering (SER)",
+            "Lets an NVIDIA RTX 40/50 GPU regroup path-tracing rays that went in different directions before it shades "
+                + "them, so neighbouring threads run the same material code. It changes only how the work is scheduled, "
+                + "not the picture. The GPU feature is requested when the game starts, so a change applies after a restart.",
+            "FPS: not a speed-up on the tested GPU. The last A/B on an RTX 5060 Ti measured the trace pass 2.14x slower "
+                + "with it, so it stays off by default; try it per GPU and keep it only if the frame time drops.",
+            "Path Tracing on an NVIDIA GPU with the ray tracing invocation reorder extension; elsewhere the setting is "
+                + "ignored and the log says the feature is unavailable.",
+            "Compare the GPU time of the trace pass (F3 / the frame log) with the switch on and off after a restart; the "
+                + "image is the same.");
         putNoImage("path_restir_pt", Tier.ADVANCED, "ReSTIR Path Reuse (experimental)",
             "Keeps the indirect light a pixel's first bounce brought back - light bounced off a nearby diffuse wall or floor - "
                 + "in a per-pixel path record and reuses it in the next frames, so bounced light settles faster while you move. "
