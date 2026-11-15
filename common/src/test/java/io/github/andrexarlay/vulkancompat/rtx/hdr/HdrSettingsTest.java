@@ -51,6 +51,7 @@ public class HdrSettingsTest {
         HdrSettings.setPaperWhiteNits(500);
         HdrSettings.setPeakNits(400);
         assertEquals(500, HdrSettings.peakNits());
+        assertEquals(400, HdrSettings.peakSetting());
         HdrSettings.setPaperWhiteNits(200);
         HdrSettings.setPeakNits(1000);
     }

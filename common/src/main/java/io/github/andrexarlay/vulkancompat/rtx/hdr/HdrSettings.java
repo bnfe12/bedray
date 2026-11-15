@@ -77,6 +77,12 @@ public final class HdrSettings {
         paperWhite = Math.max(PAPER_WHITE_MIN, Math.min(PAPER_WHITE_MAX, nits));
     }
 
+    /** The peak as the player set it (what the settings slider shows and the toml stores). */
+    public static int peakSetting() {
+        return peak;
+    }
+
+    /** The peak the renderer uses: never below paper white. */
     public static int peakNits() {
         return Math.max(peak, paperWhite);
     }

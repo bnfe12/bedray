@@ -829,7 +829,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             v -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.setPaperWhiteNits(v), () -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.paperWhiteNits(),
             hdrOn, dHdr, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(intOpt(builder, "hdr_peak", 1000, io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.PEAK_MIN, io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.PEAK_MAX, 100, unit(" nits"),
-            v -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.setPeakNits(v), () -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.peakNits(),
+            v -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.setPeakNits(v), () -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.peakSetting(),
             hdrOn, dHdr, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(boolOpt(builder, "vibrant_visuals", false, v -> RtSettings.vibrantVisuals = v,
             () -> RtSettings.vibrantVisuals, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
