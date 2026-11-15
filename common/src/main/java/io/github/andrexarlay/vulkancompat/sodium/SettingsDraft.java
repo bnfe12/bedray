@@ -114,7 +114,9 @@ final class SettingsDraft {
     boolean voxel() { return config.readEnumOption(id("renderer"), VulkanRtxConfig.RendererSelection.class) != VulkanRtxConfig.RendererSelection.HARDWARE_RT; }
     boolean hasQualityProfile() { return voxel() || config.readEnumOption(id("rt_mode"), RtMode.class) == RtMode.PATH_TRACED; }
     boolean changed() { return !imported.isEmpty() || config.anyOptionChanged(); }
-    int menuTransparency() { return config.readIntOption(MENU_TRANSPARENCY); }
+    int menuTransparency() {
+        return config.readIntOption(MENU_TRANSPARENCY, false);
+    }
 
     boolean pending(Entry entry) {
         // The Overview renderer control stages both the renderer and its tracing mode.
