@@ -16,6 +16,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(value = Minecraft.class, remap = false)
 public abstract class MixinMinecraftFrameTiming {
+    @Inject(method = "renderFrame(Z)V", at = @At("HEAD"))
+    private void vkb$cmdStart(boolean advanceGameTime, CallbackInfo ci) {
+        if (VulkanBridge.isVulkan()) {
+            PerfMonitor.cmdStart();
+        }
+    }
+
     @Inject(method = "renderFrame(Z)V",
         at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;render()V", shift = At.Shift.AFTER))
     private void vkb$renderEnd(boolean advanceGameTime, CallbackInfo ci) {

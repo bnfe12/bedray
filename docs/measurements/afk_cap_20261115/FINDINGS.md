@@ -129,6 +129,21 @@ raised the count to 5 (applied, `mixin_applied=` in the log); ABBA, same stack: 
 interval 25.69 vs 26.24 ms (+2.1 %, noise). **Rejected, not kept.** The idle time is still unexplained (other candidates: present
 cost of a windowed swapchain, CPU wake-up and submit latency); a profiler or fullscreen/independent-flip capture would be needed.
 
+## Where the GPU idle time sits, and the present mode is not the cause either
+
+A `CMD_START` stamp (first command of the frame's command buffer) splits the gap between two frames in the `[VKB-PERF] gpu_gap_ms`
+log line: `idle_before_cmdbuf` 1.5-1.8 ms on average (spikes up to 36 ms) against `engine_pre_render` 0.02 ms. So the GPU is not busy
+with unmeasured engine work; it waits for the next frame's submit (acquire semaphore / present path). Tested and rejected: swapchain
+image count 3 vs 5 (+2.1 %), and MAILBOX instead of IMMEDIATE (ABBA, gpu_total 23.78 vs 23.97 ms, interval 25.70 vs 25.77 ms, +0.3 %).
+
+## The capture window overlaps a re-mesh storm
+
+After the world is loaded (`total=4281`, `pending=0`) Sodium keeps re-meshing sections for about a minute: the section registry's
+`replaced` counter goes 1335 -> 2453 -> 4581 and the log shows 70-100 BLAS builds per second, so the first part of every
+`native_perf` capture runs with extra BLAS build work (the `world` span is 1.9 ms in the first window against 0.4-0.6 ms later,
+and the 7-25 ms stalls are in the same period). A longer warm-up would give a cleaner baseline; why every section is replaced once
+is not established (neighbour-driven rebuilds are normal for Sodium, a double build by this mod would be a bug).
+
 ## Not measured / open
 
 * One GPU, one scene (fixed seed, one camera pose); no frame-time percentiles beyond the capture analyzer's.

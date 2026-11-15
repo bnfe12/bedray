@@ -38,6 +38,8 @@ public final class PerfMonitor {
 
     /** Stamp points of a frame, in submission order. */
     public enum Mark {
+        /** Head of Minecraft.renderFrame: the first command of the frame's command buffer (diagnostic, no segment uses it). */
+        CMD_START,
         /** Head of GameRenderer.render(). */
         FRAME_BEGIN,
         /** Right before GameRenderer.renderLevel() (after the main target clear and the lightmap). */
@@ -143,7 +145,7 @@ public final class PerfMonitor {
         slot = (int) (frameIndex % RING);
         GameplayCapture.tick(now);
         FrameBenchmark.begin(frameIndex, now);
-        if (ensurePool()) {
+        if (ensurePool() && harvestedFrame != frameIndex) {
             harvest(slot);
         }
         slotFrames[slot] = frameIndex;
@@ -165,6 +167,26 @@ public final class PerfMonitor {
             written[q] = true;
         }
     }
+
+    /**
+     * Head of Minecraft.renderFrame, before anything of the frame is recorded: stamps CMD_START as the first command of the new
+     * command buffer. The slot of this frame is harvested here (its old results are read before the query is reused), so the
+     * stamp does not overwrite the frame {@link #RING} frames back. Splits the GPU gap between two frames into the idle time
+     * before the command buffer starts (acquire semaphore, submit latency) and the engine work recorded before the world.
+     */
+    public static void cmdStart() {
+        if (frameOpen || !ensurePool()) {
+            return;
+        }
+        int s = (int) (frameIndex % RING);
+        harvest(s);
+        harvestedFrame = frameIndex;
+        int q = s * MARKS + Mark.CMD_START.ordinal();
+        RenderSystem.getDevice().createCommandEncoder().writeTimestamp(pool, q);
+        written[q] = true;
+    }
+
+    private static long harvestedFrame = -1L;
 
     /** Before the frame submit: stamps FRAME_END, accumulates CPU segments, publishes the window when it elapsed. */
     public static void frameEnd() {
@@ -260,22 +282,22 @@ public final class PerfMonitor {
         if (FrameBenchmark.active()) FrameBenchmark.gpu(slotFrames[s], samples(gpuTicks, gpuHave, timestampPeriodNs * 1.0e-6, gpuSamples));
     }
 
-    // GPU-side gap between the previous frame's FRAME_END and this frame's FRAME_BEGIN: time the GPU spent on anything the frame
-    // segments do not cover (engine work recorded before GameRenderer.render, the swapchain blit and present of the previous
-    // frame) or sat idle waiting for a submit. Frames are harvested in order, so the previous end tick is the last harvested one.
+    // GPU-side gap between the previous frame's FRAME_END and this frame's FRAME_BEGIN, split by CMD_START (the first command of this
+    // frame's command buffer) into: idle before the buffer starts (acquire semaphore, submit latency, present) and engine work recorded
+    // before GameRenderer.render. Frames are harvested in order, so the previous end tick is the last harvested one.
     private static long prevEndTick;
-    private static double gapSumMs;
-    private static double gapMaxMs;
+    private static double idleSumMs, preSumMs, gapMaxMs;
     private static int gapCount;
     private static int gapWindows;
 
     private static void trackGpuGap() {
-        int b = Mark.FRAME_BEGIN.ordinal(), e = Mark.FRAME_END.ordinal();
+        int c = Mark.CMD_START.ordinal(), b = Mark.FRAME_BEGIN.ordinal(), e = Mark.FRAME_END.ordinal();
         if (gpuHave[b] && gpuHave[e]) {
-            if (prevEndTick != 0L && gpuTicks[b] >= prevEndTick) {
-                double gap = (gpuTicks[b] - prevEndTick) * timestampPeriodNs * 1.0e-6;
-                gapSumMs += gap;
-                gapMaxMs = Math.max(gapMaxMs, gap);
+            if (prevEndTick != 0L && gpuHave[c] && gpuTicks[c] >= prevEndTick && gpuTicks[b] >= gpuTicks[c]) {
+                double toMs = timestampPeriodNs * 1.0e-6;
+                idleSumMs += (gpuTicks[c] - prevEndTick) * toMs;
+                preSumMs += (gpuTicks[b] - gpuTicks[c]) * toMs;
+                gapMaxMs = Math.max(gapMaxMs, (gpuTicks[b] - prevEndTick) * toMs);
                 gapCount++;
             }
             prevEndTick = gpuTicks[e];
@@ -283,13 +305,15 @@ public final class PerfMonitor {
     }
 
     private static void logGpuGap() {
-        // Every 10th window (about 5 s) and only with samples: one line that says how much GPU time lies between frames.
+        // Every 10th window (about 5 s) and only with samples: how much GPU time lies between frames, and where.
         if (gapCount > 0 && ++gapWindows % 10 == 0) {
-            LOGGER.info("[VKB-PERF] gpu_gap_ms avg={} max={} frames={} (previous FRAME_END to FRAME_BEGIN on the GPU timeline)",
-                String.format(java.util.Locale.ROOT, "%.3f", gapSumMs / gapCount),
+            LOGGER.info("[VKB-PERF] gpu_gap_ms idle_before_cmdbuf={} engine_pre_render={} max_total={} frames={}",
+                String.format(java.util.Locale.ROOT, "%.3f", idleSumMs / gapCount),
+                String.format(java.util.Locale.ROOT, "%.3f", preSumMs / gapCount),
                 String.format(java.util.Locale.ROOT, "%.3f", gapMaxMs), gapCount);
         }
-        gapSumMs = 0.0;
+        idleSumMs = 0.0;
+        preSumMs = 0.0;
         gapMaxMs = 0.0;
         gapCount = 0;
     }
