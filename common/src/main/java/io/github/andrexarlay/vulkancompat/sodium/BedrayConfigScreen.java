@@ -56,6 +56,10 @@ public final class BedrayConfigScreen extends Screen {
     private SettingsLayout layout;
     private final java.util.Map<SettingsDraft.Category, Button> navigation = new java.util.EnumMap<>(SettingsDraft.Category.class);
 
+    public static void open(Screen parent) {
+        parent.getMinecraft().gui.setScreen(new BedrayConfigScreen(parent));
+    }
+
     public BedrayConfigScreen(Screen parent) {
         super(tr("bedray.settings.title", "Bedray Settings"));
         this.parent = parent;
