@@ -47,6 +47,8 @@ public final class BedrayConfigScreen extends Screen {
     private final List<Button> popupButtons = new ArrayList<>();
     private int popupX, popupY, popupWidth, popupHeight, popupScroll, popupFocus;
     private SettingsDraft.Entry selected;
+    private long tabSelectedAt;
+    private long rowSelectedAt;
     private Button applyButton, revertButton, captureButton, detailsButton, closeButton, reviewButton;
     private Component runtime = Component.empty();
     private Component notice = Component.empty();
@@ -130,6 +132,7 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     private void selectCategory(SettingsDraft.Category value) {
+        if (!activeTab(value)) tabSelectedAt = System.nanoTime();
         category = value;
         reviewing = false;
         scroll = 0;
@@ -230,7 +233,10 @@ public final class BedrayConfigScreen extends Screen {
         rowWidgets.clear(); rows.clear();
         rows.addAll(nextRows);
         for (AbstractWidget widget : nextWidgets) rowWidgets.add(addRenderableWidget(widget));
-        if (!rows.contains(selected)) selected = rows.isEmpty() ? null : rows.getFirst();
+        if (!rows.contains(selected)) {
+            selected = rows.isEmpty() ? null : rows.getFirst();
+            rowSelectedAt = 0L;
+        }
         if (browsing && category == SettingsDraft.Category.PRESETS) {
             addAction(tr("bedray.settings.looks", "Visual style…"), () -> openLooks(contentX, listTop));
             addAction(tr("bedray.settings.experience_library", "Rendering experiences..."),
@@ -396,7 +402,11 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     private void select(SettingsDraft.Entry entry) {
-        if (selected != entry) { selected = entry; PreviewPanel.setRuntimeStatus(draft.status(entry).text()); }
+        if (selected != entry) {
+            selected = entry;
+            rowSelectedAt = System.nanoTime();
+            PreviewPanel.setRuntimeStatus(draft.status(entry).text());
+        }
         PreviewPanel.select(entry.option());
     }
     private void positionRows() {
@@ -576,20 +586,23 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     @Override public void extractRenderState(GuiGraphicsExtractor g, int mx, int my, float delta) {
+        long now = System.nanoTime();
+        float tabOpacity = SettingsChrome.selectionOpacity(now, tabSelectedAt);
+        float rowOpacity = SettingsChrome.selectionOpacity(now, rowSelectedAt);
         navigation.forEach((value, tab) -> {
             int index = value.ordinal();
             int x = layout.navX(index);
             int y = layout.navY(index);
             int w = layout.navWidth(index);
             boolean hovered = mx >= x && mx < x + w && my >= y && my < y + SettingsLayout.NAV_HEIGHT;
-            SettingsChrome.navigation(g, x, y, w, activeTab(value), hovered || tab.isFocused());
+            SettingsChrome.navigation(g, x, y, w, activeTab(value) ? tabOpacity : 0f, hovered || tab.isFocused());
         });
         for (int i = 0; i < rows.size(); i++) {
             AbstractWidget widget = rowWidgets.get(i);
             if (!widget.visible) continue;
             int y = widget.getY();
             boolean hovered = mx >= contentX && mx < contentX + contentWidth && my >= y && my < y + CONTROL_HEIGHT;
-            SettingsChrome.row(g, contentX, y, contentWidth, selected == rows.get(i), hovered, draft.pending(rows.get(i)));
+            SettingsChrome.row(g, contentX, y, contentWidth, selected == rows.get(i) ? rowOpacity : 0f, hovered, draft.pending(rows.get(i)));
         }
         super.extractRenderState(g, mx, my, delta);
         g.text(font, title, (width - font.width(title)) / 2, 8, SettingsChrome.TITLE);

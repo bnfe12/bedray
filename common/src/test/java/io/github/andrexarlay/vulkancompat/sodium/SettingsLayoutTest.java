@@ -56,10 +56,22 @@ class SettingsLayoutTest {
 
     @Test
     void menuTransparencyChangesBothLayers() {
-        assertEquals(255, SettingsChrome.menuSurface(0) >>> 24);
-        assertEquals(102, SettingsChrome.menuSurface(VulkanRtxConfig.MAX_MENU_TRANSPARENCY) >>> 24);
+        assertEquals(255, SettingsChrome.menuTop(0) >>> 24);
+        assertEquals(102, SettingsChrome.menuTop(VulkanRtxConfig.MAX_MENU_TRANSPARENCY) >>> 24);
+        assertEquals(102, SettingsChrome.menuBottom(VulkanRtxConfig.MAX_MENU_TRANSPARENCY) >>> 24);
+        assertNotEquals(SettingsChrome.menuTop(0), SettingsChrome.menuBottom(0));
         assertTrue((SettingsChrome.worldShade(0) >>> 24) > (SettingsChrome.worldShade(VulkanRtxConfig.MAX_MENU_TRANSPARENCY) >>> 24));
         assertEquals(SettingsDraft.Category.SYSTEM, SettingsDraft.category("ui_menu_transparency"));
+    }
+
+    @Test
+    void selectionFadeStartsClearAndSettlesWithinOneShortTransition() {
+        long started = 10L;
+        assertEquals(1f, SettingsChrome.selectionOpacity(started, 0L));
+        assertEquals(0f, SettingsChrome.selectionOpacity(started, started));
+        float halfway = SettingsChrome.selectionOpacity(started + 65_000_000L, started);
+        assertTrue(halfway > 0.5f && halfway < 1f);
+        assertEquals(1f, SettingsChrome.selectionOpacity(started + 130_000_000L, started));
     }
 
     @Test
