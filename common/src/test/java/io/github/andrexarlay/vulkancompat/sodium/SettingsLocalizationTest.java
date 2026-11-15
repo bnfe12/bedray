@@ -54,6 +54,17 @@ class SettingsLocalizationTest {
         }
     }
 
+    @Test
+    void reviewAndDiscardLabelsAreAvailableInBothLocales() {
+        for (JsonObject locale : new JsonObject[] {readJson(EN), readJson(RU)}) {
+            for (String key : new String[] {"review", "review_count", "review_hint", "review_open", "review_hidden",
+                    "review_search", "review_empty", "review_imported_only", "review_imported_count", "search_prerequisite",
+                    "discard_title", "discard_message", "discard", "keep_editing"}) {
+                assertNotNull(locale.get("bedray.settings." + key), key + " in both locales");
+            }
+        }
+    }
+
     private static JsonObject readJson(String relative) {
         try (Reader reader = Files.newBufferedReader(Path.of(relative), StandardCharsets.UTF_8)) {
             return JsonParser.parseReader(reader).getAsJsonObject();

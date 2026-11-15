@@ -25,6 +25,14 @@ record SettingsLayout(int contentX, int contentWidth, int listTop, int listBotto
         return Math.min(150, contentWidth * 45 / 100);
     }
 
+    int reviewWidth(int textWidth) {
+        return Math.min(contentWidth / 3, textWidth + 10);
+    }
+
+    int searchWidth(int reviewWidth) {
+        return Math.max(1, contentWidth - reviewWidth - GAP);
+    }
+
     int gridEdge(int index, int count) {
         return contentX + ((contentWidth + GAP) * index) / count;
     }

@@ -11,6 +11,9 @@ class SettingsLayoutTest {
             var layout = SettingsLayout.measure(size[0], size[1]);
             assertEquals(layout.contentX(), size[0] - layout.contentX() - layout.contentWidth(), 1);
             assertTrue(layout.contentWidth() <= 500);
+            int reviewWidth = layout.reviewWidth(145);
+            assertTrue(reviewWidth <= layout.contentWidth() / 3);
+            assertEquals(layout.contentWidth(), layout.searchWidth(reviewWidth) + SettingsLayout.GAP + reviewWidth);
             assertTrue(layout.listBottom() - layout.listTop() >= SettingsLayout.CONTROL_HEIGHT);
             assertTrue(layout.listBottom() < layout.footerY());
             assertTrue(layout.footerY() + SettingsLayout.FOOTER_HEIGHT <= size[1]);
