@@ -586,7 +586,8 @@ public final class SettingsCatalog {
         putNoImage("atm_bloom_shape", Tier.ADVANCED, "Bloom Shape",
             "Stretches the glow horizontally or vertically.", "", "", "Shares the Bloom screenshots.");
         putNoImage("atm_sunglare_size", Tier.ADVANCED, "Sun Halo Size",
-            "Controls the angular size of the halo separately from the sun disc.", "", "", "");
+            "Controls the angular size of the halo separately from the sun disc.", "", "",
+            "Compare with an unobstructed sun at a fixed camera angle.");
         putNoImage("atm_bloom_threshold", Tier.ADVANCED, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "", "", "Shares the Bloom screenshots.");
         putNoImage("atm_bloom_scatter", Tier.ADVANCED, "Bloom Spread", "Balance between a tight and a wide glow.", "", "", "Shares the Bloom screenshots.");
         putNoImage("atm_sunglare_strength", Tier.ADVANCED, "Sun Glare Strength", "Brightness of the sun halo.", "", "", "Shares the Sun Glare screenshots.");
