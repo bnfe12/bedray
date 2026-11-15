@@ -81,6 +81,7 @@ AMD Radeon and Intel Arc test reports are welcome.
 | Follow development | [Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md) · [Feature status](docs/FEATURE_MATRIX.md) |
 | Explore experimental features | [DLSS 5 setup and validation limits](docs/experiments/dlss5.md) |
 | Build or contribute | [Building](docs/BUILDING.md) · [Contributing](CONTRIBUTING.md) |
+| Integrate another mod | [Renderer API and add-on settings](docs/ADDON_SETTINGS_API.md) |
 
 ## Help shape Bedray
 
