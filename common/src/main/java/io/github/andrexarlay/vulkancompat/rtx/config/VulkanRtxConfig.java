@@ -699,6 +699,8 @@ public final class VulkanRtxConfig {
                         LOGGER.warn("'{}' = '{}' is not implemented (STUB: frame generation / ray reconstruction), ignored", key, val);
                     }
                 }
+                case "hdr_output", "hdr_paper_white", "hdr_peak" ->
+                    io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.applyKeyValue(key, val);
                 case "framegen_mode", "reflex_mode", "framegen_frame_limit" ->
                     io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.applyKeyValue(key, val);
                 case "rt_mode" -> {
@@ -747,6 +749,10 @@ public final class VulkanRtxConfig {
         } catch (IllegalArgumentException e) {
             LOGGER.error("[VKB-AUTOTEST] upscaler_config_load FAILED backend={} mode={}\n{}", activeBackend, mode, LogPaths.stack(e));
         }
+    }
+
+    /** Forces the static initialiser (which reads bedray.toml) for callers that run before any other config access. */
+    public static void ensureLoaded() {
     }
 
     public static void load() {
@@ -874,6 +880,7 @@ public final class VulkanRtxConfig {
             writer.write("ui_expert = " + uiExpert + "\n");
             RtSettings.write(writer);
             io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.write(writer);
+            io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.write(writer);
             io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostConfig.write(writer);
         }
     }

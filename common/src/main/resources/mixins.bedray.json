@@ -64,6 +64,9 @@
     "framegen.MixinVulkanDevicePipelineCache",
     "framegen.MixinVulkanPhysicalDeviceFgQueues",
     "framegen.MixinVulkanGpuSurfaceFsr3",
-    "framegen.MixinDebugEntryFps"
+    "framegen.MixinDebugEntryFps",
+    "hdr.MixinVulkanInstanceColorspace",
+    "hdr.MixinVulkanGpuSurfaceHdrProbe",
+    "hdr.MixinVulkanGpuSurfaceHdr"
   ]
 }
