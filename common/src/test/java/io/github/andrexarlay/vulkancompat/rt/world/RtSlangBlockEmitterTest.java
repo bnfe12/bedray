@@ -79,11 +79,11 @@ class RtSlangBlockEmitterTest {
     @Test
     void theTwoSidedSourcesKeepTheirFloorAndTheirEndBias() {
         String slang = read(EMITTERS);
-        String phat = block(slang, "float blockEmitterPhat(BlockEmitterPoint p, LightReceiver receiver, float distance2,"
-            + " float lightRadius) {");
-        assertTrue(phat.contains("float cosGeometry = p.twoSided ? abs(cosEmitter) : max(cosEmitter, 0.0);"),
-            "the density uses the true projection");
-        assertTrue(phat.contains("float cosKernel = p.twoSided ? max(abs(cosEmitter), 0.25) : max(cosEmitter, 0.0);"),
+        String candidate = block(slang, "BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<uint4> records,");
+        assertTrue(candidate.contains("float cosGeometry = point.twoSided ? abs(cosEmitter) : max(cosEmitter, 0.0);")
+                && candidate.contains("candidate.cosGeometry = cosGeometry;"),
+            "the solid-angle PDF uses the true projection");
+        assertTrue(candidate.contains("float cosKernel = point.twoSided ? max(cosGeometry, 0.25) : cosGeometry;"),
             "the look kernel keeps the 0.25 floor so an edge-on flame does not switch off");
         String endBias = block(slang, "float blockEmitterEndBias(BlockEmitterPoint p, float distanceTo) {");
         assertTrue(endBias.contains("float endBias = clamp(0.02 * distanceTo, 0.002, 0.03);"), "the tuned shadow bias");
