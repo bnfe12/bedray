@@ -68,6 +68,20 @@ VARIANTS: dict[str, dict[str, str]] = {
     "denoiser_rr_preset_f": {"vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
                              "vkrtx.rt.path_denoiser": "dlss_rr", "vkrtx.rt.dlss_rr_preset": "f"},
 }
+# Cost menu: the same DLSS-RR stack with one feature removed, to price each quality option in GPU milliseconds.
+_RR = {"vkrtx.rt.path_denoiser": "dlss_rr", "vkrtx.rt.path_restir_di": "true"}
+VARIANTS.update({
+    "cost_all_on": {**_RR, "vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true"},
+    "cost_pt_spatial_off": {**_RR, "vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "false"},
+    "cost_pt_off": {**_RR, "vkrtx.rt.path_restir_pt": "false", "vkrtx.rt.path_restir_pt_spatial": "false"},
+    "cost_di_off": {"vkrtx.rt.path_denoiser": "dlss_rr", "vkrtx.rt.path_restir_di": "false",
+                    "vkrtx.rt.path_restir_pt": "false", "vkrtx.rt.path_restir_pt_spatial": "false"},
+    "cost_bounces1": {**_RR, "vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
+                      "vkrtx.rt.path_bounces": "1"},
+    "cost_nrd": {"vkrtx.rt.path_denoiser": "nrd", "vkrtx.rt.path_restir_di": "true", "vkrtx.rt.path_restir_pt": "true",
+                 "vkrtx.rt.path_restir_pt_spatial": "true"},
+})
+COST_MENU = ["cost_all_on", "cost_pt_spatial_off", "cost_pt_off", "cost_di_off", "cost_bounces1", "cost_nrd"]
 BASELINE = ["compute_pt_off", "compute_pt_on", "raygen_pt_off", "raygen_pt_on"]
 SER_AB = ["compute_pt_on", "raygen_pt_on", "ser_pt_on"]
 DENOISER_AB = ["denoiser_rr", "denoiser_nrd", "denoiser_nrd_relax"]
@@ -410,7 +424,7 @@ def main() -> int:
     parser.add_argument("--scratch", type=Path, required=True, help="working dir for launcher/log copies")
     parser.add_argument("--revision", default="cf3f5f97-abi2")
     parser.add_argument("--variants", nargs="*", default=BASELINE,
-                        help="variant labels, or 'baseline' / 'ser_ab' / 'denoiser_ab' / 'rr_preset_ab' / 'all'")
+                        help="variant labels, or 'baseline' / 'ser_ab' / 'denoiser_ab' / 'rr_preset_ab' / 'cost_menu' / 'all'")
     parser.add_argument("--timeout", type=float, default=480)
     parser.add_argument("--render-distance", type=int, default=16,
                         help="controlled render distance for a stable scene that fits the native budget (RD32 needs BLAS compaction)")
@@ -433,6 +447,8 @@ def main() -> int:
             labels += DENOISER_AB
         elif name == "rr_preset_ab":
             labels += RR_PRESET_AB
+        elif name == "cost_menu":
+            labels += COST_MENU
         elif name == "all":
             labels += list(VARIANTS)
         elif name in VARIANTS:

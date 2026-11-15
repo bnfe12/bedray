@@ -256,7 +256,42 @@ public final class PerfMonitor {
             written[q] = false;
         }
         accumulate(gpuTicks, gpuHave, timestampPeriodNs * 1.0e-6, gpuSum, gpuCount);
+        trackGpuGap();
         if (FrameBenchmark.active()) FrameBenchmark.gpu(slotFrames[s], samples(gpuTicks, gpuHave, timestampPeriodNs * 1.0e-6, gpuSamples));
+    }
+
+    // GPU-side gap between the previous frame's FRAME_END and this frame's FRAME_BEGIN: time the GPU spent on anything the frame
+    // segments do not cover (engine work recorded before GameRenderer.render, the swapchain blit and present of the previous
+    // frame) or sat idle waiting for a submit. Frames are harvested in order, so the previous end tick is the last harvested one.
+    private static long prevEndTick;
+    private static double gapSumMs;
+    private static double gapMaxMs;
+    private static int gapCount;
+    private static int gapWindows;
+
+    private static void trackGpuGap() {
+        int b = Mark.FRAME_BEGIN.ordinal(), e = Mark.FRAME_END.ordinal();
+        if (gpuHave[b] && gpuHave[e]) {
+            if (prevEndTick != 0L && gpuTicks[b] >= prevEndTick) {
+                double gap = (gpuTicks[b] - prevEndTick) * timestampPeriodNs * 1.0e-6;
+                gapSumMs += gap;
+                gapMaxMs = Math.max(gapMaxMs, gap);
+                gapCount++;
+            }
+            prevEndTick = gpuTicks[e];
+        }
+    }
+
+    private static void logGpuGap() {
+        // Every 10th window (about 5 s) and only with samples: one line that says how much GPU time lies between frames.
+        if (gapCount > 0 && ++gapWindows % 10 == 0) {
+            LOGGER.info("[VKB-PERF] gpu_gap_ms avg={} max={} frames={} (previous FRAME_END to FRAME_BEGIN on the GPU timeline)",
+                String.format(java.util.Locale.ROOT, "%.3f", gapSumMs / gapCount),
+                String.format(java.util.Locale.ROOT, "%.3f", gapMaxMs), gapCount);
+        }
+        gapSumMs = 0.0;
+        gapMaxMs = 0.0;
+        gapCount = 0;
     }
 
     private static final long[] gpuTicks = new long[MARKS];
@@ -310,6 +345,7 @@ public final class PerfMonitor {
             cpuSum[i] = 0.0;
             cpuCount[i] = 0;
         }
+        logGpuGap();
         frameIntervalAvgMs = intervalCount > 0 ? intervalSumMs / intervalCount : 0.0;
         fpsAvg = frameIntervalAvgMs > 0.0 ? 1000.0 / frameIntervalAvgMs : 0.0;
         intervalSumMs = 0.0;

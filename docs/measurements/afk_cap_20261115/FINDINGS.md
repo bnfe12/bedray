@@ -97,6 +97,26 @@ The spread between runs of the same arm is about 0.5 ms, so this is at noise lev
 ceiling came from the no-hole build removing the shading of transparent texels and ending paths early, not from avoided
 restarts. The change was **not kept** and no image comparison was done (it only matters for a change that is worth keeping).
 
+## Where the time goes, and what each quality option costs
+
+DLSS RR is a black box: temporary sub-spans (not kept, they add timestamps to every frame) split the 6.25 ms "denoise" span into
+`evaluate` 5.75 ms (92 %), velocity 0.37, pack 0.09, depth 0.03, compose 0.03. The wrapper around RR costs about 0.5 ms; nothing to win there.
+The interval is 1.0-1.8 ms longer than the GPU total (`gpu_gap_ms` in the log, with rare 7-25 ms stalls); the cause was not found.
+
+One capture per variant, the same scene, DLSS RR unless stated, background captures, all `valid_native_capture=true`; deltas are
+large (>=13 %) so a single run per row is enough. Each row **changes the picture**, so none of them is a free speed-up:
+
+| variant | gpu_total | interval | FPS | delta GPU | trace | PT spatial | denoise |
+|---|---|---|---|---|---|---|---|
+| everything on (baseline) | 24.37 ms | 26.03 ms | 38.4 | - | 11.70 | 3.53 | 6.26 |
+| ReSTIR PT spatial reuse off | 21.14 ms | 22.75 ms | 44.0 | -3.23 ms (-13 %) | 12.19 | 0 | 6.31 |
+| ReSTIR PT off (DI on) | 17.94 ms | 19.70 ms | 50.8 | -6.42 ms (-26 %) | 9.07 | 0 | 6.32 |
+| ReSTIR DI off (PT off with it) | 16.23 ms | 17.78 ms | 56.2 | -8.14 ms (-33 %) | 7.95 | 0 | 6.32 |
+| 1 bounce instead of 2 | 20.19 ms | 21.71 ms | 46.1 | -4.17 ms (-17 %) | 8.61 | 2.59 | 6.29 |
+| NRD REBLUR instead of DLSS RR | 20.52 ms | 22.06 ms | 45.3 | -3.85 ms (-16 %) | 11.90 | 3.56 | 2.53 |
+
+Reproduce: `python tools/automation/bench_gi_stack.py --variants cost_menu --background ...` (variants `cost_*`).
+
 ## Not measured / open
 
 * One GPU, one scene (fixed seed, one camera pose); no frame-time percentiles beyond the capture analyzer's.
