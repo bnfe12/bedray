@@ -871,12 +871,15 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         look.addOption(atmSlider(builder, "atm_bloom_strength", "bloom_strength", 25, 0, 200, 5, bloomOn, dBloom, true, st));
         look.addOption(atmSlider(builder, "atm_bloom_threshold", "bloom_threshold", 600, 50, 1000, 5, bloomOn, dBloom, true, st));
         look.addOption(atmSlider(builder, "atm_bloom_scatter", "bloom_scatter", 62, 30, 95, 1, bloomOn, dBloom, true, st));
+        look.addOption(bloomShapeOption(builder, bloomOn, dBloom, st));
         look.addOption(boolOpt(builder, "atm_bloom_sky", false, value -> RtAtmosphereSettings.set("bloom_sky", value ? 1 : 0),
             RtAtmosphereSettings::bloomSky, bloomOn, dBloom, Mark.NONE, OptionImpact.LOW, true, st));
         look.addOption(boolOpt(builder, "atm_sunglare", true, v -> RtAtmosphereSettings.set("sunglare", v ? 1 : 0),
             () -> RtAtmosphereSettings.get("sunglare") >= 0.5, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         Identifier glareId = id("atm_sunglare");
         look.addOption(atmSlider(builder, "atm_sunglare_strength", "sunglare_strength", 100, 0, 200, 5,
+            s -> anyRt.apply(s) && s.readBooleanOption(glareId), rtDependencies(modeId, glareId), true, st));
+        look.addOption(atmSlider(builder, "atm_sunglare_size", "sunglare_size", 100, 50, 200, 5,
             s -> anyRt.apply(s) && s.readBooleanOption(glareId), rtDependencies(modeId, glareId), true, st));
         look.addOption(intOpt(builder, "sun_size_tenths", 5, 1, 50, 1,
             value -> Component.literal(String.format(Locale.ROOT, "%.1f°", value / 10.0)),
@@ -1076,6 +1079,23 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         diag.addOption(resetAllDefaultsButton(builder, "reset_all_defaults", "Reset ALL Bedray settings",
             "Resets every Bedray setting (both pages, including values that are not shown) to factory defaults at once and reopens this screen."));
         endGroup(builder, page, diag, "adv_diag");
+    }
+
+    private static OptionBuilder bloomShapeOption(ConfigBuilder builder, Function<ConfigState, Boolean> enabled,
+                                                  Identifier[] deps, StorageEventHandler st) {
+        String path = "atm_bloom_shape";
+        var shape = builder.createEnumOption(id(path), RtAtmosphereSettings.BloomShape.class);
+        shape.setName(nameOf(path)).setTooltip(v -> tipOf(path)).setDefaultValue(RtAtmosphereSettings.BloomShape.ROUND)
+            .setAllowedValues(EnumSet.allOf(RtAtmosphereSettings.BloomShape.class))
+            .setElementNameProvider(v -> switch (v) {
+                case ROUND -> tr("bedray.bloom_shape.round", "Round");
+                case HORIZONTAL -> tr("bedray.bloom_shape.horizontal", "Horizontal");
+                case VERTICAL -> tr("bedray.bloom_shape.vertical", "Vertical");
+            })
+            .setEnabledProvider(enabled, deps).setControlHiddenWhenDisabled(true)
+            .setBinding(v -> RtAtmosphereSettings.set("bloom_shape", v.ordinal()), RtAtmosphereSettings::bloomShape)
+            .setImpact(OptionImpact.LOW).setStorageHandler(st);
+        return track(path, shape);
     }
 
     private static IntegerOptionBuilder atmSlider(ConfigBuilder builder, String path, String atmKey, int defPercent, int min, int max, int step,

@@ -2,6 +2,7 @@ package io.github.andrexarlay.bedray.api.v1.settings;
 
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -66,6 +67,31 @@ class AddonSettingsTest {
             toggle("a", new Condition("b", "fast")), toggle("b"))));
         assertThrows(IllegalArgumentException.class, () -> registration(List.of(
             toggle("a", new Condition("b", true)), toggle("b", new Condition("a", true)))));
+    }
+
+    @Test
+    void decimalSlidersKeepAnExactStepAcrossSnapshotsAndPatches() {
+        var gain = new DecimalOption(details("gain"), new BigDecimal("0.10"), new BigDecimal("-0.2"),
+            new BigDecimal("0.5"), new BigDecimal("0.1"));
+        TestStorage storage = new TestStorage();
+        storage.values.put("gain", new BigDecimal("0.300"));
+        var registration = new Registration("decimal_storage", TITLE, List.of(gain,
+            toggle("advanced", new Condition("gain", new BigDecimal("0.30")))), storage);
+
+        assertEquals(7, gain.steps());
+        assertEquals(5, gain.indexOf(new BigDecimal("0.3")));
+        assertEquals(new BigDecimal("-0.2"), gain.valueAt(0));
+        assertEquals(new BigDecimal("0.5"), gain.valueAt(7));
+        assertEquals(new BigDecimal("0.3"), registration.read().get("gain"));
+        assertTrue(registration.options().get(1).enabled(registration.read()));
+        assertThrows(IndexOutOfBoundsException.class, () -> gain.valueAt(8));
+        assertThrows(IllegalArgumentException.class, () -> registration.apply(Map.of("gain", new BigDecimal("0.31"))));
+        assertEquals(0, storage.applies);
+        registration.apply(Map.of("gain", new BigDecimal("0.200")));
+        assertEquals(new BigDecimal("0.2"), storage.lastPatch.get("gain"));
+        assertFalse(registration.options().get(1).enabled(registration.read()));
+        assertThrows(IllegalArgumentException.class, () -> new DecimalOption(details("invalid"), BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ONE, new BigDecimal("0.3")));
     }
 
     @Test

@@ -23,12 +23,25 @@ struct BloomPush {
     float4 sunDir;          //  64 xyz towards the key light, w glare strength (0 = off)
     float4 camOrigin;       //  80 xyz bob origin of the camera, w 1 = flip Y
     float4 p0;              //  96 x threshold (scene units), y knee, z bloom strength, w exposure of an HDR source (p1.x = 2)
-    float4 p1;              // 112 x packed integer: low 2 bits source mode (0 linear, 1 LDR, 2 HDR), next 3 tone mode; y scatter, zw sun NDC
+    float4 p1;              // 112 x packed source, tone mode, sky, shape and halo size; y scatter, zw sun NDC
 };
 
 uint bloomSourceMode(BloomPush pc) { return uint(max(pc.p1.x, 0.0)) & 3u; }
 uint bloomToneMode(BloomPush pc) { return (uint(max(pc.p1.x, 0.0)) >> 2u) & 7u; }
 bool bloomIncludesSky(BloomPush pc) { return (uint(max(pc.p1.x, 0.0)) & (1u << 5u)) != 0u; }
+
+float2 bloomShapeScale(BloomPush pc) {
+    uint shape = (uint(pc.p1.x) >> 6u) & 3u;
+    if (shape == 1u) return float2(2.2, 0.65);
+    if (shape == 2u) return float2(0.65, 2.2);
+    return float2(1.0);
+}
+
+float bloomGlareSize(BloomPush pc) {
+    uint encoded = (uint(pc.p1.x) >> 8u) & 255u;
+    int offset = int(encoded ^ 128u) - 128;
+    return clamp(1.0 + float(offset) * 0.01, 0.5, 2.0);
+}
 
 static const float3 BLOOM_LUMA = float3(0.2126, 0.7152, 0.0722);
 /** Ray distance the path tracer writes for a miss: anything at or beyond it is sky. */

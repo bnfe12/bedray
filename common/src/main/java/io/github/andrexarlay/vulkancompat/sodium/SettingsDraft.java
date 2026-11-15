@@ -45,9 +45,9 @@ final class SettingsDraft {
         "water_style", "auto_normals", "auto_normal_strength", "point_sampling_sharpness", "auto_texture_lod_bias",
         "texture_lod_bias_offset", "manual_texture_lod_bias",
         "path_auto_exposure", "path_exposure_ev", "tonemapper", "atm_local_highlights", "atm_local_shadows", "vibrant_visuals",
-        "atm_bloom", "atm_bloom_strength", "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky",
+        "atm_bloom", "atm_bloom_strength", "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky", "atm_bloom_shape",
         "atm_godrays", "atm_godrays_strength", "atm_godrays_quality", "atm_godrays_range",
-        "atm_sunglare", "atm_sunglare_strength",
+        "atm_sunglare", "atm_sunglare_strength", "atm_sunglare_size",
         "rt_fog", "rt_fog_density", "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_aerial", "atm_fog_vanilla", "atm_chunk_fade",
         "vignette", "film_grain"
     );
@@ -278,7 +278,8 @@ final class SettingsDraft {
         if (p.startsWith("voxel_") || p.startsWith("compute_")) return voxel() && !e.option().shouldHideControl();
         if (p.equals("dlss_rr_preset") && !e.option().isEnabled()) return false;
         if ((p.endsWith("custom_scale") || Set.of("fsr_sharpness", "fsr1_sharpness", "nis_sharpness",
-                "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky", "atm_godrays_quality", "atm_godrays_range", "atm_sunglare_strength",
+                "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky", "atm_bloom_shape",
+                "atm_godrays_quality", "atm_godrays_range", "atm_sunglare_strength", "atm_sunglare_size",
                 "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_vanilla", "auto_normal_strength",
                 "texture_lod_bias_offset", "manual_texture_lod_bias", "atm_local_highlights", "atm_local_shadows").contains(p))
                 && !e.option().isEnabled()) return false;
@@ -428,6 +429,10 @@ final class SettingsDraft {
         };
     }
 
+    private static boolean persistedAsOrdinal(Enum<?> value) {
+        return value instanceof RtAtmosphereSettings.GodRays || value instanceof RtAtmosphereSettings.BloomShape;
+    }
+
     static int persistedNumberScale(String path) {
         return switch (path) {
             case "texture_lod_bias_offset", "manual_texture_lod_bias" -> 10;
@@ -494,11 +499,12 @@ final class SettingsDraft {
                 ? VulkanSodiumConfig.WaterStyle.REALISTIC : Enum.valueOf(VulkanSodiumConfig.WaterStyle.class, value.toUpperCase(Locale.ROOT));
         } else if (current instanceof VulkanSodiumConfig.SelfShadow) {
             next = VulkanSodiumConfig.SelfShadow.parsePreset(value);
-        } else if (current instanceof RtAtmosphereSettings.GodRays) {
+        } else if (current instanceof Enum<?> mode && persistedAsOrdinal(mode)) {
             double parsed = Double.parseDouble(value);
-            int ordinal = (int)parsed;
-            if (!Double.isFinite(parsed) || parsed != ordinal || ordinal < 0 || ordinal >= RtAtmosphereSettings.GodRays.values().length) throw new IllegalArgumentException();
-            next = RtAtmosphereSettings.GodRays.values()[ordinal];
+            int ordinal = (int) parsed;
+            Enum<?>[] choices = mode.getDeclaringClass().getEnumConstants();
+            if (!Double.isFinite(parsed) || parsed != ordinal || ordinal < 0 || ordinal >= choices.length) throw new IllegalArgumentException();
+            next = choices[ordinal];
         } else if (current instanceof Enum enumValue) {
             next = Enum.valueOf(enumValue.getDeclaringClass(), value.toUpperCase(Locale.ROOT));
         } else return;
@@ -512,7 +518,7 @@ final class SettingsDraft {
         if (value instanceof RtMode mode) return "\"" + mode.logName() + "\"";
         if (value instanceof VulkanSodiumConfig.WaterStyle style) return style == VulkanSodiumConfig.WaterStyle.VANILLA ? "0" : "1";
         if (value instanceof VulkanSodiumConfig.SelfShadow mode) return Integer.toString(mode.storedValue());
-        if (value instanceof RtAtmosphereSettings.GodRays mode) return mode.ordinal() + ".0";
+        if (value instanceof Enum<?> mode && persistedAsOrdinal(mode)) return mode.ordinal() + ".0";
         if (value instanceof Boolean on && e.path().startsWith("atm_")) return on ? "1.0" : "0.0";
         if (value instanceof Number n && persistedNumberScale(e.path()) != 1) {
             return Double.toString(n.doubleValue() / persistedNumberScale(e.path()));

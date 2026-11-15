@@ -1,5 +1,6 @@
 package io.github.andrexarlay.bedray.api.v1.settings;
 
+import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -45,9 +46,10 @@ public final class AddonSettings {
     public record Condition(String optionId, Object value) {
         public Condition {
             requireId(optionId, "condition option");
-            if (!(value instanceof Boolean || value instanceof Integer || value instanceof String)) {
-                throw new IllegalArgumentException("A condition value must be a boolean, integer or choice ID");
+            if (!(value instanceof Boolean || value instanceof Integer || value instanceof String || value instanceof BigDecimal)) {
+                throw new IllegalArgumentException("A condition value must be a boolean, integer, decimal or choice ID");
             }
+            value = canonicalValue(value);
         }
     }
 
@@ -66,7 +68,7 @@ public final class AddonSettings {
         }
     }
 
-    public sealed interface Option<T> permits BooleanOption, IntegerOption, ChoiceOption {
+    public sealed interface Option<T> permits BooleanOption, IntegerOption, DecimalOption, ChoiceOption {
         Details details();
         T defaultValue();
         boolean accepts(Object value);
@@ -80,7 +82,7 @@ public final class AddonSettings {
 
         /** Evaluate against a complete snapshot such as {@link Registration#read()}, including staged edits. */
         default boolean enabled(Map<String, ?> snapshot) {
-            return details().requires().stream().allMatch(c -> c.value().equals(snapshot.get(c.optionId())));
+            return details().requires().stream().allMatch(c -> c.value().equals(canonicalValue(snapshot.get(c.optionId()))));
         }
     }
 
@@ -108,6 +110,57 @@ public final class AddonSettings {
 
         private static boolean inRange(int value, int min, int max, int step) {
             return value >= min && value <= max && ((long) value - min) % step == 0;
+        }
+    }
+
+    /** Inclusive exact decimal range. Storage uses BigDecimal values and can preserve the step across reloads. */
+    public record DecimalOption(Details details, BigDecimal initial, BigDecimal min, BigDecimal max, BigDecimal step)
+            implements Option<BigDecimal> {
+        public DecimalOption {
+            Objects.requireNonNull(details, "details");
+            initial = initial.stripTrailingZeros();
+            Objects.requireNonNull(min, "min");
+            Objects.requireNonNull(max, "max");
+            if (step.signum() <= 0 || min.compareTo(max) > 0) {
+                throw new IllegalArgumentException("Invalid decimal range or step for " + details.id());
+            }
+            try {
+                max.subtract(min).divide(step).intValueExact();
+            } catch (ArithmeticException ex) {
+                throw new IllegalArgumentException("Decimal range must have a whole number of reachable steps for " + details.id(), ex);
+            }
+            if (!inRange(initial, min, max, step)) {
+                throw new IllegalArgumentException("Invalid decimal default for " + details.id());
+            }
+        }
+
+        @Override public BigDecimal defaultValue() { return initial; }
+
+        @Override public boolean accepts(Object value) {
+            return value instanceof BigDecimal decimal && inRange(decimal, min, max, step);
+        }
+
+        @Override public BigDecimal read(Map<String, ?> snapshot) {
+            return Option.super.read(snapshot).stripTrailingZeros();
+        }
+
+        public int steps() {
+            return max.subtract(min).divide(step).intValueExact();
+        }
+
+        public BigDecimal valueAt(int index) {
+            if (index < 0 || index > steps()) throw new IndexOutOfBoundsException(index);
+            return min.add(step.multiply(BigDecimal.valueOf(index))).stripTrailingZeros();
+        }
+
+        public int indexOf(BigDecimal value) {
+            if (!accepts(value)) throw new IllegalArgumentException("Value is outside the decimal range or step");
+            return value.subtract(min).divide(step).intValueExact();
+        }
+
+        private static boolean inRange(BigDecimal value, BigDecimal min, BigDecimal max, BigDecimal step) {
+            return value.compareTo(min) >= 0 && value.compareTo(max) <= 0
+                && value.subtract(min).remainder(step).signum() == 0;
         }
     }
 
@@ -177,7 +230,7 @@ public final class AddonSettings {
                 if (option == null || !option.accepts(value)) {
                     throw new IllegalArgumentException("Invalid setting in patch for " + namespace + ":" + id);
                 }
-                patch.put(id, value);
+                patch.put(id, canonicalValue(value));
             });
             storage.apply(Collections.unmodifiableMap(patch));
         }
@@ -216,6 +269,10 @@ public final class AddonSettings {
         }
         pending.remove(id);
         visited.add(id);
+    }
+
+    private static Object canonicalValue(Object value) {
+        return value instanceof BigDecimal decimal ? decimal.stripTrailingZeros() : value;
     }
 
     private static void requireId(String id, String kind) {

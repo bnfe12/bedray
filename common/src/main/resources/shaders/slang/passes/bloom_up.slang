@@ -24,7 +24,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     srcTex.GetDimensions(srcSize.x, srcSize.y);
     float4 ownTexel = dstImg[p];
     float3 own = ownTexel.rgb;
-    float3 wide = bloomUp9(srcTex, uv, 1.0 / float2(srcSize));
+    float3 wide = bloomUp9(srcTex, uv, bloomShapeScale(pc) / float2(srcSize));
     // Keep the alpha: in mip 0 it carries the prefilter's sun visibility to the apply stage.
     dstImg[p] = float4(bloomSanitize(lerp(own, wide, pc.p1.y)), ownTexel.a);
 }

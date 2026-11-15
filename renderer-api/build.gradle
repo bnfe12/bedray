@@ -2,7 +2,12 @@ apply from: rootProject.file('gradle/loader-module.gradle')
 apply from: rootProject.file('gradle/build-provenance.gradle')
 
 base { archivesName = 'bedray-renderer-api' }
+version = '1.8.0'
 java { withSourcesJar() }
+
+tasks.withType(Jar).configureEach {
+    from(rootProject.file('LICENSE'), rootProject.file('NOTICE'), rootProject.file('COPYING'))
+}
 dependencies {
     testImplementation "org.lwjgl:lwjgl:${rootProject.lwjgl_version}"
     testImplementation "org.lwjgl:lwjgl-vulkan:${rootProject.lwjgl_version}"
@@ -12,11 +17,35 @@ dependencies {
 }
 test { useJUnitPlatform() }
 
+def apiRepository = layout.buildDirectory.dir("api-maven/${project.version}")
 publishing {
+    repositories {
+        maven {
+            name = 'apiDistribution'
+            url = apiRepository
+        }
+    }
     publications {
         create('mavenJava', MavenPublication) {
             from components.java
             artifactId = 'bedray-renderer-api'
+            pom {
+                name = 'Bedray Renderer API'
+                description = 'Versioned Java contracts for Bedray mod integration'
+                url = 'https://github.com/bnfe12/bedray'
+                licenses {
+                    license {
+                        name = 'LGPL-3.0-or-later'
+                        url = 'https://www.gnu.org/licenses/lgpl-3.0.html'
+                    }
+                }
+            }
         }
     }
+}
+
+tasks.register('apiDistribution', Zip) {
+    dependsOn 'test', 'publishMavenJavaPublicationToApiDistributionRepository'
+    archiveBaseName = 'bedray-renderer-api-maven'
+    from(apiRepository) { into 'maven' }
 }

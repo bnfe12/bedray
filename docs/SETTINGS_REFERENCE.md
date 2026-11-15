@@ -71,7 +71,7 @@ DLSS Ray Reconstruction; a missing library falls back to accumulation and the lo
 ### Expert (only with `-Dvkrtx.ui.expert=true` or `ui_expert = true` in `bedray.toml`)
 
 Adds a group **Expert: Numbers** (light budget, sun size, auto-normal strength, manual RT distance, LOD bias
-offset, effect tuning such as bloom threshold and light shaft range, fog in-scattering, FSR version), the **Ray Tracing (Fast,
+offset, effect tuning such as bloom threshold, shape and light shaft range, fog in-scattering, FSR version), the **Ray Tracing (Fast,
 experimental)** group, the RT debug buffer view, and shows FSR 1 / NIS in the Upscaler list. Without the flag these options keep their
 stored values; four of them are **forced on** (see below).
 
@@ -100,3 +100,7 @@ screenshots of the right-hand panel come from `-Dvkbridge.autotest=settings_prev
 
 The file is written by the game. Edit it only while the game is closed. Settings the page no longer shows (all `rays_*`, `rt_*`
 numbers, `atm_*` tuning) are still read from and written to the file.
+
+Under **Effects**, **Bloom Shape** sets round, horizontal or vertical glow.
+**Sun Halo Size** adjusts the halo from 50% to 200% independently of the sun disc.
+Both controls are saved with the rest of the visual settings and can be included in presets.

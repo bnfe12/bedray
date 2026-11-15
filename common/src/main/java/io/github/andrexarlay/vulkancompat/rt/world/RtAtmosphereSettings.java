@@ -18,6 +18,8 @@ public final class RtAtmosphereSettings {
     /** Where the light shafts come from. INLINE = the former 6 step estimate inside the primary shader (kept for A/B comparison). */
     public enum GodRays { OFF, POST, INLINE }
 
+    public enum BloomShape { ROUND, HORIZONTAL, VERTICAL }
+
     public enum Tier { BASIC, ADVANCED }
 
     public enum Kind { TOGGLE, CHOICE, SLIDER }
@@ -33,6 +35,8 @@ public final class RtAtmosphereSettings {
     private static volatile int godRayRange = (int) clamp(num("vkrtx.rt.godrays.range", 160), 32, 256);
     private static volatile boolean bloom = flag("vkrtx.rt.bloom", true);
     private static volatile boolean bloomSky = false;
+    private static volatile BloomShape bloomShape = BloomShape.ROUND;
+    private static volatile int sunGlareSizePercent = 100;
     private static volatile float localHighlights = (float) clamp(num("vkrtx.rt.localTonemap", 1.0), 0, 2);
     private static volatile float localShadows = (float) clamp(num("vkrtx.rt.localTonemap.shadows", 1.0), 0, 2);
     private static volatile float bloomStrength = (float) clamp(num("vkrtx.rt.bloom.strength", 0.25), 0, 2);
@@ -77,6 +81,14 @@ public final class RtAtmosphereSettings {
 
     public static boolean bloom() {
         return bloom && bloomStrength > 0f;
+    }
+
+    public static BloomShape bloomShape() {
+        return bloomShape;
+    }
+
+    public static int sunGlareSizePercent() {
+        return sunGlareSizePercent;
     }
 
     public static boolean bloomSky() {
@@ -140,6 +152,8 @@ public final class RtAtmosphereSettings {
                 Tier.ADVANCED, Kind.SLIDER, 0, 2, 1, List.of()),
             new Option("bloom_sky", "Sky bloom", "Let bright sky pixels contribute to bloom.",
                 Tier.ADVANCED, Kind.TOGGLE, 0, 1, 0, List.of()),
+            new Option("bloom_shape", "Bloom shape", "Stretches the glow horizontally or vertically.", Tier.ADVANCED,
+                Kind.CHOICE, 0, 2, 0, List.of("Round", "Horizontal", "Vertical")),
             new Option("bloom_strength", "Bloom strength", "How strong the glow is.", Tier.BASIC, Kind.SLIDER, 0, 2, 0.25, List.of()),
             new Option("sunglare", "Sun glare", "Halo around the sun when you look at it; hidden behind blocks and clouds.",
                 Tier.BASIC, Kind.TOGGLE, 0, 1, 1, List.of()),
@@ -158,6 +172,8 @@ public final class RtAtmosphereSettings {
                 + "Lower values make more of the image glow.", Tier.ADVANCED, Kind.SLIDER, 0.5, 10, 6.0, List.of()),
             new Option("bloom_scatter", "Bloom spread", "Balance between a tight and a wide glow.", Tier.ADVANCED, Kind.SLIDER,
                 0.3, 0.95, 0.62, List.of()),
+            new Option("sunglare_size", "Sun halo size", "Angular size of the halo around the sun.", Tier.ADVANCED,
+                Kind.SLIDER, 0.5, 2, 1, List.of()),
             new Option("sunglare_strength", "Sun glare strength", "Brightness of the sun halo.", Tier.ADVANCED, Kind.SLIDER, 0, 2, 1.0,
                 List.of()));
     }
@@ -171,6 +187,8 @@ public final class RtAtmosphereSettings {
             case "godrays_range" -> godRayRange;
             case "bloom" -> bloom ? 1 : 0;
             case "bloom_sky" -> bloomSky ? 1 : 0;
+            case "bloom_shape" -> bloomShape.ordinal();
+            case "sunglare_size" -> sunGlareSizePercent / 100.0;
             case "local_highlights" -> localHighlights;
             case "local_shadows" -> localShadows;
             case "bloom_strength" -> bloomStrength;
@@ -197,6 +215,8 @@ public final class RtAtmosphereSettings {
             case "godrays_range" -> godRayRange = (int) clamp(Math.round(v), 32, 256);
             case "bloom" -> bloom = v >= 0.5;
             case "bloom_sky" -> bloomSky = v >= 0.5;
+            case "bloom_shape" -> bloomShape = BloomShape.values()[(int) clamp(Math.round(v), 0, 2)];
+            case "sunglare_size" -> sunGlareSizePercent = (int) Math.round(clamp(v, 0.5, 2) * 100);
             case "local_highlights" -> localHighlights = (float) clamp(v, 0, 2);
             case "local_shadows" -> localShadows = (float) clamp(v, 0, 2);
             case "bloom_strength" -> bloomStrength = (float) clamp(v, 0, 2);
@@ -216,9 +236,9 @@ public final class RtAtmosphereSettings {
 
     /** One line for the log. */
     public static String describe() {
-        return String.format(Locale.ROOT, "godrays=%s steps=%d strength=%.2f range=%d bloom=%s sky=%s strength=%.2f threshold=%.2f scatter=%.2f "
-                + "sunglare=%s strength=%.2f fog_vanilla=%.2f fog_aerial=%.2f chunk_fade=%.2f", godRays, godRaySteps(), godRayStrength, godRayRange,
-            bloom(), bloomSky(), bloomStrength, bloomThreshold, bloomScatter, sunGlare(), sunGlareStrength, fogVanilla, fogAerial, chunkFade);
+        return String.format(Locale.ROOT, "godrays=%s steps=%d strength=%.2f range=%d bloom=%s sky=%s shape=%s strength=%.2f threshold=%.2f scatter=%.2f "
+                + "sunglare=%s strength=%.2f size=%d%% fog_vanilla=%.2f fog_aerial=%.2f chunk_fade=%.2f", godRays, godRaySteps(), godRayStrength, godRayRange,
+            bloom(), bloomSky(), bloomShape(), bloomStrength, bloomThreshold, bloomScatter, sunGlare(), sunGlareStrength, sunGlareSizePercent(), fogVanilla, fogAerial, chunkFade);
     }
 
     static GodRays parseGodRays(String s, GodRays def) {

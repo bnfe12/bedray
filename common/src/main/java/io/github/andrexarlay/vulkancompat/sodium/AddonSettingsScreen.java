@@ -3,6 +3,7 @@ package io.github.andrexarlay.vulkancompat.sodium;
 import io.github.andrexarlay.bedray.api.v1.settings.AddonSettings;
 import io.github.andrexarlay.bedray.api.v1.settings.AddonSettings.BooleanOption;
 import io.github.andrexarlay.bedray.api.v1.settings.AddonSettings.ChoiceOption;
+import io.github.andrexarlay.bedray.api.v1.settings.AddonSettings.DecimalOption;
 import io.github.andrexarlay.bedray.api.v1.settings.AddonSettings.IntegerOption;
 import io.github.andrexarlay.bedray.api.v1.settings.AddonSettings.Option;
 import io.github.andrexarlay.bedray.api.v1.settings.AddonSettings.Registration;
@@ -19,11 +20,13 @@ import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.LongFunction;
 
 /** Renders loader-independent add-on descriptors and applies only the selected owner's draft. */
 final class AddonSettingsScreen extends Screen {
@@ -162,14 +165,12 @@ final class AddonSettingsScreen extends Screen {
         Draft draft = currentDraft();
         if (option instanceof IntegerOption range && range.min() < range.max()) {
             long steps = ((long) range.max() - range.min()) / range.step();
-            double fraction = ((Integer) draft.values.get(id) - (double) range.min()) / (steps * range.step());
-            return new AbstractSliderButton(x, y, controlWidth, 20, valueText(option), fraction) {
-                @Override protected void updateMessage() { setMessage(valueText(option)); }
-                @Override protected void applyValue() {
-                    draft.values.put(id, (int) (range.min() + Math.round(value * steps) * range.step()));
-                    updateControls();
-                }
-            };
+            long index = ((Integer) draft.values.get(id) - (long) range.min()) / range.step();
+            return slider(option, draft, x, y, controlWidth, steps, index, step -> (int) (range.min() + step * range.step()));
+        }
+        if (option instanceof DecimalOption range && range.min().compareTo(range.max()) < 0) {
+            int index = range.indexOf((BigDecimal) draft.values.get(id));
+            return slider(option, draft, x, y, controlWidth, range.steps(), index, step -> range.valueAt((int) step));
         }
         return Button.builder(valueText(option), button -> {
             Object previous = draft.values.get(id);
@@ -184,8 +185,20 @@ final class AddonSettingsScreen extends Screen {
         }).bounds(x, y, controlWidth, 20).build();
     }
 
+    private AbstractWidget slider(Option<?> option, Draft draft, int x, int y, int width,
+                                  long steps, long index, LongFunction<Object> valueAt) {
+        return new AbstractSliderButton(x, y, width, 20, valueText(option), (double) index / steps) {
+            @Override protected void updateMessage() { setMessage(valueText(option)); }
+            @Override protected void applyValue() {
+                draft.values.put(option.details().id(), valueAt.apply(Math.round(value * steps)));
+                updateControls();
+            }
+        };
+    }
+
     private Component valueText(Option<?> option) {
         Object value = currentDraft().values.get(option.details().id());
+        if (value instanceof BigDecimal decimal) return Component.literal(decimal.toPlainString());
         if (value instanceof Boolean on) return on ? tr("options.on", "On") : tr("options.off", "Off");
         if (option instanceof ChoiceOption choice) {
             return choice.choices().stream().filter(item -> item.id().equals(value)).findFirst()
@@ -203,7 +216,8 @@ final class AddonSettingsScreen extends Screen {
         for (Row row : rows) {
             boolean enabled = row.option().enabled(draft.values);
             row.control().active = enabled
-                && !(row.option() instanceof IntegerOption range && range.min() == range.max());
+                && !(row.option() instanceof IntegerOption range && range.min() == range.max())
+                && !(row.option() instanceof DecimalOption range && range.min().compareTo(range.max()) == 0);
             row.control().setMessage(valueText(row.option()));
             var help = Component.empty().append(text(row.option().details().help()));
             if (!enabled) help.append("\n").append(tr("bedray.addons.dependency", "Requires: %s",
