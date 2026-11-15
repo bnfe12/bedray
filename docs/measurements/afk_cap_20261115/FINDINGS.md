@@ -46,9 +46,40 @@ section BLAS (size query and build through one helper, env switch for A/B on one
 (A = flag off, B = flag on): A mean gpu_total 25.10 ms, B mean 25.03 ms (-0.07 ms, -0.3 %), trace 12.24 vs 12.18 ms. That is
 inside the run-to-run drift, so there is no measurable gain on this GPU/scene and the change was **not kept**.
 
+## Candidate tested and rejected: slangc `-O3` (default is `-O1`)
+
+All shaders rebuilt with `-O3` (smaller SPIR-V, jar 18.7 vs 19.5 MB). ABBA: gpu_total 25.09 ms (-O1) vs 25.70 ms (-O3), +2.4 %,
+trace 12.50 vs 12.24 ms (-2.1 %). No gain; not kept.
+
+## Lead with measurable potential: cutout holes restart the BVH traversal
+
+`traceTriangleIntersection` (traversal/triangle_query.slang) commits every non-opaque candidate without an alpha test; the
+surface layer (pathtrace/path_tracer.slang, the `surfaceIsHole` branch of the surface-step loop) then decides that the texel is a
+hole and the ray is **traced again from the TLAS root** just past the candidate. The fixed-seed scene has about 43 % cutout
+geometry (veg_quads ~17-18 M).
+
+Upper bound, measured: a throw-away build with `alphaCutoff = 0` (no texel is ever a hole; the image is wrong and the build is
+not kept) against the normal build, ABBA, background captures, 4 valid runs:
+
+| | normal | no holes | delta |
+|---|---|---|---|
+| gpu_total | 23.99 ms | 21.67 ms | -2.33 ms (-9.7 %) |
+| trace | 11.57 ms | 9.92 ms | -14.3 % |
+| pt_spatial | 3.53 ms | 3.09 ms | -12.6 % |
+| frame interval | 25.64 ms | 23.46 ms | -8.5 % |
+
+This is a ceiling, not an expectation: the no-hole build also removes the shading of every transparent texel and ends paths
+earlier (leaves become solid). A real fix (alpha test of the candidate inside the ray-query loop, committing only non-hole
+triangles; or opacity micromaps) keeps the alpha fetch and saves only the restarts. It needs the atlas and the block-material
+rules inside the traversal module, and must reproduce `surfaceIsHole` exactly (the restart also skips `pathTraceHoleStep` behind
+a hole, and hole steps count against `maxSurfaceSteps`). Not implemented; any implementation needs a same-seed image comparison
+with the denoiser before it can be called quality-neutral.
+
 ## Not measured / open
 
 * One GPU, one scene (fixed seed, one camera pose); no frame-time percentiles beyond the capture analyzer's.
 * No visual comparison was needed for the rejected candidate (geometry identical); nothing in the shipped renderer changed.
 * Remaining cost sits in the RT trace (~47 % of GPU), DLSS RR (~25 %) and PT spatial (~15 %); no quality-neutral reduction of
-  them has been measured yet.
+  them has been measured yet (the cutout lead above is only a ceiling).
+* Captures from `bench_gi_stack --background` waive the focus requirement (`focus_waived=true`); one background capture matched
+  the focused runs of the same build (gpu_total 24.3 ms vs 24.1-26.1 ms).
