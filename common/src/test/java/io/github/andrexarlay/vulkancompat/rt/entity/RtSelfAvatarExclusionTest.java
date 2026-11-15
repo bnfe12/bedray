@@ -65,9 +65,6 @@ public class RtSelfAvatarExclusionTest {
 
     @Test
     public void selfShadowFollowsTheSettingAndMirrorsAlwaysSeeTheBody() {
-        // 2026-11-07: with the body a full occluder, the floor under a first-person player rendered as a black blot - the
-        // eye cannot see the feet that cover it. Removing the body shadow altogether was wrong (owner: the shadow stays);
-        // the default mode skips the body only for rays that leave the floor inside its own column.
         String tracer = read(TRACER);
         assertTrue(tracer.contains("SurfaceHit hit = result.surfaceHits == 0u ? traversal.tracePrimary(ray)")
                 && tracer.contains(": glossyEscape ? traversal.traceMirror(ray) : traversal.traceClosest(ray);"),
@@ -92,11 +89,9 @@ public class RtSelfAvatarExclusionTest {
                 && ser.contains("override SurfaceHit traceMirror(Ray ray) {\n        TriangleIntersection hit = base.traceIntersection(ray, SELF_SHADOW_FULL);"),
             "the SER wrapper keeps the same split, or SER-capable GPUs would trace a different shadow");
         String helper = block(read(SHADERS + "/contracts/triangle_intersection.slang"),
-            "bool selfOccluderSkipped(uint mode, bool entity, uint primitive, uint start, uint count, float3 origin) {");
-        assertTrue(helper.contains("if (mode == SELF_SHADOW_FULL) return false;")
-                && helper.contains("if (mode == SELF_SHADOW_OFF) return true;")
-                && helper.contains("return dot(origin.xz, origin.xz) < SELF_SHADOW_FOOTPRINT_RADIUS * SELF_SHADOW_FOOTPRINT_RADIUS;"),
-            "the default mode skips the body only for rays that start inside its column (camera-relative xz = 0)");
+            "bool selfOccluderSkipped(uint mode, bool entity, uint primitive, uint start, uint count) {");
+        assertTrue(helper.contains("return mode == SELF_SHADOW_OFF && excludedSelfAvatar(true, entity, primitive, start, count);"),
+            "full mode keeps all avatar triangles, including shadow rays from underfoot");
         for (String pass : new String[] {"path_trace_scene", "rc_path_trace_scene",
                 "restir_pt_spatial_scene", "rc_field_build_scene"}) {
             String source = read(SHADERS + "/passes/" + pass + ".slang");

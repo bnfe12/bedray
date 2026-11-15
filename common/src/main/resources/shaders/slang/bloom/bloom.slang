@@ -10,8 +10,7 @@
 //   up              mip i = mix(mip i, tent(mip i+1), scatter), in place
 //   apply           image += tonemap(lin + bloom + glare) - tonemap(lin), glare in the same dispatch
 //
-// The sky and the clouds never glow (their bright edge against dark blocks used to be a halo around every
-// silhouette); the sun has its own glare term.
+// Sky and cloud bloom are opt-in; the sun also has an independent glare term.
 
 public module bloom;
 
@@ -29,6 +28,7 @@ struct BloomPush {
 
 uint bloomSourceMode(BloomPush pc) { return uint(max(pc.p1.x, 0.0)) & 3u; }
 uint bloomToneMode(BloomPush pc) { return (uint(max(pc.p1.x, 0.0)) >> 2u) & 7u; }
+bool bloomIncludesSky(BloomPush pc) { return (uint(max(pc.p1.x, 0.0)) & (1u << 5u)) != 0u; }
 
 static const float3 BLOOM_LUMA = float3(0.2126, 0.7152, 0.0722);
 /** Ray distance the path tracer writes for a miss: anything at or beyond it is sky. */
@@ -90,12 +90,12 @@ float3 bloomClippedSource(float3 display, BloomPush pc) {
     return bloomToScene(display, pc) * (w * BLOOM_CLIP_GAIN);
 }
 
-// One prefiltered tap of the first downsample. The sky contributes nothing, so its bright edge cannot glow.
+// One prefiltered tap of the first downsample. Sky exclusion is independent of sun visibility for glare.
 float3 bloomFetchPre(Sampler2D src, Sampler2D depth, float2 uv, BloomPush pc) {
     uint2 size;
     depth.GetDimensions(size.x, size.y);
     int2 dp = clamp(int2(uv * float2(size)), int2(0), int2(size) - 1);
-    if (bloomIsSky(depth, dp)) {
+    if (!bloomIncludesSky(pc) && bloomIsSky(depth, dp)) {
         return float3(0.0);
     }
     float3 display = src.SampleLevel(uv, 0.0).rgb;
@@ -195,6 +195,7 @@ float3 bloomPixelDir(int2 p, int2 size, BloomPush pc) {
 float bloomSunVisibility(Sampler2D depth, Sampler2D frame, int2 size, BloomPush pc) {
     float2 ndc = pc.p1.zw;
     float edge = max(abs(ndc.x), abs(ndc.y));
+    // RtAtmosphere uses the outer edge to skip recording glare once its contribution reaches zero.
     float fade = 1.0 - smoothstep(0.95, 1.25, edge);
     if (fade <= 0.0) {
         return 0.0;

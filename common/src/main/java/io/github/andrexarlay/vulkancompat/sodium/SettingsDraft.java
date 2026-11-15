@@ -29,10 +29,33 @@ final class SettingsDraft {
     record RuntimeStatus(Badge badge, Component reason) {
         Component text() { return Component.translatable("bedray.settings.status." + badge.name().toLowerCase(Locale.ROOT)).copy().append(": ").append(reason); }
     }
-    enum Category { OVERVIEW, LIGHTING, WORLD, UPSCALING, PRESETS, SYSTEM;
+    enum Category { OVERVIEW, UPSCALING, LIGHTING, WORLD, EFFECTS, PRESETS, SYSTEM;
         Component title() { return Component.translatable("bedray.settings.category." + name().toLowerCase(Locale.ROOT)); }
     }
     record Entry(String path, SettingsCatalog.Info info, StatefulOption<?> option, Category category, String searchText) {}
+
+    private static final List<String> PRIMARY_ROWS = List.of(
+        "renderer", "shader_host", "path_quality_profile", "voxel_quality_profile", "self_shadow",
+        "upscaler_backend", "quality_preset", "custom_scale", "dlss_mode", "dlss_custom_scale", "xess_mode",
+        "xess_custom_scale", "fsr_mode", "fsr_custom_scale", "fsr1_mode", "fsr1_custom_scale", "nis_custom_scale",
+        "path_denoiser", "frame_generation_mode", "frame_generation_provider", "frame_generation_status",
+        "frame_generation_reflex", "frame_generation_limit",
+        "dlss_rr_preset", "dlss_sr_preset", "fsr_sharpness", "fsr1_sharpness", "nis_sharpness",
+        "path_spp", "path_bounces", "path_distance", "adaptive_quality", "sun_size_tenths", "sun_tilt_deg",
+        "water_style", "auto_normals", "auto_normal_strength", "point_sampling_sharpness", "auto_texture_lod_bias",
+        "texture_lod_bias_offset", "manual_texture_lod_bias",
+        "path_auto_exposure", "path_exposure_ev", "tonemapper", "atm_local_highlights", "atm_local_shadows", "vibrant_visuals",
+        "atm_bloom", "atm_bloom_strength", "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky",
+        "atm_godrays", "atm_godrays_strength", "atm_godrays_quality", "atm_godrays_range",
+        "atm_sunglare", "atm_sunglare_strength",
+        "rt_fog", "rt_fog_density", "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_aerial", "atm_fog_vanilla", "atm_chunk_fade",
+        "vignette", "film_grain"
+    );
+
+    static int rowOrder(String path) {
+        int index = PRIMARY_ROWS.indexOf(path);
+        return index >= 0 ? index : PRIMARY_ROWS.size();
+    }
     enum Experience { VANILLA, PATH, RAYS, VOXEL;
         Component title() { return Component.translatable("bedray.settings.experience." + name().toLowerCase(Locale.ROOT)); }
         Component description() { return Component.translatable("bedray.settings.experience." + name().toLowerCase(Locale.ROOT) + ".desc"); }
@@ -71,6 +94,7 @@ final class SettingsDraft {
                 entries.add(new Entry(path, info, value, category, searchText));
             }
         });
+        entries.sort(java.util.Comparator.comparingInt(entry -> rowOrder(entry.path())));
     }
 
     static Identifier id(String path) { return Identifier.fromNamespaceAndPath("bedray", path); }
@@ -119,7 +143,7 @@ final class SettingsDraft {
         }
     }
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private void stage(String path, Object value) {
+    void stage(String path, Object value) {
         if (config.getOption(id(path)) instanceof StatefulOption option) option.modifyValue(value);
     }
     private void applySelectedProfile() {
@@ -175,6 +199,7 @@ final class SettingsDraft {
 
     /** Stages a texture sampling style into the pending model; Apply commits it like any other edit. */
     void applyTexturePreset(io.github.andrexarlay.vulkancompat.rtx.config.TexturePreset preset) {
+        stage("auto_texture_lod_bias", true);
         preset.stagedValues().forEach(this::stage);
     }
     void revert() { imported.clear(); config.resetAllOptionsFromBindings(); }
@@ -202,7 +227,10 @@ final class SettingsDraft {
             };
             return new RuntimeStatus(badge, Component.literal(io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.statusLine()));
         }
-        if (entry.category() == Category.UPSCALING && !entry.path().equals("quality_preset") && !entry.path().equals("custom_scale")) {
+        if (entry.category() == Category.UPSCALING && switch (entry.path()) {
+            case "quality_preset", "custom_scale", "path_denoiser", "dlss_rr_preset" -> false;
+            default -> true;
+        }) {
             var choice = config.readEnumOption(id("upscaler_backend"), UpscalerChoice.class);
             var backend = choice.backend();
             if (entry.path().equals("dlss_sr_preset")) {
@@ -248,22 +276,34 @@ final class SettingsDraft {
         if (p.equals("pt_preset") || p.equals("rt_mode")) return false;
         if (p.equals("path_quality_profile") && !hasQualityProfile()) return false;
         if (p.startsWith("voxel_") || p.startsWith("compute_")) return voxel() && !e.option().shouldHideControl();
-        if (p.endsWith("custom_scale") && !e.option().isEnabled()) return false;
+        if (p.equals("dlss_rr_preset") && !e.option().isEnabled()) return false;
+        if ((p.endsWith("custom_scale") || Set.of("fsr_sharpness", "fsr1_sharpness", "nis_sharpness",
+                "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky", "atm_godrays_quality", "atm_godrays_range", "atm_sunglare_strength",
+                "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_vanilla", "auto_normal_strength",
+                "texture_lod_bias_offset", "manual_texture_lod_bias", "atm_local_highlights", "atm_local_shadows").contains(p))
+                && !e.option().isEnabled()) return false;
         if (!voxel()) return !e.option().shouldHideControl();
         return Set.of("renderer", "renderer_status", "quality_preset", "custom_scale", "debug_overlay", "ui_expert").contains(p)
             && !e.option().shouldHideControl();
     }
 
-    private static Category category(String p) {
-        if (p.equals("rays_transparency_stats")) return Category.SYSTEM;
-        if (p.equals("rays_cull_shared_glass") || p.equals("rays_optical_materials")) return Category.WORLD;
-        if (p.equals("renderer") || p.equals("renderer_status") || p.startsWith("voxel_") || p.equals("path_quality_profile")) return Category.OVERVIEW;
-        if (p.startsWith("compute_") || p.startsWith("debug_") || p.equals("rt_debug_view") || p.equals("ui_expert")) return Category.SYSTEM;
+    static Category category(String p) {
+        if (p.equals("renderer") || p.equals("shader_host") || p.startsWith("voxel_") || p.equals("path_quality_profile")) {
+            return Category.OVERVIEW;
+        }
+        if (p.startsWith("compute_") || p.startsWith("debug_") || Set.of("renderer_status", "gi_execution_status",
+                "rays_transparency_stats", "rt_debug_view", "ui_expert").contains(p)) return Category.SYSTEM;
         if (p.contains("mode") && (p.startsWith("dlss") || p.startsWith("fsr") || p.startsWith("xess"))
             || p.startsWith("upscaler") || p.startsWith("frame_generation") || p.startsWith("fsr_")
-            || p.equals("quality_preset") || p.endsWith("custom_scale") || p.equals("dlss_sr_preset")) return Category.UPSCALING;
-        if (p.startsWith("atm_") || p.startsWith("water_") || p.startsWith("waving_") || p.startsWith("auto_normal")
-            || p.startsWith("texture_") || p.equals("point_sampling_sharpness") || p.startsWith("rt_fog")) return Category.WORLD;
+            || p.endsWith("custom_scale") || Set.of("quality_preset", "dlss_sr_preset", "path_denoiser",
+                "dlss_rr_preset", "fsr1_sharpness", "nis_sharpness").contains(p)) return Category.UPSCALING;
+        if (p.startsWith("atm_") || p.startsWith("rt_fog") || Set.of("path_auto_exposure", "path_exposure_ev",
+                "tonemapper", "vibrant_visuals", "vignette", "film_grain").contains(p)) return Category.EFFECTS;
+        if (p.startsWith("water_") || p.startsWith("waving_") || p.startsWith("auto_normal")
+            || p.startsWith("texture_") || Set.of("point_sampling_sharpness", "auto_texture_lod_bias", "manual_texture_lod_bias",
+                "rt_particles", "rt_weather",
+                "rays_optical_materials", "rays_cull_shared_glass", "rays_direct_translucent_shadows",
+                "rays_indirect_translucent_shadows").contains(p)) return Category.WORLD;
         return Category.LIGHTING;
     }
 
@@ -379,6 +419,7 @@ final class SettingsDraft {
     private static String key(String path) {
         return switch (path) {
             case "upscaler_backend" -> "active_backend";
+            case "rt_fog_distance_scale" -> "fog_distance_scale";
             case "frame_generation_mode" -> "framegen_mode";
             case "frame_generation_provider" -> "framegen_provider";
             case "frame_generation_reflex" -> "reflex_mode";
@@ -387,8 +428,13 @@ final class SettingsDraft {
         };
     }
 
-    private static boolean fractional(String p) {
-        return p.equals("fsr_sharpness") || p.equals("texture_lod_bias_offset") || p.startsWith("atm_") && !p.equals("atm_godrays");
+    static int persistedNumberScale(String path) {
+        return switch (path) {
+            case "texture_lod_bias_offset", "manual_texture_lod_bias" -> 10;
+            case "fsr_sharpness", "fsr1_sharpness", "nis_sharpness", "rt_fog_distance_scale" -> 100;
+            case "atm_godrays", "atm_godrays_range", "atm_godrays_quality" -> 1;
+            default -> path.startsWith("atm_") ? 100 : 1;
+        };
     }
 
     private static String unquote(String raw) {
@@ -433,8 +479,7 @@ final class SettingsDraft {
                 next = numeric == 1.0;
             } else throw new IllegalArgumentException();
         } else if (option instanceof IntegerOption number) {
-            double parsed = Double.parseDouble(value);
-            if (fractional(e.path())) parsed *= e.path().equals("texture_lod_bias_offset") ? 10 : 100;
+            double parsed = Double.parseDouble(value) * persistedNumberScale(e.path());
             var validator = number.getSteppedValidator();
             if (!Double.isFinite(parsed) || parsed < Integer.MIN_VALUE || parsed > Integer.MAX_VALUE
                 || parsed < validator.min() || parsed > validator.max()) throw new IllegalArgumentException();
@@ -447,6 +492,8 @@ final class SettingsDraft {
         } else if (current instanceof VulkanSodiumConfig.WaterStyle) {
             next = value.equals("0") ? VulkanSodiumConfig.WaterStyle.VANILLA : value.equals("1")
                 ? VulkanSodiumConfig.WaterStyle.REALISTIC : Enum.valueOf(VulkanSodiumConfig.WaterStyle.class, value.toUpperCase(Locale.ROOT));
+        } else if (current instanceof VulkanSodiumConfig.SelfShadow) {
+            next = VulkanSodiumConfig.SelfShadow.parsePreset(value);
         } else if (current instanceof RtAtmosphereSettings.GodRays) {
             double parsed = Double.parseDouble(value);
             int ordinal = (int)parsed;
@@ -464,9 +511,12 @@ final class SettingsDraft {
         if (value instanceof UpscalerChoice choice) return "\"" + choice.backend().name() + "\"";
         if (value instanceof RtMode mode) return "\"" + mode.logName() + "\"";
         if (value instanceof VulkanSodiumConfig.WaterStyle style) return style == VulkanSodiumConfig.WaterStyle.VANILLA ? "0" : "1";
+        if (value instanceof VulkanSodiumConfig.SelfShadow mode) return Integer.toString(mode.storedValue());
         if (value instanceof RtAtmosphereSettings.GodRays mode) return mode.ordinal() + ".0";
         if (value instanceof Boolean on && e.path().startsWith("atm_")) return on ? "1.0" : "0.0";
-        if (value instanceof Number n && fractional(e.path())) return String.valueOf(n.doubleValue() / (e.path().equals("texture_lod_bias_offset") ? 10 : 100));
+        if (value instanceof Number n && persistedNumberScale(e.path()) != 1) {
+            return Double.toString(n.doubleValue() / persistedNumberScale(e.path()));
+        }
         if (value instanceof Enum<?> mode) return "\"" + mode.name() + "\"";
         return String.valueOf(value);
     }

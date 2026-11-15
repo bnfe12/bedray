@@ -1,8 +1,7 @@
 // Bloom, stage 0: prefilter + first downsample.
 //
-// The display image (RGBA8, already tone mapped) is converted back to scene space, the soft threshold is applied to
-// the peak channel, a Karis average over the 13 taps suppresses fireflies, and the result lands in mip 0 (half
-// resolution, RGBA16F). The sky is excluded by the ray distance, so it cannot glow.
+// Threshold the source and downsample to bloom mip 0 (half resolution, RGBA16F).
+// The alpha of its first texel stores the sun visibility used by the apply stage.
 
 import "bloom/bloom.slang";
 
@@ -26,7 +25,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
     uint2 srcSize;
     srcTex.GetDimensions(srcSize.x, srcSize.y);
     float2 texel = 1.0 / float2(srcSize);
-    // Alpha: the sun's visibility on the frame before any glow, the same value in every texel; the apply stage reads it.
-    float sunVisibility = pc.sunDir.w > 0.0 ? bloomSunVisibility(depthTex, srcTex, int2(srcSize), pc) : 0.0;
-    dstImg[p] = float4(bloomSanitize(bloomDown13Prefilter(srcTex, depthTex, uv, texel, pc)), sunVisibility);
+    float sunVisibility = 0.0;
+    if (all(p == int2(0)) && pc.sunDir.w > 0.0) {
+        sunVisibility = bloomSunVisibility(depthTex, srcTex, int2(srcSize), pc);
+    }
+    float3 glow = float3(0.0);
+    if (pc.p0.z > 0.0) {
+        glow = bloomSanitize(bloomDown13Prefilter(srcTex, depthTex, uv, texel, pc));
+    }
+    dstImg[p] = float4(glow, sunVisibility);
 }

@@ -19,7 +19,7 @@ TriangleIntersection traceTriangleIntersection(RaytracingAccelerationStructure t
         if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
         uint primitive = query.CandidatePrimitiveIndex();
         if (selfOccluderSkipped(selfShadowMode, entityInstance(query.CandidateInstanceID()),
-            primitive, selfStart, selfCount, ray.origin)) continue;
+            primitive, selfStart, selfCount)) continue;
         query.CommitNonOpaqueTriangleHit();
     }
     if (query.CommittedStatus() == COMMITTED_NOTHING) return result;

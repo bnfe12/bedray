@@ -29,8 +29,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float2 uv = (float2(p) + 0.5) / float2(size);
     float3 add = pc.p0.z > 0.0 ? srcTex.SampleLevel(uv, 0.0).rgb * pc.p0.z : float3(0.0);
 
-    float glareK = pc.sunDir.w;
-    if (glareK > 0.0) {
+    float sunVisibility = pc.sunDir.w > 0.0 ? srcTex.Load(int3(0, 0, 0)).a : 0.0;
+    if (sunVisibility > 0.0) {
         float3 d = bloomPixelDir(p, int2(size), pc);
         float cosA = dot(d, normalize(pc.sunDir.xyz));
         if (cosA > 0.0) {
@@ -42,8 +42,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
             // Halo: compact Lorentzian core + gentle exponential glow.
             float g = (0.38 / (1.0 + (theta / 0.028) * (theta / 0.028)) + 0.045 * exp(-theta / 0.18)) * fgMask;
             if (g > 1.0e-3) {
-                float vis = srcTex.Load(int3(0, 0, 0)).a;
-                add += float3(1.0, 0.93, 0.80) * (g * 2.2 * glareK * vis);
+                add += float3(1.0, 0.93, 0.80) * (g * 2.2 * pc.sunDir.w * sunVisibility);
             }
         }
     }

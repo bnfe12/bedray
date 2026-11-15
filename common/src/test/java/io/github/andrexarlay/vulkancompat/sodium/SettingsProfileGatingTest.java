@@ -79,7 +79,9 @@ class SettingsProfileGatingTest {
             "src/main/java/io/github/andrexarlay/vulkancompat/sodium/SettingsDraft.java"));
         int choose = draft.indexOf("void choose(Entry entry, Enum<?> value) {");
         assertTrue(choose > 0, "choose() moved");
-        String body = draft.substring(choose, draft.indexOf("private void stage(", choose));
+        int stage = draft.indexOf("void stage(String path, Object value)", choose);
+        assertTrue(stage > choose, "missing staging helper after profile selection");
+        String body = draft.substring(choose, stage);
         for (String path : expected) {
             assertTrue(body.contains("stage(\"" + path + "\""), path + " is owned by a profile but choose() never stages it");
         }
