@@ -61,6 +61,33 @@ class RtBloomSunVisibilityTest {
         }
     }
 
+    @Test
+    void bloomShapeAndHaloSizeSurviveConfigAndHaveSeparateShaderFields() throws IOException {
+        double shape = RtAtmosphereSettings.get("bloom_shape");
+        double size = RtAtmosphereSettings.get("sunglare_size");
+        try {
+            io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.applyKeyValue("atm_bloom_shape", "2.0");
+            io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.applyKeyValue("atm_sunglare_size", "0.65");
+            var config = new java.io.StringWriter();
+            io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.writeAll(config);
+            assertTrue(config.toString().lines().anyMatch("atm_bloom_shape = 2.0"::equals));
+            assertTrue(config.toString().lines().anyMatch("atm_sunglare_size = 0.65"::equals));
+            var params = new RtBloomPass.Params(new Matrix4f(), new float[]{0, 1, 0}, 1,
+                0, 0, 0, false, true, 2, 0.7f, 0.35f, 0.75f, 0, 0, 71, 1);
+            var bytes = ByteBuffer.allocateDirect(128).order(ByteOrder.nativeOrder());
+            RtBloomPass.fillPushConstants(bytes, params, true);
+            int flags = (int) bytes.getFloat(112);
+            assertEquals(2, flags & 3);
+            assertEquals(2, flags >>> 6 & 3);
+            assertEquals(-35, (byte) (flags >>> 8));
+            assertTrue(read("passes/bloom_up.slang").contains("bloomShapeScale(pc)"));
+            assertTrue(read("passes/bloom_apply.slang").contains("bloomGlareSize(pc)"));
+        } finally {
+            RtAtmosphereSettings.set("bloom_shape", shape);
+            RtAtmosphereSettings.set("sunglare_size", size);
+        }
+    }
+
     @Test void thePackedCurveCannotChangeTheSourceMode() {
         var previous = RtSettings.tonemapper;
         try {

@@ -167,6 +167,10 @@ final class RtBloomPass {
         int sourceMode = pr.hdrSource() ? 2 : pr.tonemapped ? 1 : 0;
         int displayFlags = sourceMode | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.tonemapper().ordinal() << 2);
         if (RtAtmosphereSettings.bloomSky()) displayFlags |= 1 << 5;
+        displayFlags |= RtAtmosphereSettings.bloomShape().ordinal() << 6;
+        // Signed percent offset. Zero retains the original 100% halo.
+        int haloOffset = RtAtmosphereSettings.sunGlareSizePercent() - 100;
+        displayFlags |= (haloOffset & 0xff) << 8;
         pc.putFloat(112, displayFlags).putFloat(116, pr.scatter).putFloat(120, pr.sunNdcX).putFloat(124, pr.sunNdcY);
     }
 

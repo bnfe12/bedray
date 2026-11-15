@@ -34,7 +34,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         float3 d = bloomPixelDir(p, int2(size), pc);
         float cosA = dot(d, normalize(pc.sunDir.xyz));
         if (cosA > 0.0) {
-            float theta = acos(clamp(cosA, -1.0, 1.0));
+            float theta = acos(clamp(cosA, -1.0, 1.0)) / bloomGlareSize(pc);
             bool pixelIsSky = bloomIsSky(depthTex, p);
             // On foreground geometry (trees/blocks) only a soft tight atmospheric bleed near the sun core, never
             // long star spikes.
