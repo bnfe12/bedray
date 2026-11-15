@@ -147,7 +147,11 @@ public final class BedrayConfigScreen extends Screen {
         reviewing = !reviewing;
         scroll = 0;
         notice = Component.empty();
-        rebuildRows();
+        if (reviewing && !query.isEmpty()) {
+            search.setValue("");
+        } else {
+            rebuildRows();
+        }
     }
 
     private void openSetting(SettingsDraft.Entry entry) {
@@ -171,6 +175,9 @@ public final class BedrayConfigScreen extends Screen {
         Map<SettingsDraft.Entry, Component> prerequisites = new HashMap<>();
         boolean searching = !query.isBlank();
         boolean browsing = !reviewing && !searching;
+        search.setHint(reviewing
+            ? tr("bedray.settings.review_search", "Filter pending settings")
+            : tr("bedray.settings.search", "Search settings"));
         List<String> terms = SettingsSearch.terms(query);
         // Report each failed predicate with its option before replacing the existing rows.
         List<String> broken = new ArrayList<>();

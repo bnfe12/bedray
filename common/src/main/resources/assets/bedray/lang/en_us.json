@@ -217,6 +217,7 @@
   "bedray.settings.review": "Review",
   "bedray.settings.review_count": "Review (%s)",
   "bedray.settings.review_hint": "Show staged changes across all settings.",
+  "bedray.settings.review_search": "Filter pending settings",
   "bedray.settings.review_open": "Open in %s",
   "bedray.settings.review_hidden": "Staged value. This control is hidden in the current mode.",
   "bedray.settings.review_empty": "No settings to review.",

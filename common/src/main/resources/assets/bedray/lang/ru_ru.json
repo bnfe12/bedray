@@ -317,6 +317,7 @@
   "bedray.settings.review": "Изменения",
   "bedray.settings.review_count": "Изменения (%s)",
   "bedray.settings.review_hint": "Показать ещё не применённые настройки во всех разделах.",
+  "bedray.settings.review_search": "Поиск по изменениям",
   "bedray.settings.review_open": "Открыть раздел «%s»",
   "bedray.settings.review_hidden": "Значение изменено. Настройка скрыта в текущем режиме.",
   "bedray.settings.review_empty": "Нет настроек для просмотра.",
