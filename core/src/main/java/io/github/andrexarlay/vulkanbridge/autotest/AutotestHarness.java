@@ -175,6 +175,11 @@ public final class AutotestHarness {
         lastFps = mc.getFps();
         // Keep forcing it: options may be reloaded/overwritten; focus loss must never open the pause menu.
         mc.options.pauseOnLostFocus = false;
+        // The harness is the scripted player. Without input vanilla's FramerateLimitTracker (javap: AFK_LIMIT=30 after
+        // AFK_THRESHOLD_MS=60000, option inactivityFpsLimit="afk") caps the game at 30 FPS, which silently capped every
+        // native_perf capture at a 33.3 ms interval regardless of GPU time. Report input each frame so FPS captures
+        // measure the renderer, not the idle limiter.
+        mc.getFramerateLimitTracker().onInputReceived();
         phaseName = phase.name();
         try {
             applyPose();

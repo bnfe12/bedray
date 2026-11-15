@@ -43,16 +43,24 @@ public final class NativePerfScenario implements AutotestScenario {
         var settings = new FrameCapture.Config(10_000_000_000L, 30_000_000_000L, 30_000, 5_000_000_000L);
         var directory = mc.gameDirectory.toPath().resolve("autotest/native_perf/capture-" + UUID.randomUUID());
         var device = com.mojang.blaze3d.systems.RenderSystem.getDevice().getDeviceInfo();
-        var future = FrameBenchmark.start(directory, settings, Map.of(
-            "label", System.getProperty("vkrtx.autotest.captureLabel", "unlabelled"),
-            "revision_hint", System.getProperty("vkrtx.autotest.revisionHint", "unverified"),
-            "render_distance", String.valueOf(mc.options.renderDistance().get()),
-            "vsync", String.valueOf(mc.options.enableVsync().get()),
-            "frame_limit", String.valueOf(mc.options.framerateLimit().get()),
-            "scenario", name(),
-            "gpu", device.name(), "driver", device.driverInfo(), "gpu_backend", device.backendName(),
-            "adaptive_budget_ms", String.valueOf(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.adaptiveBudgetMs())));
-        ctx.log("scenario", name(), "event", "capture_armed", "directory", directory.toString());
+        var limiter = mc.getFramerateLimitTracker();
+        var future = FrameBenchmark.start(directory, settings, Map.ofEntries(
+            Map.entry("label", System.getProperty("vkrtx.autotest.captureLabel", "unlabelled")),
+            Map.entry("revision_hint", System.getProperty("vkrtx.autotest.revisionHint", "unverified")),
+            Map.entry("render_distance", String.valueOf(mc.options.renderDistance().get())),
+            Map.entry("vsync", String.valueOf(mc.options.enableVsync().get())),
+            Map.entry("frame_limit", String.valueOf(mc.options.framerateLimit().get())),
+            // What the vanilla limiter applies right now (30 would mean the AFK throttle caps the capture).
+            Map.entry("effective_frame_limit", String.valueOf(limiter.getFramerateLimit())),
+            Map.entry("throttle_reason", String.valueOf(limiter.getThrottleReason())),
+            Map.entry("inactivity_fps_limit", String.valueOf(mc.options.inactivityFpsLimit().get())),
+            Map.entry("scenario", name()),
+            Map.entry("gpu", device.name()), Map.entry("driver", device.driverInfo()),
+            Map.entry("gpu_backend", device.backendName()),
+            Map.entry("adaptive_budget_ms", String.valueOf(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.adaptiveBudgetMs()))));
+        ctx.log("scenario", name(), "event", "capture_armed", "directory", directory.toString(),
+            "effective_frame_limit", String.valueOf(mc.getFramerateLimitTracker().getFramerateLimit()),
+            "throttle_reason", String.valueOf(mc.getFramerateLimitTracker().getThrottleReason()));
         ScenarioTime.waitUntil(ctx, future::isDone, 100, () -> saved(ctx, future), () -> {
             FrameBenchmark.abort("scenario_timeout_waiting_for_world_or_capture");
             ScenarioTime.waitUntil(ctx, future::isDone, 10, () -> saved(ctx, future),
