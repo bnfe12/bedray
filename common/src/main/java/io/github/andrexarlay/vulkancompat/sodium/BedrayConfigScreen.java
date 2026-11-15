@@ -640,8 +640,13 @@ public final class BedrayConfigScreen extends Screen {
         }
     }
     @Override public void extractBackground(GuiGraphicsExtractor g, int mx, int my, float delta) {
-        super.extractBackground(g, mx, my, delta);
-        if (layout != null) SettingsChrome.background(g, layout);
+        int transparency = draft.menuTransparency();
+        if (minecraft.level == null) {
+            super.extractBackground(g, mx, my, delta);
+        } else {
+            g.fill(0, 0, width, height, SettingsChrome.worldShade(transparency));
+        }
+        if (layout != null) SettingsChrome.background(g, layout, transparency);
     }
     @Override public void onClose() {
         PreviewPanel.clearSelection();

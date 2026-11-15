@@ -1,6 +1,10 @@
 package io.github.andrexarlay.vulkancompat.sodium;
 
+import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.io.StringWriter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -45,6 +49,30 @@ class SettingsLayoutTest {
         assertEquals(narrow.navY(0), narrow.navY(3));
         assertTrue(narrow.navY(6) > narrow.navY(0));
         assertFalse(SettingsLayout.measure(960, 198).sidebar());
+    }
+
+    @Test
+    void menuTransparencyChangesBothLayers() {
+        assertEquals(255, SettingsChrome.menuSurface(0) >>> 24);
+        assertEquals(102, SettingsChrome.menuSurface(VulkanRtxConfig.MAX_MENU_TRANSPARENCY) >>> 24);
+        assertTrue((SettingsChrome.worldShade(0) >>> 24) > (SettingsChrome.worldShade(VulkanRtxConfig.MAX_MENU_TRANSPARENCY) >>> 24));
+        assertEquals(SettingsDraft.Category.SYSTEM, SettingsDraft.category("ui_menu_transparency"));
+    }
+
+    @Test
+    void menuTransparencySurvivesConfigAndStaysOutOfRenderPresets() throws IOException {
+        int oldValue = VulkanRtxConfig.menuTransparency;
+        try {
+            VulkanRtxConfig.applyKeyValue("ui_menu_transparency", "87");
+            assertEquals(VulkanRtxConfig.MAX_MENU_TRANSPARENCY, VulkanRtxConfig.menuTransparency);
+            VulkanRtxConfig.applyKeyValue("ui_menu_transparency", "28");
+            StringWriter output = new StringWriter();
+            VulkanRtxConfig.writeAll(output);
+            assertTrue(output.toString().lines().anyMatch("ui_menu_transparency = 28"::equals));
+            assertFalse(PresetStore.snapshot().lines().anyMatch(line -> line.startsWith("ui_menu_transparency")));
+        } finally {
+            VulkanRtxConfig.menuTransparency = oldValue;
+        }
     }
 
     @Test

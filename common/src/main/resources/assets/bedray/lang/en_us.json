@@ -321,6 +321,8 @@
   "bedray.opt.voxel_diffuse_bounce.desc": "Enable the supported diffuse lighting bounce. Full physical light transport is still in development.",
   "bedray.opt.voxel_translucent_optics": "Voxel Layered Transparency",
   "bedray.opt.voxel_translucent_optics.desc": "Enable the layered transparent optical path. Off skips this extra traversal and retains raster where replacement is unsupported.",
+  "bedray.opt.ui_menu_transparency": "Menu Transparency",
+  "bedray.opt.ui_menu_transparency.desc": "Lets more of the world show through the settings menu. Changes preview immediately.",
   "bedray.opt.ui_expert": "Expert Settings",
   "bedray.opt.ui_expert.desc": "Show low-level rendering and diagnostics. Apply rebuilds this screen with the new options.",
   "bedray.opt.frame_generation_provider": "Frame Generation Method",

@@ -1057,6 +1057,9 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
         diag.addOption(boolOpt(builder, "rays_transparency_stats", false, v -> RtSettings.transparencyStats = v,
             () -> RtSettings.transparencyStats, null, NO_DEPS, Mark.NONE, OptionImpact.MEDIUM, false, st));
+        diag.addOption(intOpt(builder, "ui_menu_transparency", VulkanRtxConfig.DEFAULT_MENU_TRANSPARENCY,
+            0, VulkanRtxConfig.MAX_MENU_TRANSPARENCY, 1, percent(), v -> VulkanRtxConfig.menuTransparency = v,
+            () -> VulkanRtxConfig.menuTransparency, null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
         diag.addOption(boolOpt(builder, "ui_expert", false, v -> VulkanRtxConfig.uiExpert = v, () -> VulkanRtxConfig.uiExpert,
             null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
         if (expert) {

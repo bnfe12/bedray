@@ -303,6 +303,9 @@ public final class VulkanRtxConfig {
     public static boolean experimentalRays = false;
     /** Shows the Expert and Debug groups on the Bedray Advanced settings page (toml key ui_expert, or -Dvkrtx.ui.expert=true). */
     public static boolean uiExpert = false;
+    public static final int DEFAULT_MENU_TRANSPARENCY = 35;
+    public static final int MAX_MENU_TRANSPARENCY = 60;
+    public static int menuTransparency = DEFAULT_MENU_TRANSPARENCY;
     /** Set for this session by {@code -Dvkrtx.rt.mode=rays|ao|direct} (autotests): the hidden mode is then usable and shown. */
     private static boolean raysUnlockedBySession = false;
 
@@ -711,6 +714,7 @@ public final class VulkanRtxConfig {
                 }
                 case "experimental_rays" -> experimentalRays = Boolean.parseBoolean(val);
                 case "ui_expert" -> uiExpert = Boolean.parseBoolean(val);
+                case "ui_menu_transparency" -> menuTransparency = Math.clamp(Integer.parseInt(val), 0, MAX_MENU_TRANSPARENCY);
                 case "shader_host" -> io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostConfig.applyValue(val);
                 // RT mode settings; false = a key of an older config file that no longer exists (ignored on purpose)
                 default -> {
@@ -872,6 +876,7 @@ public final class VulkanRtxConfig {
                 writer.write("atm_" + o.key() + " = " + io.github.andrexarlay.vulkancompat.rt.world.RtAtmosphereSettings.get(o.key()) + "\n");
             }
             writer.write("ui_expert = " + uiExpert + "\n");
+            writer.write("ui_menu_transparency = " + menuTransparency + "\n");
             RtSettings.write(writer);
             io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.write(writer);
             io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostConfig.write(writer);

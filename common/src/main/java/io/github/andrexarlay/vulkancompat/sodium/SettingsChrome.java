@@ -19,17 +19,36 @@ final class SettingsChrome {
 
     private SettingsChrome() {}
 
-    static void background(GuiGraphicsExtractor g, SettingsLayout layout) {
+    static int worldShade(int transparency) {
+        // Keep labels readable even over the daytime sky at the most transparent setting.
+        return withOpacity(0x0A1510, 72 - transparency / 6);
+    }
+
+    static int menuSurface(int transparency) {
+        return withOpacity(0x13251D, 100 - transparency);
+    }
+
+    private static int withOpacity(int rgb, int percent) {
+        return (Math.round(percent * 255 / 100f) << 24) | rgb;
+    }
+
+    static void background(GuiGraphicsExtractor g, SettingsLayout layout, int transparency) {
+        g.fill(layout.frameX() - 4, 4, layout.frameX() + layout.frameWidth() + 4,
+            layout.footerY() + SettingsLayout.FOOTER_HEIGHT + 4, menuSurface(transparency));
         if (layout.sidebar()) {
             int dividerX = layout.contentX() - 6;
             g.fill(dividerX, SettingsLayout.SEARCH_Y, dividerX + 1, layout.listBottom(), SEPARATOR);
         }
-        list(g, layout.contentX(), layout.listTop(), layout.contentWidth(), layout.listBottom());
+        list(g, layout.contentX(), layout.listTop(), layout.contentWidth(), layout.listBottom(), 0x27020B07);
     }
 
     static void list(GuiGraphicsExtractor g, int x, int top, int width, int bottom) {
+        list(g, x, top, width, bottom, LIST);
+    }
+
+    private static void list(GuiGraphicsExtractor g, int x, int top, int width, int bottom, int color) {
         if (bottom <= top) return;
-        g.fill(x, top, x + width, bottom, LIST);
+        g.fill(x, top, x + width, bottom, color);
         g.fill(x, top - 1, x + width, top, SEPARATOR);
         g.fill(x, bottom, x + width, bottom + 1, SEPARATOR);
     }
