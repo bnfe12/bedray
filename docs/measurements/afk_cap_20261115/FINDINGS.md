@@ -75,11 +75,33 @@ rules inside the traversal module, and must reproduce `surfaceIsHole` exactly (t
 a hole, and hole steps count against `maxSurfaceSteps`). Not implemented; any implementation needs a same-seed image comparison
 with the denoiser before it can be called quality-neutral.
 
+## Implemented and rejected: cutout-hole pre-filter in the candidate loop
+
+The lead above was implemented: `SceneTraversal` rejected, inside the nearest-hit ray-query loop, exactly the terrain candidates
+the surface layer calls holes (material mode Cutout from the range pass or the vegetation tag, not Translucent, and atlas alpha
+at the interpolated UV, level 0, below `pc.alphaCutoff`), so a ray no longer committed the hole and restarted from the TLAS root.
+Enabled in the path-trace passes and ReSTIR PT spatial, off for the RC passes; shaders compiled with unchanged binding counts,
+`:core:test` and `:common:test` passed.
+
+Measured ABBA against the same commit without it, background captures, DLSS RR, PT on (3 valid of 4; the invalid one was
+still used only as a spread check):
+
+| | base | pre-filter | delta |
+|---|---|---|---|
+| gpu_total | 24.54 ms | 24.22 ms | -0.32 ms (-1.3 %) |
+| trace | 11.84 ms | 11.61 ms | -1.9 % |
+| pt_spatial | 3.78 ms | 3.59 ms | -5.0 % |
+| frame interval | 26.02 ms | 25.81 ms | -0.8 % |
+
+The spread between runs of the same arm is about 0.5 ms, so this is at noise level, far below the -9.7 % ceiling: most of the
+ceiling came from the no-hole build removing the shading of transparent texels and ending paths early, not from avoided
+restarts. The change was **not kept** and no image comparison was done (it only matters for a change that is worth keeping).
+
 ## Not measured / open
 
 * One GPU, one scene (fixed seed, one camera pose); no frame-time percentiles beyond the capture analyzer's.
 * No visual comparison was needed for the rejected candidate (geometry identical); nothing in the shipped renderer changed.
 * Remaining cost sits in the RT trace (~47 % of GPU), DLSS RR (~25 %) and PT spatial (~15 %); no quality-neutral reduction of
-  them has been measured yet (the cutout lead above is only a ceiling).
+  them has been measured yet (the cutout pre-filter above measured -1.3 %, noise level).
 * Captures from `bench_gi_stack --background` waive the focus requirement (`focus_waived=true`); one background capture matched
   the focused runs of the same build (gpu_total 24.3 ms vs 24.1-26.1 ms).
