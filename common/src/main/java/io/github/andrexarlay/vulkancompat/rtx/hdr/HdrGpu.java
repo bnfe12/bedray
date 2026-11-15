@@ -124,6 +124,7 @@ public final class HdrGpu {
                 sdrReference.needsInit = false;
             }
             VkBarriers.fullMemoryBarrier(cmd);
+            HdrTiming.begin(device, cmd, HdrTiming.SCENE);
             long set = descriptorSet(scenePipe, presented.view, hdrSourceView, hdrScene.view, sdrReference.view);
             float peakRatio = Math.max(1.0f, (float) HdrSettings.peakNits() / (float) HdrSettings.paperWhiteNits());
             try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -134,6 +135,7 @@ public final class HdrGpu {
                 dispatch(cmd, scenePipe, set, push, presented.width, presented.height);
             }
             VkBarriers.fullMemoryBarrier(cmd);
+            HdrTiming.end(device, cmd, HdrTiming.SCENE);
             sceneRecorded = true;
             sceneWidth = presented.width;
             sceneHeight = presented.height;
@@ -178,6 +180,7 @@ public final class HdrGpu {
                 }
                 VkBarriers.fullMemoryBarrier(cmd);
 
+                HdrTiming.begin(device, cmd, HdrTiming.OUTPUT);
                 // 1. the engine target (world + GUI) into an image the compute pass may read
                 VkImageBlit.Buffer copy = VkImageBlit.calloc(1, stack);
                 copy.srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(region.srcSubresource().mipLevel())
@@ -211,6 +214,7 @@ public final class HdrGpu {
                 present.dstOffsets(0).set(region.dstOffsets(0).x(), region.dstOffsets(0).y(), region.dstOffsets(0).z());
                 present.dstOffsets(1).set(region.dstOffsets(1).x(), region.dstOffsets(1).y(), region.dstOffsets(1).z());
                 VK10.vkCmdBlitImage(cmd, pq.image, GENERAL, dstImage, dstLayout, present, filter);
+                HdrTiming.end(device, cmd, HdrTiming.OUTPUT);
             }
             return true;
         } catch (Throwable t) {
@@ -266,6 +270,7 @@ public final class HdrGpu {
             // the device is going away anyway
         }
         HdrDump.release(device);
+        HdrTiming.release(device);
         destroyImages();
         if (pool != 0L) {
             VK10.vkDestroyDescriptorPool(device, pool, null);
