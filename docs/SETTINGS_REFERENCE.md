@@ -10,8 +10,7 @@ Per-texture IOR, thickness and absorption parameters belong in resource-pack sid
 [TRANSPARENT_MATERIALS](TRANSPARENT_MATERIALS.md). No validation run or FPS measurement was made for these source changes.
 `rays_optical_materials` (default on) is the master switch for the authored shader optics, with a legacy mode for comparison.
 
-Open **Options → Video Settings → Bedray Settings** to find the tabs for image and FPS, lighting, the world, effects, presets and system tools.
-**Apply** saves staged settings in `config/bedray.toml`.
+Open **Options → Video Settings → Bedray Settings** to find the categories for image and FPS, lighting, the world, effects, presets and system tools. Categories appear in a sidebar on wider screens and in two compact rows at larger GUI scales. **Apply** saves staged settings in `config/bedray.toml`.
 
 Development alpha.7 includes **World Renderer** and **Renderer Status** on the main Bedray page. Install
 the separate matching Bedray Compute JAR to choose **Voxel (Experimental)**; a missing add-on is shown

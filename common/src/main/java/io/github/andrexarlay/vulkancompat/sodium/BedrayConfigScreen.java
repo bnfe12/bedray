@@ -90,16 +90,13 @@ public final class BedrayConfigScreen extends Screen {
             b -> toggleReview(), font));
         reviewButton.setTooltip(Tooltip.create(tr("bedray.settings.review_hint", "Show staged changes across all settings.")));
         navigation.clear();
-        int index = 0;
         for (SettingsDraft.Category value : SettingsDraft.Category.values()) {
-            int column = index % layout.columns();
-            int y = SettingsLayout.TABS_Y + (index / layout.columns()) * (CONTROL_HEIGHT + SettingsLayout.GAP);
-            int tabWidth = layout.gridWidth(column, layout.columns());
-            Button button = addRenderableWidget(Button.builder(fit(value.title(), tabWidth - 6), b -> selectCategory(value))
-                .bounds(layout.gridEdge(column, layout.columns()), y, tabWidth, CONTROL_HEIGHT).build());
-            button.setTooltip(Tooltip.create(value.title()));
-            navigation.put(value, button);
-            index++;
+            int index = value.ordinal();
+            int tabWidth = Math.max(1, layout.navWidth(index) - 9);
+            Button tab = addRenderableWidget(new PlainTextButton(layout.navX(index) + 6, layout.navY(index),
+                tabWidth, SettingsLayout.NAV_HEIGHT, fit(value.title(), tabWidth), b -> selectCategory(value), font));
+            tab.setTooltip(Tooltip.create(value.title()));
+            navigation.put(value, tab);
         }
 
         int footerY = layout.footerY();
@@ -108,14 +105,15 @@ public final class BedrayConfigScreen extends Screen {
         detailsButton = addRenderableWidget(new PlainTextButton(contentX, footerY, font.width(details) + 6, footerHeight,
             details, b -> { if (selected != null) PreviewPanel.openModal(selected.option()); }, font));
 
-        Component close = tr("bedray.settings.close", "Close");
-        int closeWidth = font.width(close) + 6;
-        int closeX = contentX + contentWidth - closeWidth;
-        closeButton = addRenderableWidget(new PlainTextButton(closeX, footerY, closeWidth, footerHeight, close, b -> onClose(), font));
+        Component done = Component.translatable("gui.done");
+        int doneWidth = Math.max(56, font.width(done) + 12);
+        int doneX = contentX + contentWidth - doneWidth;
+        closeButton = addRenderableWidget(Button.builder(done, b -> onClose())
+            .bounds(doneX, footerY, doneWidth, footerHeight).build());
 
         Component apply = tr("bedray.settings.apply", "Apply");
         int applyWidth = font.width(apply) + 12;
-        int applyX = closeX - applyWidth - 6;
+        int applyX = doneX - applyWidth - 4;
         applyButton = addRenderableWidget(Button.builder(apply, b -> apply()).bounds(applyX, footerY, applyWidth, footerHeight).build());
 
         Component revert = tr("bedray.settings.revert", "Revert");
@@ -304,8 +302,11 @@ public final class BedrayConfigScreen extends Screen {
         if (selected != null) { PreviewPanel.select(selected.option()); PreviewPanel.setRuntimeStatus(draft.status(selected).text()); }
         updateButtons();
         navigation.forEach((value, button) -> button.setMessage(
-            fit(value.title(), button.getWidth() - 6).copy().withColor(value == category && !reviewing && query.isBlank()
-                ? SettingsChrome.ACCENT : SettingsChrome.TEXT)));
+            fit(value.title(), button.getWidth()).copy().withColor(activeTab(value) ? SettingsChrome.TEXT : SettingsChrome.MUTED)));
+    }
+
+    private boolean activeTab(SettingsDraft.Category value) {
+        return value == category && !reviewing && query.isBlank();
     }
 
     private Button addAction(Component name, Runnable action) {
@@ -356,10 +357,17 @@ public final class BedrayConfigScreen extends Screen {
                 select(entry); updateMessage(); updateButtons();
             }
         };
+        if (option.getValidatedValue() instanceof Boolean) {
+            int toggleWidth = Math.min(controlWidth, 56);
+            return Button.builder(fit(valueText(option), toggleWidth - 8), b -> {
+                select(entry);
+                option.modifyValue(!(Boolean) option.getValidatedValue());
+                rebuildRows();
+            }).bounds(x + controlWidth - toggleWidth, 0, toggleWidth, CONTROL_HEIGHT).build();
+        }
         return Button.builder(fit(valueText(option), controlWidth - 8), b -> {
             select(entry);
-            if (option.getValidatedValue() instanceof Boolean on) { option.modifyValue(!on); rebuildRows(); }
-            else if (option instanceof EnumOption enumeration) {
+            if (option instanceof EnumOption enumeration) {
                 List<Enum> values = new ArrayList<>((java.util.Set<Enum>)enumeration.getAllowedValues().get(draft.config));
                 openChoices(values.stream().map(enumeration::getElementName).toList(), index -> {
                     draft.choose(entry, values.get(index)); rebuildRows();
@@ -407,7 +415,7 @@ public final class BedrayConfigScreen extends Screen {
                 ? tr("bedray.settings.review_count", "Review (%s)", draft.pendingCount())
                 : tr("bedray.settings.review", "Review");
             reviewButton.setMessage(fit(label, reviewButton.getWidth() - 4).copy()
-                .withColor(reviewing ? SettingsChrome.ACCENT : SettingsChrome.MUTED));
+                .withColor(reviewing ? SettingsChrome.TEXT : SettingsChrome.MUTED));
             reviewButton.active = changed || reviewing;
         }
         if (applyButton != null) applyButton.visible = applyButton.active = changed;
@@ -565,20 +573,31 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     @Override public void extractRenderState(GuiGraphicsExtractor g, int mx, int my, float delta) {
+        navigation.forEach((value, tab) -> {
+            int index = value.ordinal();
+            int x = layout.navX(index);
+            int y = layout.navY(index);
+            int w = layout.navWidth(index);
+            boolean hovered = mx >= x && mx < x + w && my >= y && my < y + SettingsLayout.NAV_HEIGHT;
+            SettingsChrome.navigation(g, x, y, w, activeTab(value), hovered || tab.isFocused());
+        });
         for (int i = 0; i < rows.size(); i++) {
-            if (rowWidgets.get(i).visible) SettingsChrome.row(g, contentX, rowWidgets.get(i).getY(), contentWidth,
-                selected == rows.get(i), draft.pending(rows.get(i)));
+            AbstractWidget widget = rowWidgets.get(i);
+            if (!widget.visible) continue;
+            int y = widget.getY();
+            boolean hovered = mx >= contentX && mx < contentX + contentWidth && my >= y && my < y + CONTROL_HEIGHT;
+            SettingsChrome.row(g, contentX, y, contentWidth, selected == rows.get(i), hovered, draft.pending(rows.get(i)));
         }
         super.extractRenderState(g, mx, my, delta);
         g.text(font, title, (width - font.width(title)) / 2, 8, SettingsChrome.TEXT);
-        int labelWidth = contentWidth - layout.controlWidth() - 15;
         for (int i = 0; i < rows.size(); i++) {
             AbstractWidget widget = rowWidgets.get(i);
             if (!widget.visible) continue;
             SettingsDraft.Entry row = rows.get(i);
             Component label = row.option().getName();
             if (reviewing || !query.isBlank()) label = label.copy().append(" · ").append(row.category().title());
-            g.text(font, fit(label, labelWidth), contentX + 5, widget.getY() + (CONTROL_HEIGHT - font.lineHeight) / 2,
+            int labelWidth = widget.getX() - contentX - 12;
+            g.text(font, fit(label, labelWidth), contentX + 7, widget.getY() + (CONTROL_HEIGHT - font.lineHeight) / 2,
                 widget.active ? SettingsChrome.TEXT : SettingsChrome.MUTED);
         }
         if (rowWidgets.isEmpty()) {
@@ -592,12 +611,12 @@ public final class BedrayConfigScreen extends Screen {
                     ? tr("bedray.settings.voxel_unrelated", "These settings belong to the hardware renderer. Choose another category.")
                     : tr("bedray.settings.empty", "No matching settings.");
             }
-            int y = listTop; for (var line : font.split(empty, contentWidth - 8)) { g.text(font, line, contentX + 2, y, 0xFFB0B0B0); y += 11; }
+            int y = listTop; for (var line : font.split(empty, contentWidth - 8)) { g.text(font, line, contentX + 2, y, SettingsChrome.MUTED); y += 11; }
         }
         if (maxScroll > 0) {
             int track = Math.max(1, listBottom - listTop), thumb = Math.max(8, track * track / (maxScroll + track));
             int y = listTop + (track - thumb) * scroll / maxScroll;
-            g.fill(contentX + contentWidth - 3, y, contentX + contentWidth - 1, y + thumb, 0xFF79A6BE);
+            g.fill(contentX + contentWidth - 3, y, contentX + contentWidth - 1, y + thumb, SettingsChrome.THUMB);
         }
         Component footer = reviewing && draft.importedCount() > 0
             ? tr("bedray.settings.review_imported_count", "Additional preset values: %s", draft.importedCount())
@@ -613,8 +632,7 @@ public final class BedrayConfigScreen extends Screen {
         }
         if (!popupButtons.isEmpty()) {
             g.nextStratum(); g.fill(0, 0, width, height, 0x70000000);
-            g.fill(popupX, popupY, popupX + popupWidth, popupY + popupHeight, 0xFF141C24);
-            g.outline(popupX, popupY, popupWidth, popupHeight, 0xFF79A6BE);
+            SettingsChrome.panel(g, popupX, popupY, popupWidth, popupHeight);
             for (Button b : popupButtons) b.extractRenderState(g, mx, my, delta);
         }
     }

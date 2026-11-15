@@ -9,22 +9,42 @@ class SettingsLayoutTest {
     void compactLayoutFitsAtCommonGuiScales() {
         for (int[] size : new int[][] {{320, 180}, {480, 270}, {640, 360}, {960, 540}, {1920, 1080}}) {
             var layout = SettingsLayout.measure(size[0], size[1]);
-            assertEquals(layout.contentX(), size[0] - layout.contentX() - layout.contentWidth(), 1);
-            assertTrue(layout.contentWidth() <= 500);
+            assertEquals(layout.frameX(), size[0] - layout.frameX() - layout.frameWidth(), 1);
+            assertTrue(layout.frameWidth() <= 536);
+            assertEquals(layout.frameX() + layout.frameWidth(), layout.contentX() + layout.contentWidth());
             int reviewWidth = layout.reviewWidth(145);
             assertTrue(reviewWidth <= layout.contentWidth() / 3);
             assertEquals(layout.contentWidth(), layout.searchWidth(reviewWidth) + SettingsLayout.GAP + reviewWidth);
-            assertTrue(layout.listBottom() - layout.listTop() >= SettingsLayout.CONTROL_HEIGHT);
+            assertTrue(layout.listBottom() - layout.listTop() >= SettingsLayout.ROW_HEIGHT + SettingsLayout.CONTROL_HEIGHT);
             assertTrue(layout.listBottom() < layout.footerY());
             assertTrue(layout.footerY() + SettingsLayout.FOOTER_HEIGHT <= size[1]);
-            int columns = layout.columns();
-            assertEquals(layout.contentX(), layout.gridEdge(0, columns));
-            assertEquals(layout.contentX() + layout.contentWidth(),
-                layout.gridEdge(columns - 1, columns) + layout.gridWidth(columns - 1, columns));
-            for (int i = 0; i < columns; i++) {
-                assertTrue(layout.gridWidth(i, columns) >= 60);
+            for (int i = 0; i < SettingsDraft.Category.values().length; i++) {
+                int x = layout.navX(i);
+                int right = x + layout.navWidth(i);
+                int bottom = layout.navY(i) + SettingsLayout.NAV_HEIGHT;
+                assertTrue(x >= layout.frameX());
+                if (layout.sidebar()) {
+                    assertTrue(right < layout.contentX());
+                    assertTrue(bottom <= layout.listBottom());
+                } else {
+                    assertTrue(right <= layout.contentX() + layout.contentWidth());
+                    assertTrue(bottom < layout.listTop());
+                }
             }
         }
+    }
+
+    @Test
+    void compactTabsReplaceTheSidebarAtLargeGuiScalesAndInShortWindows() {
+        var wide = SettingsLayout.measure(640, 360);
+        assertTrue(wide.sidebar());
+        assertEquals(wide.navX(0), wide.navX(6));
+        assertTrue(wide.navY(6) > wide.navY(0));
+        var narrow = SettingsLayout.measure(320, 180);
+        assertFalse(narrow.sidebar());
+        assertEquals(narrow.navY(0), narrow.navY(3));
+        assertTrue(narrow.navY(6) > narrow.navY(0));
+        assertFalse(SettingsLayout.measure(960, 198).sidebar());
     }
 
     @Test

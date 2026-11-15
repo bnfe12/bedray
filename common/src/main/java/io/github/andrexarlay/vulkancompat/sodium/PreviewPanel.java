@@ -189,7 +189,7 @@ public final class PreviewPanel {
             int my0 = 14;
             int mLimitY = Math.min(screenH - 6, Math.max(my0 + 90, screenH - 14));
             g.nextStratum();
-            g.fill(0, 0, screenW, screenH, 0xB806060A);
+            g.fill(0, 0, screenW, screenH, 0xB8000000);
             drawPanelBox(g, font, mx0, my0, mw, mLimitY, option, info, mouseX, mouseY, true);
             compactBtnRect = new int[4];
             return true;
@@ -225,8 +225,7 @@ public final class PreviewPanel {
         }
         boolean hover = mouseX >= bx && mouseX < bx + bw && mouseY >= by && mouseY < by + bh;
         g.nextStratum();
-        g.fill(bx, by, bx + bw, by + bh, hover ? 0xF03A5A9A : 0xE8223458);
-        g.outline(bx, by, bw, bh, hover ? 0xFFFFFFFF : 0xFFA0C0FF);
+        SettingsChrome.panelButton(g, bx, by, bw, bh, hover, false);
         g.text(font, label, bx + (bw - font.width(label)) / 2, by + 4, 0xFFFFFFFF);
         compactBtnRect = new int[] {bx, by, bw, bh};
     }
@@ -242,11 +241,10 @@ public final class PreviewPanel {
                 info.previews().size(), w, limitY - y, x, y, limitY);
         }
         g.nextStratum();
-        g.fill(x, y, x + w, limitY, 0xF0101014);
+        SettingsChrome.panel(g, x, y, w, limitY - y);
         final int footer = 20;   // "Reset to default" (and Close in modal) stays visible, only the content above it scrolls
         int contentLimit = limitY - footer;
         g.enableScissor(x, y, x + w, contentLimit);
-        g.outline(x, y, w, limitY - y, isModal ? 0xFFA0C0FF : 0x60FFFFFF);
         int cx = x + 4;
         int cw = w - 8 - 4;   // 4 px right for the scrollbar
         int top = y + 4 - scroll;
@@ -267,7 +265,7 @@ public final class PreviewPanel {
             cy += 11;
         }
         cy += 2;
-        if (!runtimeStatus.getString().isEmpty()) cy = paragraph(g, font, runtimeStatus, cx, cy, cw, 0xFF8ABCD8) + 3;
+        if (!runtimeStatus.getString().isEmpty()) cy = paragraph(g, font, runtimeStatus, cx, cy, cw, SettingsChrome.MUTED) + 3;
 
         // picture block (drawn only when actual preview screenshots exist — never show a placeholder box)
         if (info.hasPreviews()) {
@@ -477,8 +475,7 @@ public final class PreviewPanel {
     private static int chip(GuiGraphicsExtractor g, Font font, int x, int y, Component text, boolean active, int mx, int my, String action) {
         int w = font.width(text) + 8;
         boolean hover = mx >= x && mx < x + w && my >= y && my < y + 13;
-        g.fill(x, y, x + w, y + 13, active ? 0xFF3A5A9A : hover ? 0xFF404048 : 0xFF2A2A30);
-        g.outline(x, y, w, 13, active ? 0xFFA0C0FF : 0x60FFFFFF);
+        SettingsChrome.panelButton(g, x, y, w, 13, hover, active);
         g.text(font, text, x + 4, y + 3, 0xFFFFFFFF);
         HITS.add(new Hit(x, y, w, 13, action));
         return w;
@@ -486,8 +483,7 @@ public final class PreviewPanel {
 
     private static void button(GuiGraphicsExtractor g, Font font, int x, int y, int w, int h, Component text, int mx, int my, String action) {
         boolean hover = mx >= x && mx < x + w && my >= y && my < y + h;
-        g.fill(x, y, x + w, y + h, hover ? 0xFF505058 : 0xFF383840);
-        g.outline(x, y, w, h, 0x80FFFFFF);
+        SettingsChrome.panelButton(g, x, y, w, h, hover, false);
         g.text(font, text, x + (w - font.width(text)) / 2, y + (h - 8) / 2, 0xFFFFFFFF);
         HITS.add(new Hit(x, y, w, h, action));
     }

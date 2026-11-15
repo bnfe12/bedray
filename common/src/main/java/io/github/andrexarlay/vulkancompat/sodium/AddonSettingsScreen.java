@@ -277,12 +277,13 @@ final class AddonSettingsScreen extends Screen {
     @Override
     public void extractBackground(GuiGraphicsExtractor g, int x, int y, float delta) {
         super.extractBackground(g, x, y, delta);
-        g.fill(0, 0, width, height, 0xF20C1119);
-        g.fill(left - 4, 5, left + panelWidth + 4, height - 3, 0xFF121D29);
+        SettingsChrome.list(g, left, LIST_TOP, panelWidth, height - 51);
         for (Row row : rows) {
             String id = row.option().details().id();
             Draft draft = currentDraft();
-            SettingsChrome.row(g, left, row.control().getY(), panelWidth, row.control().isFocused(),
+            int rowY = row.control().getY();
+            boolean hovered = x >= left && x < left + panelWidth && y >= rowY && y < rowY + SettingsLayout.CONTROL_HEIGHT;
+            SettingsChrome.row(g, left, rowY, panelWidth, row.control().isFocused(), hovered,
                 !draft.values.get(id).equals(draft.baseline.get(id)));
         }
     }
@@ -297,7 +298,7 @@ final class AddonSettingsScreen extends Screen {
             return;
         }
         String label = text(addon.title()).getString() + " (" + addon.namespace() + ")";
-        g.text(font, font.plainSubstrByWidth(label, panelWidth - 52), left + 26, 35, SettingsChrome.ACCENT);
+        g.text(font, font.plainSubstrByWidth(label, panelWidth - 52), left + 26, 35, SettingsChrome.TEXT);
         for (Row row : rows) {
             var details = row.option().details();
             int labelWidth = Math.max(1, row.control().getX() - left - 10);
