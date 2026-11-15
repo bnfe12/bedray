@@ -172,6 +172,29 @@ frames back), `acquire_ms` and `present_ms` (time inside the swapchain acquire a
 back-pressure of a GPU-bound pipeline, not CPU work, and the real main-thread work is about 9-12 ms per frame (interval minus submit minus present),
 well under the GPU time. Reducing CPU work cannot raise FPS here; only GPU time can.
 
+## No hidden hotspot among the path-mode options, and the DLSS RR presets cost the same
+
+DLSS RR render presets (default, D, E, F; 90 s warm-up, one capture each): denoise span 6.45 / 6.54 / 6.47 / 6.46 ms, gpu_total 24.67 / 24.66 /
+24.91 / 24.91 ms. The preset hint does not change the cost.
+
+One path-mode option changed per capture on the warm baseline (valid captures; baseline gpu_total 23.98 ms, interval 25.36 ms). None of them is an
+unexpectedly large term, so there is no single feature whose implementation is worth hunting for waste:
+
+| option changed | gpu_total | delta |
+|---|---|---|
+| ray distance 256 -> 64 | 22.85 ms | -1.13 ms (-4.7 %) |
+| light budget 512 -> 64 | 23.04 ms | -0.94 ms (-3.9 %) |
+| RT particles off | 23.60 ms | -0.39 ms |
+| volumetric fog off | 23.93 ms | -0.05 ms |
+| waving foliage off | 24.00 ms | +0.02 ms |
+| RT weather off | 23.99 ms | +0.01 ms |
+| caustics off | 24.05 ms | +0.07 ms |
+| auto normals off | 24.12 ms | +0.13 ms |
+| self shadow off | 24.40 ms | +0.42 ms |
+
+The cost sits in the core of the path tracer (primary hit, two bounces, ReSTIR DI/PT) and in DLSS RR, which the earlier cost menu prices
+(PT spatial -3.2 ms, second bounce -4.2 ms, PT -6.4 ms). Both the distance and the light budget change the picture (distant GI / distant torches).
+
 ## Not measured / open
 
 * One GPU, one scene (fixed seed, one camera pose); no frame-time percentiles beyond the capture analyzer's.

@@ -91,6 +91,28 @@ VARIANTS["dim_overworld"] = {**_DIM, "vkrtx.autotest.perfDimension": "overworld"
 VARIANTS["dim_nether"] = {**_DIM, "vkrtx.autotest.perfDimension": "nether"}
 VARIANTS["dim_end"] = {**_DIM, "vkrtx.autotest.perfDimension": "end"}
 DIMENSIONS = ["dim_overworld", "dim_nether", "dim_end"]
+# DLSS RR render-preset cost on a warm baseline (90 s wait): same stack, only the NGX preset hint differs (quality is the owner's call).
+for _p in ("default", "d", "e", "f"):
+    VARIANTS["rrp_" + _p] = {**VARIANTS["cost_all_on"], "vkrtx.autotest.loadSeconds": "90",
+                             **({} if _p == "default" else {"vkrtx.rt.dlss_rr_preset": _p})}
+RR_PRESET_COST = ["rrp_default", "rrp_d", "rrp_e", "rrp_f"]
+# One-option-off attribution on a warm baseline (90 s wait): each variant is the baseline stack with a single path-mode option changed.
+_ATTR_BASE = {**VARIANTS["cost_all_on"], "vkrtx.autotest.loadSeconds": "90"}
+ATTR_OPTIONS = {
+    "attr_base": {},
+    "attr_distance64": {"vkrtx.rt.path_distance": "64"},
+    "attr_no_auto_normals": {"vkrtx.rt.auto_normals": "false"},
+    "attr_no_caustics": {"vkrtx.rt.path_caustics": "false"},
+    "attr_no_fog": {"vkrtx.rt.rt_fog": "false"},
+    "attr_light_budget64": {"vkrtx.rt.rt_light_budget": "64"},
+    "attr_no_waving": {"vkrtx.rt.waving_foliage": "false"},
+    "attr_no_particles": {"vkrtx.rt.rt_particles": "false"},
+    "attr_no_weather": {"vkrtx.rt.rt_weather": "false"},
+    "attr_self_shadow_off": {"vkrtx.rt.self_shadow": "2"},
+}
+for _k, _v in ATTR_OPTIONS.items():
+    VARIANTS[_k] = {**_ATTR_BASE, **_v}
+ATTRIBUTION = list(ATTR_OPTIONS)
 COST_MENU = ["cost_all_on", "cost_pt_spatial_off", "cost_pt_off", "cost_di_off", "cost_bounces1", "cost_nrd"]
 BASELINE = ["compute_pt_off", "compute_pt_on", "raygen_pt_off", "raygen_pt_on"]
 SER_AB = ["compute_pt_on", "raygen_pt_on", "ser_pt_on"]
@@ -434,7 +456,7 @@ def main() -> int:
     parser.add_argument("--scratch", type=Path, required=True, help="working dir for launcher/log copies")
     parser.add_argument("--revision", default="cf3f5f97-abi2")
     parser.add_argument("--variants", nargs="*", default=BASELINE,
-                        help="variant labels, or 'baseline' / 'ser_ab' / 'denoiser_ab' / 'rr_preset_ab' / 'cost_menu' / 'dimensions' / 'all'")
+                        help="variant labels, or 'baseline' / 'ser_ab' / 'denoiser_ab' / 'rr_preset_ab' / 'cost_menu' / 'dimensions' / 'attribution' / 'all'")
     parser.add_argument("--timeout", type=float, default=480)
     parser.add_argument("--render-distance", type=int, default=16,
                         help="controlled render distance for a stable scene that fits the native budget (RD32 needs BLAS compaction)")
@@ -461,6 +483,8 @@ def main() -> int:
             labels += COST_MENU
         elif name == "dimensions":
             labels += DIMENSIONS
+        elif name == "attribution":
+            labels += ATTRIBUTION
         elif name == "all":
             labels += list(VARIANTS)
         elif name in VARIANTS:
