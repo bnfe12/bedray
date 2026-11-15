@@ -2,18 +2,20 @@ package io.github.andrexarlay.vulkancompat.sodium;
 
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 
-/** Neutral surfaces around the game's native settings widgets. */
+/** A shared palette for navigation, lists and details around native widgets. */
 final class SettingsChrome {
     static final int TEXT = 0xFFFFFFFF;
-    static final int MUTED = 0xFFAAAAAA;
-    static final int PENDING = 0xFFFFDA80;
-    static final int THUMB = 0xA0FFFFFF;
-    private static final int SEPARATOR = 0x38FFFFFF;
-    private static final int HOVER = 0x26FFFFFF;
-    private static final int SELECTED = 0x3AFFFFFF;
-    private static final int LIST = 0x46000000;
-    private static final int MODAL_BACKGROUND = 0xFA161616;
-    private static final int MODAL_OUTLINE = 0xFF737373;
+    static final int TITLE = 0xFFCCF5DA;
+    static final int ACCENT = 0xFF8AE3AA;
+    static final int MUTED = 0xFFB6C7BD;
+    static final int PENDING = 0xFFFFD070;
+    static final int THUMB = 0xAB8AE3AA;
+    private static final int SEPARATOR = 0x586CBF98;
+    private static final int HOVER = 0x58375647;
+    private static final int SELECTED = 0x90366A52;
+    private static final int LIST = 0xB0152B22;
+    private static final int MODAL_BACKGROUND = 0xFA13251D;
+    private static final int MODAL_OUTLINE = 0xFF527F65;
 
     private SettingsChrome() {}
 
@@ -35,7 +37,7 @@ final class SettingsChrome {
     static void navigation(GuiGraphicsExtractor g, int x, int y, int width, boolean selected, boolean hovered) {
         int bottom = y + SettingsLayout.NAV_HEIGHT;
         if (selected || hovered) g.fill(x, y, x + width, bottom, selected ? SELECTED : HOVER);
-        if (selected) g.fill(x + 1, y + 3, x + 2, bottom - 3, TEXT);
+        if (selected) g.fill(x + 1, y + 3, x + 2, bottom - 3, ACCENT);
     }
 
     static void row(GuiGraphicsExtractor g, int x, int y, int width, boolean selected, boolean hovered, boolean changed) {
@@ -50,7 +52,7 @@ final class SettingsChrome {
     }
 
     static void panelButton(GuiGraphicsExtractor g, int x, int y, int width, int height, boolean hovered, boolean selected) {
-        g.fill(x, y, x + width, y + height, hovered ? 0xFF555555 : selected ? 0xFF434343 : 0xFF303030);
-        g.outline(x, y, width, height, hovered || selected ? TEXT : MODAL_OUTLINE);
+        g.fill(x, y, x + width, y + height, hovered ? 0xFF355947 : selected ? 0xFF294636 : 0xFF24362D);
+        g.outline(x, y, width, height, hovered ? TITLE : selected ? ACCENT : MODAL_OUTLINE);
     }
 }

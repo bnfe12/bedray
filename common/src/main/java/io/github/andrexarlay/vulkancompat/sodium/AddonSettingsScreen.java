@@ -291,7 +291,7 @@ final class AddonSettingsScreen extends Screen {
     @Override
     public void extractRenderState(GuiGraphicsExtractor g, int x, int y, float delta) {
         super.extractRenderState(g, x, y, delta);
-        g.text(font, title, left, 11, SettingsChrome.TEXT);
+        g.text(font, title, left, 11, SettingsChrome.TITLE);
         Registration addon = selected();
         if (addon == null) {
             drawLines(g, tr("bedray.addons.none", "Installed add-ons can register their settings here."), 36);

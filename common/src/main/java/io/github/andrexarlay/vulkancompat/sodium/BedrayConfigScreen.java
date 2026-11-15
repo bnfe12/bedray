@@ -216,6 +216,9 @@ public final class BedrayConfigScreen extends Screen {
             AbstractWidget widget = createControl(entry, x, controls);
             Component prerequisite = prerequisites.get(entry);
             widget.active = prerequisite == null && entry.option().isEnabled() && draft.editable(entry);
+            if (widget.active && Boolean.TRUE.equals(entry.option().getValidatedValue())) {
+                widget.setMessage(widget.getMessage().copy().withColor(SettingsChrome.ACCENT));
+            }
             widget.setTooltip(Tooltip.create(controlHelp(entry, widget.active, prerequisite)));
             nextWidgets.add(widget);
         }
@@ -302,7 +305,7 @@ public final class BedrayConfigScreen extends Screen {
         if (selected != null) { PreviewPanel.select(selected.option()); PreviewPanel.setRuntimeStatus(draft.status(selected).text()); }
         updateButtons();
         navigation.forEach((value, button) -> button.setMessage(
-            fit(value.title(), button.getWidth()).copy().withColor(activeTab(value) ? SettingsChrome.TEXT : SettingsChrome.MUTED)));
+            fit(value.title(), button.getWidth()).copy().withColor(activeTab(value) ? SettingsChrome.TITLE : SettingsChrome.MUTED)));
     }
 
     private boolean activeTab(SettingsDraft.Category value) {
@@ -415,7 +418,7 @@ public final class BedrayConfigScreen extends Screen {
                 ? tr("bedray.settings.review_count", "Review (%s)", draft.pendingCount())
                 : tr("bedray.settings.review", "Review");
             reviewButton.setMessage(fit(label, reviewButton.getWidth() - 4).copy()
-                .withColor(reviewing ? SettingsChrome.TEXT : SettingsChrome.MUTED));
+                .withColor(reviewing ? SettingsChrome.ACCENT : changed ? SettingsChrome.PENDING : SettingsChrome.MUTED));
             reviewButton.active = changed || reviewing;
         }
         if (applyButton != null) applyButton.visible = applyButton.active = changed;
@@ -589,7 +592,7 @@ public final class BedrayConfigScreen extends Screen {
             SettingsChrome.row(g, contentX, y, contentWidth, selected == rows.get(i), hovered, draft.pending(rows.get(i)));
         }
         super.extractRenderState(g, mx, my, delta);
-        g.text(font, title, (width - font.width(title)) / 2, 8, SettingsChrome.TEXT);
+        g.text(font, title, (width - font.width(title)) / 2, 8, SettingsChrome.TITLE);
         for (int i = 0; i < rows.size(); i++) {
             AbstractWidget widget = rowWidgets.get(i);
             if (!widget.visible) continue;
