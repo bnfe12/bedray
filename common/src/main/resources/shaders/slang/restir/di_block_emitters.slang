@@ -103,6 +103,11 @@ bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel
     if (slot >= diReservoirCount(reservoirs)) {
         return false;
     }
+    // The gates on M and the weight sum read the stats word alone, so an empty history costs 16 B instead of 64 B.
+    float4 storedStats = reservoirs[slot].stats;
+    if (!(min(storedStats.x, RESTIR_DI_M_CAP) > 0.0) || !(storedStats.y > 0.0)) {
+        return false;
+    }
     DIReservoir stored = reservoirs[slot];
     if (!(min(stored.stats.x, RESTIR_DI_M_CAP) > 0.0) || !(stored.stats.y > 0.0) || !isFinite(stored.sample.xyz)
         || !isFinite(stored.receiver.xyz)) {
