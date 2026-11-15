@@ -175,11 +175,12 @@ BedrayStatus BloomPass::render(const BedrayBloomFrameDesc& frame, BedrayError* e
             0, 0, nullptr, 0, nullptr, 1, &barrier);
     }
     initialize_ = false;
+    const auto scene_source = frame.source_view ? frame.source_view : frame.output_view;
     auto dispatch = [&](std::size_t stage, std::uint32_t width, std::uint32_t height, std::uint64_t source,
                         std::uint64_t target) {
         std::array<BedrayResource, 4> resources{image_binding(0, true, source, desc_.linear_sampler),
             image_binding(stage == 3 ? 2 : 1, false, target), image_binding(3, true, frame.depth_view, desc_.nearest_sampler),
-            image_binding(4, true, frame.source_view ? frame.source_view : frame.output_view, desc_.nearest_sampler)};
+            image_binding(4, true, scene_source, desc_.nearest_sampler)};
         BedrayFrameDesc call{};
         call.abi_version = BEDRAY_CORE_ABI_VERSION;
         call.command_buffer = frame.command_buffer; call.program = desc_.programs[stage];
@@ -194,10 +195,11 @@ BedrayStatus BloomPass::render(const BedrayBloomFrameDesc& frame, BedrayError* e
     };
     float glare = 0;
     std::memcpy(&glare, push.data() + 76, sizeof(glare));
-    // The prefilter also measures the sun's visibility on the unmodified frame (mip 0 alpha), so the sun glare needs it
-    // even without bloom; the apply stage must not read the image it is writing.
+    // Glare only needs the first texel's alpha. Dispatch one group so the apply pass can read it from mip 0.
     if (frame.bloom_enabled || glare > 0) {
-        status = dispatch(0, views_[0].width, views_[0].height, frame.output_view, bits(views_[0].view));
+        const auto width = frame.bloom_enabled ? views_[0].width : 1u;
+        const auto height = frame.bloom_enabled ? views_[0].height : 1u;
+        status = dispatch(0, width, height, scene_source, bits(views_[0].view));
         if (status != BEDRAY_OK) return status;
     }
     if (frame.bloom_enabled) {

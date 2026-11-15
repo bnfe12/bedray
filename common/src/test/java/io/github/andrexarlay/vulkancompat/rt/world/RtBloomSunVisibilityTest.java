@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import org.joml.Matrix4f;
+import org.joml.Vector4f;
 import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -91,13 +92,25 @@ class RtBloomSunVisibilityTest {
     }
 
     @Test
+    void glareKeepsTheFadeMarginAndRejectsInvalidProjections() {
+        assertTrue(RtAtmosphere.glareOnScreen(new Vector4f(1.24f, 0f, 0f, 1f)));
+        assertTrue(RtAtmosphere.glareOnScreen(new Vector4f(0f, -2.48f, 0f, 2f)));
+        assertFalse(RtAtmosphere.glareOnScreen(new Vector4f(1.25f, 0f, 0f, 1f)));
+        assertFalse(RtAtmosphere.glareOnScreen(new Vector4f(0f, -2.5f, 0f, 2f)));
+        assertFalse(RtAtmosphere.glareOnScreen(new Vector4f(0f, 0f, 0f, 0.001f)));
+        assertFalse(RtAtmosphere.glareOnScreen(new Vector4f(0f, 0f, 0f, -1f)));
+        assertFalse(RtAtmosphere.glareOnScreen(new Vector4f(Float.NaN, 0f, 0f, 1f)));
+    }
+
+    @Test
     void theApplyStageNeverReadsTheImageItWrites() throws IOException {
         String bloom = read("bloom/bloom.slang");
         assertTrue(bloom.contains("float bloomSunVisibility(Sampler2D depth, Sampler2D frame, int2 size, BloomPush pc) {"),
             "visibility is measured on a sampled, read-only frame");
         assertFalse(bloom.contains("finalImg[t]"), "no read of the storage image the apply stage writes");
         String apply = read("passes/bloom_apply.slang");
-        assertTrue(apply.contains("float vis = srcTex.Load(int3(0, 0, 0)).a;"), "the apply stage takes the prefilter's value");
+        assertTrue(apply.contains("pc.sunDir.w > 0.0 ? srcTex.Load(int3(0, 0, 0)).a : 0.0"),
+            "the apply stage reads the first texel's alpha");
         assertFalse(apply.contains("bloomSunVisibility("), "and never measures it itself");
     }
 
@@ -106,7 +119,9 @@ class RtBloomSunVisibilityTest {
         String prefilter = read("passes/bloom_prefilter_down.slang");
         assertTrue(prefilter.contains("bloomSunVisibility(depthTex, srcTex, int2(srcSize), pc)"),
             "measured on the full-resolution frame the prefilter samples");
-        assertTrue(prefilter.contains("pc, uv, texel, pc)), sunVisibility);") || prefilter.contains("pc)), sunVisibility);"),
+        assertTrue(prefilter.contains("if (all(p == int2(0)) && pc.sunDir.w > 0.0)"),
+            "visibility is measured just for the texel the apply stage reads");
+        assertTrue(prefilter.contains("dstImg[p] = float4(glow, sunVisibility);"),
             "stored in the alpha of mip 0");
         String up = read("passes/bloom_up.slang");
         assertTrue(up.contains("dstImg[p] = float4(bloomSanitize(lerp(own, wide, pc.p1.y)), ownTexel.a);"),

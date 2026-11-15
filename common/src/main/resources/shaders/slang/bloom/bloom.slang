@@ -10,8 +10,7 @@
 //   up              mip i = mix(mip i, tent(mip i+1), scatter), in place
 //   apply           image += tonemap(lin + bloom + glare) - tonemap(lin), glare in the same dispatch
 //
-// The sky and the clouds never glow (their bright edge against dark blocks used to be a halo around every
-// silhouette); the sun has its own glare term.
+// Sky and cloud bloom are opt-in; the sun also has an independent glare term.
 
 public module bloom;
 
@@ -196,6 +195,7 @@ float3 bloomPixelDir(int2 p, int2 size, BloomPush pc) {
 float bloomSunVisibility(Sampler2D depth, Sampler2D frame, int2 size, BloomPush pc) {
     float2 ndc = pc.p1.zw;
     float edge = max(abs(ndc.x), abs(ndc.y));
+    // RtAtmosphere uses the outer edge to skip recording glare once its contribution reaches zero.
     float fade = 1.0 - smoothstep(0.95, 1.25, edge);
     if (fade <= 0.0) {
         return 0.0;

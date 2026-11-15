@@ -69,6 +69,7 @@ void chain_and_validation() {
     CHECK(pass.render(input, &error) == BEDRAY_OK);
     CHECK(fake::images.size() == 6); CHECK(fake::render_calls.size() == 12); CHECK(fake::barriers == 19);
     CHECK(fake::render_calls.front().program == 1); CHECK(fake::render_calls.back().program == 4);
+    CHECK(fake::render_calls.front().resources[0].handle == input.output_view);
     const std::uint32_t widths[] = {10,5,3,2,1,1,1,2,3,5,10,19};
     const std::uint32_t heights[] = {6,3,2,1,1,1,1,1,2,3,6,11};
     for (std::size_t i = 0; i < fake::render_calls.size(); ++i) {
@@ -93,6 +94,8 @@ void chain_and_validation() {
     CHECK(pass.render(frame(1, push.data(), false), &error) == BEDRAY_OK);
     CHECK(fake::render_calls.size() == calls + 2); CHECK(fake::barriers == 22);
     CHECK(fake::render_calls[calls].program == 1 && fake::render_calls[calls + 1].program == 4);
+    CHECK(fake::render_calls[calls].group_x == 1 && fake::render_calls[calls].group_y == 1);
+    CHECK(fake::render_calls[calls + 1].group_x == 3 && fake::render_calls[calls + 1].group_y == 2);
     CHECK(pass.release_recording(1) == BEDRAY_OK);
     // Neither bloom nor glare: strength (104) and glareK (76) are both zero, so the apply shader early-returns per pixel
     // without writing the output. The dispatch is skipped entirely: no render call is added and only the leading barrier
@@ -160,7 +163,7 @@ void device_loss_keeps_other_recordings_until_proof() {
     CHECK(pass.destroy() == BEDRAY_OK); clean();
 }
 }
-void hdr_base_reaches_the_apply_stage() {
+void hdr_source_reaches_prefilter_and_apply() {
     fake::reset();
     BedrayCore core;
     BedrayError error{};
@@ -172,6 +175,10 @@ void hdr_base_reaches_the_apply_stage() {
     auto input = frame(17, push.data());
     input.source_view = 777;
     CHECK(pass.render(input, &error) == BEDRAY_OK);
+    const auto& prefilter = fake::render_calls.front();
+    CHECK(prefilter.program == 1 && prefilter.resources.size() == 3);
+    CHECK(prefilter.resources[0].binding == 0 && prefilter.resources[0].handle == 777);
+    CHECK(prefilter.resources[0].sampler == 100);
     const auto& apply = fake::render_calls.back();
     CHECK(apply.program == 5 && apply.resources.size() == 4);
     CHECK(apply.resources[3].binding == 4 && apply.resources[3].handle == 777);
@@ -183,7 +190,7 @@ void hdr_base_reaches_the_apply_stage() {
 }
 
 int main() {
-    hdr_base_reaches_the_apply_stage();
+    hdr_source_reaches_prefilter_and_apply();
     chain_and_validation(); resize_discard_and_partial_failure(); device_loss_keeps_other_recordings_until_proof();
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

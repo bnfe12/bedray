@@ -1245,9 +1245,10 @@ public final class RtFrameRenderer {
         }
 
         RtMemory.Img presented = frameOutput(), presentedDepth = frameDepth();
-        // Only raw presentation needs this export; a successful denoiser has its own signal.
-        boolean rawHdrExported = !frameColorTemporallyResolved
-            && (RtAtmosphereSettings.bloom() || RtAtmosphereSettings.sunGlare())
+        RtAtmosphere.SunGlare sunGlare = atmosphere.projectSunGlare(params, curViewProj);
+        // The HDR export is only useful for a tone-mapped raw frame with active bloom or glare.
+        boolean rawHdrExported = !frameColorTemporallyResolved && params.tonemap && params.mode == RtConfig.MODE_LIT
+            && (RtAtmosphereSettings.bloom() || sunGlare.active())
             && frameResources.postHdr().width == presented.width && frameResources.postHdr().height == presented.height
             && pass.exportHdr(cmd, frameResources.postHdr().view, w, h);
         if (rawHdrExported) VkBarriers.fullMemoryBarrier(cmd);
@@ -1284,8 +1285,7 @@ public final class RtFrameRenderer {
         RtMemory.Img postHdr = hdrBloom ? dlssRrDenoiser.outDiffuse() : !frameColorTemporallyResolved && rawHdrExported
             && frameResources.postHdr().width == presented.width && frameResources.postHdr().height == presented.height
             ? frameResources.postHdr() : null;
-        atmosphere.bloomSource(postHdr != null ? postHdr.view : 0L, params.exposure);
-        atmosphere.record(cmd, vulkanDevice, world.memory(), params, curViewProj,
+        atmosphere.record(cmd, vulkanDevice, params, sunGlare, postHdr != null ? postHdr.view : 0L,
             new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), presented.view, atlasView, materials.materialView(),
                 materials.normalView(), 0L, null, presentedDepth.view, lightmapView),
             presented.width, presented.height, bobOrigin.x, bobOrigin.y, bobOrigin.z);
