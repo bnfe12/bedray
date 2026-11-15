@@ -751,10 +751,6 @@ public final class VulkanRtxConfig {
         }
     }
 
-    /** Forces the static initialiser (which reads bedray.toml) for callers that run before any other config access. */
-    public static void ensureLoaded() {
-    }
-
     public static void load() {
         RtSettings.presetSeen = false;
         RtSettings.pathPresetSeen = false;

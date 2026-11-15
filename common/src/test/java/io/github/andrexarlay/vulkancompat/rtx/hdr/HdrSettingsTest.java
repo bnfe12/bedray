@@ -47,6 +47,13 @@ public class HdrSettingsTest {
     }
 
     @Test
+    public void peeksOutputFromTomlLines() {
+        assertEquals(HdrSettings.Output.HDR10, HdrSettings.parseOutputFromToml(java.util.List.of("[hdr]", "hdr_output = \"HDR10\"", "hdr_peak = 1000")));
+        assertEquals(HdrSettings.Output.OFF, HdrSettings.parseOutputFromToml(java.util.List.of("hdr_output = \"OFF\"")));
+        assertNull(HdrSettings.parseOutputFromToml(java.util.List.of("hdr_peak = 1000", "framegen_mode = \"OFF\"")));
+    }
+
+    @Test
     public void peakNeverBelowPaperWhite() {
         HdrSettings.setPaperWhiteNits(500);
         HdrSettings.setPeakNits(400);

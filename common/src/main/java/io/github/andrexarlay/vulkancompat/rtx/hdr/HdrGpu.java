@@ -73,7 +73,37 @@ public final class HdrGpu {
     private static final float KNEE_LOW = 0.6f;
     private static final float KNEE_HIGH = 1.5f;
 
-    private record Pipe(long setLayout, long layout, long pipeline, int pushBytes) {}
+    private static final class Pipe {
+        final long setLayout;
+        final long layout;
+        final long pipeline;
+        final int pushBytes;
+        private long lastSet;
+        private final long[] lastViews = new long[4];
+
+        Pipe(long setLayout, long layout, long pipeline, int pushBytes) {
+            this.setLayout = setLayout;
+            this.layout = layout;
+            this.pipeline = pipeline;
+            this.pushBytes = pushBytes;
+        }
+
+        long setLayout() { return setLayout; }
+        long layout() { return layout; }
+        long pipeline() { return pipeline; }
+        long lastSet() { return lastSet; }
+        long[] lastViews() { return lastViews; }
+
+        void remember(long set, long v0, long v1, long v2, long v3) {
+            lastSet = set;
+            lastViews[0] = v0;
+            lastViews[1] = v1;
+            lastViews[2] = v2;
+            lastViews[3] = v3;
+        }
+
+        void forget() { lastSet = 0L; }
+    }
 
     private static final class Image {
         long image;
@@ -375,15 +405,22 @@ public final class HdrGpu {
 
     /** One immutable descriptor set per distinct view quadruple; the pool is recycled when it runs out. */
     private static long descriptorSet(Pipe pipe, long v0, long v1, long v2, long v3) {
+        if (pipe.lastSet() != 0L && pipe.lastViews()[0] == v0 && pipe.lastViews()[1] == v1 && pipe.lastViews()[2] == v2
+            && pipe.lastViews()[3] == v3) {
+            return pipe.lastSet();
+        }
         List<Long> key = List.of(pipe.pipeline(), v0, v1, v2, v3);
         Long cached = SETS.get(key);
         if (cached != null) {
+            pipe.remember(cached, v0, v1, v2, v3);
             return cached;
         }
         if (SETS.size() >= MAX_SETS) {
             VK10.vkDeviceWaitIdle(device);
             check(VK10.vkResetDescriptorPool(device, pool, 0), "vkResetDescriptorPool");
             SETS.clear();
+            pipe.forget();
+            (pipe == scenePipe ? outputPipe : scenePipe).forget();
         }
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer out = stack.mallocLong(1);
@@ -398,6 +435,7 @@ public final class HdrGpu {
             }
             VK10.vkUpdateDescriptorSets(device, writes, null);
             SETS.put(key, set);
+            pipe.remember(set, v0, v1, v2, v3);
             return set;
         }
     }
@@ -443,6 +481,8 @@ public final class HdrGpu {
             VK10.vkResetDescriptorPool(device, pool, 0);
         }
         SETS.clear();
+        if (scenePipe != null) scenePipe.forget();
+        if (outputPipe != null) outputPipe.forget();
     }
 
     private static void destroyImages() {

@@ -91,11 +91,53 @@ public final class HdrSettings {
         peak = Math.max(PEAK_MIN, Math.min(PEAK_MAX, nits));
     }
 
-    /** True when the saved/forced setting asks for an HDR10 swapchain (read when the surface is created). */
+    private static volatile Output peeked;
+    private static volatile boolean peekDone;
+
+    /**
+     * True when the saved/forced setting asks for an HDR10 swapchain. Read while the engine creates its instance, earlier than
+     * the config class is needed, so it only peeks at {@code hdr_output} in the toml (once) instead of loading all settings.
+     */
     public static boolean wantsHdr10() {
-        // The config class loads bedray.toml in its static initialiser; make sure that happened before the first read.
-        io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.ensureLoaded();
-        return output() == Output.HDR10;
+        if (PROPERTY_OUTPUT != null) {
+            return PROPERTY_OUTPUT == Output.HDR10;
+        }
+        if (!peekDone) {
+            synchronized (HdrSettings.class) {
+                if (!peekDone) {
+                    peeked = peekOutputFromFile(io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenEarly.findConfigFile());
+                    peekDone = true;
+                }
+            }
+        }
+        // Once the config class has loaded (settings UI, later reads) its value is the live one.
+        return (peeked != null ? peeked : output) == Output.HDR10 || output == Output.HDR10;
+    }
+
+    /** Reads only {@code hdr_output} from a toml file; absent file or key gives null. */
+    public static Output peekOutputFromFile(java.nio.file.Path toml) {
+        try {
+            if (!java.nio.file.Files.isRegularFile(toml)) {
+                return null;
+            }
+            return parseOutputFromToml(java.nio.file.Files.readAllLines(toml, java.nio.charset.StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            LOGGER.warn("[VKB-HDR] cannot read bedray.toml for hdr_output: {}", e.toString());
+            return null;
+        }
+    }
+
+    static Output parseOutputFromToml(java.util.List<String> lines) {
+        for (String line : lines) {
+            String t = line.trim();
+            if (t.startsWith("hdr_output")) {
+                int eq = t.indexOf('=');
+                if (eq > 0) {
+                    return parseOutput(t.substring(eq + 1).trim().replace("\"", ""));
+                }
+            }
+        }
+        return null;
     }
 
     public static void applyKeyValue(String key, String val) {
