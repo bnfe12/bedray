@@ -180,11 +180,7 @@ final class HdrDump {
 
     /** ST 2084 code value (BT.2020 channel) to nits. */
     private static float nits(float e) {
-        double m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
-        double ep = Math.pow(Math.max(e, 0.0f), 1.0 / m2);
-        double num = Math.max(ep - c1, 0.0);
-        double den = c2 - c3 * ep;
-        return (float) (10000.0 * Math.pow(num / den, 1.0 / m1));
+        return (float) HdrMath.pqDecode(e);
     }
 
     /** Linear BT.2020 (1.0 = full scale) to an sRGB-encoded Rec.709 preview pixel. */

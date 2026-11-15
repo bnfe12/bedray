@@ -124,6 +124,7 @@ public final class HdrGpu {
     private static Image frameCopy;
     private static Image pq;
     private static boolean sceneRecorded;
+    private static boolean sceneCommitted;
     private static int sceneWidth;
     private static int sceneHeight;
     private static boolean failed;
@@ -141,6 +142,7 @@ public final class HdrGpu {
     public static synchronized void recordScene(VulkanDevice vulkanDevice, VkCommandBuffer cmd, RtMemory.Img presented,
                                                 long hdrSourceView, float exposure) {
         sceneRecorded = false;
+        sceneCommitted = false;
         if (!HdrOutput.active() || failed || hdrSourceView == 0L) {
             return;
         }
@@ -174,6 +176,14 @@ public final class HdrGpu {
         }
     }
 
+    /**
+     * Called once the frame's command buffer has been recorded to the end (copy to the engine target done). A recording that is
+     * discarded after {@link #recordScene} never reaches this call, so its half-built scene is not used by the output pass.
+     */
+    public static synchronized void commitScene() {
+        sceneCommitted = sceneRecorded;
+    }
+
     // ------------------------------------------------------------------ pass 2: the engine's present command buffer
 
     /**
@@ -193,8 +203,9 @@ public final class HdrGpu {
                 return false;
             }
             ensureOutput(w, h);
-            boolean sceneValid = sceneRecorded && sceneWidth == w && sceneHeight == h && hdrScene != null && sdrReference != null;
+            boolean sceneValid = sceneCommitted && sceneWidth == w && sceneHeight == h && hdrScene != null && sdrReference != null;
             sceneRecorded = false;
+            sceneCommitted = false;
             if (sceneValid != lastSceneValid || !loggedFirst) {
                 LOGGER.info("[VKB-HDR] output pass extent={}x{} scene={} paper_white={} peak={}", w, h, sceneValid,
                     HdrSettings.paperWhiteNits(), HdrSettings.peakNits());

@@ -12,6 +12,8 @@
 // overlays) is the SDR colour decoded with the sRGB curve and placed at paper white, so the interface is never brighter
 // than the player's paper white setting.
 
+import "post/hdr_common.slang";
+
 [[vk::image_format("rgba8")]] [[vk::binding(0, 0)]] RWTexture2D<float4> frameCopy;
 [[vk::image_format("rgba8")]] [[vk::binding(1, 0)]] RWTexture2D<float4> sdrReference;
 [[vk::image_format("rgba16f")]] [[vk::binding(2, 0)]] RWTexture2D<float4> hdrScene;
@@ -32,12 +34,6 @@ struct HdrOutputPush {
 static const uint HDR_FLAG_SCENE = 1u;
 // One 8-bit step is 1/255; the equality test tolerates half of it so a re-quantised copy still matches.
 static const float SAME_PIXEL_TOLERANCE = 0.5 / 255.0;
-
-float3 srgbToLinear(float3 c) {
-    float3 lo = c / 12.92;
-    float3 hi = pow((c + 0.055) / 1.055, float3(2.4));
-    return select(c <= float3(0.04045), lo, hi);
-}
 
 // SMPTE ST 2084 inverse EOTF: absolute nits / 10000 -> code value.
 float3 pqEncode(float3 nits) {

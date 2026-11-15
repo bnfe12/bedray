@@ -12,6 +12,8 @@
 // display peak (peakRatio = peak nits / paper white nits), so a lamp or the sun reaches real HDR brightness while the
 // hue stays the one the player tuned.
 
+import "post/hdr_common.slang";
+
 [[vk::image_format("rgba8")]] [[vk::binding(0, 0)]] RWTexture2D<float4> displayColor;
 [[vk::image_format("rgba16f")]] [[vk::binding(1, 0)]] RWTexture2D<float4> hdrSource;
 [[vk::image_format("rgba16f")]] [[vk::binding(2, 0)]] RWTexture2D<float4> hdrScene;
@@ -30,12 +32,6 @@ struct HdrScenePush {
 [[vk::push_constant]] HdrScenePush pc;
 
 static const float3 LUMA709 = float3(0.2126, 0.7152, 0.0722);
-
-float3 srgbToLinear(float3 c) {
-    float3 lo = c / 12.92;
-    float3 hi = pow((c + 0.055) / 1.055, float3(2.4));
-    return select(c <= float3(0.04045), lo, hi);
-}
 
 // Identity up to 1.0 (paper white), then an exponential shoulder whose asymptote is the peak ratio.
 float hdrShoulder(float x, float peak) {
@@ -58,7 +54,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float lumScene = dot(scene, LUMA709);
     float blend = smoothstep(pc.kneeLow, max(pc.kneeHigh, pc.kneeLow + 1.0e-3), lumScene);
     float target = hdrShoulder(lumScene, pc.peakRatio);
-    float gain = lerp(1.0, max(1.0, target / lumSdr), blend);
+    // The SDR pixel already carries vignette, grain and grade. Its brightness relative to what the exposed radiance alone would
+    // show under the global curve (about min(scene, 1) * 0.9) is that grade; keep the ratio instead of cancelling it, so a lamp
+    // in a vignetted corner stays darker than the same lamp in the centre.
+    float lumRef = min(lumScene, 1.0) * 0.9;
+    float gain = lerp(1.0, max(1.0, target / max(lumSdr, lumRef)), blend);
     float3 hdr = lin * gain;
     // The brightest channel never passes the peak, whatever the hue.
     float top = max(hdr.r, max(hdr.g, hdr.b));

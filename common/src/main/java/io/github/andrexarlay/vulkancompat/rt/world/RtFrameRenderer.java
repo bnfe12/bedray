@@ -1315,6 +1315,9 @@ public final class RtFrameRenderer {
                 VK10.vkCmdCopyImage(cmd, presented.image, VK10.VK_IMAGE_LAYOUT_GENERAL, dst, VK10.VK_IMAGE_LAYOUT_GENERAL, region);
             }
             pendingDisplayedTarget = target;
+            if (io.github.andrexarlay.vulkancompat.rtx.hdr.HdrOutput.active()) {
+                io.github.andrexarlay.vulkancompat.rtx.hdr.HdrGpu.commitScene();
+            }
         }
     }
 
