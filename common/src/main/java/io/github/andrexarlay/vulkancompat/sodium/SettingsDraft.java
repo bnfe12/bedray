@@ -77,6 +77,18 @@ final class SettingsDraft {
     private static final Set<String> VOXEL_PROFILE_OWNED = Set.of(
         "voxel_distance_auto", "voxel_memory_budget_mib", "voxel_diffuse_bounce", "voxel_translucent_optics");
     private static final Set<String> PATH_PROFILE_OWNED = Set.of("path_spp", "path_bounces", "path_distance");
+    private static final Map<String, String> SEARCH_PREREQUISITES = Map.ofEntries(
+        Map.entry("atm_bloom_strength", "atm_bloom"),
+        Map.entry("atm_bloom_threshold", "atm_bloom"),
+        Map.entry("atm_bloom_scatter", "atm_bloom"),
+        Map.entry("atm_bloom_shape", "atm_bloom"),
+        Map.entry("atm_bloom_sky", "atm_bloom"),
+        Map.entry("atm_sunglare_strength", "atm_sunglare"),
+        Map.entry("atm_sunglare_size", "atm_sunglare"),
+        Map.entry("auto_normal_strength", "auto_normals")
+    );
+    private static final Identifier RT_MODE = id("rt_mode");
+
     private static final Set<String> PRESET_SKIPPED = Set.of("ui_expert", "experimental_rays", "rt_show_advanced", "rt_show_expert",
         "enable_hardware_ray_tracing", "rt_preset", "pt_preset");
     final Config config = VulkanSodiumConfig.createScreenConfig();
@@ -101,6 +113,23 @@ final class SettingsDraft {
     boolean voxel() { return config.readEnumOption(id("renderer"), VulkanRtxConfig.RendererSelection.class) != VulkanRtxConfig.RendererSelection.HARDWARE_RT; }
     boolean hasQualityProfile() { return voxel() || config.readEnumOption(id("rt_mode"), RtMode.class) == RtMode.PATH_TRACED; }
     boolean changed() { return !imported.isEmpty() || config.anyOptionChanged(); }
+
+    boolean pending(Entry entry) {
+        // The Overview renderer control stages both the renderer and its tracing mode.
+        return switch (entry.path()) {
+            case "rt_mode" -> false;
+            case "renderer" -> entry.option().hasChanged() || (config.getOption(RT_MODE) instanceof StatefulOption<?> mode && mode.hasChanged());
+            default -> entry.option().hasChanged();
+        };
+    }
+
+    int pendingCount() {
+        return imported.size() + (int) entries.stream().filter(this::pending).count();
+    }
+
+    int importedCount() {
+        return imported.size();
+    }
     boolean editable(Entry e) {
         if (!hasQualityProfile()) return true;
         boolean voxel = voxel();
@@ -286,6 +315,20 @@ final class SettingsDraft {
         if (!voxel()) return !e.option().shouldHideControl();
         return Set.of("renderer", "renderer_status", "quality_preset", "custom_scale", "debug_overlay", "ui_expert").contains(p)
             && !e.option().shouldHideControl();
+    }
+
+    static String searchPrerequisite(String path) {
+        return SEARCH_PREREQUISITES.get(path);
+    }
+
+    Component searchPrerequisiteName(Entry entry) {
+        String prerequisite = searchPrerequisite(entry.path());
+        // A toggle is useful as guidance only while the current renderer supports it.
+        if (prerequisite == null || !(config.getOption(id(prerequisite)) instanceof StatefulOption<?> parent)
+                || !parent.isEnabled() || !Boolean.FALSE.equals(parent.getValidatedValue())) {
+            return null;
+        }
+        return parent.getName();
     }
 
     static Category category(String p) {

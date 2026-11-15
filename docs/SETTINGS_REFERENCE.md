@@ -10,9 +10,8 @@ Per-texture IOR, thickness and absorption parameters belong in resource-pack sid
 [TRANSPARENT_MATERIALS](TRANSPARENT_MATERIALS.md). No validation run or FPS measurement was made for these source changes.
 `rays_optical_materials` (default on) is the master switch for the authored shader optics, with a legacy mode for comparison.
 
-Open **Options, Video Settings** and look for the **Bedray** section: two pages, **Bedray** (the essentials) and
-**Bedray Advanced**. Everything is saved in `config/bedray.toml`. The decision for every option, with the reasons, is in
-[SETTINGS_AUDIT.md](SETTINGS_AUDIT.md).
+Open **Options → Video Settings → Bedray Settings** to find the tabs for image and FPS, lighting, the world, effects, presets and system tools.
+**Apply** saves staged settings in `config/bedray.toml`.
 
 Development alpha.7 includes **World Renderer** and **Renderer Status** on the main Bedray page. Install
 the separate matching Bedray Compute JAR to choose **Voxel (Experimental)**; a missing add-on is shown
@@ -21,27 +20,18 @@ inside a 48-block window. Shaded composition preserves distant, unsupported and 
 It selects Bilinear and switches off FG; physical GI/reflections and matching temporal guides remain pending.
 The hardware RT mode preference is retained for switching back. See [COMPUTE](COMPUTE.md).
 
-How the screen works:
+### Find, review and save settings
 
-* Move the mouse over a setting, or click it: the **right-hand panel** shows real screenshots taken in the game for that setting
-  (same camera, same scene), what changes, what it costs, and what it needs. **Slider** mode splits the picture at the mouse (click
-  to lock), **Flip** switches between the two frames with a click, **Compare with** picks the other value (Off, Default, Low, High...).
-  The small zoomed pictures show the area where the effect is. A setting that cannot be shown in a still (frame generation, latency)
-  says so instead of showing a picture. If a screenshot has not been captured yet the panel shows a "PLACEHOLDER" box with the file name.
-* The panel never covers the Done / Apply / Undo buttons. On a narrow window or a high GUI scale it is hidden and Sodium's normal
-  tooltip is used; if the content is taller than the space, scroll over the panel with the mouse wheel.
-* **Reset to default** in the panel resets the selected setting. Every group on the Advanced page ends with **Reset this group**;
-  the first page ends with **Reset this page**; **Reset ALL Bedray settings** (Diagnostics group) resets everything.
-  Group / page / option resets use Sodium's change mechanism: press **Apply** to keep them, **Undo** to cancel.
-* **My presets...** (first page): save the current settings under a name, load or delete them, copy them as text and import text from
-  the clipboard. Files: `bedray/presets/<name>.toml` in the game folder. They contain setting values only (no paths); loading a
-  preset applies it at once and saves `bedray.toml`.
-* Rows that do not apply (for example the DLSS quality row while FSR is selected) are hidden, not greyed.
+- Search across tabs by name or setting ID. Some dependent controls, such as **Bloom Shape**, appear in search while their effect is off. Hover over the value to see which effect enables the control.
+- **Review (n)** beside the search box shows all pending settings, including staged values hidden by the current renderer or effect. Select a visible value to jump to its tab. An imported preset can include additional values without an individual control.
+- **Apply** saves the draft, and **Revert** reloads the applied settings. Closing with pending changes asks whether to discard them or keep editing.
+- Select a setting and open **Details** for its description, available screenshots and its individual reset. To stage a broader reset, use **System → Reset editable settings**.
+- Use **Presets** to save named settings, copy the current draft or import a preset from the clipboard. Imported values are staged until you select **Apply**. Named preset files live in `bedray/presets/<name>.toml`.
 
 **FPS cost** is qualitative (none / low / medium / high). The alpha has **no published benchmark table**; measure on your own
 system with the F3 screen (Bedray block).
 
-## Page "Bedray"
+## Core settings
 
 | Setting | What it does | FPS |
 |---|---|---|
@@ -54,7 +44,7 @@ system with the F3 screen (Bedray block).
 | Upscaler Quality (DLSS / XeSS / FSR / FSR 1) or 3D Scale (Built-in) | Render size before the upscale. Custom shows a 25-100% slider stored for each backend (NIS: 50-100%). | quality vs FPS |
 | Frame Generation | Off, 2x, 3x, 4x (NVIDIA, needs Streamline). See [FRAME_GENERATION.md](FRAME_GENERATION.md). | presented FPS up |
 
-## Page "Bedray Advanced" (groups are collapsed; click a header)
+## Detailed settings
 
 **Path Tracing Details** - Rays per Pixel (the Fast / Quality profile is not offered in the alpha), Ray Distance, Denoiser (Off / NRD /
 DLSS Ray Reconstruction; a missing library falls back to accumulation and the log says so), Water Caustics, Sharp Block Edges
