@@ -7,6 +7,7 @@ import net.caffeinemc.mods.sodium.client.config.structure.EnumOption;
 import net.caffeinemc.mods.sodium.client.config.structure.IntegerOption;
 import net.caffeinemc.mods.sodium.client.config.structure.StatefulOption;
 import net.caffeinemc.mods.sodium.client.util.Dim2i;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.AbstractWidget;
@@ -57,7 +58,7 @@ public final class BedrayConfigScreen extends Screen {
     private final java.util.Map<SettingsDraft.Category, Button> navigation = new java.util.EnumMap<>(SettingsDraft.Category.class);
 
     public static void open(Screen parent) {
-        parent.getMinecraft().gui.setScreen(new BedrayConfigScreen(parent));
+        Minecraft.getInstance().gui.setScreen(new BedrayConfigScreen(parent));
     }
 
     public BedrayConfigScreen(Screen parent) {
