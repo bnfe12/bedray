@@ -117,6 +117,18 @@ large (>=13 %) so a single run per row is enough. Each row **changes the picture
 
 Reproduce: `python tools/automation/bench_gi_stack.py --variants cost_menu --background ...` (variants `cost_*`).
 
+## The GPU is idle about 6 % of the time; the cause is not the swapchain image count
+
+During a background capture `nvidia-smi` (500 ms samples) showed GPU utilization median 94 % (min 53, max 99), SM clock steady at
+2865 MHz (max boost 3090), 151 W of a 198 W limit, 71 C, mem clock 14201 MHz: no power or thermal throttling. 94 % matches
+GPU total 24.4 ms against a frame interval of 26.0 ms, i.e. the GPU really idles about 1.5 ms per frame.
+
+Hypothesis tested: the engine asks for only 3 swapchain images (`VulkanGpuSurface.configure`, `Math.max(3, minImageCount)`) and
+each submit waits for the acquire semaphore, so a late image release (windowed DWM) would stall the next frame. A temporary mixin
+raised the count to 5 (applied, `mixin_applied=` in the log); ABBA, same stack: gpu_total 24.23 ms (3 images) vs 24.42 ms (5),
+interval 25.69 vs 26.24 ms (+2.1 %, noise). **Rejected, not kept.** The idle time is still unexplained (other candidates: present
+cost of a windowed swapchain, CPU wake-up and submit latency); a profiler or fullscreen/independent-flip capture would be needed.
+
 ## Not measured / open
 
 * One GPU, one scene (fixed seed, one camera pose); no frame-time percentiles beyond the capture analyzer's.
