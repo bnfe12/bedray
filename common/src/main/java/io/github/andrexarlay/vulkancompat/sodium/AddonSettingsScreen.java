@@ -33,6 +33,8 @@ final class AddonSettingsScreen extends Screen {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/Addons");
     private static final int ROW_HEIGHT = 33;
     private static final int LIST_TOP = 81;
+    private AbstractWidget animatedFocus;
+    private long focusSelectedAt;
 
     private final Screen parent;
     private final List<Registration> addons = AddonSettings.registrations();
@@ -278,12 +280,19 @@ final class AddonSettingsScreen extends Screen {
     public void extractBackground(GuiGraphicsExtractor g, int x, int y, float delta) {
         super.extractBackground(g, x, y, delta);
         SettingsChrome.list(g, left, LIST_TOP, panelWidth, height - 51);
+        long now = System.nanoTime();
+        AbstractWidget focus = getFocused() instanceof AbstractWidget widget ? widget : null;
+        if (focus != animatedFocus) {
+            animatedFocus = focus;
+            focusSelectedAt = now;
+        }
+        float selection = SettingsChrome.selectionOpacity(now, focusSelectedAt);
         for (Row row : rows) {
             String id = row.option().details().id();
             Draft draft = currentDraft();
             int rowY = row.control().getY();
             boolean hovered = x >= left && x < left + panelWidth && y >= rowY && y < rowY + SettingsLayout.CONTROL_HEIGHT;
-            SettingsChrome.row(g, left, rowY, panelWidth, row.control().isFocused(), hovered,
+            SettingsChrome.row(g, left, rowY, panelWidth, row.control().isFocused() ? selection : 0f, hovered,
                 !draft.values.get(id).equals(draft.baseline.get(id)));
         }
     }
@@ -291,7 +300,7 @@ final class AddonSettingsScreen extends Screen {
     @Override
     public void extractRenderState(GuiGraphicsExtractor g, int x, int y, float delta) {
         super.extractRenderState(g, x, y, delta);
-        g.text(font, title, left, 11, SettingsChrome.TEXT);
+        g.text(font, title, left, 11, SettingsChrome.TITLE);
         Registration addon = selected();
         if (addon == null) {
             drawLines(g, tr("bedray.addons.none", "Installed add-ons can register their settings here."), 36);

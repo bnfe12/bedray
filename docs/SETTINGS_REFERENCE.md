@@ -24,6 +24,7 @@ The hardware RT mode preference is retained for switching back. See [COMPUTE](CO
 - Search across tabs by name or setting ID. Some dependent controls, such as **Bloom Shape**, appear in search while their effect is off. Hover over the value to see which effect enables the control.
 - **Review (n)** beside the search box shows all pending settings, including staged values hidden by the current renderer or effect. Select a visible value to jump to its tab. An imported preset can include additional values without an individual control.
 - **Apply** saves the draft, and **Revert** reloads the applied settings. Closing with pending changes asks whether to discard them or keep editing.
+- **System → Menu Transparency** controls the settings menu and previews the change while you drag. In a world, it also changes the dimming over the scene. The preference is stored in `config/bedray.toml`.
 - Select a setting and open **Details** for its description, available screenshots and its individual reset. To stage a broader reset, use **System → Reset editable settings**.
 - Use **Presets** to save named settings, copy the current draft or import a preset from the clipboard. Imported values are staged until you select **Apply**. Named preset files live in `bedray/presets/<name>.toml`.
 

@@ -1,6 +1,10 @@
 package io.github.andrexarlay.vulkancompat.sodium;
 
+import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.io.StringWriter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -14,7 +18,10 @@ class SettingsLayoutTest {
             assertEquals(layout.frameX() + layout.frameWidth(), layout.contentX() + layout.contentWidth());
             int reviewWidth = layout.reviewWidth(145);
             assertTrue(reviewWidth <= layout.contentWidth() / 3);
-            assertEquals(layout.contentWidth(), layout.searchWidth(reviewWidth) + SettingsLayout.GAP + reviewWidth);
+            int searchWidth = layout.searchWidth(reviewWidth);
+            assertTrue(searchWidth <= layout.controlWidth());
+            assertTrue(searchWidth + SettingsLayout.GAP + reviewWidth <= layout.contentWidth());
+            assertTrue(SettingsLayout.SEARCH_HEIGHT < SettingsLayout.CONTROL_HEIGHT);
             assertTrue(layout.listBottom() - layout.listTop() >= SettingsLayout.ROW_HEIGHT + SettingsLayout.CONTROL_HEIGHT);
             assertTrue(layout.listBottom() < layout.footerY());
             assertTrue(layout.footerY() + SettingsLayout.FOOTER_HEIGHT <= size[1]);
@@ -45,6 +52,42 @@ class SettingsLayoutTest {
         assertEquals(narrow.navY(0), narrow.navY(3));
         assertTrue(narrow.navY(6) > narrow.navY(0));
         assertFalse(SettingsLayout.measure(960, 198).sidebar());
+    }
+
+    @Test
+    void menuTransparencyChangesBothLayers() {
+        assertEquals(255, SettingsChrome.menuTop(0) >>> 24);
+        assertEquals(102, SettingsChrome.menuTop(VulkanRtxConfig.MAX_MENU_TRANSPARENCY) >>> 24);
+        assertEquals(102, SettingsChrome.menuBottom(VulkanRtxConfig.MAX_MENU_TRANSPARENCY) >>> 24);
+        assertNotEquals(SettingsChrome.menuTop(0), SettingsChrome.menuBottom(0));
+        assertTrue((SettingsChrome.worldShade(0) >>> 24) > (SettingsChrome.worldShade(VulkanRtxConfig.MAX_MENU_TRANSPARENCY) >>> 24));
+        assertEquals(SettingsDraft.Category.SYSTEM, SettingsDraft.category("ui_menu_transparency"));
+    }
+
+    @Test
+    void selectionFadeStartsClearAndSettlesWithinOneShortTransition() {
+        long started = 10L;
+        assertEquals(1f, SettingsChrome.selectionOpacity(started, 0L));
+        assertEquals(0f, SettingsChrome.selectionOpacity(started, started));
+        float halfway = SettingsChrome.selectionOpacity(started + 65_000_000L, started);
+        assertTrue(halfway > 0.5f && halfway < 1f);
+        assertEquals(1f, SettingsChrome.selectionOpacity(started + 130_000_000L, started));
+    }
+
+    @Test
+    void menuTransparencySurvivesConfigAndStaysOutOfRenderPresets() throws IOException {
+        int oldValue = VulkanRtxConfig.menuTransparency;
+        try {
+            VulkanRtxConfig.applyKeyValue("ui_menu_transparency", "87");
+            assertEquals(VulkanRtxConfig.MAX_MENU_TRANSPARENCY, VulkanRtxConfig.menuTransparency);
+            VulkanRtxConfig.applyKeyValue("ui_menu_transparency", "28");
+            StringWriter output = new StringWriter();
+            VulkanRtxConfig.writeAll(output);
+            assertTrue(output.toString().lines().anyMatch("ui_menu_transparency = 28"::equals));
+            assertFalse(PresetStore.snapshot().lines().anyMatch(line -> line.startsWith("ui_menu_transparency")));
+        } finally {
+            VulkanRtxConfig.menuTransparency = oldValue;
+        }
     }
 
     @Test

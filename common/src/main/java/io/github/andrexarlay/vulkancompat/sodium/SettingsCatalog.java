@@ -602,6 +602,9 @@ public final class SettingsCatalog {
         putNoImage("voxel_memory_budget_mib", Tier.ADVANCED, "Voxel GPU Memory Budget", "Maximum GPU scene storage in MiB. The provider prioritizes nearby sections; memory pressure can reduce resident coverage below the requested distance.", "", "Voxel renderer only.", "Memory use is reported by runtime statistics.");
         putNoImage("voxel_diffuse_bounce", Tier.ADVANCED, "Voxel Diffuse Bounce", "Trace the supported diffuse bounce in the software renderer. Turning it off removes this lighting work; full physical light transport is still in development.", "", "Voxel renderer only.", "No voxel lighting comparison has been captured.");
         putNoImage("voxel_translucent_optics", Tier.ADVANCED, "Voxel Layered Transparency", "Enable the software renderer's layered transparent optical path. Turning it off skips this additional traversal and preserves the underlying raster where replacement is unsupported.", "", "Voxel renderer only.", "No voxel transparency comparison has been captured.");
+        putNoImage("ui_menu_transparency", Tier.ADVANCED, "Menu Transparency",
+            "Lets more of the world show through the settings menu. Changes preview immediately.", "", "",
+            "Interface preference, no image comparison.");
         putNoImage("ui_expert", Tier.ADVANCED, "Expert Settings", "Show low-level rendering and diagnostic options. Apply to rebuild this screen with the new option set.", "", "", "Interface preference, no image comparison.");
         putNoImage("frame_generation_provider", Tier.ADVANCED, "Frame Generation Method", "Select the runtime provider. Changing it requires a restart; installed files do not establish that generation is active.", "", "Hardware renderer with a supported runtime.", "Generated frames require motion, so a still image cannot demonstrate them.");
         // Older descriptions carried generic FPS and VRAM estimates without linked measurements.

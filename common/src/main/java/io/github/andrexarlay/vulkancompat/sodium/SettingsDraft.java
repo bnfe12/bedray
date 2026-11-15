@@ -49,7 +49,7 @@ final class SettingsDraft {
         "atm_godrays", "atm_godrays_strength", "atm_godrays_quality", "atm_godrays_range",
         "atm_sunglare", "atm_sunglare_strength", "atm_sunglare_size",
         "rt_fog", "rt_fog_density", "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_aerial", "atm_fog_vanilla", "atm_chunk_fade",
-        "vignette", "film_grain"
+        "vignette", "film_grain", "ui_menu_transparency"
     );
 
     static int rowOrder(String path) {
@@ -88,8 +88,9 @@ final class SettingsDraft {
         Map.entry("auto_normal_strength", "auto_normals")
     );
     private static final Identifier RT_MODE = id("rt_mode");
+    private static final Identifier MENU_TRANSPARENCY = id("ui_menu_transparency");
 
-    private static final Set<String> PRESET_SKIPPED = Set.of("ui_expert", "experimental_rays", "rt_show_advanced", "rt_show_expert",
+    private static final Set<String> PRESET_SKIPPED = Set.of("ui_expert", "ui_menu_transparency", "experimental_rays", "rt_show_advanced", "rt_show_expert",
         "enable_hardware_ray_tracing", "rt_preset", "pt_preset");
     final Config config = VulkanSodiumConfig.createScreenConfig();
     final List<Entry> entries = new ArrayList<>();
@@ -113,6 +114,9 @@ final class SettingsDraft {
     boolean voxel() { return config.readEnumOption(id("renderer"), VulkanRtxConfig.RendererSelection.class) != VulkanRtxConfig.RendererSelection.HARDWARE_RT; }
     boolean hasQualityProfile() { return voxel() || config.readEnumOption(id("rt_mode"), RtMode.class) == RtMode.PATH_TRACED; }
     boolean changed() { return !imported.isEmpty() || config.anyOptionChanged(); }
+    int menuTransparency() {
+        return config.readIntOption(MENU_TRANSPARENCY, false);
+    }
 
     boolean pending(Entry entry) {
         // The Overview renderer control stages both the renderer and its tracing mode.
@@ -313,7 +317,7 @@ final class SettingsDraft {
                 "texture_lod_bias_offset", "manual_texture_lod_bias", "atm_local_highlights", "atm_local_shadows").contains(p))
                 && !e.option().isEnabled()) return false;
         if (!voxel()) return !e.option().shouldHideControl();
-        return Set.of("renderer", "renderer_status", "quality_preset", "custom_scale", "debug_overlay", "ui_expert").contains(p)
+        return Set.of("renderer", "renderer_status", "quality_preset", "custom_scale", "debug_overlay", "ui_expert", "ui_menu_transparency").contains(p)
             && !e.option().shouldHideControl();
     }
 
@@ -336,7 +340,7 @@ final class SettingsDraft {
             return Category.OVERVIEW;
         }
         if (p.startsWith("compute_") || p.startsWith("debug_") || Set.of("renderer_status", "gi_execution_status",
-                "rays_transparency_stats", "rt_debug_view", "ui_expert").contains(p)) return Category.SYSTEM;
+                "rays_transparency_stats", "rt_debug_view", "ui_expert", "ui_menu_transparency").contains(p)) return Category.SYSTEM;
         if (p.contains("mode") && (p.startsWith("dlss") || p.startsWith("fsr") || p.startsWith("xess"))
             || p.startsWith("upscaler") || p.startsWith("frame_generation") || p.startsWith("fsr_")
             || p.endsWith("custom_scale") || Set.of("quality_preset", "dlss_sr_preset", "path_denoiser",

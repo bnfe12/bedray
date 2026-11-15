@@ -47,6 +47,8 @@ public final class BedrayConfigScreen extends Screen {
     private final List<Button> popupButtons = new ArrayList<>();
     private int popupX, popupY, popupWidth, popupHeight, popupScroll, popupFocus;
     private SettingsDraft.Entry selected;
+    private long tabSelectedAt;
+    private long rowSelectedAt;
     private Button applyButton, revertButton, captureButton, detailsButton, closeButton, reviewButton;
     private Component runtime = Component.empty();
     private Component notice = Component.empty();
@@ -74,9 +76,8 @@ public final class BedrayConfigScreen extends Screen {
         listTop = layout.listTop();
         listBottom = layout.listBottom();
         int reviewWidth = layout.reviewWidth(font.width(tr("bedray.settings.review_count", "Review (%s)", 999)));
-        search = new EditBox(font, contentX, SettingsLayout.SEARCH_Y, layout.searchWidth(reviewWidth), CONTROL_HEIGHT,
+        search = new EditBox(font, contentX, SettingsLayout.SEARCH_Y, layout.searchWidth(reviewWidth), SettingsLayout.SEARCH_HEIGHT,
             tr("bedray.settings.search", "Search settings"));
-        search.setHint(tr("bedray.settings.search", "Search settings"));
         search.setMaxLength(80);
         search.setValue(query);
         search.setResponder(text -> {
@@ -86,7 +87,7 @@ public final class BedrayConfigScreen extends Screen {
         });
         addRenderableWidget(search);
         reviewButton = addRenderableWidget(new PlainTextButton(contentX + contentWidth - reviewWidth,
-            SettingsLayout.SEARCH_Y, reviewWidth, CONTROL_HEIGHT, tr("bedray.settings.review", "Review"),
+            SettingsLayout.SEARCH_Y, reviewWidth, SettingsLayout.SEARCH_HEIGHT, tr("bedray.settings.review", "Review"),
             b -> toggleReview(), font));
         reviewButton.setTooltip(Tooltip.create(tr("bedray.settings.review_hint", "Show staged changes across all settings.")));
         navigation.clear();
@@ -131,6 +132,7 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     private void selectCategory(SettingsDraft.Category value) {
+        if (!activeTab(value)) tabSelectedAt = System.nanoTime();
         category = value;
         reviewing = false;
         scroll = 0;
@@ -173,9 +175,10 @@ public final class BedrayConfigScreen extends Screen {
         Map<SettingsDraft.Entry, Component> prerequisites = new HashMap<>();
         boolean searching = !query.isBlank();
         boolean browsing = !reviewing && !searching;
-        search.setHint(reviewing
+        search.setHint(reviewing ? tr("bedray.settings.filter_hint", "Filter") : tr("bedray.settings.search_hint", "Search"));
+        search.setTooltip(Tooltip.create(reviewing
             ? tr("bedray.settings.review_search", "Filter pending settings")
-            : tr("bedray.settings.search", "Search settings"));
+            : tr("bedray.settings.search", "Search all settings")));
         List<String> terms = SettingsSearch.terms(query);
         // Report each failed predicate with its option before replacing the existing rows.
         List<String> broken = new ArrayList<>();
@@ -216,6 +219,9 @@ public final class BedrayConfigScreen extends Screen {
             AbstractWidget widget = createControl(entry, x, controls);
             Component prerequisite = prerequisites.get(entry);
             widget.active = prerequisite == null && entry.option().isEnabled() && draft.editable(entry);
+            if (widget.active && Boolean.TRUE.equals(entry.option().getValidatedValue())) {
+                widget.setMessage(widget.getMessage().copy().withColor(SettingsChrome.TITLE));
+            }
             widget.setTooltip(Tooltip.create(controlHelp(entry, widget.active, prerequisite)));
             nextWidgets.add(widget);
         }
@@ -227,7 +233,10 @@ public final class BedrayConfigScreen extends Screen {
         rowWidgets.clear(); rows.clear();
         rows.addAll(nextRows);
         for (AbstractWidget widget : nextWidgets) rowWidgets.add(addRenderableWidget(widget));
-        if (!rows.contains(selected)) selected = rows.isEmpty() ? null : rows.getFirst();
+        if (!rows.contains(selected)) {
+            selected = rows.isEmpty() ? null : rows.getFirst();
+            rowSelectedAt = 0L;
+        }
         if (browsing && category == SettingsDraft.Category.PRESETS) {
             addAction(tr("bedray.settings.looks", "Visual style…"), () -> openLooks(contentX, listTop));
             addAction(tr("bedray.settings.experience_library", "Rendering experiences..."),
@@ -302,7 +311,7 @@ public final class BedrayConfigScreen extends Screen {
         if (selected != null) { PreviewPanel.select(selected.option()); PreviewPanel.setRuntimeStatus(draft.status(selected).text()); }
         updateButtons();
         navigation.forEach((value, button) -> button.setMessage(
-            fit(value.title(), button.getWidth()).copy().withColor(activeTab(value) ? SettingsChrome.TEXT : SettingsChrome.MUTED)));
+            fit(value.title(), button.getWidth()).copy().withColor(activeTab(value) ? SettingsChrome.TITLE : SettingsChrome.MUTED)));
     }
 
     private boolean activeTab(SettingsDraft.Category value) {
@@ -393,7 +402,11 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     private void select(SettingsDraft.Entry entry) {
-        if (selected != entry) { selected = entry; PreviewPanel.setRuntimeStatus(draft.status(entry).text()); }
+        if (selected != entry) {
+            selected = entry;
+            rowSelectedAt = System.nanoTime();
+            PreviewPanel.setRuntimeStatus(draft.status(entry).text());
+        }
         PreviewPanel.select(entry.option());
     }
     private void positionRows() {
@@ -415,7 +428,7 @@ public final class BedrayConfigScreen extends Screen {
                 ? tr("bedray.settings.review_count", "Review (%s)", draft.pendingCount())
                 : tr("bedray.settings.review", "Review");
             reviewButton.setMessage(fit(label, reviewButton.getWidth() - 4).copy()
-                .withColor(reviewing ? SettingsChrome.TEXT : SettingsChrome.MUTED));
+                .withColor(reviewing ? SettingsChrome.ACCENT : changed ? SettingsChrome.PENDING : SettingsChrome.MUTED));
             reviewButton.active = changed || reviewing;
         }
         if (applyButton != null) applyButton.visible = applyButton.active = changed;
@@ -573,23 +586,26 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     @Override public void extractRenderState(GuiGraphicsExtractor g, int mx, int my, float delta) {
+        long now = System.nanoTime();
+        float tabOpacity = SettingsChrome.selectionOpacity(now, tabSelectedAt);
+        float rowOpacity = SettingsChrome.selectionOpacity(now, rowSelectedAt);
         navigation.forEach((value, tab) -> {
             int index = value.ordinal();
             int x = layout.navX(index);
             int y = layout.navY(index);
             int w = layout.navWidth(index);
             boolean hovered = mx >= x && mx < x + w && my >= y && my < y + SettingsLayout.NAV_HEIGHT;
-            SettingsChrome.navigation(g, x, y, w, activeTab(value), hovered || tab.isFocused());
+            SettingsChrome.navigation(g, x, y, w, activeTab(value) ? tabOpacity : 0f, hovered || tab.isFocused());
         });
         for (int i = 0; i < rows.size(); i++) {
             AbstractWidget widget = rowWidgets.get(i);
             if (!widget.visible) continue;
             int y = widget.getY();
             boolean hovered = mx >= contentX && mx < contentX + contentWidth && my >= y && my < y + CONTROL_HEIGHT;
-            SettingsChrome.row(g, contentX, y, contentWidth, selected == rows.get(i), hovered, draft.pending(rows.get(i)));
+            SettingsChrome.row(g, contentX, y, contentWidth, selected == rows.get(i) ? rowOpacity : 0f, hovered, draft.pending(rows.get(i)));
         }
         super.extractRenderState(g, mx, my, delta);
-        g.text(font, title, (width - font.width(title)) / 2, 8, SettingsChrome.TEXT);
+        g.text(font, title, (width - font.width(title)) / 2, 8, SettingsChrome.TITLE);
         for (int i = 0; i < rows.size(); i++) {
             AbstractWidget widget = rowWidgets.get(i);
             if (!widget.visible) continue;
@@ -637,8 +653,13 @@ public final class BedrayConfigScreen extends Screen {
         }
     }
     @Override public void extractBackground(GuiGraphicsExtractor g, int mx, int my, float delta) {
-        super.extractBackground(g, mx, my, delta);
-        if (layout != null) SettingsChrome.background(g, layout);
+        int transparency = draft.menuTransparency();
+        if (minecraft.level == null) {
+            super.extractBackground(g, mx, my, delta);
+        } else {
+            g.fill(0, 0, width, height, SettingsChrome.worldShade(transparency));
+        }
+        if (layout != null) SettingsChrome.background(g, layout, transparency);
     }
     @Override public void onClose() {
         PreviewPanel.clearSelection();

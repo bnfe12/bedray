@@ -251,7 +251,7 @@ public final class PreviewPanel {
         int cy = top;
 
         // title (truncated: a long localized name must not overflow the narrow panel), value, impact
-        g.text(font, font.plainSubstrByWidth(option.getName().copy().withStyle(ChatFormatting.BOLD).getString(), cw), cx, cy, 0xFFFFFFFF);
+        g.text(font, font.plainSubstrByWidth(option.getName().copy().withStyle(ChatFormatting.BOLD).getString(), cw), cx, cy, SettingsChrome.TITLE);
         cy += 11;
         Object value = option instanceof StatefulOption<?> so ? so.getValidatedValue() : null;
         if (value != null) {
