@@ -34,7 +34,9 @@ public abstract class MixinVulkanInstanceColorspace {
             if (enable) {
                 this.enabledExtensions.add(HdrProbe.EXT_SWAPCHAIN_COLORSPACE);
             }
-            HdrProbe.logInstance(enable, offered);
+            if (enable || HdrProbe.wantColorspaceExtension()) {
+                HdrProbe.logInstance(enable, offered);
+            }
         } catch (Throwable t) {
             // The probe must never stop the engine from creating its instance.
             org.slf4j.LoggerFactory.getLogger("Bedray/HDR").error("[VKB-HDR] instance probe failed", t);

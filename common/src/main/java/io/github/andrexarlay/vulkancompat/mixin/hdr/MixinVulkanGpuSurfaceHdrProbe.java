@@ -24,6 +24,10 @@ public abstract class MixinVulkanGpuSurfaceHdrProbe {
 
     @Inject(method = "<init>", at = @At("RETURN"))
     private void vkb$hdrProbeSurface(CallbackInfo ci) {
+        // Only for players who asked for HDR10 or the probe: everyone else pays no startup work and gets no extra log lines.
+        if (!HdrProbe.wantColorspaceExtension() && !io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.wantsHdr10()) {
+            return;
+        }
         HdrProbe.logSurface(this.device.vkDevice().getPhysicalDevice(), this.surface);
     }
 }

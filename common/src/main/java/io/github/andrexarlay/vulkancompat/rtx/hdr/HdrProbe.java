@@ -108,9 +108,9 @@ public final class HdrProbe {
     }
 
     /** Logged once from the instance mixin: what the loader offers and whether the opt-in enabled the colour space extension. */
-    public static void logInstance(boolean enabledByProbe, boolean offered) {
-        LOGGER.info("[VKB-HDR] instance: {}={} enabled_by_probe={} (set -D{}=colorspace to enable it)",
-            EXT_SWAPCHAIN_COLORSPACE, offered ? "offered" : "NOT offered", enabledByProbe, PROPERTY);
+    public static void logInstance(boolean extensionEnabled, boolean offered) {
+        LOGGER.info("[VKB-HDR] instance: {}={} enabled={} (enabled by hdr_output = HDR10 or -D{}=colorspace)",
+            EXT_SWAPCHAIN_COLORSPACE, offered ? "offered" : "NOT offered", extensionEnabled, PROPERTY);
     }
 
     /** Logged after the engine surface exists: device extensions and every (format, colour space) pair the surface reports. */
