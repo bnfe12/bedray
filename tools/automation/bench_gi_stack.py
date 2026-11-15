@@ -28,6 +28,7 @@ from pathlib import Path
 from statistics import fmean, median
 
 from capture_analysis import InvalidCapture, analyze
+from background_hold import BackgroundHold
 from focus_hold import FocusHold
 
 DEFAULT_INSTANCE = Path(
@@ -321,7 +322,7 @@ def capture_medians(capture: Path) -> dict:
 
 def run_variant(label: str, props: dict[str, str], instance: Path, launcher: Path,
                 out_dir: Path, scratch: Path, revision: str, timeout_s: float,
-                render_distance: int, hold_focus: bool = False) -> dict:
+                render_distance: int, hold_focus: bool = False, background: bool = False) -> dict:
     game = instance / "minecraft"
     started = time.time()
     full_props = {
@@ -341,6 +342,9 @@ def run_variant(label: str, props: dict[str, str], instance: Path, launcher: Pat
         "bedray.rt.nativeMemoryMiB": "4096",
         **props,
     }
+    if background:
+        # Background bench: the window sits behind the owner's work, so the focus requirement is waived and recorded.
+        full_props["vkrtx.autotest.allowUnfocused"] = "true"
     env = dict(os.environ)
     env["JAVA_TOOL_OPTIONS"] = " ".join(f"-D{k}={v}" for k, v in full_props.items())
     stop_launcher()
@@ -353,12 +357,15 @@ def run_variant(label: str, props: dict[str, str], instance: Path, launcher: Pat
     launcher_log = scratch / f"launcher-{label}.log"
     # Opt-in: hold the real window focus so the strict FOCUSED gate (bit 6) survives the whole capture on a
     # desktop that would otherwise steal focus. Only runs while this bench owns the desktop (game_running gate).
-    with FocusHold("Minecraft") if hold_focus else contextlib.nullcontext() as focus:
+    hold = BackgroundHold("Minecraft") if background else FocusHold("Minecraft") if hold_focus else contextlib.nullcontext()
+    with hold as focus:
         with launcher_log.open("w", encoding="utf-8") as stream:
             subprocess.Popen([str(launcher), "--launch", instance.name], env=env,
                              stdout=stream, stderr=subprocess.STDOUT)
         capture, status = wait_capture(game, started, timeout_s)
-    if hold_focus:
+    if background:
+        print(f"[bench] {label}: background-hold pushed the window down {focus.pushed_count} time(s)", flush=True)
+    elif hold_focus:
         print(f"[bench] {label}: focus-hold refocused {focus.refocus_count} time(s)", flush=True)
     exited = wait_game_exit()
     log_copy = scratch / f"latest-{label}.log"
@@ -410,6 +417,9 @@ def main() -> int:
     parser.add_argument("--hold-focus", action="store_true",
                         help="keep the Minecraft window focused during each capture so the strict FOCUSED gate survives "
                              "a desktop that would steal focus (Windows only; the bench already refuses to run beside another game)")
+    parser.add_argument("--background", action="store_true",
+                        help="run behind the user's windows: keep the game window at the bottom of the z-order and waive the "
+                             "FOCUSED capture requirement (recorded as manifest fact focus_waived); overrides --hold-focus")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -452,7 +462,7 @@ def main() -> int:
                 break
             summary.append(run_variant(label, VARIANTS[label], args.instance, args.launcher,
                                        args.out, args.scratch, args.revision, args.timeout,
-                                       args.render_distance, args.hold_focus))
+                                       args.render_distance, args.hold_focus, args.background))
     finally:
         stop_launcher()
         restore_files(args.instance, backup)

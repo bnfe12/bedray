@@ -54,13 +54,16 @@ public final class NativePerfScenario implements AutotestScenario {
             Map.entry("effective_frame_limit", String.valueOf(limiter.getFramerateLimit())),
             Map.entry("throttle_reason", String.valueOf(limiter.getThrottleReason())),
             Map.entry("inactivity_fps_limit", String.valueOf(mc.options.inactivityFpsLimit().get())),
+            // true: a background bench waived the FOCUSED requirement (window kept behind the user's windows).
+            Map.entry("focus_waived", String.valueOf(io.github.andrexarlay.vulkancompat.rtx.debug.FrameBenchmark.FOCUS_WAIVED)),
             Map.entry("scenario", name()),
             Map.entry("gpu", device.name()), Map.entry("driver", device.driverInfo()),
             Map.entry("gpu_backend", device.backendName()),
             Map.entry("adaptive_budget_ms", String.valueOf(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.adaptiveBudgetMs()))));
         ctx.log("scenario", name(), "event", "capture_armed", "directory", directory.toString(),
             "effective_frame_limit", String.valueOf(mc.getFramerateLimitTracker().getFramerateLimit()),
-            "throttle_reason", String.valueOf(mc.getFramerateLimitTracker().getThrottleReason()));
+            "throttle_reason", String.valueOf(mc.getFramerateLimitTracker().getThrottleReason()),
+            "focus_waived", String.valueOf(io.github.andrexarlay.vulkancompat.rtx.debug.FrameBenchmark.FOCUS_WAIVED));
         ScenarioTime.waitUntil(ctx, future::isDone, 100, () -> saved(ctx, future), () -> {
             FrameBenchmark.abort("scenario_timeout_waiting_for_world_or_capture");
             ScenarioTime.waitUntil(ctx, future::isDone, 10, () -> saved(ctx, future),
