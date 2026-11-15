@@ -217,7 +217,7 @@ public final class BedrayConfigScreen extends Screen {
             Component prerequisite = prerequisites.get(entry);
             widget.active = prerequisite == null && entry.option().isEnabled() && draft.editable(entry);
             if (widget.active && Boolean.TRUE.equals(entry.option().getValidatedValue())) {
-                widget.setMessage(widget.getMessage().copy().withColor(SettingsChrome.ACCENT));
+                widget.setMessage(widget.getMessage().copy().withColor(SettingsChrome.TITLE));
             }
             widget.setTooltip(Tooltip.create(controlHelp(entry, widget.active, prerequisite)));
             nextWidgets.add(widget);
