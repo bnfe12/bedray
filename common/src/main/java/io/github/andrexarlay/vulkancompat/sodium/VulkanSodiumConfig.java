@@ -247,7 +247,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     public void registerConfigLate(ConfigBuilder builder) {
         builder.registerOwnModOptions().setName("Bedray").addPage(builder.createExternalPage()
             .setName(tr("bedray.settings.open", "Bedray Settings..."))
-            .setScreenConsumer(parent -> Minecraft.getInstance().gui.setScreen(new BedrayConfigScreen(parent))));
+            .setScreenConsumer(BedrayConfigScreen::open));
         LOGGER.info("[Bedray/SodiumPage] external settings page registered");
     }
 

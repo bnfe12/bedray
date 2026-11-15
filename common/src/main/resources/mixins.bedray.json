@@ -25,6 +25,7 @@
     "rtx.MixinSkyRendererAccessor",
     "rtx.MixinTextureAtlasAccessor",
     "rtx.MixinVulkanGpuSampler",
+    "gui.MixinBedraySettingsShortcut",
     "rtx.MixinOptions",
     "rtx.MixinMinecraft",
     "compute.MixinComputeResources",
