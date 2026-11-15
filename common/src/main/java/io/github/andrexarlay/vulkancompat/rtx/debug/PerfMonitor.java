@@ -188,6 +188,50 @@ public final class PerfMonitor {
 
     private static long harvestedFrame = -1L;
 
+    // Time the render thread spends inside CommandEncoder.submit(): the queue submit plus the engine's wait for the submit two frames
+    // back (VulkanCommandEncoder.submit), i.e. how long the CPU is parked on the GPU. interval - submit wait = main-thread busy time.
+    private static long submitStartNs;
+    private static double submitSumMs;
+    private static int submitCount;
+
+    // Blocking calls of Minecraft.renderFrame timed on the render thread (sum over the window, ms): swapchain acquire and present.
+    private static long acquireStartNs, presentStartNs;
+    private static double acquireSumMs, presentSumMs;
+    private static int acquireCount, presentCount;
+
+    public static void acquireBegin() {
+        acquireStartNs = System.nanoTime();
+    }
+
+    public static void acquireEnd() {
+        if (acquireStartNs != 0L) {
+            acquireSumMs += (System.nanoTime() - acquireStartNs) / 1.0e6;
+            acquireCount++;
+            acquireStartNs = 0L;
+        }
+    }
+
+    public static void presentBegin() {
+        presentStartNs = System.nanoTime();
+    }
+
+    public static void presentEnd() {
+        if (presentStartNs != 0L) {
+            presentSumMs += (System.nanoTime() - presentStartNs) / 1.0e6;
+            presentCount++;
+            presentStartNs = 0L;
+        }
+    }
+
+    /** Right after {@code CommandEncoder.submit()} returned in Minecraft.renderFrame. */
+    public static void afterSubmit() {
+        if (submitStartNs != 0L) {
+            submitSumMs += (System.nanoTime() - submitStartNs) / 1.0e6;
+            submitCount++;
+            submitStartNs = 0L;
+        }
+    }
+
     /** Before the frame submit: stamps FRAME_END, accumulates CPU segments, publishes the window when it elapsed. */
     public static void frameEnd() {
         if (!frameOpen) {
@@ -195,6 +239,7 @@ public final class PerfMonitor {
         }
         mark(Mark.FRAME_END);
         frameOpen = false;
+        submitStartNs = System.nanoTime();
         accumulate(cpuNs, cpuWritten, 1.0e-6, cpuSum, cpuCount);
         if (FrameBenchmark.active()) {
             FrameBenchmark.end(frameIndex, cpuWritten[Mark.WORLD_BEGIN.ordinal()], samples(cpuNs, cpuWritten, 1.0e-6, cpuSamples));
@@ -307,11 +352,24 @@ public final class PerfMonitor {
     private static void logGpuGap() {
         // Every 10th window (about 5 s) and only with samples: how much GPU time lies between frames, and where.
         if (gapCount > 0 && ++gapWindows % 10 == 0) {
-            LOGGER.info("[VKB-PERF] gpu_gap_ms idle_before_cmdbuf={} engine_pre_render={} max_total={} frames={}",
+            double interval = intervalCount > 0 ? intervalSumMs / intervalCount : 0.0;
+            double submitWait = submitCount > 0 ? submitSumMs / submitCount : 0.0;
+            LOGGER.info("[VKB-PERF] gpu_gap_ms idle_before_cmdbuf={} engine_pre_render={} max_total={} frames={} "
+                    + "submit_wait_ms={} main_thread_busy_ms={} acquire_ms={} present_ms={}",
                 String.format(java.util.Locale.ROOT, "%.3f", idleSumMs / gapCount),
                 String.format(java.util.Locale.ROOT, "%.3f", preSumMs / gapCount),
-                String.format(java.util.Locale.ROOT, "%.3f", gapMaxMs), gapCount);
+                String.format(java.util.Locale.ROOT, "%.3f", gapMaxMs), gapCount,
+                String.format(java.util.Locale.ROOT, "%.3f", submitWait),
+                String.format(java.util.Locale.ROOT, "%.3f", interval - submitWait),
+                String.format(java.util.Locale.ROOT, "%.3f", acquireCount > 0 ? acquireSumMs / acquireCount : 0.0),
+                String.format(java.util.Locale.ROOT, "%.3f", presentCount > 0 ? presentSumMs / presentCount : 0.0));
         }
+        submitSumMs = 0.0;
+        submitCount = 0;
+        acquireSumMs = 0.0;
+        acquireCount = 0;
+        presentSumMs = 0.0;
+        presentCount = 0;
         idleSumMs = 0.0;
         preSumMs = 0.0;
         gapMaxMs = 0.0;

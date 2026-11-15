@@ -144,6 +144,34 @@ After the world is loaded (`total=4281`, `pending=0`) Sodium keeps re-meshing se
 and the 7-25 ms stalls are in the same period). A longer warm-up would give a cleaner baseline; why every section is replaced once
 is not established (neighbour-driven rebuilds are normal for Sodium, a double build by this mod would be a bug).
 
+## Warm-up changes the baseline by 7 %, and the three dimensions
+
+Warm-up A/B (ABBA, 4 valid captures): waiting 120 s instead of 20 s after entering the world makes the same stack 1.7 ms faster on
+the GPU (25.28 -> 23.58 ms, -6.7 %; interval 26.89 -> 24.71 ms, -8.1 %, about 37 -> 40.5 FPS). Every stage got faster at once
+(trace -0.6..-1.2 ms, PT spatial -0.3, world -0.23) with the same section count and scene memory, so this is process warm-up (driver or
+clocks), not the scene. **A baseline must be taken after a long warm-up; differences below ~1.5 ms measured against a 20 s warm-up
+cannot be told from this drift.** `-Dvkrtx.autotest.loadSeconds=N` sets the wait (default still 20).
+
+One capture per dimension, same stack (DLSS RR, PT + DI on), 90 s wait, `-Dvkrtx.autotest.perfDimension=overworld|nether|end`
+(spectator mode, camera chosen by `NativePerfScenario.findOpenPose` from loaded blocks; the pose is in the manifest):
+
+| dimension | gpu_total | interval | FPS | trace | PT spatial | DI | notes |
+|---|---|---|---|---|---|---|---|
+| Overworld (fixture pose) | 24.27 ms | 25.62 ms | 39.0 | 11.53 | 3.63 | 0.67 | 4284 sections, ray hit 71 % |
+| Nether (open pose 0,100,0) | 22.09 ms | 22.23 ms | 45.0 | 9.94 | 3.58 | 1.02 | 6572 sections, 78 k emitters in range, hit 99.9 % |
+| End (open pose 0,102,0) | 16.23 ms | 16.18 ms | 61.8 | 5.67 | 2.66 | 0.51 | 421 sections, hit 35 % (void) |
+
+DLSS RR costs 6.3-6.5 ms in every dimension, so it is the largest fixed term of the cheap scenes. In the Nether and the End the interval
+equals the GPU time (no idle); in the Overworld the interval is 1.3 ms longer.
+
+## What the render thread does during a frame
+
+New log fields in `[VKB-PERF] gpu_gap_ms`: `submit_wait_ms` (time inside `CommandEncoder.submit`, which includes the engine's wait for the submit two
+frames back), `acquire_ms` and `present_ms` (time inside the swapchain acquire and present). Typical windows: submit 2.6-8 ms, acquire 0.005 ms,
+**present 0.5-18 ms**. The render thread therefore spends well over half of each frame parked in the present call and the fence wait: that is the
+back-pressure of a GPU-bound pipeline, not CPU work, and the real main-thread work is about 9-12 ms per frame (interval minus submit minus present),
+well under the GPU time. Reducing CPU work cannot raise FPS here; only GPU time can.
+
 ## Not measured / open
 
 * One GPU, one scene (fixed seed, one camera pose); no frame-time percentiles beyond the capture analyzer's.

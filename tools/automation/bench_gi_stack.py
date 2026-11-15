@@ -81,6 +81,16 @@ VARIANTS.update({
     "cost_nrd": {"vkrtx.rt.path_denoiser": "nrd", "vkrtx.rt.path_restir_di": "true", "vkrtx.rt.path_restir_pt": "true",
                  "vkrtx.rt.path_restir_pt_spatial": "true"},
 })
+# Warm-up A/B: identical stack, only the load wait before the 10 s warm-up differs (default 20 s vs 120 s).
+VARIANTS["load20"] = {**VARIANTS["cost_all_on"]}
+VARIANTS["load120"] = {**VARIANTS["cost_all_on"], "vkrtx.autotest.loadSeconds": "120"}
+# Dimension set: the same stack in the Overworld fixture pose, the Nether and the End (camera chosen by NativePerfScenario.findOpenPose).
+# All three wait 90 s after the world/dimension is entered so chunk streaming and re-meshing are mostly over before the warm-up.
+_DIM = {**VARIANTS["cost_all_on"], "vkrtx.autotest.loadSeconds": "90"}
+VARIANTS["dim_overworld"] = {**_DIM, "vkrtx.autotest.perfDimension": "overworld"}
+VARIANTS["dim_nether"] = {**_DIM, "vkrtx.autotest.perfDimension": "nether"}
+VARIANTS["dim_end"] = {**_DIM, "vkrtx.autotest.perfDimension": "end"}
+DIMENSIONS = ["dim_overworld", "dim_nether", "dim_end"]
 COST_MENU = ["cost_all_on", "cost_pt_spatial_off", "cost_pt_off", "cost_di_off", "cost_bounces1", "cost_nrd"]
 BASELINE = ["compute_pt_off", "compute_pt_on", "raygen_pt_off", "raygen_pt_on"]
 SER_AB = ["compute_pt_on", "raygen_pt_on", "ser_pt_on"]
@@ -424,7 +434,7 @@ def main() -> int:
     parser.add_argument("--scratch", type=Path, required=True, help="working dir for launcher/log copies")
     parser.add_argument("--revision", default="cf3f5f97-abi2")
     parser.add_argument("--variants", nargs="*", default=BASELINE,
-                        help="variant labels, or 'baseline' / 'ser_ab' / 'denoiser_ab' / 'rr_preset_ab' / 'cost_menu' / 'all'")
+                        help="variant labels, or 'baseline' / 'ser_ab' / 'denoiser_ab' / 'rr_preset_ab' / 'cost_menu' / 'dimensions' / 'all'")
     parser.add_argument("--timeout", type=float, default=480)
     parser.add_argument("--render-distance", type=int, default=16,
                         help="controlled render distance for a stable scene that fits the native budget (RD32 needs BLAS compaction)")
@@ -449,6 +459,8 @@ def main() -> int:
             labels += RR_PRESET_AB
         elif name == "cost_menu":
             labels += COST_MENU
+        elif name == "dimensions":
+            labels += DIMENSIONS
         elif name == "all":
             labels += list(VARIANTS)
         elif name in VARIANTS:
