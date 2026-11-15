@@ -8,7 +8,8 @@ record SettingsLayout(int frameX, int frameWidth, boolean sidebar, int listTop, 
     static final int FOOTER_HEIGHT = 20;
     static final int GAP = 4;
     static final int SEARCH_Y = 24;
-    private static final int TAB_TOP = SEARCH_Y + CONTROL_HEIGHT + 5;
+    static final int SEARCH_HEIGHT = 16;
+    private static final int TAB_TOP = SEARCH_Y + SEARCH_HEIGHT + 5;
     private static final int TAB_COLUMNS = 4;
     private static final int TAB_COUNT = SettingsDraft.Category.values().length;
     private static final int MAX_WIDTH = 536;
@@ -36,7 +37,7 @@ record SettingsLayout(int frameX, int frameWidth, boolean sidebar, int listTop, 
     }
 
     int searchWidth(int reviewWidth) {
-        return Math.max(1, contentWidth() - reviewWidth - GAP);
+        return Math.max(1, Math.min(controlWidth(), contentWidth() - reviewWidth - GAP));
     }
 
     int navX(int index) { return sidebar ? frameX : tabEdge(index % TAB_COLUMNS); }

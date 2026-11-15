@@ -18,7 +18,10 @@ class SettingsLayoutTest {
             assertEquals(layout.frameX() + layout.frameWidth(), layout.contentX() + layout.contentWidth());
             int reviewWidth = layout.reviewWidth(145);
             assertTrue(reviewWidth <= layout.contentWidth() / 3);
-            assertEquals(layout.contentWidth(), layout.searchWidth(reviewWidth) + SettingsLayout.GAP + reviewWidth);
+            int searchWidth = layout.searchWidth(reviewWidth);
+            assertTrue(searchWidth <= layout.controlWidth());
+            assertTrue(searchWidth + SettingsLayout.GAP + reviewWidth <= layout.contentWidth());
+            assertTrue(SettingsLayout.SEARCH_HEIGHT < SettingsLayout.CONTROL_HEIGHT);
             assertTrue(layout.listBottom() - layout.listTop() >= SettingsLayout.ROW_HEIGHT + SettingsLayout.CONTROL_HEIGHT);
             assertTrue(layout.listBottom() < layout.footerY());
             assertTrue(layout.footerY() + SettingsLayout.FOOTER_HEIGHT <= size[1]);

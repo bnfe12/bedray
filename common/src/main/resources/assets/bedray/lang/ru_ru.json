@@ -354,6 +354,8 @@
   "bedray.opt.atm_sunglare_size.desc": "Меняет размер ореола независимо от размера солнечного диска.",
   "bedray.opt.atm_bloom_sky": "Свечение неба",
   "bedray.opt.atm_bloom_sky.desc": "Яркие участки неба участвуют в свечении. Если днём картинка блекнет, повысьте порог свечения.",
+  "bedray.settings.search_hint": "Поиск",
+  "bedray.settings.filter_hint": "Фильтр",
   "bedray.settings.search": "Поиск по всем настройкам",
   "bedray.settings.addons": "Настройки дополнений…",
   "bedray.settings.trace_runtime": "Последний кадр · %s · %s → %s · %s сэмпл./пикс. · %s отск.",

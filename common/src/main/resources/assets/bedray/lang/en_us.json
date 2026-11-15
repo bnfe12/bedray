@@ -254,6 +254,8 @@
   "bedray.opt.atm_sunglare_size.desc": "Controls the angular size of the halo separately from the sun disc.",
   "bedray.opt.atm_bloom_sky": "Sky Bloom",
   "bedray.opt.atm_bloom_sky.desc": "Lets bright sky pixels contribute to bloom. Raise the threshold if daylight looks washed out.",
+  "bedray.settings.search_hint": "Search",
+  "bedray.settings.filter_hint": "Filter",
   "bedray.settings.search": "Search all settings",
   "bedray.settings.addons": "Add-on settings…",
   "bedray.settings.trace_runtime": "Last trace · %s · %s → %s · %s spp · %s bounces",

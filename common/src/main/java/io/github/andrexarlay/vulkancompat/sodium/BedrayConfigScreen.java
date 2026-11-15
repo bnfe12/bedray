@@ -74,9 +74,8 @@ public final class BedrayConfigScreen extends Screen {
         listTop = layout.listTop();
         listBottom = layout.listBottom();
         int reviewWidth = layout.reviewWidth(font.width(tr("bedray.settings.review_count", "Review (%s)", 999)));
-        search = new EditBox(font, contentX, SettingsLayout.SEARCH_Y, layout.searchWidth(reviewWidth), CONTROL_HEIGHT,
+        search = new EditBox(font, contentX, SettingsLayout.SEARCH_Y, layout.searchWidth(reviewWidth), SettingsLayout.SEARCH_HEIGHT,
             tr("bedray.settings.search", "Search settings"));
-        search.setHint(tr("bedray.settings.search", "Search settings"));
         search.setMaxLength(80);
         search.setValue(query);
         search.setResponder(text -> {
@@ -86,7 +85,7 @@ public final class BedrayConfigScreen extends Screen {
         });
         addRenderableWidget(search);
         reviewButton = addRenderableWidget(new PlainTextButton(contentX + contentWidth - reviewWidth,
-            SettingsLayout.SEARCH_Y, reviewWidth, CONTROL_HEIGHT, tr("bedray.settings.review", "Review"),
+            SettingsLayout.SEARCH_Y, reviewWidth, SettingsLayout.SEARCH_HEIGHT, tr("bedray.settings.review", "Review"),
             b -> toggleReview(), font));
         reviewButton.setTooltip(Tooltip.create(tr("bedray.settings.review_hint", "Show staged changes across all settings.")));
         navigation.clear();
@@ -173,9 +172,10 @@ public final class BedrayConfigScreen extends Screen {
         Map<SettingsDraft.Entry, Component> prerequisites = new HashMap<>();
         boolean searching = !query.isBlank();
         boolean browsing = !reviewing && !searching;
-        search.setHint(reviewing
+        search.setHint(reviewing ? tr("bedray.settings.filter_hint", "Filter") : tr("bedray.settings.search_hint", "Search"));
+        search.setTooltip(Tooltip.create(reviewing
             ? tr("bedray.settings.review_search", "Filter pending settings")
-            : tr("bedray.settings.search", "Search settings"));
+            : tr("bedray.settings.search", "Search all settings")));
         List<String> terms = SettingsSearch.terms(query);
         // Report each failed predicate with its option before replacing the existing rows.
         List<String> broken = new ArrayList<>();
