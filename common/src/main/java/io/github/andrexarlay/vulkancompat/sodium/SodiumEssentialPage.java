@@ -158,6 +158,16 @@ final class SodiumEssentialPage {
             .setEnabledProvider(s -> false).setControlHiddenWhenDisabled(false)
             .setBinding(v -> {}, () -> GiExecutionStatusRow.STATUS).setStorageHandler(st);
         rt.addOption(track("gi_execution_status", giStatus));
+        EnumOptionBuilder<VulkanSodiumConfig.TechnologyStatusRow> techStatus =
+            builder.createEnumOption(id("technology_status"), VulkanSodiumConfig.TechnologyStatusRow.class);
+        techStatus.setName(nameOf("technology_status")).setTooltip(v -> Component.empty()
+            .append(tipOf("technology_status")).append("\n")
+            .append(io.github.andrexarlay.vulkancompat.rtx.TechnologyStatus.live()))
+            .setDefaultValue(VulkanSodiumConfig.TechnologyStatusRow.STATUS)
+            .setElementNameProvider(v -> tr("bedray.technology_status.value", "Hover for details"))
+            .setEnabledProvider(s -> false).setControlHiddenWhenDisabled(false)
+            .setBinding(v -> {}, () -> VulkanSodiumConfig.TechnologyStatusRow.STATUS).setStorageHandler(st);
+        rt.addOption(track("technology_status", techStatus));
         for (boolean voxel : new boolean[] {false, true}) {
             String path = voxel ? "voxel_quality_profile" : "path_quality_profile";
             EnumOptionBuilder<QualityProfile> profile = builder.createEnumOption(id(path), QualityProfile.class);

@@ -189,6 +189,13 @@ public final class SettingsCatalog {
             "Experimental; the Iris host cost depends on the pack.",
             "Iris needs a selected shaderpack and Minecraft's Vulkan backend.",
             "No gameplay comparison has been captured for the Iris shader host.");
+        putNoImage("technology_status", Tier.ADVANCED, "Technology Support",
+            "Read-only list of the vendor-dependent technologies and what each one needs right now: DLSS multi frame generation "
+                + "(and the largest multiplier your driver reports), AMD FSR 3 frame generation, Intel XeSS frame generation, DLSS Ray "
+                + "Reconstruction and DLSS Neural Rendering. Hover the value to read it. Nothing here changes a setting.",
+            "Read-only status; no FPS claim.",
+            "Windows. Missing vendor files are named with the Download DLLs screen as the way to get them.",
+            "A status list has no comparison image.");
         putNoImage("gi_execution_status", Tier.ADVANCED, "GI Execution Technologies",
             "Honest supported / enabled / implemented state of the GI execution and geometry paths: raygen, NV Shader Execution Reordering, opacity micromap and partitioned TLAS. Raygen and SER are startup device features (-Dbedray.rt.raygen / -Dbedray.rt.ser); OMM and partitioned TLAS are deferred and not implemented. The regional in-place TLAS update is already active.",
             "Read-only status; no FPS claim. Measured: raygen -7.8% gpu_rt vs compute (RD16, PT on).",

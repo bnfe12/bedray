@@ -106,6 +106,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     }
     public enum RendererStatus { STATUS }
     public enum GiExecutionStatusRow { STATUS }
+    public enum TechnologyStatusRow { STATUS }
     public enum QualityProfile { FAST, BEAUTIFUL, CUSTOM }
 
     enum Mark { NONE, RT, PATH }
