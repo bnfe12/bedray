@@ -106,7 +106,7 @@ public final class RtModesScenario implements AutotestScenario {
                 continue;
             }
             String[] sm = item.split(":", 2);
-            if (sm.length != 2 || !(sm[0].equals("A") || sm[0].equals("B") || sm[0].equals("C") || sm[0].equals("D") || sm[0].equals("E") || sm[0].equals("F") || sm[0].equals("H") || LIGHT_SCENES.contains(sm[0]))) {
+            if (sm.length != 2 || !(sm[0].equals("A") || sm[0].equals("B") || sm[0].equals("C") || sm[0].equals("D") || sm[0].equals("E") || sm[0].equals("F") || sm[0].equals("H") || sm[0].equals("W") || LIGHT_SCENES.contains(sm[0]))) {
                 throw new IllegalArgumentException("step '" + item + "': expected A:, B:, C: or D:<mode>");
             }
             String[] parts = sm[1].split("\\+");
@@ -251,7 +251,19 @@ public final class RtModesScenario implements AutotestScenario {
         c.add(set(4, 0, 2, "torch"));
         c.add(set(0, 0, 13, "lantern"));
         lightScenes(c);
+        waterSeamScene(c);
         return c;
+    }
+
+    /**
+     * Scene W (owner screenshot 2026-11-14: a straight seam across a lake): a water sheet over the world lines x = 0 and z = 0,
+     * where {@code SurfaceHit.worldPosition} wraps at 1024 blocks. Absolute coordinates, because the wrap is absolute. The
+     * base is the spawn (about -42, 2), so the sheet is inside the loaded chunks.
+     */
+    private void waterSeamScene(List<String> c) {
+        c.add(fill(-30 - bx, -3, -30 - bz, 30 - bx, -2, 30 - bz, "sand"));
+        c.add(fill(-30 - bx, -1, -30 - bz, 30 - bx, -1, 30 - bz, "water"));
+        c.add(fill(-30 - bx, 0, -30 - bz, 30 - bx, 8, 30 - bz, "air"));
     }
 
     /** Geometry of the light-placement scenes J..N (see {@link #LIGHT_SCENES}); all within ~70 blocks of the base. */
@@ -563,6 +575,10 @@ public final class RtModesScenario implements AutotestScenario {
         } else if (scene.equals("Y")) {
             // dark room: south-east corner looking north-west at the lantern behind the rails
             x = bx + 122.5; y = by; z = bz - 18.5; aimYaw = 125f; aimPitch = 5f;
+        } else if (scene.equals("W")) {
+            // hovering over the sheet south-west of the origin, looking north-east (-Z, +X) so both world seams cross the view
+            x = -22.5; y = by + 3; z = 22.5; aimYaw = -135f; aimPitch = 14f;
+            flyScene = true;
         } else if (scene.equals("Z")) {
             // hub: at the south edge of the lamp field looking north (+Z) across it
             x = bx + 55.5; y = by; z = bz + 49.0; aimYaw = 0f; aimPitch = 8f;
@@ -818,6 +834,15 @@ public final class RtModesScenario implements AutotestScenario {
         return n > 0 ? 1000.0 * hit / n : 0;
     }
 
+    /** Mean luminance (0..255) of a screen image. */
+    private static double meanLuma(int[] a) {
+        double s = 0;
+        for (int p : a) {
+            s += luma8(p);
+        }
+        return a.length > 0 ? s / a.length : 0;
+    }
+
     private static double meanAbsDiff(int[] a, int[] b) {
         double s = 0;
         int n = Math.min(a.length, b.length);
@@ -1065,6 +1090,10 @@ public final class RtModesScenario implements AutotestScenario {
                 ctx.log("scenario", name(), "step", String.valueOf(index), "event", "moving_error", "spec", s.raw(),
                     "pose_idx", String.valueOf(pi), "err", String.format(Locale.ROOT, "%.3f", meanAbsDiff(movingImg, ref)),
                     "rmse", String.format(Locale.ROOT, "%.3f", rmse(movingImg, ref)),
+                    // Signed: err is blind to a light that is systematically too bright or too dim, bias is not.  A reuse stage
+                    // that keeps only the samples that survived a shadow test (or drops the ones that did not) shows here.
+                    "mean_moving", String.format(Locale.ROOT, "%.3f", meanLuma(movingImg)),
+                    "mean_ref", String.format(Locale.ROOT, "%.3f", meanLuma(ref)),
                     "edge_ref", String.format(Locale.ROOT, "%.3f", edgeSharpness(ref, ni.getWidth(), ni.getHeight(), 12f)),
                     "edge_moving", String.format(Locale.ROOT, "%.3f", edgeSharpness(movingImg, ni.getWidth(), ni.getHeight(), 12f)));
             } catch (Throwable t) {

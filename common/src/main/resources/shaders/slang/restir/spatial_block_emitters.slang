@@ -99,9 +99,10 @@ struct BlockEmitterSpatialReuse {
     }
 
     bool neighbourUsable(DIReservoir neighbour) {
+        // A zero-weight record (empty, or zeroed by its own shadow ray) cannot spread its sample - it has no weight to win
+        // with - but its draws count, so it is usable.
         return min(neighbour.stats.x, RESTIR_DI_M_CAP) > 0.0
-            && neighbour.stats.y > 0.0   // a record zeroed by its own shadow ray must not spread
-            && neighbour.source.z == uint(LightKind.Emitter)
+            && (neighbour.stats.y <= 0.0 || neighbour.source.z == uint(LightKind.Emitter))
             && isFinite(neighbour.sample.xyz) && isFinite(neighbour.receiver.xyz);
     }
 
@@ -130,10 +131,6 @@ struct BlockEmitterSpatialReuse {
 
         uint seed = blockEmitterSpatialSeed(pixel, frameIndex);
         DIReservoir merged = own;
-        // A selected sample cleared by the visibility test contributes neither weight nor M.
-        if (merged.stats.y == 0.0 && merged.sample.w > 0.0) {
-            merged.stats.x = 0.0;
-        }
         for (uint draw = 0u; draw < SPATIAL_DRAWS; draw += 1u) {
             int2 offset = blockEmitterSpatialOffset(seed, SPATIAL_OFFSET_RADIUS);
             // The shift that forced the opposite colour can push the offset one cell past the radius; the legacy kernel
