@@ -23,6 +23,14 @@ import static io.github.andrexarlay.vulkancompat.rtx.debug.benchmark.FrameCaptur
 public final class FrameBenchmark {
     public record Result(Path directory, boolean complete, int frames, String reason) {}
     private record Trace(String mode, String program, int width, int height, int spp, int bounces, float distance, int flags) {}
+    /**
+     * Opt-in for background benches ({@code -Dvkrtx.autotest.allowUnfocused=true}, set by {@code bench_gi_stack --background}):
+     * the owner keeps working while the capture runs, so the window sits behind other windows and is never focused. GPU
+     * timestamps do not depend on focus. The waiver is not silent: the native_perf manifest and the capture_armed log line
+     * carry {@code focus_waived}, and the default stays the strict focused capture.
+     */
+    public static final boolean FOCUS_WAIVED = Boolean.getBoolean("vkrtx.autotest.allowUnfocused");
+
     private static FrameCapture capture;
     private static FrameCapture.Config config;
     private static Path directory;
@@ -81,7 +89,7 @@ public final class FrameBenchmark {
             | (request == UpscalerBackend.BILINEAR && upscaler == null ? UPSCALER_OFF : 0)
             | (FrameGenSettings.mode() == FrameGenSettings.Mode.OFF
                 && (fg == FrameGenRuntime.State.READY || fg == FrameGenRuntime.State.UNAVAILABLE) ? FRAMEGEN_OFF : 0)
-            | (mc.gui.screen() == null ? SCREEN_CLOSED : 0) | (mc.getWindow().isFocused() ? FOCUSED : 0);
+            | (mc.gui.screen() == null ? SCREEN_CLOSED : 0) | (mc.getWindow().isFocused() || FOCUS_WAIVED ? FOCUSED : 0);
         capture.end(frame, new Facts(flags, rw, rh, ow, oh, trace == null ? "none" : trace.mode,
             trace == null ? "" : trace.program, trace == null ? 0 : trace.spp, trace == null ? 0 : trace.bounces,
             trace == null ? 0 : trace.distance,

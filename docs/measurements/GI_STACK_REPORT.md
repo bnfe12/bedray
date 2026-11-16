@@ -83,6 +83,8 @@ trace pass; `reserved` is peak native VRAM reserved.
 | DLSS RR → NRD REBLUR (PT on, same session) | gpu_rt 30.80 ms / total 31.54 ms | gpu_rt 25.14 ms / total 25.81 ms | **−5.66 ms (−18.4%)** | `denoiser_ab_rd16/` |
 | BLAS compaction RD32 | — | reserved 3607 MiB / used 3464 MiB | **fits 4096 MiB budget**, RT stable | `compaction_rd32_clean/` |
 
+> **Correction 2026-11-15:** the ~33 ms frame intervals quoted below were the vanilla AFK limiter (30 FPS cap after 60 s without input), not the renderer; see [afk_cap_20261115/FINDINGS.md](afk_cap_20261115/FINDINGS.md). GPU-time numbers are unaffected.
+
 Frame-interval medians sit at ~33–34 ms (~30 fps) across the RD16 arms: at RD16 the frame is denoiser/CPU-bound,
 so GPU-time wins (raygen, NRD) do not fully reach the presented frame interval. This is why the report quotes GPU
 timers, not FPS guarantees.
