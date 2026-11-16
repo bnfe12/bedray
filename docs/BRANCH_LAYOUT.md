@@ -24,8 +24,7 @@ Git therefore reports them as merged although their files are not in `main`. Com
 |---|---|
 | `archive/bedray/modular-20261112` | Native splits of `scene.cpp`, `core.cpp`, `path_trace_pass.cpp`; `RtPassFactory`, `RtArena`, `RtCameraHistory` and other owners written for the old `RtFrameRenderer`. Redo on the current tree: `main` has since re-modularised several of the same areas (`RtRenderLog`, `RtFrameStatsTracker`, `WorldCameraHistory`) with a different design. Taken so far: the `rtpipeline` unification and `RtDenoiserLifecycle` |
 | `archive/bedray/modular-reroot-20261113` | `WorldCameraHistory` / `WorldLevelProjection` extraction against the older tree |
-| `archive/feat/ui-hand-fg-20261114` | Height-dependent distance haze; conflicts with `main` in the volumetric push constants (`toneMode` vs `aerialSigma`) and needs a shader build to merge |
-| `archive/bedray/nether-lighting-stability-20261114`, `archive/bedray/nether-current-integration-20261114` | Nether emitter-scan caching and capture scenario; conflicts in `RtEmitters` and `NativePerfScenario` |
-| `archive/codex/reuse-scene-build-buffers` | Staging and BLAS scratch reuse; conflicts with the compaction code in native `scene.cpp` |
+| `archive/bedray/nether-lighting-stability-20261114` | Lava-footprint and cold-emitter stabilisation (`7103d3f2`): large shader and `RtEmitters` change that conflicts with the light-level/peak rework in `main`; needs a shader build to merge. The Nether capture scene (`archive/bedray/nether-current-integration-20261114`) duplicates `perfDimension=nether` already in `experimental` |
+| `archive/codex/reuse-scene-build-buffers` | Staging and BLAS scratch reuse (native `scene.cpp`, conflicts with the compaction code; needs a native build to merge) |
 | `archive/feat/slang-compute-migration-20261113` | Slang toolchain and voxel pilot on a much older base |
 | other `archive/bedray/*`, `archive/fix/*`, `archive/codex/*`, `archive/refactor/*`, `archive/feat/*` | Older snapshots; their useful changes were adapted into `main` on 2026-11-13 |
