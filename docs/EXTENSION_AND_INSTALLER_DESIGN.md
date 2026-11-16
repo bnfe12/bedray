@@ -109,3 +109,23 @@ existing instance)? Code-signing: an unsigned Windows `.exe` triggers SmartScree
 5. Companion app, only if the installer proves too limited.
 
 Nothing in this order requires a GPU except step 4; steps 1 to 3 can be built and tested with the Java suite and the native fake device.
+
+## 6. Decisions asked on 2026-11-16
+
+**Opacity micromaps: worth building, as an optional, measured feature.** `docs/measurements/afk_cap_20261115/FINDINGS.md` measured
+that about 43 % of the test scene is cutout geometry and that a build with no alpha holes ran 9.7 % faster on `gpu_total`
+(trace -14.3 %); a shader-side pre-filter recovered only 1.3 %, because the alpha fetch stays. Micromaps move the alpha decision into
+the acceleration structure, which is the one lever that can keep most of that ceiling. Needs `VK_EXT_opacity_micromap` (RTX 40/50), so
+it must be capability-gated and off elsewhere. The earlier "no measured terrain win" was written before this measurement.
+
+**Partitioned TLAS (PTLAS): not yet.** The whole TLAS-inclusive `world` span is 0.4 to 0.6 ms of about 24 ms, and a regional in-place TLAS
+update already exists. Even a perfect PTLAS cannot save more than a few percent. Revisit only if a capture shows the `world` span
+growing with render distance or entity count.
+
+**DLSS 5 with frame generation and Ray Reconstruction: cannot be promised.** The Neural Rendering path runs after DLSS SR/DLAA on the
+raster image and requires frame generation and RR off. Whether NGX allows it together with RR or Streamline frame generation is decided
+by NVIDIA's runtime and its partner SDK, which Bedray does not have and cannot test without an RTX card. The settings row now exists;
+combining it is a question for NVIDIA's documentation and a measured experiment, not a code change from here.
+
+**Multi frame generation up to 6x: already in the code.** `FrameGenSettings.Mode` has X2 to X6; the settings page offers each step only
+up to the `numFramesToGenerateMax` the driver reports (`FrameGenOptions.allowedModes`). The docs were out of date, not the code.
