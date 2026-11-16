@@ -837,6 +837,27 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         Identifier[] dLocalTone = rtDependencies(modeId, denId);
         look.addOption(atmSlider(builder, "atm_local_highlights", "local_highlights", 100, 0, 200, 5, localToneOn, dLocalTone, true, st));
         look.addOption(atmSlider(builder, "atm_local_shadows", "local_shadows", 100, 0, 200, 5, localToneOn, dLocalTone, true, st));
+        Identifier hdrId = id("hdr_output");
+        EnumOptionBuilder<io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.Output> hdr = builder.createEnumOption(hdrId, io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.Output.class);
+        hdr.setName(nameOf("hdr_output")).setTooltip(v -> tipOf("hdr_output"))
+            .setDefaultValue(io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.Output.OFF)
+            .setAllowedValues(EnumSet.allOf(io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.Output.class))
+            .setElementNameProvider(val -> switch (val) {
+                case OFF -> tr("bedray.hdr_output.off", "Off (SDR)");
+                case HDR10 -> tr("bedray.hdr_output.hdr10", "HDR10 (PQ)");
+            })
+            .setFlags(OptionFlag.REQUIRES_GAME_RESTART)
+            .setBinding(v -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.setOutput(v), () -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.savedOutput())
+            .setImpact(OptionImpact.LOW).setStorageHandler(st);
+        look.addOption(track("hdr_output", hdr));
+        Function<ConfigState, Boolean> hdrOn = s -> s.readEnumOption(hdrId, io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.Output.class) == io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.Output.HDR10;
+        Identifier[] dHdr = {hdrId};
+        look.addOption(intOpt(builder, "hdr_paper_white", 200, io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.PAPER_WHITE_MIN, io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.PAPER_WHITE_MAX, 10, unit(" nits"),
+            v -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.setPaperWhiteNits(v), () -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.paperWhiteNits(),
+            hdrOn, dHdr, Mark.NONE, OptionImpact.LOW, false, st));
+        look.addOption(intOpt(builder, "hdr_peak", 1000, io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.PEAK_MIN, io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.PEAK_MAX, 100, unit(" nits"),
+            v -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.setPeakNits(v), () -> io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.peakSetting(),
+            hdrOn, dHdr, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(boolOpt(builder, "vibrant_visuals", false, v -> RtSettings.vibrantVisuals = v,
             () -> RtSettings.vibrantVisuals, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(boolOpt(builder, "vignette", false, v -> RtSettings.vignette = v,

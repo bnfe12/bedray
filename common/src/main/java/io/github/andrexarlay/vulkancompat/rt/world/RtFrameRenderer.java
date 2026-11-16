@@ -1300,6 +1300,12 @@ public final class RtFrameRenderer {
             if (dst == 0L) {
                 throw new RtFailure("copy_to_target", "engine VkImage of the main/world target is 0");
             }
+            // HDR10 output: build the HDR picture from the SDR frame and the linear radiance the frame resolved (no-op in SDR).
+            if (io.github.andrexarlay.vulkancompat.rtx.hdr.HdrOutput.active()) {
+                RtComputeCheckpoints.mark(vulkanDevice, cmd, "hdr_scene");
+                io.github.andrexarlay.vulkancompat.rtx.hdr.HdrGpu.recordScene(vulkanDevice, cmd, presented,
+                    postHdr != null ? postHdr.view : 0L, params.exposure);
+            }
             RtComputeCheckpoints.mark(vulkanDevice, cmd, "copy_to_target");
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkImageCopy.Buffer region = VkImageCopy.calloc(1, stack);
@@ -1309,6 +1315,9 @@ public final class RtFrameRenderer {
                 VK10.vkCmdCopyImage(cmd, presented.image, VK10.VK_IMAGE_LAYOUT_GENERAL, dst, VK10.VK_IMAGE_LAYOUT_GENERAL, region);
             }
             pendingDisplayedTarget = target;
+            if (io.github.andrexarlay.vulkancompat.rtx.hdr.HdrOutput.active()) {
+                io.github.andrexarlay.vulkancompat.rtx.hdr.HdrGpu.commitScene();
+            }
         }
     }
 

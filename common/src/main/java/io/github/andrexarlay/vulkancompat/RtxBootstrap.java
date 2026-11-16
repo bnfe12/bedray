@@ -6,6 +6,7 @@ import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkanbridge.platform.Platforms;
 import io.github.andrexarlay.vulkancompat.autotest.RtxAutotest;
 import io.github.andrexarlay.vulkancompat.rt.denoise.NrdDeviceRequirements;
+import io.github.andrexarlay.vulkancompat.rtx.hdr.HdrDeviceRequirements;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.RtDeviceRequirements;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssDeviceRequirements;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrDeviceRequirements;
@@ -39,6 +40,7 @@ public final class RtxBootstrap {
     public static final String DLSS_PROVIDER_ID = "bedray.dlss";
     public static final String NRD_PROVIDER_ID = "bedray.nrd";
     public static final String FSR_PROVIDER_ID = "bedray.fsr";
+    public static final String HDR_PROVIDER_ID = "bedray.hdr_metadata";
     private static final Logger LOGGER = LoggerFactory.getLogger("VulkanRtx");
 
     private RtxBootstrap() {}
@@ -108,6 +110,8 @@ public final class RtxBootstrap {
         registry.addLateProvider(FSR_PROVIDER_ID, FsrDeviceRequirements::register);
         // only adds the storage-image features when -Dvkrtx.denoiser=nrd* is set; a default run leaves the device unchanged
         registry.addLateProvider(NRD_PROVIDER_ID, NrdDeviceRequirements::register);
+        // HDR10 output: optional VK_EXT_hdr_metadata group, only while hdr_output is HDR10
+        registry.addLateProvider(HDR_PROVIDER_ID, HdrDeviceRequirements::register);
         RtxAutotest.registerAll();
         // Shader hosts (Iris post, Dirt RT, custom RT stage): select before the device so their device groups can register.
         io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostStartup.run(Platforms.get().gameDir(), registry);
