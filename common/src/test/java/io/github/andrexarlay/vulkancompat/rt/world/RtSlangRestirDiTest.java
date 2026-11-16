@@ -162,10 +162,11 @@ class RtSlangRestirDiTest {
         String confirm = block(di, "void reuseConfirm(bool occluded) {");
         assertTrue(confirm.contains("if (!DI_VISIBILITY_REUSE || !occluded || !reuseActive())"),
             "a visible sample leaves the published weight alone");
-        assertTrue(confirm.contains("DIReservoir record = reservoirs[ownSlot];"),
-            "and the feedback re-reads the slot, because nothing may be carried between the two calls");
+        // The feedback touches the slot itself, because nothing may be carried between the two calls; it writes the one
+        // weight lane instead of reading and rewriting the whole record.
+        assertFalse(confirm.contains("DIReservoir record"), "no whole-record copy for a one-lane change");
         // 2026-11-07: the old 0.25 decay kept M, so the next merges read ~46% of the light and the pixel pulsed.
-        assertTrue(confirm.contains("record.stats.y = 0.0;"),
+        assertTrue(confirm.contains("reservoirs[reservoirSlot()].stats.y = 0.0;"),
             "visibility reuse: a blocked sample loses its whole weight, and mergeReservoirs then skips the record whole");
         assertFalse(confirm.contains("RESTIR_DI_OCCLUSION_DECAY"), "no partial decay that keeps M");
         String tracer = read(TRACER);
@@ -179,8 +180,8 @@ class RtSlangRestirDiTest {
     @Test
     void aPixelWithoutASurfacePublishesAnEmptyRecord() {
         String clear = block(read(DI), "void reuseClear() {");
-        assertTrue(clear.contains("reservoirs[reservoirSlot()] = emptyReservoir();"),
-            "the clear publishes an empty record of the current frame");
+        assertTrue(clear.contains("reservoirs[reservoirSlot()].stats = float4(0.0);"),
+            "the clear publishes an empty record of the current frame: M = 0 is what every reader gates on");
         String tracer = read(TRACER);
         assertTrue(tracer.contains("if (!reuseHandled && reuse.reuseActive()) {"),
             "the loop tail covers every path that never reached the primary NEE");

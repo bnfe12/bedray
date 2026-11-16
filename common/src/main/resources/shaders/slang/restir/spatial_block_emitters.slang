@@ -113,8 +113,14 @@ struct BlockEmitterSpatialReuse {
             return;
         }
         uint ownSlot = diReservoirSlot(pixel, size, parity);
-        DIReservoir own = reservoirs[ownSlot];
-        if (!ownRecord(own)) {
+        // The stats word is enough to reject an empty slot (sky, a pixel the trace pass cleared): the other 48 B are read
+        // only for a record that can be merged.  ownRecord below still decides on the full record.
+        bool hasOwn = min(reservoirs[ownSlot].stats.x, RESTIR_DI_M_CAP) > 0.0;
+        DIReservoir own = emptyReservoir();
+        if (hasOwn) {
+            own = reservoirs[ownSlot];
+        }
+        if (!hasOwn || !ownRecord(own)) {
             return;
         }
 
@@ -145,6 +151,12 @@ struct BlockEmitterSpatialReuse {
             }
             uint neighbourSlot = diReservoirSlot(neighbourPixel, size, parity);
             if (neighbourSlot >= diReservoirCount(reservoirs)) {
+                continue;
+            }
+            // The same two gates neighbourUsable opens with, on the stats word alone: an empty or zeroed neighbour costs
+            // 16 B instead of 64 B.  The full record is read once and neighbourUsable stays the single decision.
+            float4 neighbourStats = reservoirs[neighbourSlot].stats;
+            if (!(min(neighbourStats.x, RESTIR_DI_M_CAP) > 0.0) || !(neighbourStats.y > 0.0)) {
                 continue;
             }
             DIReservoir neighbour = reservoirs[neighbourSlot];
