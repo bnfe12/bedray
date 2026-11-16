@@ -25,6 +25,8 @@ class RtSlangVolumetricPassTest {
         assertEquals(17, march.getInt(72)); assertEquals(17, apply.getInt(12));
         assertEquals(0, march.getInt(76)); assertEquals(1, march.getInt(80)); assertEquals(1, march.getInt(84));
         assertEquals(1, apply.getInt(8)); assertEquals(0, march.getInt(92));
+        assertEquals(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.tonemapper().ordinal(), RtAerialFog.unpackToneMode(apply.getInt(20)),
+            "the tone curve rides in the top bits of the haze word, the push block stays 24 bytes");
     }
     @Test void sharedCameraConversionPreservesTheBobOriginWithoutChangingWorldHeight() {
         var p = new RtFrameParams();

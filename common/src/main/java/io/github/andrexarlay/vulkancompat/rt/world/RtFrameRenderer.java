@@ -449,6 +449,7 @@ public final class RtFrameRenderer {
             // the first-person camera never draws the player's own model; without it a reflection has nothing to show
             io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().captureSelfAvatar(camera,
                 levelState != null ? levelState.playerRenderState : null);
+            io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().captureHandGeometry(camera);
         }
         io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().endFrame();
         if (RtGeometryGate.irisActive()) {
@@ -1017,7 +1018,7 @@ public final class RtFrameRenderer {
         RtSky.dimensionSkyLight(skyState.isEnd, skyState.isNether, skyState.fogColor, skyLight);
         System.arraycopy(skyLight.zenith, 0, params.skyLightZenith, 0, 3);
         System.arraycopy(skyLight.horizon, 0, params.skyLightHorizon, 0, 3);
-        io.github.andrexarlay.vulkancompat.rt.hand.HandRtProbe.publishSky(params.key.color, skyLight.horizon, skyLight.zenith);
+        io.github.andrexarlay.vulkancompat.rt.hand.HandRtProbe.publishSky(params.key.color, skyLight.horizon, skyLight.zenith, params.exposure);
         params.volumetricFogEnabled = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.volumetricFogEnabled();
         params.fogDensity = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.fogDensity();
         params.fogInScattering = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.fogInScattering();

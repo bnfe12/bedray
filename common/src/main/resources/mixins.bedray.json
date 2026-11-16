@@ -35,6 +35,7 @@
     "rt.MixinEntityRenderDispatcher",
     "rt.MixinSubmitNodeCollection",
     "rt.MixinGameRendererHand",
+    "rt.MixinGuiItemAtlas",
     "rt.MixinFirstPersonHandsAndItemsRenderer",
     "rt.MixinBlockEntityRenderDispatcher",
     "rt.MixinRenderTypeAccessor",

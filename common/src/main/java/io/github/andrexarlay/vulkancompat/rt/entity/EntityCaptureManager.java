@@ -455,11 +455,134 @@ public final class EntityCaptureManager {
         worldEmitterCount++;
     }
 
+    /**
+     * Held item as real RT geometry ({@code -Dvkbridge.rt.handGeometry=true}, default off): the item quads of the hand pass are
+     * kept in VIEW space and injected into the entity geometry of the next RT frame with that frame's camera, so glass in the hand
+     * is traced like glass in the world. The raster item is not drawn then. STUB: arm and offhand model stay raster; the item
+     * appears one frame late relative to its animation.
+     */
+    private static final boolean HAND_GEOMETRY = Boolean.getBoolean("vkbridge.rt.handGeometry");
+
+    public static boolean handGeometryEnabled() {
+        return HAND_GEOMETRY;
+    }
+
+    private record HandGeoQuad(int slot, float[] remap, int tint, float[] pos, float[] uv) { }
+
+    private final java.util.ArrayList<HandGeoQuad> handGeo = new java.util.ArrayList<>();
+    private long handGeoSeq = Long.MIN_VALUE / 2;
+    private int handGeoLight = 0xF000F0;
+    private long handGeoInjectLogged;
+    /** Vertical FOV (degrees) of the hand projection of the current hand pass ({@code CameraRenderState.hudFov}). */
+    private float handHudFov = 70.0f;
+
+    /** Stages the quads of the held item in view space (hand pass only). Returns the number of staged quads. */
+    public synchronized int stageHandGeometry(PoseStack poseStack, ItemQuads itemQuads, int[] tintColors, int light) {
+        if (!HAND_GEOMETRY || !handPass || open || poseStack == null || itemQuads == null || itemQuads.isEmpty()) {
+            return 0;
+        }
+        PoseStack.Pose pose = poseStack.last();
+        Vector4f tmp = new Vector4f();
+        int staged = 0;
+        for (BakedQuad quad : itemQuads.all()) {
+            if (quad == null) continue;
+            var sprite = quad.materialInfo() != null ? quad.materialInfo().sprite() : null;
+            int slot = 0;
+            float[] remap = null;
+            if (sprite != null) {
+                slot = EntityTextureAtlas.INSTANCE.spriteSlot(sprite.contents().name(), sprite.contents().width(), sprite.contents().height());
+                remap = new float[] {sprite.getU0(), sprite.getU1(), sprite.getV0(), sprite.getV1()};
+            }
+            float[] pos = new float[12];
+            float[] uv = new float[8];
+            for (int i = 0; i < 4; i++) {
+                Vector3fc p = quad.position(i);
+                tmp.set(p.x(), p.y(), p.z(), 1.0f).mul(pose.pose()).mul(handViewRotation);
+                pos[i * 3] = tmp.x;
+                pos[i * 3 + 1] = tmp.y;
+                pos[i * 3 + 2] = tmp.z;
+                long packed = quad.packedUV(i);
+                uv[i * 2] = net.minecraft.client.model.geom.builders.UVPair.unpackU(packed);
+                uv[i * 2 + 1] = net.minecraft.client.model.geom.builders.UVPair.unpackV(packed);
+            }
+            handGeo.add(new HandGeoQuad(slot, remap, itemQuadTintColor(quad.materialInfo(), tintColors), pos, uv));
+            staged++;
+        }
+        if (staged > 0) {
+            handGeoSeq = frameSeq;
+            handGeoLight = light;
+        }
+        return staged;
+    }
+
+    /**
+     * Appends the staged held-item quads (of the PREVIOUS frame's hand pass) to this frame's entity capture, placed with this
+     * frame's camera. Call after the world capture and before {@link #endFrame()}.
+     */
+    public synchronized boolean captureHandGeometry(net.minecraft.client.renderer.state.level.CameraRenderState camera) {
+        if (!HAND_GEOMETRY || !open || camera == null || camera.viewRotationMatrix == null) {
+            return false;
+        }
+        if (frameSeq - handGeoSeq > 1 || handGeo.isEmpty()) {
+            return false;
+        }
+        Matrix4f inv = new Matrix4f(camera.viewRotationMatrix).invert();
+        Vector4f v = new Vector4f();
+        // The hand is rasterised with its own FOV (hudFov), the RT camera uses the world FOV: scale x/y of the view-space point so it
+        // lands on the same screen position under the world projection (the usual viewmodel-FOV correction).
+        float worldTanHalf = camera.projectionMatrix != null && camera.projectionMatrix.m11() != 0.0f
+            ? 1.0f / Math.abs(camera.projectionMatrix.m11()) : 0.0f;
+        float hudTanHalf = (float) Math.tan(Math.toRadians(handHudFov) * 0.5);
+        float fovScale = worldTanHalf > 0.0f && hudTanHalf > 0.0f ? worldTanHalf / hudTanHalf : 1.0f;
+        beginEntity(-1, "item", null, EntityGeometryFrame.CapturedEntity.FLAG_ITEM);
+        int light = handGeoLight;
+        try {
+            for (HandGeoQuad q : handGeo) {
+                frameConsumer.setTexture(q.slot(), q.remap());
+                float[] w = new float[12];
+                for (int i = 0; i < 4; i++) {
+                    v.set(q.pos()[i * 3] * fovScale, q.pos()[i * 3 + 1] * fovScale, q.pos()[i * 3 + 2], 0.0f).mul(inv);
+                    w[i * 3] = v.x;
+                    w[i * 3 + 1] = v.y;
+                    w[i * 3 + 2] = v.z;
+                }
+                float e1x = w[3] - w[0], e1y = w[4] - w[1], e1z = w[5] - w[2];
+                float e2x = w[9] - w[0], e2y = w[10] - w[1], e2z = w[11] - w[2];
+                float nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+                float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+                if (len > 1e-8f) { nx /= len; ny /= len; nz /= len; }
+                for (int i = 0; i < 4; i++) {
+                    frameConsumer.addVertex(w[i * 3], w[i * 3 + 1], w[i * 3 + 2]);
+                    frameConsumer.setColor(q.tint());
+                    frameConsumer.setUv(q.uv()[i * 2], q.uv()[i * 2 + 1]);
+                    frameConsumer.setUv2(light & 0xFFFF, (light >>> 16) & 0xFFFF);
+                    frameConsumer.setNormal(nx, ny, nz);
+                }
+            }
+        } finally {
+            frameConsumer.setTexture(0, null);
+            endEntity();
+        }
+        if (handGeoInjectLogged++ == 0) {
+            LOGGER.info("[VKB-RT] hand_geometry injected quads={} light={} hudFov={} worldTanHalf={} fovScale={}", handGeo.size(),
+                Integer.toHexString(light), handHudFov, worldTanHalf, fovScale);
+        }
+        return true;
+    }
+
     /** Opens the first-person hand pass ({@code GameRenderer.renderItemInHand}); {@code viewRotation} = camera view rotation. */
     public synchronized void beginHandPass(Matrix4f viewRotation) {
+        beginHandPass(viewRotation, handHudFov);
+    }
+
+    public synchronized void beginHandPass(Matrix4f viewRotation, float hudFovDegrees) {
+        handHudFov = hudFovDegrees;
         handPass = frameEnabled;
         handViewRotation.set(viewRotation);
         handEmitterCount = 0;
+        if (handPass) {
+            handGeo.clear();
+        }
     }
 
     public synchronized void endHandPass() {
