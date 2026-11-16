@@ -16,7 +16,7 @@ repositories {
     }
 }
 dependencies {
-    compileOnly 'io.github.andrexarlay:bedray-renderer-api:1.8.0'
+    compileOnly 'io.github.andrexarlay:bedray-renderer-api:1.9.0'
 }
 ```
 
@@ -24,7 +24,7 @@ Declare the `bedray` mod as a client dependency in your loader metadata. Keep th
 API JAR on the compile classpath. The Bedray mod supplies the classes at runtime.
 For optional integration, isolate the code in a class loaded only after your
 loader confirms Bedray is present. Check
-`GraphicsBackendRegistry.apiMinorVersion() >= 8` before invoking API 1.8 code.
+`GraphicsBackendRegistry.apiMinorVersion() >= 8 (>= 9 for light providers)` before invoking API 1.8 code.
 
 ## Contribute controls
 
@@ -87,3 +87,21 @@ register once with `GraphicsBackendRegistry.register(...)` on the client. The
 host owns frame callbacks and permits one compute backend. Integrations that
 use the Vulkan callback types also need the game's LWJGL Vulkan bindings on the
 compile classpath. See the [companion module](../compute-common/) for an example.
+
+## Contribute lights (API 1.9)
+
+`io.github.andrexarlay.bedray.api.v1.light.LightProviders` lets an add-on supply extra point lights once per frame.
+Check `GraphicsBackendRegistry.apiMinorVersion() >= 9` first.
+
+```java
+LightProviders.register("example", camera -> List.of(
+    new PointLight(10.5, 70.0, -3.5, 1.0f, 0.6f, 0.2f, 12.0f)));
+```
+
+* Lights are validated when constructed (finite position, colour in `[0, 1000]`, radius `0.5` to `64` blocks).
+* One provider may contribute at most 64 lights per frame and all providers together at most 256; the rest are dropped.
+* A provider that throws is skipped for that frame and disabled after three failing frames in a row;
+  `LightProviders.status()` reports each provider.
+* **Status:** the host collects and validates the lights, but does not yet inject them into the renderer; the injection needs
+  in-game GPU verification. `LightProviders.appliedByHost()` returns `false` until it does, so an add-on can tell.
+  See `docs/EXTENSION_AND_INSTALLER_DESIGN.md` for the planned layers (sky, materials, pass hooks).

@@ -2,7 +2,7 @@ apply from: rootProject.file('gradle/loader-module.gradle')
 apply from: rootProject.file('gradle/build-provenance.gradle')
 
 base { archivesName = 'bedray-renderer-api' }
-version = '1.8.0'
+version = '1.9.0'
 java { withSourcesJar() }
 
 tasks.withType(Jar).configureEach {
