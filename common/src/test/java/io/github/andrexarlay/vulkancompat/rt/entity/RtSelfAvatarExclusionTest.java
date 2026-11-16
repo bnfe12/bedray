@@ -49,7 +49,7 @@ public class RtSelfAvatarExclusionTest {
             "the trailing uints retain their offsets after the private sky colour/day packet");
         assertEquals(RtStatsLayout.SKY_DISPLAY_COLOR_B_DAY + 16, RtStatsLayout.SELF_AVATAR_TRI_COUNT, "two separate uints, no uvec2 padding");
         assertTrue(RtStatsLayout.SIZE <= RtStatsLayout.SLOT_STRIDE, "the slot ring must still fit the struct");
-        String renderer = readJava("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
+        String renderer = readJava("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameHeader.java");
         assertTrue(renderer.contains("memPutInt(hdr + RtStatsLayout.SELF_AVATAR_TRI_START, entOk ? capture.selfAvatarTriStart() : 0)"),
             "the slot the shader reads this frame is written by the renderer before the dispatch");
         assertTrue(renderer.contains("memPutInt(hdr + RtStatsLayout.SELF_AVATAR_TRI_COUNT, entOk ? capture.selfAvatarTriCount() : 0)"),
