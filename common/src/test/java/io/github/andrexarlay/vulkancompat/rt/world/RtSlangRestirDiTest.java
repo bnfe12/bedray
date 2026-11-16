@@ -198,11 +198,11 @@ class RtSlangRestirDiTest {
     void aReusedSampleIsEstimatedExactlyLikeAFreshDraw() {
         String reuse = block(read(DI), "LightSample reuseSample(LightReceiver receiver, inout uint seed) {");
         // evaluateTarget shares blockEmitterCandidate with evaluate (same p-hat and Le); only the cancelling source pdf is dropped.
-        assertTrue(reuse.contains("LightEvaluation evaluation = emitters().evaluateTarget(receiver, historySample);"),
+        assertTrue(reuse.contains("evaluation = emitters().evaluateTarget(receiver, historySample);"),
             "the stored point is re-resolved through the plain sampler's candidate path, so p-hat and Le are one code path");
         // A vanished quad fails blockEmitterFind inside evaluateTarget and comes back invalid (no source pdf any more).
-        assertTrue(reuse.contains("if (evaluation.valid && evaluation.targetPdf > 0.0) {"),
-            "a record whose quad vanished from the list is dropped instead of being weighted by zero");
+        assertTrue(reuse.contains("bool historyShades = evaluation.valid && evaluation.targetPdf > 0.0;"),
+            "a record whose quad vanished from the list contributes no sample - it is not weighted by zero, it only counts its draws");
         // The import's solid-angle pdf multiplies the estimate and is divided out by the direct term, so a constant serves.
         assertTrue(reuse.contains("imported.solidAnglePdf = DI_IMPORT_SOLID_ANGLE_PDF;"),
             "the import fills the same estimate struct a winner fills");
@@ -211,7 +211,7 @@ class RtSlangRestirDiTest {
         assertTrue(reuse.contains("return blockEmitterEstimateSample(estimate, current.stats.y, current.stats.x,"
             + " receiver);"),
             "one estimator, fed with the merged weight sum and the merged M - reuse means reusing the accumulation too");
-        assertTrue(reuse.contains("current = mergeReservoirs(current, history, evaluation.targetPdf,")
+        assertTrue(reuse.contains("current = mergeReservoirs(current, history, historyShades ? evaluation.targetPdf : 0.0,")
             && reuse.contains("RESTIR_DI_TEMPORAL_RATIO_CAP, temporalCap, seed)")
             && reuse.contains("cameraStatic != 0u ? RESTIR_DI_M_CAP : RESTIR_DI_M_CAP_MOVING"),
             "the import is capped by the ratio, and a moving camera reuses a short history so a stuck outlier cannot "
@@ -219,6 +219,31 @@ class RtSlangRestirDiTest {
         String entry = read(ENTRY);
         assertTrue(entry.contains("lights.emittersReusedAtPrimary = directReuse.enabled != 0u;"),
             "with the reservoir on, the composite stops drawing the emitter branch a second time at the primary vertex");
+    }
+
+    /**
+     * 2026-11-14: a history with no weight to give still spent its draws. Dropping them (the old early return and the old
+     * {@code stats.y > 0} gate) divided the sample a receiver keeps by the fresh batch alone whenever the history happened to
+     * be empty, which is most of the time on a dim wall: autotest rt_modes scene N, fixed exposure, DLSS RR, whole-frame mean
+     * 94.2 with temporal reuse against 85.9 with reuse off (+9.6 %, +23..27 % in the dim cells); two runs of one setting agree
+     * to 0.1 %.
+     */
+    @Test
+    void anEmptyHistoryStillCountsItsDraws() {
+        String merge = block(read(RESERVOIR), "DIReservoir mergeReservoirs(");
+        assertTrue(merge.contains("if (!(incomingWeight > 0.0)) {") && merge.contains("current.stats.x += incomingM;"),
+            "a zero-weight incoming reservoir adds its (capped) M and leaves the sample, the weight and the random stream alone");
+        assertFalse(merge.contains("if (incomingWeight <= 0.0) return current;"), "the old early return is gone");
+        String history = block(read(DI), "bool diLoadHistory(");
+        assertFalse(history.contains("!(stored.stats.y > 0.0)"), "an empty record is still a history that was tried M times");
+        assertTrue(history.contains("stored.stats.y > 0.0 && stored.source.z != uint(LightKind.Emitter)"),
+            "the light kind is only a test for a record that holds a sample; an empty record's source lanes read as the sun");
+        String reuse = block(read(DI), "LightSample reuseSample(LightReceiver receiver, inout uint seed) {");
+        assertTrue(reuse.contains("if (historySample.valid && history.stats.y > 0.0) {"),
+            "only a record with weight is re-evaluated; an empty one merges its M with a target of 0");
+        String spatial = block(read(RESERVOIR), "DIReservoir restirDiSpatial<S : ILightSampler>");
+        assertTrue(spatial.contains("float targetPdf = 0.0;") && spatial.contains("return mergeReservoirs(current, neighbor, targetPdf,"),
+            "the spatial merge counts a neighbour's draws the same way");
     }
 
     /** One shader, two branches: the switch is host state, not a second compiled program. */

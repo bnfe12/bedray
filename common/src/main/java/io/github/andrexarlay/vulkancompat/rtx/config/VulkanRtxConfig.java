@@ -702,6 +702,8 @@ public final class VulkanRtxConfig {
                         LOGGER.warn("'{}' = '{}' is not implemented (STUB: frame generation / ray reconstruction), ignored", key, val);
                     }
                 }
+                case "hdr_output", "hdr_paper_white", "hdr_peak" ->
+                    io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.applyKeyValue(key, val);
                 case "framegen_mode", "reflex_mode", "framegen_frame_limit" ->
                     io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.applyKeyValue(key, val);
                 case "rt_mode" -> {
@@ -879,6 +881,7 @@ public final class VulkanRtxConfig {
             writer.write("ui_menu_transparency = " + menuTransparency + "\n");
             RtSettings.write(writer);
             io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.write(writer);
+            io.github.andrexarlay.vulkancompat.rtx.hdr.HdrSettings.write(writer);
             io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostConfig.write(writer);
         }
     }

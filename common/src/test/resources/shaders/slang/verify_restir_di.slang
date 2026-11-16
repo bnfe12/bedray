@@ -53,10 +53,30 @@ void main() {
     occluded.stats.y = 0.0;
     DIReservoir current = freshBatch(8.0);
     uint before = seed;
-    DIReservoir unchanged = mergeReservoirs(current, occluded, 1.0,
+    // A zero-weight history cannot win a draw and leaves the sample and the random stream alone, but its draws still count.
+    DIReservoir kept = mergeReservoirs(current, occluded, 1.0,
         RESTIR_DI_TEMPORAL_RATIO_CAP, RESTIR_DI_M_CAP, seed);
-    sink[3] = all(unchanged.stats == current.stats) && all(unchanged.sample == current.sample)
-        && all(unchanged.source == current.source) && seed == before;
+    sink[3] = kept.stats.x == current.stats.x + occluded.stats.x && kept.stats.y == current.stats.y
+        && kept.stats.z == current.stats.z && all(kept.sample == current.sample)
+        && all(kept.source == current.source) && seed == before;
+
+    // Pooling is unbiased when the history is random too: 4 fresh and 4 history draws, each hitting with probability 1/4 and
+    // weight 4, over all 4^8 equally likely outcomes.  The pooled estimate wSum / (M * p^) averages to exactly 1, history
+    // empty or not; with the empty history's draws dropped it averages to more.
+    float pooledSum = 0.0;
+    for (uint pooled = 0u; pooled < 65536u; ++pooled) {
+        float freshSum = 0.0;
+        float historySum = 0.0;
+        for (uint draw = 0u; draw < 4u; ++draw) {
+            if (((pooled >> (2u * draw)) & 3u) == 0u) freshSum += 4.0;
+            if (((pooled >> (8u + 2u * draw)) & 3u) == 0u) historySum += 4.0;
+        }
+        uint pooledSeed = pooled + 1u;
+        DIReservoir pooledResult = mergeReservoirs(freshBatch(freshSum), freshBatch(historySum), 1.0,
+            RESTIR_DI_TEMPORAL_RATIO_CAP, RESTIR_DI_M_CAP, pooledSeed);
+        pooledSum += reservoirResolve(pooledResult, float3(0.0)).weight;
+    }
+    sink[9] = pooledSum == 65536.0;
 
     PathTraceOptions defaults = defaultPathTraceOptions();
     sink[4] = pathSeesEmission(2u, false, defaults.emitterNeeAvailable)

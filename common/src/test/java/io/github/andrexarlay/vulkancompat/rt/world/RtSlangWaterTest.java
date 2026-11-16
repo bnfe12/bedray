@@ -42,6 +42,35 @@ class RtSlangWaterTest {
     private static final String FLUID_BRANCH =
         "if ((hit.flags & HIT_FLAG_TRANSLUCENT) != 0u\n                && waterIsSurface(true,";
 
+    /**
+     * The wave field reads {@code SurfaceHit.worldPosition}, which wraps at 1024 blocks. A component whose vector is not a whole
+     * multiple of 2 pi / 1024 per axis jumps in phase at every world line x or z = 1024 n: a straight seam across a lake.
+     */
+    @Test
+    void everyWaveIsPeriodicOverTheWorldPositionWrap() {
+        String slang = read(WATER);
+        String table = slang.substring(slang.indexOf("static const float4 WATER_WAVE_A"));
+        table = table.substring(0, table.indexOf("};"));
+        java.util.regex.Matcher m = java.util.regex.Pattern
+            .compile("float4\\((-?[0-9.]+),\\s*(-?[0-9.]+),\\s*([0-9.]+),\\s*[0-9.]+\\)").matcher(table);
+        int waves = 0;
+        double unit = 2.0 * Math.PI / 1024.0;
+        while (m.find()) {
+            waves++;
+            double dx = Double.parseDouble(m.group(1));
+            double dz = Double.parseDouble(m.group(2));
+            double k = Double.parseDouble(m.group(3));
+            assertEquals(1.0, Math.hypot(dx, dz), 2.0e-5, "a unit direction");
+            // 1024 blocks of phase, in whole turns: an integer (the constants carry six digits, so a few 1e-3 of slack)
+            assertEquals(Math.rint(k * dx * 1024.0 / (2.0 * Math.PI)), k * dx * 1024.0 / (2.0 * Math.PI), 6.0e-3,
+                "wave " + waves + " x phase over 1024 blocks is a whole number of turns");
+            assertEquals(Math.rint(k * dz * 1024.0 / (2.0 * Math.PI)), k * dz * 1024.0 / (2.0 * Math.PI), 6.0e-3,
+                "wave " + waves + " z phase over 1024 blocks is a whole number of turns");
+            assertTrue(unit > 0.0);
+        }
+        assertEquals(6, waves);
+    }
+
     /** Six deep-water components, dispersed as gravity waves and filtered by the pixel footprint. */
     @Test
     void theWaveFieldIsTheSixComponentDeepWaterSum() {

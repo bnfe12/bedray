@@ -50,8 +50,13 @@ class RtSlangRestirSpatialTest {
             && slang.contains("static const float SPATIAL_PLANE_TOLERANCE_ABSOLUTE = 0.02;")
             && slang.contains("static const float SPATIAL_PLANE_TOLERANCE_MAX = 0.2;"),
             "and every part of that tolerance is a named constant of this module");
-        assertTrue(slang.contains("&& neighbour.stats.y > 0.0"),
-            "a record zeroed by its own shadow ray is never imported by a neighbour");
+        // 2026-11-14: a zero-weight record (empty, or zeroed by its own shadow ray) cannot win a draw, but it spent its M
+        // draws, and a pool that drops them divides the surviving samples by too little (the temporal stage measured +9.6 %).
+        assertFalse(slang.contains("&& neighbour.stats.y > 0.0"),
+            "a zero-weight neighbour is not skipped: its draws count");
+        assertTrue(slang.contains("(neighbour.stats.y <= 0.0 || neighbour.source.z == uint(LightKind.Emitter))"),
+            "the light kind is only a test for a record that holds a sample");
+        assertFalse(slang.contains("merged.stats.x = 0.0;"), "and the pixel's own draws are never wiped");
         assertTrue(slang.contains("pcgHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + frameIndex * 26699u + 7u)"),
             "the same seed hash, including its +7 stream offset, so a side-by-side frame can be compared per sample");
     }
@@ -74,7 +79,7 @@ class RtSlangRestirSpatialTest {
         // The spatial merge must not age a sample: the age lane is what the temporal gate reports, and a neighbour's age
         // belongs to another pixel.
         assertFalse(spatial.contains("source.y"), "spatial reuse does not touch the age lane");
-        assertTrue(block(read(RESERVOIR), "DIReservoir restirDiSpatial<S : ILightSampler>").contains("return mergeReservoirs(current, neighbor, evaluation.targetPdf,\n        ratioCap, mCap, seed);"),
+        assertTrue(block(read(RESERVOIR), "DIReservoir restirDiSpatial<S : ILightSampler>").contains("return mergeReservoirs(current, neighbor, targetPdf, ratioCap, mCap, seed);"),
             "and the shared helper keeps that property: only the temporal variant increments it");
         assertTrue(reservoir.contains("merged.source.y = min(merged.source.y + 1u, 0xFFFFu);"),
             "which is the temporal stage's line, not the spatial one");

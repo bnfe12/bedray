@@ -457,6 +457,19 @@ public final class SettingsCatalog {
             "FPS: none - it is a per-pixel curve in the display pass.",
             "Needs ray tracing on.",
             "A still shows the look directly; switch live to compare.");
+        putNoImage("hdr_output", Tier.ADVANCED, "HDR Output",
+            "Sends the picture to an HDR monitor as HDR10 (PQ, BT.2020). Highlights such as the sun, lava and lamps reach real HDR brightness; the interface stays at the paper white level. Needs Windows HDR switched on for the monitor, frame generation off and a game restart.",
+            "FPS: none - one extra full-screen pass before the picture is shown.",
+            "HDR monitor with Windows HDR on; restart required.",
+            "Only an HDR display shows it; on an SDR display leave it Off.");
+        putNoImage("hdr_paper_white", Tier.ADVANCED, "HDR Paper White",
+            "Brightness of SDR white and of the interface in nits (80 to 500). Raise it in a bright room, lower it in the dark. 200 is a good start.",
+            "FPS: none.", "HDR Output set to HDR10.",
+            "Only an HDR display shows it.");
+        putNoImage("hdr_peak", Tier.ADVANCED, "HDR Peak Brightness",
+            "Brightest highlight the picture may reach in nits (400 to 4000). Set it to what the monitor can really show; a value above the panel peak is clipped or tone mapped by the monitor.",
+            "FPS: none.", "HDR Output set to HDR10.",
+            "Only an HDR display shows it.");
         putNoImage("vibrant_visuals", Tier.ADVANCED, "Vibrant Visuals",
             "Mojang-style vibrant palette: richer saturation and higher colour contrast on the tone-mapped picture. The built-in Vibrant preset pairs it with the ACES tone curve.",
             "FPS: none - a per-pixel grade in the display pass.", "Needs ray tracing on.",
