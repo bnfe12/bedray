@@ -13,7 +13,7 @@ bool wrong_binding = false, wrong_push = false, wrong_count = false;
 namespace bedray::core {
 bool program_contract(BedrayCore*, std::uint64_t handle, ProgramContract& out) noexcept {
     if (handle != 2 && handle != 3) return false;
-    out = {wrong_push ? 16u : handle == 3 ? 24u : 96u, wrong_count ? 1u : handle == 3 ? 4u : 5u};
+    out = {wrong_push ? 16u : handle == 3 ? 32u : 96u, wrong_count ? 1u : handle == 3 ? 4u : 5u};
     return true;
 }
 bool program_has_binding(BedrayCore*, std::uint64_t handle, std::uint32_t binding, std::uint32_t type) noexcept {
