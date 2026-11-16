@@ -104,7 +104,7 @@ public class RtAdaptiveQualityTest {
     public void optionIsOffByDefault() throws IOException {
         assertTrue(read(SETTINGS).contains("adaptiveQuality = AdaptiveQuality.OFF"),
             "a budget is a target: a GPU that cannot reach it would sit at one ray forever");
-        assertTrue(read(CONFIG).contains("setDefaultValue(RtSettings.AdaptiveQuality.OFF)"), "the page must agree with the field");
+        assertTrue((read(CONFIG) + read(CONFIG.replace("VulkanSodiumConfig", "SodiumAdvancedPage"))).contains("setDefaultValue(RtSettings.AdaptiveQuality.OFF)"), "the page must agree with the field");
     }
 
     // ------------------------------------------------------------------ policy
@@ -334,7 +334,7 @@ public class RtAdaptiveQualityTest {
 
     @Test
     public void settingIsRegisteredAndDescribedHonestly() throws IOException {
-        String config = read(CONFIG);
+        String config = read(CONFIG) + read(CONFIG.replace("VulkanSodiumConfig", "SodiumAdvancedPage"));
         int at = config.indexOf("createEnumOption(id(\"adaptive_quality\")");
         assertTrue(at > 0, "the option must exist on the Path Tracing page");
         String block = config.substring(at, config.indexOf("track(\"adaptive_quality\"", at));

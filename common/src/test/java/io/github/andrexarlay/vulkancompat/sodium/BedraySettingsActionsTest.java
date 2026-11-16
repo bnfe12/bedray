@@ -108,12 +108,12 @@ class BedraySettingsActionsTest {
     @Test
     void theUiBuildersStayInTheFacade() throws IOException {
         String facade = read(FACADE);
-        assertTrue(facade.contains("private static <T> Consumer<T> custom(Consumer<T> set, Supplier<T> get)"),
+        assertTrue(facade.contains("static <T> Consumer<T> custom(Consumer<T> set, Supplier<T> get)"),
             "the page-value builder stays in the facade");
-        assertTrue(facade.contains("private static <T> Consumer<T> customPath(Consumer<T> set, Supplier<T> get)"),
+        assertTrue(facade.contains("static <T> Consumer<T> customPath(Consumer<T> set, Supplier<T> get)"),
             "the PT-value builder stays in the facade");
         assertTrue(facade.contains("public enum RtDebugView"), "the debug-view enum stays in the facade");
-        assertTrue(facade.contains("private static OptionBuilder resetListButton("),
+        assertTrue(facade.contains("static OptionBuilder resetListButton("),
             "the reset-list button builder stays in the facade");
         assertTrue(facade.contains("resetAllDefaultsButton("), "the reset-all button builder stays in the facade");
         assertTrue(facade.contains("requestValueRefresh();"),
