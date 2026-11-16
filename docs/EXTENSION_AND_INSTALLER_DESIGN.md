@@ -129,3 +129,23 @@ combining it is a question for NVIDIA's documentation and a measured experiment,
 
 **Multi frame generation up to 6x: already in the code.** `FrameGenSettings.Mode` has X2 to X6; the settings page offers each step only
 up to the `numFramesToGenerateMax` the driver reports (`FrameGenOptions.allowedModes`). The docs were out of date, not the code.
+
+## 7. Opacity micromaps: prior art and what is left
+
+An implementation already exists for the **old Java scene**: `OpacityMicromapCache` (tag `archive/bedray/modular-20261112`,
+`common/.../rt/world/OpacityMicromapCache.java`, about 700 lines). It builds one global level-4 4-state micromap from the material
+atlas classification, interns entries by their UV corners and attaches per-triangle indices to cutout BLAS geometry. Its own header
+records why it was switched off by default (`RtConfig.OPACITY_MICROMAPS`): a margin-0 "transparent" classification removed hits
+the distant shader still draws (the far cutout test draws at coverage 0.04), measured as foliage dropping at distance; the later
+two-tier classification with a 5-texel neighbourhood guard was the fix, and it never got a recorded A/B.
+
+The current renderer uses the **native scene** (`bedray_scene`), which has no micromap path, and the capability bit
+`CAP_OPACITY_MICROMAP` is only reported. Porting needs, in this order, and none of it was done here because it changes the native
+scene ABI and cannot be checked without a GPU:
+
+1. Move the atlas classification (tier 1 opaque, tier 2 transparent with the neighbourhood guard) into a pure, tested class; the
+   old file mixes it with Vulkan calls.
+2. Add micromap creation and the per-geometry `VkAccelerationStructureTrianglesOpacityMicromapEXT` to `acceleration_scene.cpp`,
+   behind the capability bit and a default-off setting.
+3. A/B on the RTX card with `native_perf`: `gpu_total` and `trace` against the measured ceiling (-9.7 %), plus a same-seed image
+   comparison at 16 to 256 blocks to prove foliage does not drop.
