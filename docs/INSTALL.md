@@ -109,3 +109,15 @@ The settings page also shows "library missing" next to a backend whose files are
 
 Update the Bedray JAR and `bedray_core.dll` together from the same build. Close Minecraft before replacing either file.
 To remove Bedray, delete its JAR and the files installed for it.
+
+## Install with the jar (development builds)
+
+The Bedray jar can install itself. Run it with Java 25: `java -jar bedray-<loader>-<version>.jar` opens a small window that
+lists the official launcher folder and Prism Launcher instances it finds, or lets you choose a folder, and copies the jar into
+its `mods` folder after checking the copy with SHA-256. It also creates `bedray/natives`. Without a display use
+`--list` or `--install <gameDir>`.
+
+The installer never overwrites a different file with the same name, never deletes older Bedray jars (it lists them) and does not
+touch accounts, other mods or the registry. It does **not** bundle or download NVIDIA, AMD or Intel DLLs: **Official DLL pages**
+opens the download guide, and in game **Bedray Settings > Download DLLs** shows the official page of each library. You still need
+Sodium and the loader installed as described above.

@@ -55,7 +55,8 @@ def modManifestAttributes = [
     'Specification-Version'   : '1',
     'Implementation-Title'    : "${rootProject.artifact_base}-fabric",
     'Implementation-Version'  : rootProject.mod_version,
-    'Implementation-Vendor'   : 'bnfe12'
+    'Implementation-Vendor'   : 'bnfe12',
+    'Main-Class'              : 'io.github.andrexarlay.vulkanbridge.installer.BedrayInstaller'
 ]
 
 jar {

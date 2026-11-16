@@ -60,7 +60,8 @@ def modManifestAttributes = [
     'Implementation-Version'  : rootProject.mod_version,
     'Implementation-Vendor'   : 'bnfe12',
     'MixinConfigs'            : 'mixins.bedray_core.json,mixins.bedray_core_neoforge.json,mixins.bedray.json',
-    'FMLModType'              : 'MOD'
+    'FMLModType'              : 'MOD',
+    'Main-Class'              : 'io.github.andrexarlay.vulkanbridge.installer.BedrayInstaller'
 ]
 
 jar {
