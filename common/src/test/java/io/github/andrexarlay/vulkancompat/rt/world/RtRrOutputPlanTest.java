@@ -25,8 +25,8 @@ class RtRrOutputPlanTest {
 
     @Test
     void readinessIsIntentNotTheExistenceOfTheRrObject() throws IOException {
-        String renderer = read("rt/world/RtFrameRenderer.java");
-        int start = renderer.indexOf("public static boolean rrOutputReady() {");
+        String renderer = read("rt/world/RtDenoiserLifecycle.java");
+        int start = renderer.indexOf("static boolean rrOutputReady() {");
         int end = renderer.indexOf("}", start);
         String ready = renderer.substring(start, end);
         assertTrue(ready.contains("rrIntended()"), "the plan follows the denoiser the frame will use");
