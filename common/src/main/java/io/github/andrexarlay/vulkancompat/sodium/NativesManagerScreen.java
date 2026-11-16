@@ -42,9 +42,10 @@ public final class NativesManagerScreen extends Screen {
         final boolean upcoming;
         final boolean upcomingPresent;
         final boolean partnerSdk;
+        final String url;
 
         LibInfo(String name, String fileName, String desc, boolean installed, boolean bundled, boolean invalid,
-                boolean upcoming, boolean upcomingPresent, boolean partnerSdk) {
+                boolean upcoming, boolean upcomingPresent, boolean partnerSdk, String url) {
             this.name = name;
             this.fileName = fileName;
             this.desc = desc;
@@ -54,10 +55,13 @@ public final class NativesManagerScreen extends Screen {
             this.upcoming = upcoming;
             this.upcomingPresent = upcomingPresent;
             this.partnerSdk = partnerSdk;
+            this.url = url == null ? "" : url;
         }
     }
 
     private final List<LibInfo> libraries = new ArrayList<>();
+    /** Clickable "official page" rectangles of the cards drawn last frame: x, y, width, height, library index. */
+    private final List<int[]> linkRects = new ArrayList<>();
 
     public NativesManagerScreen(Screen parent) {
         super(tr("bedray.natives.title", "Bedray Upscaler & Frame Gen Libraries"));
@@ -124,7 +128,8 @@ public final class NativesManagerScreen extends Screen {
                 gs.anyInvalid(),
                 isUpcomingGroup,
                 anyUpcomingPresent,
-                partnerSdk
+                partnerSdk,
+                g.url()
             ));
         }
     }
@@ -194,12 +199,20 @@ public final class NativesManagerScreen extends Screen {
     }
 
     private void openDownloadGuide() {
+        openUrl("https://bnfe12.github.io/bedray/DOWNLOADS.html");
+    }
+
+    /** Opens an official page in the browser; only https links are opened, nothing is downloaded by the game itself. */
+    private void openUrl(String url) {
+        if (url == null || !url.startsWith("https://")) {
+            return;
+        }
         try {
             if (!java.awt.Desktop.isDesktopSupported()
                     || !java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.BROWSE)) {
                 throw new UnsupportedOperationException("desktop browser unavailable");
             }
-            java.awt.Desktop.getDesktop().browse(java.net.URI.create("https://bnfe12.github.io/bedray/DOWNLOADS.html"));
+            java.awt.Desktop.getDesktop().browse(java.net.URI.create(url));
             status = tr("bedray.natives.downloads.opened", "Download page opened. Drop the downloaded ZIP or DLL here, then restart.");
             statusColor = 0xFFE0E0E0;
         } catch (java.io.IOException | SecurityException | UnsupportedOperationException e) {
@@ -209,6 +222,17 @@ public final class NativesManagerScreen extends Screen {
         }
     }
 
+
+    @Override
+    public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
+        for (int[] r : linkRects) {
+            if (event.x() >= r[0] && event.x() < r[0] + r[2] && event.y() >= r[1] && event.y() < r[1] + r[3]) {
+                openUrl(libraries.get(r[4]).url);
+                return true;
+            }
+        }
+        return super.mouseClicked(event, doubleClick);
+    }
     @Override
     public void onFilesDrop(List<Path> files) {
         if (files == null || files.isEmpty()) {
@@ -252,6 +276,7 @@ public final class NativesManagerScreen extends Screen {
         int listBottom = height - 48;
         int rowH = 26;
         int totalH = libraries.size() * rowH;
+        linkRects.clear();
         maxScroll = Math.max(0, totalH - (listBottom - startY));
 
         for (int i = 0; i < libraries.size(); i++) {
@@ -263,6 +288,17 @@ public final class NativesManagerScreen extends Screen {
 
             // Name
             g.text(font, lib.name, x + 4, ry, 0xFFFFFFFF);
+
+            // Official download page of the vendor, opened in the browser (no download happens inside the game)
+            if (!lib.url.isEmpty()) {
+                Component link = tr("bedray.natives.official_page", "[ Official page ]");
+                int lx = x + 4 + font.width(lib.name) + 8;
+                int lw = font.width(link);
+                boolean hover = mouseX >= lx && mouseX < lx + lw && mouseY >= ry && mouseY < ry + 10
+                    && mouseY >= startY && mouseY < listBottom;
+                g.text(font, link, lx, ry, hover ? 0xFFFFFFFF : 0xFF80D0FF);
+                linkRects.add(new int[] {lx, ry, lw, 10, i});
+            }
 
             // Status badge
             Component badgeText;

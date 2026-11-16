@@ -372,6 +372,41 @@ public final class SettingsCatalog {
                 + "ignored and the log says the feature is unavailable.",
             "Compare the GPU time of the trace pass (F3 / the frame log) with the switch on and off after a restart; the "
                 + "image is the same.");
+        putNoImage("path_radiance_cascades", Tier.ADVANCED, "Radiance Cascades (experimental)",
+            "Adds a finite-window radiance-cascade field as the diffuse continuation of path tracing, so far bounces read a "
+                + "cached field instead of tracing every one. It needs both native cascade owners; if one is missing the path "
+                + "tracer keeps the normal bounce and the log says why. Applies after a restart.",
+            "FPS: not measured. It trades far-bounce rays for the field's own passes and memory, so try it per scene.",
+            "Path Tracing with the bedray_core native cascade owners present.",
+            "Compare the frame log's trace span with the switch on and off after a restart; look at large dark interiors.");
+        putNoImage("path_native_recording", Tier.ADVANCED, "Native frame recording (experimental)",
+            "Records the whole path-tracing frame inside bedray_core instead of the Java host. The picture is meant to be "
+                + "identical; the switch exists to compare the two recording paths on the same frame. A core without the "
+                + "exports keeps the Java path. Applies after a restart.",
+            "FPS: small CPU-side difference only; GPU work is the same.",
+            "Path Tracing and a bedray_core build that exports the native recording entry points.",
+            "F3 and the frame log name the recording path in use; the image should not change.");
+        putNoImage("dlss_neural_rendering", Tier.ADVANCED, "DLSS Neural Rendering / DLSS 5 (experimental)",
+            "Runs NVIDIA Neural Rendering on the raster world image after DLSS Super Resolution or DLAA and before the HUD. "
+                + "Frame generation and Ray Reconstruction must be off. The Vulkan instance extensions are requested at "
+                + "startup, so a change applies after a restart.",
+            "FPS: adds GPU work on top of the upscaler; not yet measured on an RTX card.",
+            "A GPU and driver that NGX accepts, and the separately obtained NGX Neural Rendering runtime (see "
+                + "docs/experiments/dlss5.md). Without them the setting is ignored and the log says what is missing.",
+            "Look for the [VKB-DLSS-NR] lines in the log after a restart; the on-screen difference depends on the content.");
+        putNoImage("hand_geometry", Tier.ADVANCED, "Held item as ray-traced geometry (experimental)",
+            "Traces the item in your hand as real geometry, so glass in the hand is lit and refracted like glass in the "
+                + "world. The raster item is not drawn. The arm and the off-hand stay raster, and the item appears one frame "
+                + "late relative to its animation.",
+            "FPS: low; a few quads are added to the entity geometry each frame.",
+            "Ray Tracing or Path Tracing.",
+            "Hold a glass block or a torch in first person and compare with the switch off.");
+        putNoImage("icon_light_sky", Tier.ADVANCED, "Sky mood on inventory icons (experimental)",
+            "Tints the light on inventory item icons with the current sky colour instead of neutral white light, so icons "
+                + "match the time of day. Off keeps the neutral light.",
+            "FPS: none measurable.",
+            "Ray Tracing or Path Tracing.",
+            "Open the inventory at noon and at night with the switch on and off.");
         putNoImage("path_restir_pt", Tier.ADVANCED, "ReSTIR Path Reuse (experimental)",
             "Keeps the indirect light a pixel's first bounce brought back - light bounced off a nearby diffuse wall or floor - "
                 + "in a per-pixel path record and reuses it in the next frames, so bounced light settles faster while you move. "

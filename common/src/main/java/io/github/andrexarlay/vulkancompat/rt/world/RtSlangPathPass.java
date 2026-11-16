@@ -229,7 +229,7 @@ public final class RtSlangPathPass implements RtPass {
     }
 
     static String supportProblem(SlangRuntime runtime, boolean guides) {
-        if (RtConfig.SLANG_RADIANCE_CASCADES && !RtConfig.SLANG_PATH_TRACE_CPP)
+        if (RtConfig.radianceCascades() && !RtConfig.nativePathTrace())
             return "radianceCascades requires nativePathTrace=true";
         if (runtime == null) {
             return "no Slang runtime";
@@ -244,7 +244,7 @@ public final class RtSlangPathPass implements RtPass {
         if (!SlangPassLibrary.available(DISPLAY_PASS)) {
             return "AOT pass " + DISPLAY_PASS + " is missing from the jar";
         }
-        return RtConfig.SLANG_PATH_TRACE_CPP ? NativePathTraceBackend.supportProblem(runtime, guides) : null;
+        return RtConfig.nativePathTrace() ? NativePathTraceBackend.supportProblem(runtime, guides) : null;
     }
 
     /** Scattering events the ray mode traces: the surface the camera sees plus one indirect one. */
@@ -313,7 +313,7 @@ public final class RtSlangPathPass implements RtPass {
 
     private static PathTraceBackend createBackend(VkDevice device, SlangRuntime runtime) {
         if (runtime == null) throw new IllegalArgumentException("path trace needs a SlangRuntime");
-        return RtConfig.SLANG_PATH_TRACE_CPP ? new NativePathTraceBackend(runtime)
+        return RtConfig.nativePathTrace() ? new NativePathTraceBackend(runtime)
             : new ReferencePathTraceBackend(device, runtime);
     }
 
@@ -350,7 +350,7 @@ public final class RtSlangPathPass implements RtPass {
         if (!restir.equals("off") && spatialRequested()) restir += "+spatial";
         return (rayMode ? "ray_slang(" : "path_slang(") + "bounces=" + p.bounces + ",spp=" + p.spp + ",dist=" + p.rayDistance
             // rc_reuse: the native owner blends each field with the previous consecutive one (batch 5.6, weight 0.8).
-            + (!rayMode && RtConfig.SLANG_RADIANCE_CASCADES ? ",rc=finite-window-v2,rc_axis=" + RtConfig.SLANG_RC_BASE_AXIS
+            + (!rayMode && RtConfig.radianceCascades() ? ",rc=finite-window-v2,rc_axis=" + RtConfig.SLANG_RC_BASE_AXIS
                 + ",rc_reuse=temporal" : "")
             + (accumulateRequested() ? ",accumulate" : "") + ",restir_di=" + restir
             + ",restir_pt=" + (ptActive() ? backend.pathReuseState() : "off")

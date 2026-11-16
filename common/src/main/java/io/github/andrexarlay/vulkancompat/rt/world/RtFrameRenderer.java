@@ -1144,7 +1144,7 @@ public final class RtFrameRenderer {
         try {
             SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
             String problem = RtSlangPathPass.supportProblem(runtime, gbuffer);
-            if (problem == null && RtConfig.SLANG_PATH_TRACE_CPP && gbuffer && wantsEntityMotion()
+            if (problem == null && RtConfig.nativePathTrace() && gbuffer && wantsEntityMotion()
                 && (denoiseMode.isNrd() || denoiseMode == DenoiserMode.DLSS_RR)
                 && !runtime.library().hasNativeMotion()) {
                 problem = "native denoiser motion requires a matching core with NRD_MOTION";

@@ -408,6 +408,27 @@ final class SodiumAdvancedPage {
         }
 
         // ---- Diagnostics
+        // ---- Experimental features: official switches for what used to be JVM flags only. Each row says in its tooltip
+        // whether it needs a restart; the saved value feeds the same decision as the flag, which still wins for one session.
+        OptionGroupBuilder experimental = collapsible(builder, CollapsibleGroups.ADV_EXPERIMENTAL, "Experimental Features", "adv_experimental");
+        BooleanOptionBuilder rcOption = boolOpt(builder, "path_radiance_cascades", false, v -> RtSettings.pathRadianceCascades = v,
+            () -> RtSettings.pathRadianceCascades, pathOn, dMode, Mark.PATH, OptionImpact.HIGH, false, st);
+        rcOption.setFlags(OptionFlag.REQUIRES_GAME_RESTART);
+        experimental.addOption(rcOption);
+        BooleanOptionBuilder nativeOption = boolOpt(builder, "path_native_recording", false, v -> RtSettings.pathNativeRecording = v,
+            () -> RtSettings.pathNativeRecording, pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st);
+        nativeOption.setFlags(OptionFlag.REQUIRES_GAME_RESTART);
+        experimental.addOption(nativeOption);
+        BooleanOptionBuilder dlss5Option = boolOpt(builder, "dlss_neural_rendering", false, v -> RtSettings.dlssNeuralRendering = v,
+            () -> RtSettings.dlssNeuralRendering, s -> true, NO_DEPS, Mark.NONE, OptionImpact.HIGH, false, st);
+        dlss5Option.setFlags(OptionFlag.REQUIRES_GAME_RESTART);
+        experimental.addOption(dlss5Option);
+        experimental.addOption(boolOpt(builder, "hand_geometry", false, v -> RtSettings.handGeometry = v,
+            () -> RtSettings.handGeometry, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        experimental.addOption(boolOpt(builder, "icon_light_sky", false, v -> RtSettings.iconLightSky = v,
+            () -> RtSettings.iconLightSky, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        endGroup(builder, page, experimental, "adv_experimental");
+
         // Bedrock Edition ray-tracing material packs (Vanilla RTX and similar): a drop folder and an import button.
         OptionGroupBuilder bedrock = collapsible(builder, "bedray.group.bedrock_rtx", "Bedrock RTX packs", "adv_bedrock_rtx");
         var openBedrock = builder.createExternalButtonOption(id("bedrock_rtx_open"));

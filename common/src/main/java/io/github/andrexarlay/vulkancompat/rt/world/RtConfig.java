@@ -72,13 +72,21 @@ public final class RtConfig {
     /** Record the whole path-trace frame (radiance, motion, accumulation, history depth, ReSTIR spatial and the
      * display step) inside {@code bedray_core} instead of this Java host. The ABI is additive: a DLL without the
      * exports keeps the Java path, and the switch exists so the two can be compared on the same frame.
-     * {@code -Dvkbridge.rt.nativePathTrace=true} opts in. */
-    public static final boolean SLANG_PATH_TRACE_CPP =
-        Boolean.parseBoolean(System.getProperty("vkbridge.rt.nativePathTrace", "false"));
+     * {@code -Dvkbridge.rt.nativePathTrace=true|false} wins for one session, otherwise the saved
+     * {@code path_native_recording} setting decides. */
+    public static boolean nativePathTrace() {
+        String explicit = System.getProperty("vkbridge.rt.nativePathTrace");
+        return explicit != null ? Boolean.parseBoolean(explicit)
+            : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathNativeRecording();
+    }
 
-    /** Experimental finite-window RC diffuse continuation; requires both native owners. */
-    public static final boolean SLANG_RADIANCE_CASCADES =
-        Boolean.parseBoolean(System.getProperty("vkbridge.rt.radianceCascades", "false"));
+    /** Experimental finite-window RC diffuse continuation; requires both native owners. {@code -Dvkbridge.rt.radianceCascades}
+     * wins for one session, otherwise the saved {@code path_radiance_cascades} setting decides. */
+    public static boolean radianceCascades() {
+        String explicit = System.getProperty("vkbridge.rt.radianceCascades");
+        return explicit != null ? Boolean.parseBoolean(explicit)
+            : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathRadianceCascades();
+    }
     public static final int SLANG_RC_BASE_AXIS = Integer.getInteger("vkbridge.rt.rcBaseAxis", 8);
 
     /** Horizontal RT radius in sections: override, else the game render distance ("As in game"), else the manual value. */

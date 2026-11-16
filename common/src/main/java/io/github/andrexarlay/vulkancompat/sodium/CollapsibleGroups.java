@@ -34,7 +34,8 @@ public final class CollapsibleGroups {
     public static final String ADV_FG = "bedray.group.adv_fg";
     public static final String ADV_DIAG = "bedray.group.adv_diag";
     public static final String ADV_RAYS = "bedray.group.adv_rays";
-    public static final String[] ALL_KEYS = {RT_ADVANCED, ADV_LOOK, ADV_IMAGE, ADV_FG, ADV_DIAG, ADV_RAYS, RT_EXPERT};
+    public static final String ADV_EXPERIMENTAL = "bedray.group.adv_experimental";
+    public static final String[] ALL_KEYS = {RT_ADVANCED, ADV_LOOK, ADV_IMAGE, ADV_FG, ADV_DIAG, ADV_RAYS, ADV_EXPERIMENTAL, RT_EXPERT};
     private static final java.util.Set<String> OPEN = new java.util.HashSet<>();
 
     private record Entry(Supplier<Boolean> expanded, Consumer<Boolean> setExpanded) {
@@ -50,7 +51,7 @@ public final class CollapsibleGroups {
     static {
         GROUPS.put(RT_ADVANCED, new Entry(() -> RtSettings.showAdvanced, v -> RtSettings.showAdvanced = v));
         GROUPS.put(RT_EXPERT, new Entry(() -> RtSettings.showExpert, v -> RtSettings.showExpert = v));
-        for (String k : new String[] {ADV_LOOK, ADV_IMAGE, ADV_FG, ADV_DIAG, ADV_RAYS}) {
+        for (String k : new String[] {ADV_LOOK, ADV_IMAGE, ADV_FG, ADV_DIAG, ADV_RAYS, ADV_EXPERIMENTAL}) {
             GROUPS.put(k, new Entry(() -> OPEN.contains(k), v -> {
                 if (v) {
                     OPEN.add(k);

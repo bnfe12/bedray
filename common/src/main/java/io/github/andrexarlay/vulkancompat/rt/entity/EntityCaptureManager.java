@@ -461,10 +461,14 @@ public final class EntityCaptureManager {
      * is traced like glass in the world. The raster item is not drawn then. STUB: arm and offhand model stay raster; the item
      * appears one frame late relative to its animation.
      */
-    private static final boolean HAND_GEOMETRY = Boolean.getBoolean("vkbridge.rt.handGeometry");
+    private static boolean handGeometry() {
+        String explicit = System.getProperty("vkbridge.rt.handGeometry");
+        return explicit != null ? Boolean.parseBoolean(explicit)
+            : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.handGeometry();
+    }
 
     public static boolean handGeometryEnabled() {
-        return HAND_GEOMETRY;
+        return handGeometry();
     }
 
     private record HandGeoQuad(int slot, float[] remap, int tint, float[] pos, float[] uv) { }
@@ -478,7 +482,7 @@ public final class EntityCaptureManager {
 
     /** Stages the quads of the held item in view space (hand pass only). Returns the number of staged quads. */
     public synchronized int stageHandGeometry(PoseStack poseStack, ItemQuads itemQuads, int[] tintColors, int light) {
-        if (!HAND_GEOMETRY || !handPass || open || poseStack == null || itemQuads == null || itemQuads.isEmpty()) {
+        if (!handGeometry() || !handPass || open || poseStack == null || itemQuads == null || itemQuads.isEmpty()) {
             return 0;
         }
         PoseStack.Pose pose = poseStack.last();
@@ -520,7 +524,7 @@ public final class EntityCaptureManager {
      * frame's camera. Call after the world capture and before {@link #endFrame()}.
      */
     public synchronized boolean captureHandGeometry(net.minecraft.client.renderer.state.level.CameraRenderState camera) {
-        if (!HAND_GEOMETRY || !open || camera == null || camera.viewRotationMatrix == null) {
+        if (!handGeometry() || !open || camera == null || camera.viewRotationMatrix == null) {
             return false;
         }
         if (frameSeq - handGeoSeq > 1 || handGeo.isEmpty()) {

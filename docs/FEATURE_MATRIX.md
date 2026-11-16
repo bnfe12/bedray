@@ -93,10 +93,10 @@ other upscalers, or noise levels) has not been evaluated.
 | DLSS Super Resolution | BETA | L4 | `ngx_init code=0`, dispatch ok; also with ray tracing (`temporal_upscaler active=true backend=DLSS`) | NVIDIA RTX, `nvngx_dlss.dll`, self-built `vkb_dlss.dll` |
 | Runtime switching of upscaler / mode | BETA | L4 for FSR (autotest `upscaler_switch`), L2 for others | log `upscaler_reconfigure ... phase=done` | |
 | Texture LOD bias with upscaling | BETA | L2 | unit checks | |
-| DLSS frame generation (2x, 3x, 4x) | BETA | L4 (developer run, no recorded benchmark in the repository) | status "Active" requires presented = multiplier x rendered for 30 frames; F3 shows real and generated FPS | RTX 40/50, Streamline files, restart |
+| DLSS frame generation (2x, and 3x to 6x multi frame generation up to the driver-reported maximum) | BETA | L4 (developer run, no recorded benchmark in the repository) | status "Active" requires presented = multiplier x rendered for 30 frames; F3 shows real and generated FPS | RTX 40/50, Streamline files, restart |
 | NVIDIA Reflex | BETA | L4 (developer run) | same | Streamline files |
 | DLSS SR / Ray Reconstruction through Streamline plugins (when frame generation is on) | BETA | L3 | code path in `vkb_sl.dll`; reported working by the developer | Streamline plugins, self-built `vkb_sl.dll` |
-| AMD FSR frame generation | NOT_IMPLEMENTED | L0 | design notes only | |
+| AMD FSR 3 frame generation (2x) | EXPERIMENTAL | L0 | source and configuration paths exist (`rtx/framegen/fsr3`); no accepted live result recorded | `amd_fidelityfx_vk.dll` |
 | FSR 4.1.2 upscaling | EXPERIMENTAL | [AMD FSR SDK 2.4](https://gpuopen.com/amd-fsr-sdk/) | Vulkan provider selection and analytical fallback | ML gameplay verification requires a supported AMD Radeon GPU |
 | DLSS 5 Neural Rendering | EXPERIMENTAL | L2 | Direct Vulkan NGX path after raster DLSS SR or DLAA. RTX evaluation pending. | [RTX Remix SDK overlay and signed model](experiments/dlss5.md), `-Dbedray.dlss5=true`, frame generation off |
 

@@ -20,8 +20,15 @@ final class DlssNrDeviceRequirements {
 
     private DlssNrDeviceRequirements() {}
 
+    /** {@code -Dbedray.dlss5=true|false} wins for one session, otherwise the saved {@code dlss_neural_rendering} setting decides. */
+    static boolean enabled() {
+        String explicit = System.getProperty(PROPERTY);
+        return explicit != null ? Boolean.parseBoolean(explicit)
+            : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.dlssNeuralRendering();
+    }
+
     static void registerInstanceExtensions(DeviceFeatureRegistry registry, DlssAvailability.Library library) {
-        if (!Boolean.getBoolean(PROPERTY)) return;
+        if (!enabled()) return;
         if (!hasDirectRuntime(library.featureDir())) return;
         try (DlssNative nativeLib = DlssNative.load(library.wrapperDll())) {
             DlssNrNative nr = findExtension(nativeLib);
@@ -39,7 +46,7 @@ final class DlssNrDeviceRequirements {
     }
 
     static DlssNrNative verifyEnabled(DlssNative nativeLib, Path featureDir, Path logDir, VulkanDevice device) {
-        if (!Boolean.getBoolean(PROPERTY) || !hasDirectRuntime(featureDir)) return null;
+        if (!enabled() || !hasDirectRuntime(featureDir)) return null;
         try {
             DlssNrNative nr = findExtension(nativeLib);
             if (nr == null) return null;

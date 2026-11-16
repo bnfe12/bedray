@@ -84,7 +84,8 @@ class RtSlangRcFieldTest {
         assertFalse(backend.contains("new SlangProgram.Resource"));
         assertFalse(backend.contains("vkCmdDispatch"));
         String config = source(WORLD + "RtConfig.java");
-        assertTrue(config.contains("System.getProperty(\"vkbridge.rt.radianceCascades\", \"false\")"));
+        assertTrue(config.contains("System.getProperty(\"vkbridge.rt.radianceCascades\")")
+            && config.contains("RtSettings.pathRadianceCascades()"), "the flag wins for a session, the saved setting is the default (off)");
         assertTrue(config.contains("Integer.getInteger(\"vkbridge.rt.rcBaseAxis\", 8)"));
     }
 

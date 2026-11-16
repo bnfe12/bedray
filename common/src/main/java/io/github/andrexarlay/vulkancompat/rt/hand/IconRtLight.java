@@ -22,7 +22,12 @@ public final class IconRtLight {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
 
     static final String MODE_PROPERTY = "vkbridge.rt.iconLight";
-    private static final boolean SKY_MODE = "sky".equalsIgnoreCase(System.getProperty(MODE_PROPERTY));
+    /** {@code -Dvkbridge.rt.iconLight=sky|off} wins for one session, otherwise the saved {@code icon_light_sky} setting decides. */
+    private static boolean skyMode() {
+        String explicit = System.getProperty(MODE_PROPERTY);
+        return explicit != null ? "sky".equalsIgnoreCase(explicit)
+            : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.iconLightSky();
+    }
     /** Share of the sky hue mixed into the white icon light. */
     static final float STRENGTH = 0.35f;
     /** Brightness factor at night (sky colour black); 1.0 when the sky colour has a full channel. */
@@ -62,7 +67,7 @@ public final class IconRtLight {
     /** Start of one icon draw (GuiItemAtlas.drawToSlot). Does nothing unless the mode is on and the RT sky model is published. */
     public static void begin() {
         overriding = false;
-        if (!SKY_MODE || failed || !HandRtProbe.hasSky()) {
+        if (!skyMode() || failed || !HandRtProbe.hasSky()) {
             return;
         }
         int argb = iconArgb(HandRtProbe.argb(15, 15));

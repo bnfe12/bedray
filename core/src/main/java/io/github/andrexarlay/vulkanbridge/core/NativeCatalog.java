@@ -119,7 +119,7 @@ public final class NativeCatalog {
     public static final String URL_FSR = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4";
     public static final String URL_XESS = "https://github.com/intel/xess/releases";
     public static final String URL_DLSS = "https://github.com/NVIDIA/DLSS";
-    public static final String URL_STREAMLINE = "https://github.com/NVIDIAGameWorks/Streamline/releases";
+    public static final String URL_STREAMLINE = "https://github.com/NVIDIA-RTX/Streamline/releases";
     public static final String URL_NRD = "https://github.com/NVIDIA-RTX/NRD";
     public static final String URL_DLSS5 =
         "https://forums.developer.nvidia.com/t/official-dlss-5-neural-rendering-plugin-access-for-unreal-engine-5-8-2/382731/11";

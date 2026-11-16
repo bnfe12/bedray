@@ -9,9 +9,9 @@ what is missing and an order of work; each part needs a decision from the owner 
 
 | Technology | State | Notes |
 |---|---|---|
-| NVIDIA DLSS frame generation 2x / 3x / 4x (multi-frame) | BETA, L4 developer run | Streamline `vkb_sl.dll`; row `frame_generation_mode` is on the essentials page; status "Active" requires presented = multiplier x rendered |
+| NVIDIA DLSS frame generation 2x, and 3x to 6x multi-frame (offered up to the driver-reported maximum) | BETA, L4 developer run | Streamline `vkb_sl.dll`; row `frame_generation_mode` is on the essentials page; status "Active" requires presented = multiplier x rendered |
 | NVIDIA Reflex | BETA | same stack |
-| AMD FSR frame generation | NOT_IMPLEMENTED | design notes only |
+| AMD FSR 3 frame generation (2x) | EXPERIMENTAL, code present | `Fsr3FrameGen`; no accepted live result |
 | XeSS frame generation / XeLL | not integrated | DX12-only parts; SDK files listed in `DLL_REFERENCE.md` |
 | DLSS 5 Neural Rendering | EXPERIMENTAL, L2 | enabled by `-Dbedray.dlss5=true` only; needs frame generation and Ray Reconstruction off; the UI row was removed ("not implemented" at the time) |
 | DLSS RR, NRD REBLUR/ReLAX, FSR 3.1/4.1.2, XeSS | BETA / EXPERIMENTAL | selectable in Settings |

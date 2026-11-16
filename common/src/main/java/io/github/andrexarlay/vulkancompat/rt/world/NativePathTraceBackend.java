@@ -28,7 +28,7 @@ final class NativePathTraceBackend implements PathTraceBackend {
             return "nativePathTrace requires a core with NATIVE_DI and the 25-binding guide contract";
         if (guides && !runtime.library().hasNativeGuideOutputs())
             return "nativePathTrace guide output requires a matching core with GUIDE_OUTPUTS";
-        if (RtConfig.SLANG_RADIANCE_CASCADES && (!SlangPassLibrary.available(RtRadianceCascadesContract.BUILD)
+        if (RtConfig.radianceCascades() && (!SlangPassLibrary.available(RtRadianceCascadesContract.BUILD)
             || !SlangPassLibrary.available(RtRadianceCascadesContract.TRACE)))
             return "radianceCascades requires both AOT RC field entries";
         return null;
@@ -38,7 +38,7 @@ final class NativePathTraceBackend implements PathTraceBackend {
         String problem = supportProblem(runtime, false);
         if (problem != null) throw new IllegalStateException(problem);
         this.runtime = runtime;
-        boolean rc = RtConfig.SLANG_RADIANCE_CASCADES;
+        boolean rc = RtConfig.radianceCascades();
         String name = rc ? RtRadianceCascadesContract.TRACE : RtPathTraceSlangPass.PASS_NAME;
         SlangProgram trace = SlangTracePrograms.select(runtime, name)
             .orElseThrow(() -> new IllegalStateException("missing Slang pass " + name));
