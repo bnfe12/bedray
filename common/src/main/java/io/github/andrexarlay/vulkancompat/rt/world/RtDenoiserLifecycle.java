@@ -1,6 +1,10 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rt.denoise.BridgeNrdLocator;
@@ -14,9 +18,14 @@ import io.github.andrexarlay.vulkancompat.rt.denoise.NrdException;
 import io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
+import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssAvailability;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
+import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +57,8 @@ final class RtDenoiserLifecycle {
     static volatile String denoiserResolutionReason = "not_resolved";
     /** Last native create/record failure for the current world; retained for F3 after fallback/drop. */
     static volatile String denoiserRuntimeFailure;
+    /** Set when this frame's RT colour was resolved by a same-resolution temporal denoiser (NRD / DLSS-RR). */
+    static volatile boolean frameColorTemporallyResolved = false;
 
     private RtDenoiserLifecycle() {
     }
@@ -256,5 +267,92 @@ final class RtDenoiserLifecycle {
         dropDenoiserByError = false;
         denoiseMode = DenoiserMode.OFF;
         RtFrameRenderer.requestPassRebuild();
+    }
+
+    /**
+     * Records the denoiser of this frame into the open command buffer: DLSS-RR (with its hardware-depth pre-pass and the
+     * frame-generation guides) or NRD. Returns whether DLSS-RR resolved the colour; {@link #frameColorTemporallyResolved}
+     * is set by whichever denoiser recorded. A recording failure schedules the drop of the failed denoiser and either
+     * discards the whole recording (DLSS-RR) or leaves the raw image on screen for this frame (NRD).
+     */
+    static boolean recordDenoise(VkCommandBuffer cmd, VulkanDevice vulkanDevice, CameraRenderState camera, RenderTarget target,
+                                 RtFrameParams params, RtPass pass, org.joml.Matrix4f frameProjection, boolean useDenoiser) {
+        boolean rrColorResolved = false;
+        RtComputeCheckpoints.mark(vulkanDevice, cmd, "denoise");
+        if (useDenoiser) {
+            if (dlssRrDenoiser != null) {
+                // [DLSS-RR] Record DLSS Ray Reconstruction
+                try {
+                    // The frame's own exposure, decided once above: the pack's tonemap and the path display cannot diverge.
+                    float composeExposure = params.exposure;
+                    long depthView = (dlssRrDenoiser != null && dlssRrDenoiser.gbViewZ() != null)
+                        ? dlssRrDenoiser.gbViewZ().view
+                        : (target != null ? WorldTargetManager.extractVkImageView(target.getDepthTextureView()) : 0L);
+                    DlssRrDenoiser owner = dlssRrDenoiser;
+                    if (!(pass instanceof RtSlangPathPass slang) || RtFrameRenderer.rrHardwareDepth() == null)
+                        throw new IllegalStateException("RR hardware depth requires the current Slang primary producer");
+                    // The published primary sample is authoritative, including non-upscaler fallback sequences.
+                    float rrJitterX = slang.guideFrame().jitter.x;
+                    float rrJitterY = slang.guideFrame().jitter.y;
+                    RtComputeCheckpoints.mark(vulkanDevice, cmd, "rr_hardware_depth");
+                    RtFrameRenderer.rrHardwareDepth().record(cmd, slang.guideFrame(), owner.gbViewZ(), owner.hardwareDepth());
+                    owner.hardwareDepthRecorded(cmd.address());
+                    VkBarriers.fullMemoryBarrier(cmd);
+                    RtComputeCheckpoints.mark(vulkanDevice, cmd, "rr_record");
+                    frameColorTemporallyResolved = owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
+                        params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY, camera.projectionMatrix);
+                    rrColorResolved = frameColorTemporallyResolved;
+                    if (rrColorResolved && WorldTargetManager.rrResolvesOutput()
+                            && FrameGenRuntime.needsFrameInputs())
+                        RtFrameRenderer.setPendingFgGuides(owner.frameGenGuides(
+                            io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull(), vulkanDevice,
+                            slang.guideFrame().jitter.x, slang.guideFrame().jitter.y));
+                    VkBarriers.fullMemoryBarrier(cmd);
+                } catch (Exception e) {
+                    if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure)
+                        throw nativeFailure; // partial coarse recording requires whole-command discard
+                    if (e instanceof io.github.andrexarlay.vulkancompat.rt.denoise.RrFeatureCreationRetry) {
+                        LOGGER.warn("[DLSS-RR] creation_retry whole_recording=discarded next_frame=quality_fallback reason={}", LogPaths.show(e.getMessage()));
+                        throw new RtDenoiserFrameDiscard("DLSS-RR creation retry requires a fresh recording", e);
+                    }
+                    denoiserRuntimeFailure = "dlss_rr_record: " + LogPaths.show(e.getMessage());
+                    LOGGER.error("[DLSS-RR] FAILED record: {} (whole recording discarded; denoiser fallback next frame)\n{}",
+                        LogPaths.show(e.getMessage()), LogPaths.stack(e));
+                    dropDlssRrDenoiserNext = true;
+                    dropDlssRrByError = true;
+                    throw new RtDenoiserFrameDiscard("DLSS-RR recording failed before submission", e);
+                }
+            } else if (denoiser != null) {
+                try {
+                    // The frame's own exposure, decided once above: the pack's tonemap and the path display cannot diverge.
+                    float composeExposure = params.exposure;
+                    boolean nrdJittered = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive();
+                    float nrdJitterX = nrdJittered
+                        ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterX() : 0.0f;
+                    float nrdJitterY = nrdJittered
+                        ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterY() : 0.0f;
+                    float nrdJitterPrevX = nrdJittered
+                        ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getPrevPixelJitterX() : 0.0f;
+                    float nrdJitterPrevY = nrdJittered
+                        ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getPrevPixelJitterY() : 0.0f;
+                    NrdDenoiser owner = denoiser;
+                    RtComputeCheckpoints.mark(vulkanDevice, cmd, "nrd_record");
+                    owner.record(cmd, camera.projectionMatrix, frameProjection, camera.viewRotationMatrix,
+                        camera.pos.x, camera.pos.y, camera.pos.z, params.tonemap, composeExposure,
+                        nrdJitterX, nrdJitterY, nrdJitterPrevX, nrdJitterPrevY);
+                    frameColorTemporallyResolved = true;
+                    VkBarriers.fullMemoryBarrier(cmd);
+                } catch (NrdException e) {
+                    denoiserRuntimeFailure = "nrd_record " + e.stage() + ": " + LogPaths.show(e.getMessage());
+                    // The command buffer stays valid (vkb_nrd validates before recording); the raw image is shown this frame and the
+                    // denoiser is dropped at the start of the next one.
+                    LOGGER.error("[VKB-NRD] FAILED stage={} {} (denoiser disabled for this session, raw RT image is shown)\n{}",
+                        e.stage(), LogPaths.show(e.getMessage()), LogPaths.stack(e));
+                    dropDenoiserNext = true;
+                    dropDenoiserByError = true;
+                }
+            }
+        }
+        return rrColorResolved;
     }
 }

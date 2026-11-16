@@ -63,7 +63,7 @@ class RtSlangExposureTest {
             "the switch is read from the setting the player toggled, not from a flag bit that nothing ever set");
         assertEquals(1, occurrences(src, "exposure.applied("),
             "one call site decides the frame's exposure; a second one can only disagree with the first");
-        assertEquals(2, occurrences(src, "float composeExposure = params.exposure;"),
+        assertEquals(2, occurrences(read(Path.of(RENDERER.toString().replace("RtFrameRenderer", "RtDenoiserLifecycle"))), "float composeExposure = params.exposure;"),
             "both denoiser packs read the frame's number instead of recomputing it");
         assertTrue(src.contains("MemoryUtil.memPutFloat(hdr + RtStatsLayout.EXPOSURE, params.exposure);"),
             "the per-frame slot the shaders used to read carries the same number as the picture");
