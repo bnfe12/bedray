@@ -401,6 +401,13 @@ public final class SettingsCatalog {
             "A GPU and driver that NGX accepts, and the separately obtained NGX Neural Rendering runtime (see "
                 + "docs/experiments/dlss5.md). Without them the setting is ignored and the log says what is missing.",
             "Look for the [VKB-DLSS-NR] lines in the log after a restart; the on-screen difference depends on the content.");
+        putNoImage("addon_lights", Tier.ADVANCED, "Lights from other mods (experimental)",
+            "Lets other mods that use the Bedray renderer API add point lights to the scene. The lights are checked and capped "
+                + "(64 per mod, 256 in total) and a mod that keeps failing is switched off for the session. Without such a mod "
+                + "this does nothing.",
+            "FPS: low; each light is one more emitter in the light list.",
+            "Ray Tracing or Path Tracing and a mod that registers a light provider (renderer API 1.9).",
+            "A mod that supplies lights, or the Bedray API test add-on; F3 shows the number of accepted lights.");
         putNoImage("hand_geometry", Tier.ADVANCED, "Held item as ray-traced geometry (experimental)",
             "Traces the item in your hand as real geometry, so glass in the hand is lit and refracted like glass in the "
                 + "world. The raster item is not drawn. The arm and the off-hand stay raster, and the item appears one frame "

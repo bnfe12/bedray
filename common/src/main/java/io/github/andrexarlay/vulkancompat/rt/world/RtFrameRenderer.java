@@ -896,6 +896,8 @@ public final class RtFrameRenderer {
         // There is no point light "at the player".
         float[] entityEmitters = io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance()
             .emitterQuadsForFrame(camera.viewRotationMatrix);
+        entityEmitters = AddonLightEmitters.concat(entityEmitters,
+            AddonLightEmitters.forFrame(frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z, lightRange));
         emitters.update(world, materials.lastBake(), camera.pos.x, camera.pos.y, camera.pos.z, lightRange,
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.lightBudget(), entityEmitters,
             entityEmitters.length / RtEmitters.FLOATS);

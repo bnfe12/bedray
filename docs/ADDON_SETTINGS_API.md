@@ -102,6 +102,6 @@ LightProviders.register("example", camera -> List.of(
 * One provider may contribute at most 64 lights per frame and all providers together at most 256; the rest are dropped.
 * A provider that throws is skipped for that frame and disabled after three failing frames in a row;
   `LightProviders.status()` reports each provider.
-* **Status:** the host collects and validates the lights, but does not yet inject them into the renderer; the injection needs
-  in-game GPU verification. `LightProviders.appliedByHost()` returns `false` until it does, so an add-on can tell.
+* **Status:** the host collects the lights each frame and, with the "Lights from other mods" switch on (default), turns each into a
+  small emitter quad (colour = tint, brightness = largest component times (radius / 8)^2 of one torch). This is a first calibration and has not been looked at on a GPU yet; `LightProviders.appliedByHost()` tells an add-on whether lights were fed in the last frame.
   See `docs/EXTENSION_AND_INSTALLER_DESIGN.md` for the planned layers (sky, materials, pass hooks).

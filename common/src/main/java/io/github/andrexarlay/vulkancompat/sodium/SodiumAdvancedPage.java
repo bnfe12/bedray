@@ -427,6 +427,8 @@ final class SodiumAdvancedPage {
             () -> RtSettings.handGeometry, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         experimental.addOption(boolOpt(builder, "icon_light_sky", false, v -> RtSettings.iconLightSky = v,
             () -> RtSettings.iconLightSky, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        experimental.addOption(boolOpt(builder, "addon_lights", true, v -> RtSettings.addonLights = v,
+            () -> RtSettings.addonLights, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         endGroup(builder, page, experimental, "adv_experimental");
 
         // Bedrock Edition ray-tracing material packs (Vanilla RTX and similar): a drop folder and an import button.

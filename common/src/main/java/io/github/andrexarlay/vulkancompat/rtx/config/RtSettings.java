@@ -233,6 +233,8 @@ public final class RtSettings {
     public static boolean handGeometry = false;
     /** Sky-model mood on inventory icons instead of the neutral light. {@code -Dvkbridge.rt.iconLight=sky|off} overrides it. */
     public static boolean iconLightSky = false;
+    /** Feed the lights add-ons supply through the renderer API (LightProviders) into the emitter table. On by default; costs nothing without a provider. */
+    public static boolean addonLights = true;
     /** NRD by default: used when the NRD natives are installed, otherwise the path tracer falls back to accumulation (logged). */
     public static PathDenoiser pathDenoiser = PathDenoiser.NRD;
     public static int pathDistance = 256;
@@ -333,6 +335,7 @@ public final class RtSettings {
         bool("dlss_neural_rendering", () -> dlssNeuralRendering, v -> dlssNeuralRendering = v);
         bool("hand_geometry", () -> handGeometry, v -> handGeometry = v);
         bool("icon_light_sky", () -> iconLightSky, v -> iconLightSky = v);
+        bool("addon_lights", () -> addonLights, v -> addonLights = v);
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("path_auto_exposure", () -> pathAutoExposure, v -> pathAutoExposure = v);
         integer("path_exposure_ev", () -> pathExposureEvTenths, v -> pathExposureEvTenths = v, -40, 40);
@@ -550,6 +553,8 @@ public final class RtSettings {
     public static boolean handGeometry() { return b("hand_geometry"); }
     /** Sky mood on icons; see {@link #iconLightSky}. */
     public static boolean iconLightSky() { return b("icon_light_sky"); }
+    /** Add-on lights; see {@link #addonLights}. */
+    public static boolean addonLights() { return b("addon_lights"); }
     public static int bounces() { return i("path_bounces"); }
     public static int spp() { return i("path_spp"); }
     public static boolean accumulate() { return b("path_accumulate"); }

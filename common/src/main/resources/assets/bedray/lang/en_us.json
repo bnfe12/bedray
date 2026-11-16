@@ -585,6 +585,8 @@
   "bedray.opt.dlss_neural_rendering.desc": "Runs NVIDIA Neural Rendering on the raster world image after DLSS Super Resolution or DLAA. Needs the separately obtained NGX Neural Rendering runtime and an eligible RTX GPU, and frame generation and Ray Reconstruction must be off. Adds GPU work. Applies after a restart.",
   "bedray.opt.hand_geometry": "Held item as ray-traced geometry (experimental)",
   "bedray.opt.hand_geometry.desc": "Traces the item in your hand as real geometry, so glass in the hand is lit and refracted like glass in the world. The raster item is not drawn. The arm and the off-hand stay raster and the item appears one frame late relative to its animation.",
+  "bedray.opt.addon_lights": "Lights from other mods (experimental)",
+  "bedray.opt.addon_lights.desc": "Lets other mods that use the Bedray renderer API add point lights to the scene. The lights are checked and capped (64 per mod, 256 in total) and a mod that keeps failing is switched off for the session. Without such a mod this does nothing.",
   "bedray.opt.icon_light_sky": "Sky mood on inventory icons (experimental)",
   "bedray.opt.icon_light_sky.desc": "Tints the light on inventory item icons with the current sky colour instead of neutral white light, so icons match the time of day. Off keeps the neutral light.",
   "bedray.opt.path_restir_pt": "ReSTIR Path Reuse (experimental)",

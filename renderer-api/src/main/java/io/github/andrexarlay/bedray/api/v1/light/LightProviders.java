@@ -14,8 +14,8 @@ import java.util.regex.Pattern;
  * host calls {@link #collect} once per frame. The registry validates what it is given, bounds how much one provider and
  * all providers together can contribute, and isolates failures so one broken add-on cannot take the frame down.
  *
- * <p>Status: the host collects and validates lights every frame and reports them in diagnostics. Injection of the accepted
- * lights into the renderer emitter table is a separate host step that needs in-game GPU verification; see
+ * <p>Status: the host collects and validates lights every frame and, when the add-on light switch is on, feeds the accepted
+ * lights into the renderer emitter table. That injection has not been verified on a GPU yet; see
  * {@link #appliedByHost()}.
  */
 public final class LightProviders {
@@ -116,8 +116,20 @@ public final class LightProviders {
         return List.copyOf(list);
     }
 
-    /** Whether the running host feeds accepted lights into the renderer. False until the host injection step lands. */
+    private static volatile boolean applied;
+
+    /** Whether any provider is registered; the host skips building a camera snapshot when none is. */
+    public static synchronized boolean hasProviders() {
+        return !PROVIDERS.isEmpty();
+    }
+
+    /** Host only: records whether the lights of the last frame were fed into the renderer. */
+    public static void markApplied(boolean value) {
+        applied = value;
+    }
+
+    /** Whether the running host fed accepted lights into the renderer in the last frame. */
     public static boolean appliedByHost() {
-        return false;
+        return applied;
     }
 }
