@@ -139,6 +139,53 @@ bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel
     return true;
 }
 
+// Sub-pixel position of the reprojected receiver inside the previous frame, in pixels - the value diReprojectReceiver
+// floors.  Only meaningful after that function returned true (the clip-space w was already proven positive there).
+float2 diHistoryCoord(float3 previous, float4x4 previousViewProjection, uint2 size, bool flipY) {
+    float4 clip = mul(previousViewProjection, float4(previous, 1.0));
+    float2 ndc = clip.xy / max(clip.w, 1.0e-4);
+    if (flipY) {
+        ndc.y = -ndc.y;
+    }
+    return (ndc * 0.5 + 0.5) * float2(size);
+}
+
+// History lookup over the 2x2 footprint of the reprojected point.  The previous frame traced pixel q through
+// q + 0.5 + its own sub-pixel jitter (|jitter| <= 0.5), so the pixel that really saw this surface is the floored one or
+// one of the three cells nearest to the point - never further.  On the interior of a face every one of them holds the
+// same surface and the first lookup wins; on a silhouette the floored cell often holds the other surface, its record
+// fails the receiver proof and the pixel used to restart from a bare batch every other frame, which is what made edges
+// boil with reuse on while the faces next to them stayed calm.  Each further cell is read only after the previous one
+// failed, and every record still has to pass the full proof in diLoadHistory, so no foreign surface is imported.
+bool diLoadHistoryFootprint(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel, float2 historyCoord,
+        uint2 size, uint parity, float3 previousReceiver, float previousDistance, float3 receiverNormal,
+        bool cameraStatic, float3 cameraDelta, inout DIReservoir history) {
+    if (diLoadHistory(reservoirs, historyPixel, size, parity, previousReceiver, previousDistance, receiverNormal,
+            cameraStatic, cameraDelta, history)) {
+        return true;
+    }
+    float2 fraction = historyCoord - float2(historyPixel);
+    int2 toward = int2(fraction.x < 0.5 ? -1 : 1, fraction.y < 0.5 ? -1 : 1);
+    // Nearest cell first: the axis on which the point sits closer to the cell border.
+    bool xFirst = abs(fraction.x - 0.5) >= abs(fraction.y - 0.5);
+    int2 offsets[3] = {
+        xFirst ? int2(toward.x, 0) : int2(0, toward.y),
+        xFirst ? int2(0, toward.y) : int2(toward.x, 0),
+        toward
+    };
+    for (uint i = 0u; i < 3u; i += 1u) {
+        int2 q = historyPixel + offsets[i];
+        if (q.x < 0 || q.y < 0 || q.x >= int(size.x) || q.y >= int(size.y)) {
+            continue;
+        }
+        if (diLoadHistory(reservoirs, q, size, parity, previousReceiver, previousDistance, receiverNormal,
+                cameraStatic, cameraDelta, history)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Every fresh proposal belongs to M, even when the entire batch has zero contribution.
 DIReservoir blockEmitterDiInitialReservoir(BlockEmitterWinner winner) {
     DIReservoir current = emptyReservoir();
@@ -217,8 +264,10 @@ struct BlockEmitterDiSampler : IReuseSampler {
             bool onScreen = diReprojectReceiver(receiver.position + receiver.motion, cameraDelta, previousViewProjection, size,
                 flipY != 0u, previousReceiver, previousDistance, historyPixel);
             DIReservoir history = emptyReservoir();
-            if (onScreen && diLoadHistory(reservoirs, historyPixel, size, parity, previousReceiver, previousDistance,
-                    normalize(receiver.normal), cameraStatic != 0u, cameraDelta, history)) {
+            if (onScreen && diLoadHistoryFootprint(reservoirs, historyPixel,
+                    diHistoryCoord(previousReceiver, previousViewProjection, size, flipY != 0u), size, parity,
+                    previousReceiver, previousDistance, normalize(receiver.normal), cameraStatic != 0u, cameraDelta,
+                    history)) {
                 LightSample historySample = reservoirLightSample(history, receiver.position);
                 // Target-only: the import's source pdf multiplies the radiance in blockEmitterEstimateSample and divides
                 // it again in pathTraceDirectTerm, so the light-tree walk that computed it cancelled out exactly.
