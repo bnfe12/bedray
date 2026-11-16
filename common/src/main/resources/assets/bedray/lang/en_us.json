@@ -539,6 +539,8 @@
   "bedray.opt.rays_restir_spatial.desc": "A pixel also borrows samples from neighbours on the same surface (same normal, same plane), so one torch lights a wall from fewer, better-chosen samples. Needs ReSTIR Temporal Block Light on.",
   "bedray.opt.path_restir_spatial": "ReSTIR Spatial Direct Light",
   "bedray.opt.path_restir_spatial.desc": "A pixel also borrows light samples from neighbours on the same surface (same normal, same plane), so one torch lights a wall from fewer, better-chosen samples. Needs ReSTIR Direct Light on.",
+  "bedray.opt.path_ser": "Shader Execution Reordering (SER)",
+  "bedray.opt.path_ser.desc": "NVIDIA RTX 40/50: regroups path-tracing rays before shading. Same picture, only the scheduling changes. Measured 2.14x slower on the trace pass of an RTX 5060 Ti, so it is off by default; try it on your GPU. Applies after a game restart; ignored where the GPU lacks the feature.",
   "bedray.opt.path_restir_pt": "ReSTIR Path Reuse (experimental)",
   "bedray.opt.path_restir_pt.desc": "Reuses the light a pixel's first diffuse bounce brought back over the next frames, so bounced light settles while the camera moves. Costs about 0.6 GB of video memory at 1080p and one extra ray per reused pixel. Needs ReSTIR Direct Light on; the native backend ignores it.",
   "bedray.opt.path_restir_pt_spatial": "ReSTIR Spatial Path Reuse",

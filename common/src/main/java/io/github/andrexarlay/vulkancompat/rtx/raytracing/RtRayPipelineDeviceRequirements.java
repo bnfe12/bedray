@@ -3,6 +3,7 @@ package io.github.andrexarlay.vulkancompat.rtx.raytracing;
 import io.github.andrexarlay.vulkanbridge.api.DeviceFeatureRegistry;
 import io.github.andrexarlay.vulkanbridge.api.DeviceRequirement;
 import io.github.andrexarlay.vulkanbridge.api.FeatureRequest;
+import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructureFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayQueryFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV;
@@ -54,8 +55,19 @@ public final class RtRayPipelineDeviceRequirements {
         return Boolean.parseBoolean(System.getProperty(RAYGEN_PROPERTY, "true"));
     }
 
+    /**
+     * Whether SER is wanted this session: an explicit {@code -Dbedray.rt.ser=true|false} wins, otherwise the saved
+     * {@code path_ser} setting (off by default). Read while the device is created and while the trace program is picked,
+     * so both sides see one answer.
+     */
+    public static boolean serRequested() {
+        String explicit = System.getProperty(SER_PROPERTY);
+        if (explicit != null) return Boolean.parseBoolean(explicit);
+        return RtSettings.pathSer();
+    }
+
     public static void register(DeviceFeatureRegistry registry) {
-        register(registry, raygenRequested(), Boolean.getBoolean(SER_PROPERTY));
+        register(registry, raygenRequested(), serRequested());
     }
 
     static void register(DeviceFeatureRegistry registry, boolean raygenRequested, boolean serRequested) {
