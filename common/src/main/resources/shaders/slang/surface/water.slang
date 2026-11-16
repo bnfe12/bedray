@@ -37,14 +37,20 @@ static const float WATER_PIXEL_ANGLE = 0.0016;
 // A calm lake reads as flat glass from a player's viewing angle, so the long
 // swells carry most of the slope and the short ripples are small enough not to
 // shimmer.  Directions are unit XZ, k is rad/block and w is the peak slope.
+//
+// The field is evaluated at `SurfaceHit.worldPosition`, which wraps at 1024 blocks (a section origin is masked with 1023).  A
+// wave whose vector (k dx, k dz) is not a whole multiple of 2 pi / 1024 on both axes jumps in phase at every world line
+// x = 1024 n and z = 1024 n, and the lake shows a straight seam there (owner screenshot 2026-11-14).  So every vector below is
+// the nearest such multiple of the one the table started from (1.00, 1.70, 2.90, 4.60, 7.30, 11.5 rad/block: k moves by at most
+// 0.4 %, the direction by 0.15 degrees); the integers are in the trailing comment, and RtSlangWaterTest checks them.
 static const int WATER_WAVES = 6;
 static const float4 WATER_WAVE_A[WATER_WAVES] = {
-    float4(0.800, 0.600, 1.00, 0.050),
-    float4(-0.700, 0.714, 1.70, 0.048),
-    float4(0.312, -0.950, 2.90, 0.036),
-    float4(-0.911, -0.412, 4.60, 0.030),
-    float4(0.550, 0.835, 7.30, 0.018),
-    float4(-0.200, -0.980, 11.5, 0.012)
+    float4(0.798523, 0.601964, 0.99893, 0.050),     // n = (130, 98)
+    float4(-0.699855, 0.714285, 1.70088, 0.048),    // n = (-194, 198)
+    float4(0.311143, -0.950363, 2.89892, 0.036),    // n = (147, -449)
+    float4(-0.911096, -0.412194, 4.59977, 0.030),   // n = (-683, -309)
+    float4(0.550033, 0.835143, 7.29573, 0.018),     // n = (654, 993)
+    float4(-0.200012, -0.979793, 11.50415, 0.012)   // n = (-375, -1837)
 };
 static const float WATER_WAVE_PHASE[WATER_WAVES] = { 0.0, 1.3, 2.9, 4.1, 5.2, 0.7 };
 

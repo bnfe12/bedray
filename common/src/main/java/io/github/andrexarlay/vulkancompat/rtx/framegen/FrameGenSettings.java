@@ -144,6 +144,11 @@ public final class FrameGenSettings {
     private static volatile boolean uiOverride;
 
     public static void setMode(Mode m) {
+        if (m != Mode.OFF && io.github.andrexarlay.vulkancompat.rtx.hdr.HdrOutput.active()) {
+            // The frame generation providers wrap an 8-bit swapchain (formats 37/44); the HDR10 swapchain is created once.
+            LOGGER.warn("[VKB-FG] frame generation {} refused: HDR10 output owns the swapchain this session (set hdr_output = OFF and restart)", m);
+            m = Mode.OFF;
+        }
         mode = m;
         uiOverride = true;
     }

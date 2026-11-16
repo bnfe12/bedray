@@ -1084,6 +1084,9 @@ public final class RtFrameRenderer {
                 outputResolve, localTonemap, atmosphere, curViewProj, world, materials, atlasView, lightmapView, bobOrigin,
                 gpuTimer, w, h, rrColorResolved))) {
             pendingDisplayedTarget = target;
+            if (io.github.andrexarlay.vulkancompat.rtx.hdr.HdrOutput.active()) {
+                io.github.andrexarlay.vulkancompat.rtx.hdr.HdrGpu.commitScene();
+            }
         }
     }
 

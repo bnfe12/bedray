@@ -12,6 +12,7 @@ public final class RtxAutotest {
 
     public static void registerAll() {
         AutotestScenarios.register(new SettingsScenario());
+        AutotestScenarios.register(new HdrSettingsScenario());
         AutotestScenarios.register(new SettingsUiScenario());
         AutotestScenarios.register(new SettingsPreviewScenario());
         AutotestScenarios.register(new io.github.andrexarlay.vulkancompat.sodium.GiSettingsScenario());

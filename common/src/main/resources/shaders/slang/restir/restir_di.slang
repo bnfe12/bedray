@@ -156,7 +156,16 @@ DIReservoir mergeReservoirs(DIReservoir current, DIReservoir incoming,
     float ratio = clamp(incomingTargetPdf / max(incoming.sample.w, RESTIR_DI_MIN_PDF),
                         0.0, ratioCap);
     float incomingWeight = incoming.stats.y * (incomingM / max(incoming.stats.x, 1.0)) * ratio;
-    if (incomingWeight <= 0.0) return current;
+    // A reservoir with no weight to give still spent `incomingM` draws, and the estimate divides by M.  Dropping those draws
+    // is not neutral: whenever the history happens to be empty (a dim wall, where most batches find nothing) the sample the
+    // receiver keeps is divided by the fresh batch alone instead of by the whole window, so it comes out M_total / M_fresh
+    // too bright.  Measured 2026-11-14, autotest rt_modes scene N, fixed exposure, DLSS RR: temporal reuse +9.6 % over
+    // reuse off (+23..27 % in the dim cells), against +-0.1 % between two runs of the same setting.  The record's own sample
+    // and the random stream stay untouched.
+    if (!(incomingWeight > 0.0)) {
+        current.stats.x += incomingM;
+        return current;
+    }
 
     float totalWeight = current.stats.y + incomingWeight;
     float accept = incomingWeight / max(totalWeight, RESTIR_DI_MIN_PDF);
@@ -230,12 +239,15 @@ DIReservoir restirDiTemporal<S : ILightSampler>(S sampler,
         float mCap, float ratioCap, inout uint seed) {
     if (history.stats.x <= 0.0) return current;
 
+    // Same rule as the live adapter (di_block_emitters.slang): a history that has no sample to offer here still counts its
+    // draws, so only a sample that evaluates contributes weight.
     LightSample historySample = reservoirLightSample(history, receiver.position);
-    LightEvaluation evaluation = sampler.evaluate(receiver, historySample);
-    if (!evaluation.valid || evaluation.targetPdf <= 0.0) return current;
-
-    DIReservoir merged = mergeReservoirs(current, history, evaluation.targetPdf,
-        ratioCap, mCap, seed);
+    float targetPdf = 0.0;
+    if (historySample.valid && history.stats.y > 0.0) {
+        LightEvaluation evaluation = sampler.evaluate(receiver, historySample);
+        if (evaluation.valid && evaluation.targetPdf > 0.0) targetPdf = evaluation.targetPdf;
+    }
+    DIReservoir merged = mergeReservoirs(current, history, targetPdf, ratioCap, mCap, seed);
     merged.source.y = min(merged.source.y + 1u, 0xFFFFu);
     return merged;
 }
@@ -247,12 +259,14 @@ DIReservoir restirDiSpatial<S : ILightSampler>(S sampler,
     if (neighbor.stats.x <= 0.0) return current;
 
     LightSample neighborSample = reservoirLightSample(neighbor, receiver.position);
-    // Only p^ is merged: the source density (a light-tree walk) is not needed.
-    LightEvaluation evaluation = sampler.evaluateTarget(receiver, neighborSample);
-    if (!evaluation.valid || evaluation.targetPdf <= 0.0) return current;
-
-    return mergeReservoirs(current, neighbor, evaluation.targetPdf,
-        ratioCap, mCap, seed);
+    // Only p^ is merged: the source density (a light-tree walk) is not needed.  A neighbour that proved to be on this
+    // surface still spent its draws, even when its sample is no use here (or it has none): mergeReservoirs counts them.
+    float targetPdf = 0.0;
+    if (neighborSample.valid && neighbor.stats.y > 0.0) {
+        LightEvaluation evaluation = sampler.evaluateTarget(receiver, neighborSample);
+        if (evaluation.valid && evaluation.targetPdf > 0.0) targetPdf = evaluation.targetPdf;
+    }
+    return mergeReservoirs(current, neighbor, targetPdf, ratioCap, mCap, seed);
 }
 
 // A broken light must not keep glowing through the reservoir for many frames.
