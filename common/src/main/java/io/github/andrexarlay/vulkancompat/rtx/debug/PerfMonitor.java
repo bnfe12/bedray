@@ -38,6 +38,8 @@ public final class PerfMonitor {
 
     /** Stamp points of a frame, in submission order. */
     public enum Mark {
+        /** Head of Minecraft.renderFrame: the first command of the frame's command buffer (diagnostic, no segment uses it). */
+        CMD_START,
         /** Head of GameRenderer.render(). */
         FRAME_BEGIN,
         /** Right before GameRenderer.renderLevel() (after the main target clear and the lightmap). */
@@ -143,7 +145,7 @@ public final class PerfMonitor {
         slot = (int) (frameIndex % RING);
         GameplayCapture.tick(now);
         FrameBenchmark.begin(frameIndex, now);
-        if (ensurePool()) {
+        if (ensurePool() && harvestedFrame != frameIndex) {
             harvest(slot);
         }
         slotFrames[slot] = frameIndex;
@@ -166,6 +168,70 @@ public final class PerfMonitor {
         }
     }
 
+    /**
+     * Head of Minecraft.renderFrame, before anything of the frame is recorded: stamps CMD_START as the first command of the new
+     * command buffer. The slot of this frame is harvested here (its old results are read before the query is reused), so the
+     * stamp does not overwrite the frame {@link #RING} frames back. Splits the GPU gap between two frames into the idle time
+     * before the command buffer starts (acquire semaphore, submit latency) and the engine work recorded before the world.
+     */
+    public static void cmdStart() {
+        if (frameOpen || !ensurePool()) {
+            return;
+        }
+        int s = (int) (frameIndex % RING);
+        harvest(s);
+        harvestedFrame = frameIndex;
+        int q = s * MARKS + Mark.CMD_START.ordinal();
+        RenderSystem.getDevice().createCommandEncoder().writeTimestamp(pool, q);
+        written[q] = true;
+    }
+
+    private static long harvestedFrame = -1L;
+
+    // Time the render thread spends inside CommandEncoder.submit(): the queue submit plus the engine's wait for the submit two frames
+    // back (VulkanCommandEncoder.submit), i.e. how long the CPU is parked on the GPU. interval - submit wait = main-thread busy time.
+    private static long submitStartNs;
+    private static double submitSumMs;
+    private static int submitCount;
+
+    // Blocking calls of Minecraft.renderFrame timed on the render thread (sum over the window, ms): swapchain acquire and present.
+    private static long acquireStartNs, presentStartNs;
+    private static double acquireSumMs, presentSumMs;
+    private static int acquireCount, presentCount;
+
+    public static void acquireBegin() {
+        acquireStartNs = System.nanoTime();
+    }
+
+    public static void acquireEnd() {
+        if (acquireStartNs != 0L) {
+            acquireSumMs += (System.nanoTime() - acquireStartNs) / 1.0e6;
+            acquireCount++;
+            acquireStartNs = 0L;
+        }
+    }
+
+    public static void presentBegin() {
+        presentStartNs = System.nanoTime();
+    }
+
+    public static void presentEnd() {
+        if (presentStartNs != 0L) {
+            presentSumMs += (System.nanoTime() - presentStartNs) / 1.0e6;
+            presentCount++;
+            presentStartNs = 0L;
+        }
+    }
+
+    /** Right after {@code CommandEncoder.submit()} returned in Minecraft.renderFrame. */
+    public static void afterSubmit() {
+        if (submitStartNs != 0L) {
+            submitSumMs += (System.nanoTime() - submitStartNs) / 1.0e6;
+            submitCount++;
+            submitStartNs = 0L;
+        }
+    }
+
     /** Before the frame submit: stamps FRAME_END, accumulates CPU segments, publishes the window when it elapsed. */
     public static void frameEnd() {
         if (!frameOpen) {
@@ -173,6 +239,7 @@ public final class PerfMonitor {
         }
         mark(Mark.FRAME_END);
         frameOpen = false;
+        submitStartNs = System.nanoTime();
         accumulate(cpuNs, cpuWritten, 1.0e-6, cpuSum, cpuCount);
         if (FrameBenchmark.active()) {
             FrameBenchmark.end(frameIndex, cpuWritten[Mark.WORLD_BEGIN.ordinal()], samples(cpuNs, cpuWritten, 1.0e-6, cpuSamples));
@@ -256,7 +323,57 @@ public final class PerfMonitor {
             written[q] = false;
         }
         accumulate(gpuTicks, gpuHave, timestampPeriodNs * 1.0e-6, gpuSum, gpuCount);
+        trackGpuGap();
         if (FrameBenchmark.active()) FrameBenchmark.gpu(slotFrames[s], samples(gpuTicks, gpuHave, timestampPeriodNs * 1.0e-6, gpuSamples));
+    }
+
+    // GPU-side gap between the previous frame's FRAME_END and this frame's FRAME_BEGIN, split by CMD_START (the first command of this
+    // frame's command buffer) into: idle before the buffer starts (acquire semaphore, submit latency, present) and engine work recorded
+    // before GameRenderer.render. Frames are harvested in order, so the previous end tick is the last harvested one.
+    private static long prevEndTick;
+    private static double idleSumMs, preSumMs, gapMaxMs;
+    private static int gapCount;
+    private static int gapWindows;
+
+    private static void trackGpuGap() {
+        int c = Mark.CMD_START.ordinal(), b = Mark.FRAME_BEGIN.ordinal(), e = Mark.FRAME_END.ordinal();
+        if (gpuHave[b] && gpuHave[e]) {
+            if (prevEndTick != 0L && gpuHave[c] && gpuTicks[c] >= prevEndTick && gpuTicks[b] >= gpuTicks[c]) {
+                double toMs = timestampPeriodNs * 1.0e-6;
+                idleSumMs += (gpuTicks[c] - prevEndTick) * toMs;
+                preSumMs += (gpuTicks[b] - gpuTicks[c]) * toMs;
+                gapMaxMs = Math.max(gapMaxMs, (gpuTicks[b] - prevEndTick) * toMs);
+                gapCount++;
+            }
+            prevEndTick = gpuTicks[e];
+        }
+    }
+
+    private static void logGpuGap() {
+        // Every 10th window (about 5 s) and only with samples: how much GPU time lies between frames, and where.
+        if (gapCount > 0 && ++gapWindows % 10 == 0) {
+            double interval = intervalCount > 0 ? intervalSumMs / intervalCount : 0.0;
+            double submitWait = submitCount > 0 ? submitSumMs / submitCount : 0.0;
+            LOGGER.info("[VKB-PERF] gpu_gap_ms idle_before_cmdbuf={} engine_pre_render={} max_total={} frames={} "
+                    + "submit_wait_ms={} main_thread_busy_ms={} acquire_ms={} present_ms={}",
+                String.format(java.util.Locale.ROOT, "%.3f", idleSumMs / gapCount),
+                String.format(java.util.Locale.ROOT, "%.3f", preSumMs / gapCount),
+                String.format(java.util.Locale.ROOT, "%.3f", gapMaxMs), gapCount,
+                String.format(java.util.Locale.ROOT, "%.3f", submitWait),
+                String.format(java.util.Locale.ROOT, "%.3f", interval - submitWait),
+                String.format(java.util.Locale.ROOT, "%.3f", acquireCount > 0 ? acquireSumMs / acquireCount : 0.0),
+                String.format(java.util.Locale.ROOT, "%.3f", presentCount > 0 ? presentSumMs / presentCount : 0.0));
+        }
+        submitSumMs = 0.0;
+        submitCount = 0;
+        acquireSumMs = 0.0;
+        acquireCount = 0;
+        presentSumMs = 0.0;
+        presentCount = 0;
+        idleSumMs = 0.0;
+        preSumMs = 0.0;
+        gapMaxMs = 0.0;
+        gapCount = 0;
     }
 
     private static final long[] gpuTicks = new long[MARKS];
@@ -310,6 +427,7 @@ public final class PerfMonitor {
             cpuSum[i] = 0.0;
             cpuCount[i] = 0;
         }
+        logGpuGap();
         frameIntervalAvgMs = intervalCount > 0 ? intervalSumMs / intervalCount : 0.0;
         fpsAvg = frameIntervalAvgMs > 0.0 ? 1000.0 / frameIntervalAvgMs : 0.0;
         intervalSumMs = 0.0;

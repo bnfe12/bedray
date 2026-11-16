@@ -58,7 +58,9 @@ class RtEmitterHysteresisTest {
         assertTrue(settings.contains("public static int lightBudget = 2048;"),
             "a 512 budget cut a 531-light room and swapped 365 lights per publish");
         String page = java.nio.file.Files.readString(java.nio.file.Path.of(
-            "src/main/java/io/github/andrexarlay/vulkancompat/sodium/VulkanSodiumConfig.java"));
+            "src/main/java/io/github/andrexarlay/vulkancompat/sodium/VulkanSodiumConfig.java"))
+            + java.nio.file.Files.readString(java.nio.file.Path.of(
+            "src/main/java/io/github/andrexarlay/vulkancompat/sodium/SodiumAdvancedPage.java"));
         assertTrue(page.contains("intOpt(builder, \"rt_light_budget\", 2048,"), "the Sodium page resets to the same default");
     }
 

@@ -133,15 +133,18 @@ class RtSlangBlockLightReachTest {
         int atlas = candidate.indexOf("atlas.material.SampleLevel");
         int entity = candidate.indexOf("entityTexel(atlas.entities");
         assertTrue(gate > 0 && self > gate, "both zero tests of the target density are in the gate");
-        assertTrue(atlas > gate, "the atlas fetch must come after the distance gate");
-        assertTrue(entity > gate, "the entity atlas fetch must come after the distance gate");
+        int receiver = candidate.indexOf("if (cosReceiver <= 0.0)");
+        int emitter = candidate.indexOf("if (cosGeometry <= 1.0e-5)");
+        assertTrue(receiver > self && emitter > receiver, "test both faces after the distance and self gates");
+        assertTrue(atlas > emitter && entity > emitter, "both atlas fetches follow both angular gates");
         assertTrue(candidate.contains("candidate.distance2 = distance2;"),
-            "the measured squared distance is handed to the density instead of being rebuilt");
-        assertTrue(candidate.contains("candidate.phat = blockEmitterPhat(point, receiver, distance2, lightRadius);"),
-            "the candidate passes the distance and the hoisted reach, so neither is recomputed per candidate");
-        assertTrue(source.contains("float blockEmitterPhat(BlockEmitterPoint p, LightReceiver receiver, "
-            + "float distance2, float lightRadius)"), "the density takes the squared distance");
-        assertFalse(source.contains("dot(y - s.pos, y - s.pos)"), "no caller rebuilds the distance from the position");
+            "the estimator reuses the measured squared distance");
+        assertTrue(candidate.contains("emitterWindow(distance2, lightRadius)")
+                && candidate.contains("point.texelEmission * cosKernel * cosReceiver * window * emitterAttenuation(distance2)"),
+            "candidate weighting keeps the same window, reach and falloff");
+        int normalization = candidate.indexOf("rsqrt(distance2)");
+        assertTrue(normalization >= 0 && candidate.indexOf("rsqrt(distance2)", normalization + 1) < 0,
+            "both cosines share one direction normalization");
 
         String loop = block(source, source.indexOf("BlockEmitterWinner sampleBlockEmitterBatch("));
         int hoisted = loop.indexOf("float lightRadius = min(maxDistance, EMITTER_RADIUS);");

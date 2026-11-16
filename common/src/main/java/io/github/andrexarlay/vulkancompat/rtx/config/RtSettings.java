@@ -204,6 +204,37 @@ public final class RtSettings {
      * four first-edge visibility rays a pixel and no memory of its own.
      */
     public static boolean pathRestirPtSpatial = true;
+    /**
+     * NVIDIA shader execution reordering (SER) for the path-trace pass. Off by default: the last A/B on an RTX 5060 Ti
+     * measured the trace pass 2.14x slower with it (docs/FEATURE_MATRIX.md). The device feature is requested while the
+     * Vulkan device is created and the trace program is picked when the pass is built, so a change applies after a game
+     * restart; {@code -Dbedray.rt.ser=true|false} overrides the saved value for one session.
+     */
+    public static boolean pathSer = false;
+    /**
+     * Experimental finite-window radiance-cascade diffuse continuation of the path tracer. Needs both native RC owners; the
+     * pass is built when the world loads, so a change applies after a restart. {@code -Dvkbridge.rt.radianceCascades=true|false}
+     * overrides the saved value for one session.
+     */
+    public static boolean pathRadianceCascades = false;
+    /**
+     * Record the whole path-trace frame inside {@code bedray_core} instead of the Java host. Experimental; applies after a
+     * restart. {@code -Dvkbridge.rt.nativePathTrace=true|false} overrides the saved value for one session.
+     */
+    public static boolean pathNativeRecording = false;
+    /**
+     * NVIDIA DLSS Neural Rendering (DLSS 5) on the raster world image after DLSS Super Resolution or DLAA. Experimental, needs
+     * the separately obtained NGX Neural Rendering runtime, and frame generation and Ray Reconstruction off. The Vulkan
+     * instance extensions are requested at startup, so a change applies after a restart. {@code -Dbedray.dlss5=true|false}
+     * overrides the saved value for one session.
+     */
+    public static boolean dlssNeuralRendering = false;
+    /** The held item as real ray-traced geometry. Experimental. {@code -Dvkbridge.rt.handGeometry=true|false} overrides it. */
+    public static boolean handGeometry = false;
+    /** Sky-model mood on inventory icons instead of the neutral light. {@code -Dvkbridge.rt.iconLight=sky|off} overrides it. */
+    public static boolean iconLightSky = false;
+    /** Feed the lights add-ons supply through the renderer API (LightProviders) into the emitter table. On by default; costs nothing without a provider. */
+    public static boolean addonLights = true;
     /** NRD by default: used when the NRD natives are installed, otherwise the path tracer falls back to accumulation (logged). */
     public static PathDenoiser pathDenoiser = PathDenoiser.NRD;
     public static int pathDistance = 256;
@@ -298,6 +329,13 @@ public final class RtSettings {
         bool("path_restir_spatial", () -> pathRestirSpatial, v -> pathRestirSpatial = v);
         bool("path_restir_pt", () -> pathRestirPt, v -> pathRestirPt = v);
         bool("path_restir_pt_spatial", () -> pathRestirPtSpatial, v -> pathRestirPtSpatial = v);
+        bool("path_ser", () -> pathSer, v -> pathSer = v);
+        bool("path_radiance_cascades", () -> pathRadianceCascades, v -> pathRadianceCascades = v);
+        bool("path_native_recording", () -> pathNativeRecording, v -> pathNativeRecording = v);
+        bool("dlss_neural_rendering", () -> dlssNeuralRendering, v -> dlssNeuralRendering = v);
+        bool("hand_geometry", () -> handGeometry, v -> handGeometry = v);
+        bool("icon_light_sky", () -> iconLightSky, v -> iconLightSky = v);
+        bool("addon_lights", () -> addonLights, v -> addonLights = v);
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("path_auto_exposure", () -> pathAutoExposure, v -> pathAutoExposure = v);
         integer("path_exposure_ev", () -> pathExposureEvTenths, v -> pathExposureEvTenths = v, -40, 40);
@@ -503,6 +541,20 @@ public final class RtSettings {
     public static boolean pathRestirPt() { return b("path_restir_pt"); }
     /** The PT spatial stage; see {@link #pathRestirPtSpatial}. */
     public static boolean pathRestirPtSpatial() { return b("path_restir_pt_spatial"); }
+    /** Shader execution reordering of the path-trace pass; see {@link #pathSer}. */
+    public static boolean pathSer() { return b("path_ser"); }
+    /** Radiance-cascade continuation; see {@link #pathRadianceCascades}. */
+    public static boolean pathRadianceCascades() { return b("path_radiance_cascades"); }
+    /** Native frame recording; see {@link #pathNativeRecording}. */
+    public static boolean pathNativeRecording() { return b("path_native_recording"); }
+    /** DLSS Neural Rendering; see {@link #dlssNeuralRendering}. */
+    public static boolean dlssNeuralRendering() { return b("dlss_neural_rendering"); }
+    /** Held item as RT geometry; see {@link #handGeometry}. */
+    public static boolean handGeometry() { return b("hand_geometry"); }
+    /** Sky mood on icons; see {@link #iconLightSky}. */
+    public static boolean iconLightSky() { return b("icon_light_sky"); }
+    /** Add-on lights; see {@link #addonLights}. */
+    public static boolean addonLights() { return b("addon_lights"); }
     public static int bounces() { return i("path_bounces"); }
     public static int spp() { return i("path_spp"); }
     public static boolean accumulate() { return b("path_accumulate"); }

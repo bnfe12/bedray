@@ -97,7 +97,7 @@ class RtPostCinemaTest {
     }
 
     @Test void menuBindsAndGatesAndCatalogDescribesTheToggles() throws Exception {
-        String menu = java("sodium/VulkanSodiumConfig.java");
+        String menu = java("sodium/VulkanSodiumConfig.java") + java("sodium/SodiumAdvancedPage.java");
         assertTrue(menu.contains("boolOpt(builder, \"vignette\", false, v -> RtSettings.vignette = v,"),
             "vignette must be a row bound to RtSettings.vignette");
         assertTrue(menu.contains("boolOpt(builder, \"film_grain\", false, v -> RtSettings.filmGrain = v,"),

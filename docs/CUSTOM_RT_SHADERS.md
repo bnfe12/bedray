@@ -74,7 +74,7 @@ Activation: select the pack in Iris as usual (`config/iris.properties`) or with 
 opt in with:
 
 ```text
--Dbedray.dirtrt=true
+-Dbedray.rtpipeline=true
 ```
 
 What happens, in order:
@@ -102,7 +102,7 @@ not run on a device.
 | set 3 bindings 0–4 | Iris `bufferObject.N` SSBOs | their contents come from the pack's compute/composite programs (`composite*.csh`, custom images), which the Iris post host cannot run |
 
 Recording a trace with unbound descriptors is undefined behaviour on the GPU, so the host stops at the pipeline and
-names the missing producers in F3 (`[DirtRT]`). Even a successful trace would only fill the pack's buffers; its image
+names the missing producers in F3 (`[RT-PIPELINE]`). Even a successful trace would only fill the pack's buffers; its image
 comes from the later compute and composite programs. Running Dirt RT therefore needs, in this order: Vulkanite-layout
 geometry buffers bound to a TLAS whose custom indices address them, the PBR atlases, and Iris compute programs with
 SSBOs and custom images.

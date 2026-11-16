@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DenoiserResolutionTest {
 
     private static final String RENDERER = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java";
+    private static final String LIFECYCLE = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtDenoiserLifecycle.java";
 
     private static DenoiserResolution.Result resolve(RtSettings.PathDenoiser want, boolean nrdOk) {
         return DenoiserResolution.resolve(want, false, false, false, "null", false, nrdOk,
@@ -102,7 +103,7 @@ class DenoiserResolutionTest {
         String renderer = Files.readString(Path.of(RENDERER), StandardCharsets.UTF_8);
         assertFalse(renderer.contains("slang_denoiser_not_wired"), "the blanket refusal is gone");
         assertFalse(renderer.contains("slang_path_has_no_gbuffer"), "the old refusal is gone too");
-        String resolve = block(renderer, "private static DenoiserMode resolveDenoiseMode()");
+        String resolve = block(Files.readString(Path.of(LIFECYCLE), StandardCharsets.UTF_8), "static DenoiserMode resolveDenoiseMode()");
         assertFalse(resolve.contains("RtConfig.mode()"), "the setting is resolved independently of the trace mode");
         assertTrue(resolve.contains("DenoiserResolution.resolve("), "the resolution table decides");
         assertTrue(block(renderer, "private static boolean wantGbuffer(RtMode mode)")

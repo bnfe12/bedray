@@ -43,6 +43,33 @@ class RtRayPipelineDeviceRequirementsTest {
         else System.setProperty(name, value);
     }
 
+    /** The saved path_ser setting is the default source; an explicit -Dbedray.rt.ser wins either way, for one session. */
+    @Test
+    @ResourceLock(Resources.SYSTEM_PROPERTIES)
+    void theSavedSettingDecidesSerAndTheSessionPropertyOverridesIt() {
+        String ser = RtRayPipelineDeviceRequirements.SER_PROPERTY;
+        String oldSer = System.clearProperty(ser);
+        boolean oldSaved = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathSer;
+        try {
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathSer = false;
+            assertFalse(RtRayPipelineDeviceRequirements.serRequested(), "off by default: SER measured 2.14x slower");
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathSer = true;
+            assertTrue(RtRayPipelineDeviceRequirements.serRequested(), "the saved switch asks for it");
+            var registry = new DeviceFeatureRegistryImpl();
+            RtRayPipelineDeviceRequirements.register(registry);
+            assertEquals(RtRayPipelineDeviceRequirements.SER_ID, registry.snapshot().getLast().id(),
+                "and the device is asked for the reorder feature");
+            System.setProperty(ser, "false");
+            assertFalse(RtRayPipelineDeviceRequirements.serRequested(), "the session property wins over the saved switch");
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathSer = false;
+            System.setProperty(ser, "true");
+            assertTrue(RtRayPipelineDeviceRequirements.serRequested(), "and wins in the other direction too");
+        } finally {
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathSer = oldSaved;
+            restoreProperty(ser, oldSer);
+        }
+    }
+
     @Test void raygenRequestKeepsSerOutOfTheDevice() {
         var registry = new DeviceFeatureRegistryImpl();
         RtRayPipelineDeviceRequirements.register(registry, true, false);

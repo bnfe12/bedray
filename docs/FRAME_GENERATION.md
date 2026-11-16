@@ -19,8 +19,8 @@ above does not validate this new path.
 NVIDIA DLSS frame generation (DLSS-G) inserts generated frames between rendered frames, so the displayed frame rate is higher than the
 rendered one. It is done through NVIDIA **Streamline**. Reflex lowers latency.
 
-* 2x: one generated frame per rendered frame. 3x and 4x (multi frame generation) are offered only if the driver reports support
-  (RTX 50 series).
+* 2x: one generated frame per rendered frame. 3x to 6x (multi frame generation) are offered only up to the largest multiplier the driver reports (`numFramesToGenerateMax`; RTX 50 series)
+  and only after the adapter confirms it.
 * AMD FSR 3 frame generation is a second implementation (see "AMD FSR 3 frame generation" below, 2x only).
 * The F3 screen shows the **real** (rendered) and the **generated** (presented) frame rate side by side.
 

@@ -5,22 +5,32 @@ import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostKind;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostState;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostStatus;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHosts;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.IrisPackSettings;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackReport;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackReportCache;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackSource;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.ProgramName;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.ScanLimits;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.ShaderpackScanner;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.world.phys.Vec3;
+import org.joml.Matrix4f;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import sun.misc.Unsafe;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -39,6 +49,9 @@ class IrisRenderBridgeTest {
     private IrisShaderHost readyHost;
     private IrisPassGraph testGraph;
     private CameraRenderState camera;
+
+    @TempDir
+    Path tmp;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -338,5 +351,86 @@ class IrisRenderBridgeTest {
         assertTrue(rendered, "render must succeed with valid guards and test executor");
         assertTrue(IrisRenderBridge.isInitialized());
         assertEquals(testGraph.packName(), IrisRenderBridge.activePackName());
+    }
+
+    // --- Forward-path outcome contract (Phase 1: graceful skip, no self-disable) ---
+
+    /**
+     * A forward frame whose gbuffers have no geometry this frame (capture warmup) must be SKIPPED, not FAILED, so the
+     * hook leaves the engine image untouched and retries next frame instead of disabling the iris host for the session.
+     */
+    @Test
+    void forwardFrameWithNoGeometryIsSkippedNotFailed() throws IOException {
+        assumeTrue(dummyCmd != null, "dummy VkCommandBuffer required");
+        IrisPassGraph.FullResult full = fullGraph();
+        IrisShaderHost host = new IrisShaderHost(new PackReportCache(ScanLimits.defaults()));
+        host.setStatusForTesting(ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.READY, "ready"));
+        host.setActiveFullGraphForTesting(full);
+        camera.pos = new Vec3(0.0, 64.0, 0.0);
+        camera.projectionMatrix = new Matrix4f().identity();
+        camera.viewRotationMatrix = new Matrix4f().identity();
+        IrisRenderBridge.setForwardExecutorForTesting(IrisForwardExecutor.createForTesting(), "Forward");
+
+        IrisRenderBridge.RenderOutcome outcome = IrisRenderBridge.renderWithOutcome(
+            dummyCmd, host, 1001L, 1002L, 1003L, 64, 48, camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f);
+
+        assertEquals(IrisRenderBridge.RenderOutcome.SKIPPED, outcome,
+            "an empty-geometry warmup frame must skip, not fail (the host must not be disabled for the session)");
+        assertFalse(IrisRenderBridge.render(
+            dummyCmd, host, 1001L, 1002L, 1003L, 64, 48, camera, null, 0.0f, 0, 0.05f, 128.0f, 0.016f),
+            "the boolean contract still reports false for a skipped frame");
+    }
+
+    private IrisPassGraph.FullResult fullGraph() throws IOException {
+        Path p = tmp.resolve("Forward.zip");
+        try (ZipOutputStream z = new ZipOutputStream(Files.newOutputStream(p))) {
+            put(z, "shaders/gbuffers_terrain.vsh", """
+                #version 120
+                attribute vec3 vaPosition;
+                attribute vec4 vaColor;
+                attribute vec2 vaUV0;
+                uniform mat4 modelViewMatrix;
+                uniform mat4 projectionMatrix;
+                varying vec2 texcoord;
+                varying vec4 color;
+                void main() {
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(vaPosition, 1.0);
+                    texcoord = vaUV0; color = vaColor;
+                }
+                """);
+            put(z, "shaders/gbuffers_terrain.fsh", """
+                #version 120
+                /* DRAWBUFFERS:0 */
+                uniform sampler2D texture;
+                varying vec2 texcoord;
+                varying vec4 color;
+                void main() { gl_FragData[0] = texture2D(texture, texcoord) * color; }
+                """);
+            put(z, "shaders/composite.fsh", """
+                #version 120
+                uniform sampler2D colortex0;
+                varying vec2 texcoord;
+                void main() { gl_FragData[0] = texture2D(colortex0, texcoord); }
+                """);
+            put(z, "shaders/final.fsh", """
+                #version 120
+                uniform sampler2D colortex0;
+                varying vec2 texcoord;
+                void main() { gl_FragColor = texture2D(colortex0, texcoord); }
+                """);
+        }
+        try (PackSource src = PackSource.open(p, ScanLimits.DEFAULT)) {
+            PackReport report = ShaderpackScanner.scan(src);
+            IrisPackSettings settings = IrisPackSettings.parse(src, report);
+            IrisPassGraph.FullResult res = IrisPassGraph.build(src, report, settings);
+            assertTrue(res.success(), res.status().detail());
+            return res;
+        }
+    }
+
+    private static void put(ZipOutputStream z, String name, String text) throws IOException {
+        z.putNextEntry(new ZipEntry(name));
+        z.write(text.getBytes(StandardCharsets.UTF_8));
+        z.closeEntry();
     }
 }

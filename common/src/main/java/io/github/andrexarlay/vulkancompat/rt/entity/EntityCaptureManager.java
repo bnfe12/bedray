@@ -455,11 +455,138 @@ public final class EntityCaptureManager {
         worldEmitterCount++;
     }
 
+    /**
+     * Held item as real RT geometry ({@code -Dvkbridge.rt.handGeometry=true}, default off): the item quads of the hand pass are
+     * kept in VIEW space and injected into the entity geometry of the next RT frame with that frame's camera, so glass in the hand
+     * is traced like glass in the world. The raster item is not drawn then. STUB: arm and offhand model stay raster; the item
+     * appears one frame late relative to its animation.
+     */
+    private static boolean handGeometry() {
+        String explicit = System.getProperty("vkbridge.rt.handGeometry");
+        return explicit != null ? Boolean.parseBoolean(explicit)
+            : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.handGeometry();
+    }
+
+    public static boolean handGeometryEnabled() {
+        return handGeometry();
+    }
+
+    private record HandGeoQuad(int slot, float[] remap, int tint, float[] pos, float[] uv) { }
+
+    private final java.util.ArrayList<HandGeoQuad> handGeo = new java.util.ArrayList<>();
+    private long handGeoSeq = Long.MIN_VALUE / 2;
+    private int handGeoLight = 0xF000F0;
+    private long handGeoInjectLogged;
+    /** Vertical FOV (degrees) of the hand projection of the current hand pass ({@code CameraRenderState.hudFov}). */
+    private float handHudFov = 70.0f;
+
+    /** Stages the quads of the held item in view space (hand pass only). Returns the number of staged quads. */
+    public synchronized int stageHandGeometry(PoseStack poseStack, ItemQuads itemQuads, int[] tintColors, int light) {
+        if (!handGeometry() || !handPass || open || poseStack == null || itemQuads == null || itemQuads.isEmpty()) {
+            return 0;
+        }
+        PoseStack.Pose pose = poseStack.last();
+        Vector4f tmp = new Vector4f();
+        int staged = 0;
+        for (BakedQuad quad : itemQuads.all()) {
+            if (quad == null) continue;
+            var sprite = quad.materialInfo() != null ? quad.materialInfo().sprite() : null;
+            int slot = 0;
+            float[] remap = null;
+            if (sprite != null) {
+                slot = EntityTextureAtlas.INSTANCE.spriteSlot(sprite.contents().name(), sprite.contents().width(), sprite.contents().height());
+                remap = new float[] {sprite.getU0(), sprite.getU1(), sprite.getV0(), sprite.getV1()};
+            }
+            float[] pos = new float[12];
+            float[] uv = new float[8];
+            for (int i = 0; i < 4; i++) {
+                Vector3fc p = quad.position(i);
+                tmp.set(p.x(), p.y(), p.z(), 1.0f).mul(pose.pose()).mul(handViewRotation);
+                pos[i * 3] = tmp.x;
+                pos[i * 3 + 1] = tmp.y;
+                pos[i * 3 + 2] = tmp.z;
+                long packed = quad.packedUV(i);
+                uv[i * 2] = net.minecraft.client.model.geom.builders.UVPair.unpackU(packed);
+                uv[i * 2 + 1] = net.minecraft.client.model.geom.builders.UVPair.unpackV(packed);
+            }
+            handGeo.add(new HandGeoQuad(slot, remap, itemQuadTintColor(quad.materialInfo(), tintColors), pos, uv));
+            staged++;
+        }
+        if (staged > 0) {
+            handGeoSeq = frameSeq;
+            handGeoLight = light;
+        }
+        return staged;
+    }
+
+    /**
+     * Appends the staged held-item quads (of the PREVIOUS frame's hand pass) to this frame's entity capture, placed with this
+     * frame's camera. Call after the world capture and before {@link #endFrame()}.
+     */
+    public synchronized boolean captureHandGeometry(net.minecraft.client.renderer.state.level.CameraRenderState camera) {
+        if (!handGeometry() || !open || camera == null || camera.viewRotationMatrix == null) {
+            return false;
+        }
+        if (frameSeq - handGeoSeq > 1 || handGeo.isEmpty()) {
+            return false;
+        }
+        Matrix4f inv = new Matrix4f(camera.viewRotationMatrix).invert();
+        Vector4f v = new Vector4f();
+        // The hand is rasterised with its own FOV (hudFov), the RT camera uses the world FOV: scale x/y of the view-space point so it
+        // lands on the same screen position under the world projection (the usual viewmodel-FOV correction).
+        float worldTanHalf = camera.projectionMatrix != null && camera.projectionMatrix.m11() != 0.0f
+            ? 1.0f / Math.abs(camera.projectionMatrix.m11()) : 0.0f;
+        float hudTanHalf = (float) Math.tan(Math.toRadians(handHudFov) * 0.5);
+        float fovScale = worldTanHalf > 0.0f && hudTanHalf > 0.0f ? worldTanHalf / hudTanHalf : 1.0f;
+        beginEntity(-1, "item", null, EntityGeometryFrame.CapturedEntity.FLAG_ITEM);
+        int light = handGeoLight;
+        try {
+            for (HandGeoQuad q : handGeo) {
+                frameConsumer.setTexture(q.slot(), q.remap());
+                float[] w = new float[12];
+                for (int i = 0; i < 4; i++) {
+                    v.set(q.pos()[i * 3] * fovScale, q.pos()[i * 3 + 1] * fovScale, q.pos()[i * 3 + 2], 0.0f).mul(inv);
+                    w[i * 3] = v.x;
+                    w[i * 3 + 1] = v.y;
+                    w[i * 3 + 2] = v.z;
+                }
+                float e1x = w[3] - w[0], e1y = w[4] - w[1], e1z = w[5] - w[2];
+                float e2x = w[9] - w[0], e2y = w[10] - w[1], e2z = w[11] - w[2];
+                float nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+                float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+                if (len > 1e-8f) { nx /= len; ny /= len; nz /= len; }
+                for (int i = 0; i < 4; i++) {
+                    frameConsumer.addVertex(w[i * 3], w[i * 3 + 1], w[i * 3 + 2]);
+                    frameConsumer.setColor(q.tint());
+                    frameConsumer.setUv(q.uv()[i * 2], q.uv()[i * 2 + 1]);
+                    frameConsumer.setUv2(light & 0xFFFF, (light >>> 16) & 0xFFFF);
+                    frameConsumer.setNormal(nx, ny, nz);
+                }
+            }
+        } finally {
+            frameConsumer.setTexture(0, null);
+            endEntity();
+        }
+        if (handGeoInjectLogged++ == 0) {
+            LOGGER.info("[VKB-RT] hand_geometry injected quads={} light={} hudFov={} worldTanHalf={} fovScale={}", handGeo.size(),
+                Integer.toHexString(light), handHudFov, worldTanHalf, fovScale);
+        }
+        return true;
+    }
+
     /** Opens the first-person hand pass ({@code GameRenderer.renderItemInHand}); {@code viewRotation} = camera view rotation. */
     public synchronized void beginHandPass(Matrix4f viewRotation) {
+        beginHandPass(viewRotation, handHudFov);
+    }
+
+    public synchronized void beginHandPass(Matrix4f viewRotation, float hudFovDegrees) {
+        handHudFov = hudFovDegrees;
         handPass = frameEnabled;
         handViewRotation.set(viewRotation);
         handEmitterCount = 0;
+        if (handPass) {
+            handGeo.clear();
+        }
     }
 
     public synchronized void endHandPass() {
@@ -638,59 +765,6 @@ public final class EntityCaptureManager {
 
     /** Keep text in the RT scene; {@code -Dvkrtx.rt.text.off=true} restores the old raster-only path for A/B checks. */
     private static final boolean TEXT_OFF = Boolean.getBoolean("vkrtx.rt.text.off");
-    private static final net.minecraft.resources.Identifier ASCII_FONT =
-        net.minecraft.resources.Identifier.fromNamespaceAndPath("minecraft", "textures/font/ascii.png");
-    private static final net.minecraft.resources.Identifier DEFAULT_FONT_PROVIDERS =
-        net.minecraft.resources.Identifier.fromNamespaceAndPath("minecraft", "font/include/default.json");
-    private record BitmapGlyph(Identifier texture, int column, int row, int columns, int rows) { }
-    private static volatile java.util.Map<Integer, BitmapGlyph> nonAsciiGlyphs;
-
-    /** Bitmap glyphs outside the legacy 0..255 ASCII page (notably Cyrillic sign text). */
-    private static java.util.Map<Integer, BitmapGlyph> nonAsciiGlyphs() {
-        java.util.Map<Integer, BitmapGlyph> cached = nonAsciiGlyphs;
-        if (cached != null) return cached;
-        synchronized (EntityCaptureManager.class) {
-            if (nonAsciiGlyphs != null) return nonAsciiGlyphs;
-            java.util.Map<Integer, BitmapGlyph> glyphs = new java.util.HashMap<>();
-            var resource = net.minecraft.client.Minecraft.getInstance().getResourceManager().getResource(DEFAULT_FONT_PROVIDERS);
-            if (resource.isPresent()) {
-                try (java.io.Reader reader = new java.io.InputStreamReader(resource.get().open(), java.nio.charset.StandardCharsets.UTF_8)) {
-                    var root = com.google.gson.JsonParser.parseReader(reader).getAsJsonObject();
-                    var providers = root.getAsJsonArray("providers");
-                    if (providers != null) {
-                        for (var element : providers) {
-                            if (!element.isJsonObject()) continue;
-                            var provider = element.getAsJsonObject();
-                            if (!provider.has("type") || !"bitmap".equals(provider.get("type").getAsString())
-                                    || !provider.has("file") || !provider.has("chars")) continue;
-                            String file = provider.get("file").getAsString();
-                            int separator = file.indexOf(':');
-                            String namespace = separator >= 0 ? file.substring(0, separator) : "minecraft";
-                            String path = separator >= 0 ? file.substring(separator + 1) : file;
-                            if (!path.startsWith("textures/")) path = "textures/" + path;
-                            if (!path.endsWith(".png")) path = path + ".png";
-                            Identifier texture = Identifier.fromNamespaceAndPath(namespace, path);
-                            var rows = provider.getAsJsonArray("chars");
-                            int rowCount = rows.size();
-                            for (int row = 0; row < rowCount; row++) {
-                                int[] codepoints = rows.get(row).getAsString().codePoints().toArray();
-                                for (int column = 0; column < codepoints.length; column++) {
-                                    int codepoint = codepoints[column];
-                                    if (codepoint > 255) {
-                                        glyphs.put(codepoint, new BitmapGlyph(texture, column, row, codepoints.length, rowCount));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } catch (Exception e) {
-                    LOGGER.warn("[VK-ENTITY-CAPTURE] could not read Minecraft bitmap font providers; non-ASCII RT text is unavailable\n{}", LogPaths.stack(e));
-                }
-            }
-            nonAsciiGlyphs = java.util.Map.copyOf(glyphs);
-            return nonAsciiGlyphs;
-        }
-    }
 
     /**
      * Text (sign lines, name tags drawn as text) as RT geometry: one quad per character, textured from the vanilla ASCII
@@ -707,15 +781,15 @@ public final class EntityCaptureManager {
         if (implicit) {
             beginEntity(-1, "text", poseStack.last().pose(), EntityGeometryFrame.CapturedEntity.FLAG_BLOCK_ENTITY);
         }
-        java.util.Map<Integer, BitmapGlyph> glyphPages = nonAsciiGlyphs();
+        java.util.Map<Integer, EntityTextGlyphs.BitmapGlyph> glyphPages = EntityTextGlyphs.nonAsciiGlyphs();
         PoseStack.Pose pose = poseStack.last();
         int argb = (color >>> 24) == 0 ? (0xFF000000 | color) : color;
         float[] pen = {x};
         text.accept((index, style, cp) -> {
             float adv = font.width(String.valueOf(Character.toChars(cp)));
             if (cp > 32) {
-                BitmapGlyph glyph = cp < 256
-                    ? new BitmapGlyph(ASCII_FONT, cp & 15, cp >> 4, 16, 16)
+                EntityTextGlyphs.BitmapGlyph glyph = cp < 256
+                    ? new EntityTextGlyphs.BitmapGlyph(EntityTextGlyphs.ASCII_FONT, cp & 15, cp >> 4, 16, 16)
                     : glyphPages.get(cp);
                 if (glyph != null) {
                     int slot = EntityTextureAtlas.INSTANCE.slot(glyph.texture(), 0, 0);
@@ -743,7 +817,7 @@ public final class EntityCaptureManager {
                     // text. Use a separate emissive atlas slot so ordinary text geometry never emits.
                     if (outline != 0) {
                         if (glowSlot > 0) {
-                            stageTextEmitter(pose, x0, y0, x1, y1, u0, v0, du, dv, glowLightColor(argb, outline), glowSlot);
+                            stageTextEmitter(pose, x0, y0, x1, y1, u0, v0, du, dv, EntityTextGlyphs.glowLightColor(argb, outline), glowSlot);
                         }
                     }
                 }
@@ -755,22 +829,6 @@ public final class EntityCaptureManager {
         if (implicit) {
             endEntity();
         }
-    }
-
-    /**
-     * Colour of the light a glow-ink glyph casts. The default sign text is black, and black light is no light: the glow only
-     * showed once the sign was dyed (owner, 2026-11-14). Vanilla draws such text black with a bright outline, so a text colour
-     * too dark to light anything casts the outline colour instead (vanilla gives black text the cream 0xF0EBCC outline).
-     */
-    static int glowLightColor(int textArgb, int outline) {
-        int r = (textArgb >> 16) & 255;
-        int g = (textArgb >> 8) & 255;
-        int b = textArgb & 255;
-        float luma = (0.2126f * r + 0.7152f * g + 0.0722f * b) / 255f;
-        if (luma >= 0.12f || (outline & 0xFFFFFF) == 0) {
-            return textArgb;
-        }
-        return 0xFF000000 | (outline & 0xFFFFFF);
     }
 
     private void stageTextEmitter(PoseStack.Pose pose, float x0, float y0, float x1, float y1,

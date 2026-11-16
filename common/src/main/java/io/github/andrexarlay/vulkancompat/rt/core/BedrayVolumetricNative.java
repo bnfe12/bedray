@@ -9,7 +9,7 @@ import static java.lang.foreign.ValueLayout.*;
 
 /** Coarse recorder; native owns history, upload buffers, immutable descriptors and barriers. */
 public final class BedrayVolumetricNative implements AutoCloseable {
-    public static final int FRAME_CONSTANTS_BYTES = 608, MARCH_BYTES = 96, APPLY_BYTES = 24;
+    public static final int FRAME_CONSTANTS_BYTES = 608, MARCH_BYTES = 96, APPLY_BYTES = 32;
     public static final int NATIVE_SCENE = 1, RESET_HISTORY = 2;
     private final BedrayCoreNative library;
     private final long core;

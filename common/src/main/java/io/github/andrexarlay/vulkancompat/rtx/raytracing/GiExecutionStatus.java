@@ -40,7 +40,7 @@ public final class GiExecutionStatus {
                 serSupported ? "Measured 2.14x slower gpu_rt (quiet steady-state A/B); off by default. Opt-in: -Dbedray.rt.ser=true."
                              : "Needs the NV ray tracing invocation reorder feature (and the raygen pipeline)."),
             new Tech("omm", "Opacity micromap (2-state)", micromap, false, false,
-                "Deferred: no measured terrain win; software candidate-alpha handles cutout. Not implemented."),
+                "Not implemented. Removing alpha holes entirely measured up to 9.7% faster gpu_total on a cutout-heavy scene, so it is a candidate; see docs/EXTENSION_AND_INSTALLER_DESIGN.md."),
             new Tech("ptlas", "Partitioned TLAS (NV)", false, false, false,
                 "Regional in-place TLAS update is active (idle-skip + refit). Partitioned TLAS deferred; not implemented."));
     }
@@ -74,7 +74,7 @@ public final class GiExecutionStatus {
             return "Open a world to read the device feature mask.";
         }
         boolean raygen = Boolean.getBoolean(RtRayPipelineDeviceRequirements.RAYGEN_PROPERTY);
-        boolean ser = Boolean.getBoolean(RtRayPipelineDeviceRequirements.SER_PROPERTY);
+        boolean ser = RtRayPipelineDeviceRequirements.serRequested();
         return describe(device.capabilityMask(), raygen, ser);
     }
 

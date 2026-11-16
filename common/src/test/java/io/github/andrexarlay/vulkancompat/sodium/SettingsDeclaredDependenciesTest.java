@@ -32,7 +32,9 @@ class SettingsDeclaredDependenciesTest {
 
     @Test
     void everyRowDeclaresEveryOptionItsPredicateReads() throws IOException {
-        String source = Files.readString(CONFIG, StandardCharsets.UTF_8).replace("\r\n", "\n");
+        String source = (Files.readString(CONFIG, StandardCharsets.UTF_8)
+            + Files.readString(Path.of(CONFIG.toString().replace("VulkanSodiumConfig", "SodiumAdvancedPage")), StandardCharsets.UTF_8))
+            .replace("\r\n", "\n");
         List<String> problems = new ArrayList<>();
         int rows = 0;
         for (int at = source.indexOf("addOption("); at >= 0; at = source.indexOf("addOption(", at + 1)) {

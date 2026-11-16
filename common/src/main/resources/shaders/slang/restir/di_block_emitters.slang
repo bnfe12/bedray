@@ -103,6 +103,11 @@ bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel
     if (slot >= diReservoirCount(reservoirs)) {
         return false;
     }
+    // The gates on M and the weight sum read the stats word alone, so an empty history costs 16 B instead of 64 B.
+    float4 storedStats = reservoirs[slot].stats;
+    if (!(min(storedStats.x, RESTIR_DI_M_CAP) > 0.0) || !(storedStats.y > 0.0)) {
+        return false;
+    }
     DIReservoir stored = reservoirs[slot];
     if (!(min(stored.stats.x, RESTIR_DI_M_CAP) > 0.0) || !(stored.stats.y > 0.0) || !isFinite(stored.sample.xyz)
         || !isFinite(stored.receiver.xyz)) {
@@ -275,10 +280,9 @@ struct BlockEmitterDiSampler : IReuseSampler {
         if (!DI_VISIBILITY_REUSE || !occluded || !reuseActive()) {
             return;
         }
-        uint ownSlot = reservoirSlot();
-        DIReservoir record = reservoirs[ownSlot];
-        record.stats.y = 0.0;
-        reservoirs[ownSlot] = record;
+        // Only the weight lane changes, and this thread owns the slot (reuseSample wrote it earlier in the same dispatch):
+        // one 4 B store instead of reading and rewriting the 64 B record.
+        reservoirs[reservoirSlot()].stats.y = 0.0;
     }
 
     // A pixel whose primary ray never accepted a surface has no reservoir of its own; publishing an empty record keeps a
@@ -287,6 +291,9 @@ struct BlockEmitterDiSampler : IReuseSampler {
         if (!reuseActive()) {
             return;
         }
-        reservoirs[reservoirSlot()] = emptyReservoir();
+        // Only the stats word is zeroed (16 B instead of 64 B).  Every reader gates on stats.x > 0 before it looks at the
+        // sample, the source or the receiver (diLoadHistory, reservoirLightSample, ownRecord and neighbourUsable of the
+        // spatial pass), so the stale payload behind M = 0 is never read.
+        reservoirs[reservoirSlot()].stats = float4(0.0);
     }
 };

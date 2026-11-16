@@ -20,7 +20,8 @@ class DenoiserGuidePreparationTest {
         int prepare = renderer.indexOf("owner.prepare(cmd)", owner);
         int bind = renderer.indexOf("pass.bind(new RtFrameBindings.Views(", prepare);
         int primary = renderer.indexOf("pass.dispatch(cmd, params, w, h)", bind);
-        int record = renderer.indexOf("owner.record(cmd, camera.projectionMatrix", primary);
+        int record = renderer.indexOf("RtDenoiserLifecycle.recordDenoise(cmd", primary);
+        assertTrue(body(source("world/RtDenoiserLifecycle.java"), "static boolean recordDenoise(").contains("owner.record(cmd, camera.projectionMatrix"));
         assertTrue(owner >= 0 && prepare > owner && bind > prepare && primary > bind && record > primary);
         String nrd = source("denoise/NrdDenoiser.java");
         String preparation = body(nrd, "public void prepare(VkCommandBuffer cmd)");

@@ -34,7 +34,7 @@ class RrFrameGenerationWiringTest {
         String nvidia = source("rtx/framegen/FrameGenRuntime");
         String amd = source("rtx/framegen/fsr3/Fsr3FrameGen");
         String world = source("rtx/WorldTargetManager");
-        String renderer = source("rt/world/RtFrameRenderer");
+        String renderer = source("rt/world/RtDenoiserLifecycle");
         assertTrue(renderer.contains("&& FrameGenRuntime.needsFrameInputs())"));
         assertProducerIsGated(nvidia, "if (!needsDlssgInputs())");
         assertProducerIsGated(amd, "if (!needsFrameInputs())");
@@ -51,7 +51,7 @@ class RrFrameGenerationWiringTest {
     }
 
     @Test void rrSdkAndVelocityUseTheActualPrimaryProducerJitter() throws IOException {
-        String renderer = source("rt/world/RtFrameRenderer");
+        String renderer = source("rt/world/RtDenoiserLifecycle");
         assertTrue(renderer.contains("float rrJitterX = slang.guideFrame().jitter.x"));
         assertTrue(renderer.contains("float rrJitterY = slang.guideFrame().jitter.y"));
         String rr = source("rt/denoise/DlssRrDenoiser");

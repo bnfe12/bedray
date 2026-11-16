@@ -28,6 +28,7 @@ from pathlib import Path
 from statistics import fmean, median
 
 from capture_analysis import InvalidCapture, analyze
+from background_hold import BackgroundHold
 from focus_hold import FocusHold
 
 DEFAULT_INSTANCE = Path(
@@ -67,6 +68,52 @@ VARIANTS: dict[str, dict[str, str]] = {
     "denoiser_rr_preset_f": {"vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
                              "vkrtx.rt.path_denoiser": "dlss_rr", "vkrtx.rt.dlss_rr_preset": "f"},
 }
+# Cost menu: the same DLSS-RR stack with one feature removed, to price each quality option in GPU milliseconds.
+_RR = {"vkrtx.rt.path_denoiser": "dlss_rr", "vkrtx.rt.path_restir_di": "true"}
+VARIANTS.update({
+    "cost_all_on": {**_RR, "vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true"},
+    "cost_pt_spatial_off": {**_RR, "vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "false"},
+    "cost_pt_off": {**_RR, "vkrtx.rt.path_restir_pt": "false", "vkrtx.rt.path_restir_pt_spatial": "false"},
+    "cost_di_off": {"vkrtx.rt.path_denoiser": "dlss_rr", "vkrtx.rt.path_restir_di": "false",
+                    "vkrtx.rt.path_restir_pt": "false", "vkrtx.rt.path_restir_pt_spatial": "false"},
+    "cost_bounces1": {**_RR, "vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
+                      "vkrtx.rt.path_bounces": "1"},
+    "cost_nrd": {"vkrtx.rt.path_denoiser": "nrd", "vkrtx.rt.path_restir_di": "true", "vkrtx.rt.path_restir_pt": "true",
+                 "vkrtx.rt.path_restir_pt_spatial": "true"},
+})
+# Warm-up A/B: identical stack, only the load wait before the 10 s warm-up differs (default 20 s vs 120 s).
+VARIANTS["load20"] = {**VARIANTS["cost_all_on"]}
+VARIANTS["load120"] = {**VARIANTS["cost_all_on"], "vkrtx.autotest.loadSeconds": "120"}
+# Dimension set: the same stack in the Overworld fixture pose, the Nether and the End (camera chosen by NativePerfScenario.findOpenPose).
+# All three wait 90 s after the world/dimension is entered so chunk streaming and re-meshing are mostly over before the warm-up.
+_DIM = {**VARIANTS["cost_all_on"], "vkrtx.autotest.loadSeconds": "90"}
+VARIANTS["dim_overworld"] = {**_DIM, "vkrtx.autotest.perfDimension": "overworld"}
+VARIANTS["dim_nether"] = {**_DIM, "vkrtx.autotest.perfDimension": "nether"}
+VARIANTS["dim_end"] = {**_DIM, "vkrtx.autotest.perfDimension": "end"}
+DIMENSIONS = ["dim_overworld", "dim_nether", "dim_end"]
+# DLSS RR render-preset cost on a warm baseline (90 s wait): same stack, only the NGX preset hint differs (quality is the owner's call).
+for _p in ("default", "d", "e", "f"):
+    VARIANTS["rrp_" + _p] = {**VARIANTS["cost_all_on"], "vkrtx.autotest.loadSeconds": "90",
+                             **({} if _p == "default" else {"vkrtx.rt.dlss_rr_preset": _p})}
+RR_PRESET_COST = ["rrp_default", "rrp_d", "rrp_e", "rrp_f"]
+# One-option-off attribution on a warm baseline (90 s wait): each variant is the baseline stack with a single path-mode option changed.
+_ATTR_BASE = {**VARIANTS["cost_all_on"], "vkrtx.autotest.loadSeconds": "90"}
+ATTR_OPTIONS = {
+    "attr_base": {},
+    "attr_distance64": {"vkrtx.rt.path_distance": "64"},
+    "attr_no_auto_normals": {"vkrtx.rt.auto_normals": "false"},
+    "attr_no_caustics": {"vkrtx.rt.path_caustics": "false"},
+    "attr_no_fog": {"vkrtx.rt.rt_fog": "false"},
+    "attr_light_budget64": {"vkrtx.rt.rt_light_budget": "64"},
+    "attr_no_waving": {"vkrtx.rt.waving_foliage": "false"},
+    "attr_no_particles": {"vkrtx.rt.rt_particles": "false"},
+    "attr_no_weather": {"vkrtx.rt.rt_weather": "false"},
+    "attr_self_shadow_off": {"vkrtx.rt.self_shadow": "2"},
+}
+for _k, _v in ATTR_OPTIONS.items():
+    VARIANTS[_k] = {**_ATTR_BASE, **_v}
+ATTRIBUTION = list(ATTR_OPTIONS)
+COST_MENU = ["cost_all_on", "cost_pt_spatial_off", "cost_pt_off", "cost_di_off", "cost_bounces1", "cost_nrd"]
 BASELINE = ["compute_pt_off", "compute_pt_on", "raygen_pt_off", "raygen_pt_on"]
 SER_AB = ["compute_pt_on", "raygen_pt_on", "ser_pt_on"]
 DENOISER_AB = ["denoiser_rr", "denoiser_nrd", "denoiser_nrd_relax"]
@@ -321,7 +368,7 @@ def capture_medians(capture: Path) -> dict:
 
 def run_variant(label: str, props: dict[str, str], instance: Path, launcher: Path,
                 out_dir: Path, scratch: Path, revision: str, timeout_s: float,
-                render_distance: int, hold_focus: bool = False) -> dict:
+                render_distance: int, hold_focus: bool = False, background: bool = False) -> dict:
     game = instance / "minecraft"
     started = time.time()
     full_props = {
@@ -341,6 +388,9 @@ def run_variant(label: str, props: dict[str, str], instance: Path, launcher: Pat
         "bedray.rt.nativeMemoryMiB": "4096",
         **props,
     }
+    if background:
+        # Background bench: the window sits behind the owner's work, so the focus requirement is waived and recorded.
+        full_props["vkrtx.autotest.allowUnfocused"] = "true"
     env = dict(os.environ)
     env["JAVA_TOOL_OPTIONS"] = " ".join(f"-D{k}={v}" for k, v in full_props.items())
     stop_launcher()
@@ -353,12 +403,15 @@ def run_variant(label: str, props: dict[str, str], instance: Path, launcher: Pat
     launcher_log = scratch / f"launcher-{label}.log"
     # Opt-in: hold the real window focus so the strict FOCUSED gate (bit 6) survives the whole capture on a
     # desktop that would otherwise steal focus. Only runs while this bench owns the desktop (game_running gate).
-    with FocusHold("Minecraft") if hold_focus else contextlib.nullcontext() as focus:
+    hold = BackgroundHold("Minecraft") if background else FocusHold("Minecraft") if hold_focus else contextlib.nullcontext()
+    with hold as focus:
         with launcher_log.open("w", encoding="utf-8") as stream:
             subprocess.Popen([str(launcher), "--launch", instance.name], env=env,
                              stdout=stream, stderr=subprocess.STDOUT)
         capture, status = wait_capture(game, started, timeout_s)
-    if hold_focus:
+    if background:
+        print(f"[bench] {label}: background-hold pushed the window down {focus.pushed_count} time(s)", flush=True)
+    elif hold_focus:
         print(f"[bench] {label}: focus-hold refocused {focus.refocus_count} time(s)", flush=True)
     exited = wait_game_exit()
     log_copy = scratch / f"latest-{label}.log"
@@ -403,13 +456,16 @@ def main() -> int:
     parser.add_argument("--scratch", type=Path, required=True, help="working dir for launcher/log copies")
     parser.add_argument("--revision", default="cf3f5f97-abi2")
     parser.add_argument("--variants", nargs="*", default=BASELINE,
-                        help="variant labels, or 'baseline' / 'ser_ab' / 'denoiser_ab' / 'rr_preset_ab' / 'all'")
+                        help="variant labels, or 'baseline' / 'ser_ab' / 'denoiser_ab' / 'rr_preset_ab' / 'cost_menu' / 'dimensions' / 'attribution' / 'all'")
     parser.add_argument("--timeout", type=float, default=480)
     parser.add_argument("--render-distance", type=int, default=16,
                         help="controlled render distance for a stable scene that fits the native budget (RD32 needs BLAS compaction)")
     parser.add_argument("--hold-focus", action="store_true",
                         help="keep the Minecraft window focused during each capture so the strict FOCUSED gate survives "
                              "a desktop that would steal focus (Windows only; the bench already refuses to run beside another game)")
+    parser.add_argument("--background", action="store_true",
+                        help="run behind the user's windows: keep the game window at the bottom of the z-order and waive the "
+                             "FOCUSED capture requirement (recorded as manifest fact focus_waived); overrides --hold-focus")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -423,6 +479,12 @@ def main() -> int:
             labels += DENOISER_AB
         elif name == "rr_preset_ab":
             labels += RR_PRESET_AB
+        elif name == "cost_menu":
+            labels += COST_MENU
+        elif name == "dimensions":
+            labels += DIMENSIONS
+        elif name == "attribution":
+            labels += ATTRIBUTION
         elif name == "all":
             labels += list(VARIANTS)
         elif name in VARIANTS:
@@ -452,7 +514,7 @@ def main() -> int:
                 break
             summary.append(run_variant(label, VARIANTS[label], args.instance, args.launcher,
                                        args.out, args.scratch, args.revision, args.timeout,
-                                       args.render_distance, args.hold_focus))
+                                       args.render_distance, args.hold_focus, args.background))
     finally:
         stop_launcher()
         restore_files(args.instance, backup)

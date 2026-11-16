@@ -127,7 +127,7 @@ class RtRestirSettingsTest {
     /** A row the player can see, a description, and both locales: otherwise the switch is a key in a file nobody opens. */
     @Test
     void everySwitchHasARowAndANameInBothLocales() {
-        String ui = read(UI);
+        String ui = read(UI) + read(UI.replace("VulkanSodiumConfig", "SodiumAdvancedPage"));
         String catalog = read(CATALOG);
         JsonObject en = readJson(EN);
         JsonObject ru = readJson(RU);
@@ -163,7 +163,7 @@ class RtRestirSettingsTest {
         String pass = read(SLANG_PASS);
         assertTrue(pass.contains("return !rayMode && backend.pathReuseAvailable() && diActive() && RtSettings.pathRestirPt();"),
             "the controller asks only the path profile, only a backend with a ring, only under direct-light reuse");
-        String ui = read(UI);
+        String ui = read(UI) + read(UI.replace("VulkanSodiumConfig", "SodiumAdvancedPage"));
         assertTrue(ui.contains("boolOpt(builder, \"path_restir_pt\", false, v -> RtSettings."), "a row, off by default");
         assertRowNeedsParent(ui, "path_restir_pt", "path_restir_di");
         String catalog = read(CATALOG);
@@ -197,7 +197,7 @@ class RtRestirSettingsTest {
         assertTrue(pass.contains("return ptActive() && RtSettings.pathRestirPtSpatial();"),
             "the controller asks for it only on a frame that runs the temporal stage");
         assertTrue(pass.contains("ptResetRequested, ptSpatialRequested()));"), "and hands the answer to the backend");
-        String ui = read(UI);
+        String ui = read(UI) + read(UI.replace("VulkanSodiumConfig", "SodiumAdvancedPage"));
         assertTrue(ui.contains("boolOpt(builder, \"path_restir_pt_spatial\", true, v -> RtSettings."), "a row, on by default");
         assertRowNeedsParent(ui, "path_restir_pt_spatial", "path_restir_pt");
         String catalog = read(CATALOG);

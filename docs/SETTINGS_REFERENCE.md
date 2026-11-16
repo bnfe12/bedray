@@ -36,7 +36,7 @@ system with the F3 screen (Bedray block).
 | Setting | What it does | FPS |
 |---|---|---|
 | Ray Tracing | Off, or Path Tracing (recommended). Needs `VK_KHR_ray_query`. The experimental Ray Tracing (Fast), AO and Direct modes appear only when unlocked (`experimental_rays = true`). | Path Tracing: very high |
-| Light Quality (bounces) | How many times light bounces, 1-8 (default 4). | about -10% per bounce |
+| Light Quality (bounces) | How many times light bounces, 1-8 (default 3). | about -10% per bounce |
 | Auto Exposure | Brightness follows the scene. Known issue: it can pulse when the scene changes, see [KNOWN_ISSUES.md](KNOWN_ISSUES.md). | none |
 | Water Style | Vanilla (classic) or Realistic. | low |
 | Light Shafts | Beams of sun / moon light. | low-medium |
@@ -63,7 +63,7 @@ DLSS Ray Reconstruction; a missing library falls back to accumulation and the lo
 Adds a group **Expert: Numbers** (light budget, sun size, auto-normal strength, manual RT distance, LOD bias
 offset, effect tuning such as bloom threshold, shape and light shaft range, fog in-scattering, FSR version), the **Ray Tracing (Fast,
 experimental)** group, the RT debug buffer view, and shows FSR 1 / NIS in the Upscaler list. Without the flag these options keep their
-stored values; four of them are **forced on** (see below).
+stored values; three of them are **forced on** (see below).
 
 ### Forced on (no switch)
 

@@ -71,7 +71,7 @@ public final class IrisScenario implements AutotestScenario {
         ctx.log("scenario", name(), "phase", phase, "post_runtime", IrisRenderBridge.runtimeStatus());
         for (String line : DebugInfo.lines()) {
             String plain = DebugText.plain(line);
-            if (plain.startsWith("[SHADER-HOST]") || plain.startsWith("[IRIS") || plain.startsWith("[DIRTRT")
+            if (plain.startsWith("[SHADER-HOST]") || plain.startsWith("[IRIS") || plain.startsWith("[RT-PIPELINE]")
                 || plain.startsWith("[CUSTOM-RT")) {
                 ctx.log("scenario", name(), "phase", phase, "f3", plain);
             }

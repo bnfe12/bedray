@@ -89,8 +89,10 @@ class RtSlangRestirSpatialTest {
         String spatial = block(read(SPATIAL), "void run() {");
         assertTrue(spatial.contains("if (!active() || !blockEmitterSpatialWriter(pixel, phase))"),
             "only the checker colour this dispatch owns writes");
-        assertTrue(spatial.contains("if (!ownRecord(own))"),
+        assertTrue(spatial.contains("if (!hasOwn || !ownRecord(own))"),
             "a pixel with no record of this frame is skipped: its slot still holds an older frame's receiver");
+        assertTrue(spatial.contains("bool hasOwn = min(reservoirs[ownSlot].stats.x, RESTIR_DI_M_CAP) > 0.0;"),
+            "the stats word alone rejects an empty slot before the other 48 B are read; ownRecord stays the full decision");
         String own = block(read(SPATIAL), "bool ownRecord(DIReservoir own)");
         assertTrue(own.contains("min(own.stats.x, RESTIR_DI_M_CAP) > 0.0 && isFinite(own.sample.xyz)"),
             "and having a record means a positive capped count and a usable sample");

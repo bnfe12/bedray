@@ -140,35 +140,6 @@ struct BlockEmitterPoint {
     bool   redstone;
 };
 
-// Unshadowed target density p^ of one candidate at one receiver: the legacy kernel (emission * the two cosines * the
-// windowed d^-1.5 / d^-1.25 falloff).  Shared by the candidate batch and by the re-evaluation of a stored sample, so a
-// reservoir import and a fresh sample can never disagree about what p^ means.
-float blockEmitterPhat(BlockEmitterPoint p, LightReceiver receiver, float distance2, float lightRadius) {
-    float3 toReceiver = p.position - receiver.position;
-    float3 direction = toReceiver * rsqrt(distance2);
-    float cosReceiver = max(dot(receiver.normal, direction), 0.0);
-    if (cosReceiver <= 0.0) {
-        return 0.0;
-    }
-    float cosEmitter = dot(p.emitterNormal, -direction);
-    // The density keeps the true projection; the look kernel floors the cosine of an open source so an edge-on torch does
-    // not switch off, and a one-sided face is rejected outright.
-    float cosGeometry = p.twoSided ? abs(cosEmitter) : max(cosEmitter, 0.0);
-    float cosKernel = p.twoSided ? max(abs(cosEmitter), 0.25) : max(cosEmitter, 0.0);
-    if (cosGeometry <= 1.0e-5 || cosKernel <= 0.0) {
-        return 0.0;
-    }
-    float window = emitterWindow(distance2, lightRadius);
-    return p.texelEmission * cosKernel * cosReceiver * window * emitterAttenuation(distance2);
-}
-
-// Geometric cosine of a candidate, the term the density divides back out of the estimator.
-float blockEmitterCosGeometry(BlockEmitterPoint p, LightReceiver receiver, float distance2) {
-    float3 direction = (p.position - receiver.position) * rsqrt(distance2);
-    float cosEmitter = dot(p.emitterNormal, -direction);
-    return p.twoSided ? abs(cosEmitter) : max(cosEmitter, 0.0);
-}
-
 // Solid-angle density of the chosen point: the quad is sampled by area, so the Jacobian to the direction is d^2 / cos.
 float blockEmitterSolidAnglePdf(BlockEmitterPoint p, float distance2, float cosGeometry) {
     float probability = max(p.indexProbability, 1.0e-8);
@@ -269,9 +240,8 @@ struct BlockEmitterWinner {
     bool                  hasWinner;
 };
 
-// One stratified point of one record, evaluated for one receiver.  A point that cannot carry weight is rejected before the
-// atlas fetches: outside the light radius, inside the emitter's own body (the self-rejection of a glowing face), or a
-// texel that does not glow.
+// A fresh sample and a reservoir re-evaluation use the same unshadowed density. Reject geometry that cannot contribute
+// before reading either atlas. The texel then supplies the emission of a geometrically valid point.
 BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<uint4> records, MaterialAtlas atlas,
         uint index, float2 quad, LightReceiver receiver, float3 cameraRelative, float lightRadius, float probability) {
     BlockEmitterCandidate candidate = blockEmitterEmptyCandidate(index);
@@ -304,6 +274,20 @@ BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<uint4> records, Mat
         return candidate;
     }
     candidate.distance2 = distance2;
+    float3 direction = toPoint * rsqrt(distance2);
+    float cosReceiver = max(dot(receiver.normal, direction), 0.0);
+    if (cosReceiver <= 0.0) {
+        return candidate;
+    }
+
+    float3 crossEdge = cross(emitter.edge1.xyz, emitter.edge2.xyz);
+    float crossLength = length(crossEdge);
+    point.emitterNormal = crossLength > 1.0e-6 ? crossEdge / crossLength : float3(0.0, 1.0, 0.0);
+    float cosEmitter = dot(point.emitterNormal, -direction);
+    float cosGeometry = point.twoSided ? abs(cosEmitter) : max(cosEmitter, 0.0);
+    if (cosGeometry <= 1.0e-5) {
+        return candidate;
+    }
 
     uint slotPlus1 = point.atlasSlotPlus1;
     if (slotPlus1 != 0u) {
@@ -319,14 +303,12 @@ BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<uint4> records, Mat
     if (point.texelEmission <= 0.0) {
         return candidate;
     }
-    float3 crossEdge = cross(emitter.edge1.xyz, emitter.edge2.xyz);
-    float crossLength = length(crossEdge);
-    point.emitterNormal = crossLength > 1.0e-6 ? crossEdge / crossLength : float3(0.0, 1.0, 0.0);
-    candidate.point = point;
-
-    candidate.phat = blockEmitterPhat(point, receiver, distance2, lightRadius);
+    // Keep the true projection for the solid-angle PDF. The legacy light kernel gives open sources a cosine floor.
+    float cosKernel = point.twoSided ? max(cosGeometry, 0.25) : cosGeometry;
+    float window = emitterWindow(distance2, lightRadius);
+    candidate.phat = point.texelEmission * cosKernel * cosReceiver * window * emitterAttenuation(distance2);
     if (candidate.phat > 0.0) {
-        candidate.cosGeometry = blockEmitterCosGeometry(point, receiver, distance2);
+        candidate.cosGeometry = cosGeometry;
     }
     return candidate;
 }
@@ -344,7 +326,6 @@ BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<uint4> records, Mate
     float lightRadius = min(maxDistance, EMITTER_RADIUS);
     // One per-call shift of the R2 sequence stratifies the quads of one torch evenly instead of by independent points.
     float2 r2shift = float2(rand01(seed), rand01(seed));
-    uint count = blockEmitterCount(records);
     for (uint k = 0u; k < candidates; ++k) {
         // The primary vertex keeps the light tree: it is what the eye sees and what ReSTIR DI stores and re-evaluates
         // with the mixture PMF.  Bounce vertices are never stored, so they take the cheap global branch.

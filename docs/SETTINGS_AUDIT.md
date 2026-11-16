@@ -50,7 +50,7 @@ failure. These diagnostics describe current capture/command recording, not visua
 
 | Group | Option (id) | What it does | FPS | Decision |
 |---|---|---|---|---|
-| Path Tracing Details | `pt_preset` Path Tracing Profile | Fast / Quality / Custom set rays, bounces, distance together | high | HIDDEN: `release/final-ui` removed the quality presets from the public UI (alpha defaults 2 rays, 4 bounces, 384 blocks, caustics on, auto exposure off, DLSS-RR); the option is built but not added to the page |
+| Path Tracing Details | `pt_preset` Path Tracing Profile | Fast / Quality / Custom set rays, bounces, distance together | high | HIDDEN: `release/final-ui` removed the quality presets from the public UI (that release shipped 2 rays, 4 bounces, 384 blocks, caustics on, auto exposure off, DLSS-RR; the current defaults in `RtSettings` are 1 ray, 3 bounces, 256 blocks, caustics off, auto exposure on, NRD); the option is built but not added to the page |
 | | `path_spp` Rays per Pixel | paths per pixel | high | ADVANCED (was Expert) |
 | | `path_distance` Ray Distance | longest bounce ray | medium | ADVANCED (was Expert) |
 | | `path_denoiser` Denoiser | Off / NRD / DLSS Ray Reconstruction | medium | ADVANCED. Not an essential: the fallback to accumulation when a library is missing already happens automatically (logged), so the default NRD needs no choice |

@@ -84,7 +84,7 @@ public abstract class MixinIrisUpdateChecker {
             Class<?> irisClass = Class.forName("net.irisshaders.iris.Iris");
             ensureIrisConfig(irisClass);
 
-            // Dirt RT status is owned by the shader host bootstrap (DirtRtRuntime); this reload hook no longer
+            // Dirt RT status is owned by the shader host bootstrap (RtPipelineRuntime); this reload hook no longer
             // overwrites it with a fixed "unavailable" state.
         } catch (Throwable ignored) {}
     }

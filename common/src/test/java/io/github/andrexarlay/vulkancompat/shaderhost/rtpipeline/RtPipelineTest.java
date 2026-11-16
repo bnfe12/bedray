@@ -1,19 +1,19 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.DescriptorBindingDesc;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.DescriptorSetDesc;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.DirtRtShaderBundle;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.PassShaders;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.ShaderGroupDesc;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.ShaderGroupType;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.StageDesc;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.ShaderStageType;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipelineConfig.DescriptorType;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipelineConfig.RayPass;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipelineConfig.SbtLayout;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtSbtBuilder.MultiPassSbt;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtSbtBuilder.PassSbt;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtSbtBuilder.VkRegions;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineLayouts.DescriptorBindingDesc;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineLayouts.DescriptorSetDesc;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipeline.RtShaderBundle;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipeline.PassShaders;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineLayouts.ShaderGroupDesc;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineLayouts.ShaderGroupType;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineLayouts.StageDesc;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineLayouts.ShaderStageType;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineConfig.DescriptorType;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineConfig.RayPass;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineConfig.SbtLayout;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineSbtBuilder.MultiPassSbt;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineSbtBuilder.PassSbt;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineSbtBuilder.VkRegions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.system.MemoryStack;
@@ -39,17 +39,17 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * L2 JUnit test suite for Dirt RT Ray Tracing Pipeline ({@code VK_KHR_ray_tracing_pipeline}):
+ * L2 JUnit test suite for the ray-tracing-pipeline pack host ({@code VK_KHR_ray_tracing_pipeline}):
  * <ul>
  *   <li>Validation of descriptor sets 0, 1, 2, and 3 layouts, bindings, types, and stage access flags.</li>
  *   <li>Validation of 12 shader stages across 3 ray passes (diffuse, reflection, refraction).</li>
  *   <li>Validation of 9 shader groups (pass-ordered and stage-ordered) and SBT group indexing.</li>
  *   <li>Validation of SPIR-V magic header verification, synthetic bundle creation, and map resolution.</li>
  *   <li>Native Vulkan structs creation on {@link MemoryStack} without live GPU.</li>
- *   <li>Integration with {@link DirtRtSbtBuilder} for multi-pass SBT and VkStridedDeviceAddressRegionKHR.</li>
+ *   <li>Integration with {@link RtPipelineSbtBuilder} for multi-pass SBT and VkStridedDeviceAddressRegionKHR.</li>
  * </ul>
  */
-class DirtRtPipelineTest {
+class RtPipelineTest {
 
     // =========================================================================
     // 1. Descriptor Sets Configuration & ABI Validation
@@ -58,10 +58,10 @@ class DirtRtPipelineTest {
     @Test
     @DisplayName("Descriptor sets 0, 1, 2, 3 have exact expected bindings, types, and counts")
     void testDescriptorSetsSpecification() {
-        assertEquals(4, DirtRtPipelineConfig.TOTAL_DESCRIPTOR_SETS);
-        assertEquals(4, DirtRtPipelineConfig.ALL_DESCRIPTOR_SETS.size());
+        assertEquals(4, RtPipelineConfig.TOTAL_DESCRIPTOR_SETS);
+        assertEquals(4, RtPipelineConfig.ALL_DESCRIPTOR_SETS.size());
 
-        List<DescriptorSetDesc> sets = DirtRtPipeline.describeDescriptorSets(1024);
+        List<DescriptorSetDesc> sets = RtPipelineLayouts.describeDescriptorSets(1024);
         assertEquals(4, sets.size());
 
         // Set 0: FrameUniforms
@@ -162,7 +162,7 @@ class DirtRtPipelineTest {
     void testDescriptorSetLayoutCreateInfo() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             // Set 0
-            VkDescriptorSetLayoutCreateInfo info0 = DirtRtPipeline.createDescriptorSetLayoutInfo(0, stack, 1024);
+            VkDescriptorSetLayoutCreateInfo info0 = RtPipelineLayouts.createDescriptorSetLayoutInfo(0, stack, 1024);
             assertEquals(VK10.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, info0.sType());
             VkDescriptorSetLayoutBinding.Buffer b0 = info0.pBindings();
             assertNotNull(b0);
@@ -174,7 +174,7 @@ class DirtRtPipelineTest {
             assertEquals(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, b0.get(1).descriptorType());
 
             // Set 1
-            VkDescriptorSetLayoutCreateInfo info1 = DirtRtPipeline.createDescriptorSetLayoutInfo(1, stack, 2048);
+            VkDescriptorSetLayoutCreateInfo info1 = RtPipelineLayouts.createDescriptorSetLayoutInfo(1, stack, 2048);
             assertEquals(VK10.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, info1.sType());
             VkDescriptorSetLayoutBinding.Buffer b1 = info1.pBindings();
             assertNotNull(b1);
@@ -184,7 +184,7 @@ class DirtRtPipelineTest {
             assertEquals(2048, b1.get(0).descriptorCount());
 
             // Set 2
-            VkDescriptorSetLayoutCreateInfo info2 = DirtRtPipeline.createDescriptorSetLayoutInfo(2, stack, 1024);
+            VkDescriptorSetLayoutCreateInfo info2 = RtPipelineLayouts.createDescriptorSetLayoutInfo(2, stack, 1024);
             assertEquals(VK10.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, info2.sType());
             VkDescriptorSetLayoutBinding.Buffer b2 = info2.pBindings();
             assertNotNull(b2);
@@ -194,7 +194,7 @@ class DirtRtPipelineTest {
             assertEquals(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, b2.get(2).descriptorType());
 
             // Set 3
-            VkDescriptorSetLayoutCreateInfo info3 = DirtRtPipeline.createDescriptorSetLayoutInfo(3, stack, 1024);
+            VkDescriptorSetLayoutCreateInfo info3 = RtPipelineLayouts.createDescriptorSetLayoutInfo(3, stack, 1024);
             assertEquals(VK10.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, info3.sType());
             VkDescriptorSetLayoutBinding.Buffer b3 = info3.pBindings();
             assertNotNull(b3);
@@ -207,7 +207,7 @@ class DirtRtPipelineTest {
 
             // Pipeline Layout info with push constants
             LongBuffer setLayoutHandles = stack.longs(0x1001L, 0x1002L, 0x1003L, 0x1004L);
-            VkPipelineLayoutCreateInfo plInfo = DirtRtPipeline.createPipelineLayoutInfo(setLayoutHandles, stack);
+            VkPipelineLayoutCreateInfo plInfo = RtPipelineLayouts.createPipelineLayoutInfo(setLayoutHandles, stack);
             assertEquals(VK10.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, plInfo.sType());
             assertNotNull(plInfo.pSetLayouts());
             assertEquals(4, plInfo.pSetLayouts().capacity());
@@ -218,8 +218,8 @@ class DirtRtPipelineTest {
             assertNotNull(push);
             assertEquals(1, push.capacity());
             assertEquals(0, push.get(0).offset());
-            assertEquals(DirtRtPipeline.PUSH_CONSTANT_BYTES, push.get(0).size());
-            assertEquals(DirtRtPipeline.PUSH_CONSTANT_STAGES, push.get(0).stageFlags());
+            assertEquals(RtPipelineLayouts.PUSH_CONSTANT_BYTES, push.get(0).size());
+            assertEquals(RtPipelineLayouts.PUSH_CONSTANT_STAGES, push.get(0).stageFlags());
         }
     }
 
@@ -230,11 +230,11 @@ class DirtRtPipelineTest {
     @Test
     @DisplayName("12 shader stages correctly mapped across diffuse, reflection, refraction passes")
     void testShaderStagesSpecification() {
-        assertEquals(12, DirtRtPipeline.TOTAL_STAGES);
-        assertEquals(3, DirtRtPipeline.TOTAL_PASSES);
-        assertEquals(4, DirtRtPipeline.STAGES_PER_PASS);
+        assertEquals(12, RtPipelineLayouts.TOTAL_STAGES);
+        assertEquals(3, RtPipelineLayouts.TOTAL_PASSES);
+        assertEquals(4, RtPipelineLayouts.STAGES_PER_PASS);
 
-        List<StageDesc> stages = DirtRtPipeline.buildStageDescriptors();
+        List<StageDesc> stages = RtPipelineLayouts.buildStageDescriptors();
         assertEquals(12, stages.size());
 
         // Pass 0: Diffuse (ray0)
@@ -308,16 +308,16 @@ class DirtRtPipelineTest {
     @Test
     @DisplayName("Candidate shader names support standard names and _0 variants")
     void testCandidateShaderNames() {
-        List<String> rgenNames = DirtRtPipeline.candidateShaderNames(RayPass.DIFFUSE, ShaderStageType.RAYGEN);
+        List<String> rgenNames = RtPipeline.candidateShaderNames(RayPass.DIFFUSE, ShaderStageType.RAYGEN);
         assertTrue(rgenNames.contains("ray0.rgen.spv"));
         assertTrue(rgenNames.contains("ray0_0.rgen.spv"));
         assertTrue(rgenNames.contains("ray0.rgen"));
 
-        List<String> chitNames = DirtRtPipeline.candidateShaderNames(RayPass.DIFFUSE, ShaderStageType.CLOSEST_HIT);
+        List<String> chitNames = RtPipeline.candidateShaderNames(RayPass.DIFFUSE, ShaderStageType.CLOSEST_HIT);
         assertTrue(chitNames.contains("ray0.rchit.spv"));
         assertTrue(chitNames.contains("ray0_0.rchit.spv"));
 
-        List<String> ahitNames = DirtRtPipeline.candidateShaderNames(RayPass.REFLECTION, ShaderStageType.ANY_HIT);
+        List<String> ahitNames = RtPipeline.candidateShaderNames(RayPass.REFLECTION, ShaderStageType.ANY_HIT);
         assertTrue(ahitNames.contains("ray1.rahit.spv"));
         assertTrue(ahitNames.contains("ray1_0.rahit.spv"));
     }
@@ -325,7 +325,7 @@ class DirtRtPipelineTest {
     @Test
     @DisplayName("Synthetic shader bundle creation and SPIR-V header validation")
     void testSyntheticShaderBundle() {
-        DirtRtShaderBundle bundle = DirtRtPipeline.createSyntheticShaderBundle();
+        RtShaderBundle bundle = RtPipeline.createSyntheticShaderBundle();
         assertNotNull(bundle);
         assertEquals(3, bundle.passes().size());
 
@@ -333,7 +333,7 @@ class DirtRtPipelineTest {
             ByteBuffer spv = bundle.getShader(i);
             assertNotNull(spv, "Shader at stage " + i + " must not be null");
             assertTrue(spv.isDirect(), "SPIR-V buffer must be direct");
-            assertTrue(DirtRtPipeline.validateSpirvHeader(spv), "SPIR-V header magic must be valid for stage " + i);
+            assertTrue(RtPipeline.validateSpirvHeader(spv), "SPIR-V header magic must be valid for stage " + i);
         }
 
         PassShaders p0 = bundle.forPass(RayPass.DIFFUSE);
@@ -355,31 +355,31 @@ class DirtRtPipelineTest {
     void testShaderBundleMapLoading() {
         Map<String, ByteBuffer> validMap = new HashMap<>();
         // Populate ray0 with direct names
-        validMap.put("ray0.rgen.spv", DirtRtPipeline.createSyntheticSpirv());
-        validMap.put("ray0.rmiss.spv", DirtRtPipeline.createSyntheticSpirv());
-        validMap.put("ray0.rchit.spv", DirtRtPipeline.createSyntheticSpirv());
-        validMap.put("ray0.rahit.spv", DirtRtPipeline.createSyntheticSpirv());
+        validMap.put("ray0.rgen.spv", RtPipeline.createSyntheticSpirv());
+        validMap.put("ray0.rmiss.spv", RtPipeline.createSyntheticSpirv());
+        validMap.put("ray0.rchit.spv", RtPipeline.createSyntheticSpirv());
+        validMap.put("ray0.rahit.spv", RtPipeline.createSyntheticSpirv());
 
         // Populate ray1 with _0 names
-        validMap.put("ray1_0.rgen.spv", DirtRtPipeline.createSyntheticSpirv());
-        validMap.put("ray1_0.rmiss.spv", DirtRtPipeline.createSyntheticSpirv());
-        validMap.put("ray1_0.rchit.spv", DirtRtPipeline.createSyntheticSpirv());
-        validMap.put("ray1_0.rahit.spv", DirtRtPipeline.createSyntheticSpirv());
+        validMap.put("ray1_0.rgen.spv", RtPipeline.createSyntheticSpirv());
+        validMap.put("ray1_0.rmiss.spv", RtPipeline.createSyntheticSpirv());
+        validMap.put("ray1_0.rchit.spv", RtPipeline.createSyntheticSpirv());
+        validMap.put("ray1_0.rahit.spv", RtPipeline.createSyntheticSpirv());
 
         // Populate ray2 without .spv extension
-        validMap.put("ray2.rgen", DirtRtPipeline.createSyntheticSpirv());
-        validMap.put("ray2.rmiss", DirtRtPipeline.createSyntheticSpirv());
-        validMap.put("ray2.rchit", DirtRtPipeline.createSyntheticSpirv());
-        validMap.put("ray2.rahit", DirtRtPipeline.createSyntheticSpirv());
+        validMap.put("ray2.rgen", RtPipeline.createSyntheticSpirv());
+        validMap.put("ray2.rmiss", RtPipeline.createSyntheticSpirv());
+        validMap.put("ray2.rchit", RtPipeline.createSyntheticSpirv());
+        validMap.put("ray2.rahit", RtPipeline.createSyntheticSpirv());
 
-        DirtRtShaderBundle bundle = DirtRtPipeline.loadShaderBundleFromMap(validMap);
+        RtShaderBundle bundle = RtPipeline.loadShaderBundleFromMap(validMap);
         assertNotNull(bundle);
         assertEquals(3, bundle.passes().size());
 
         // Incomplete map throws IllegalArgumentException
         Map<String, ByteBuffer> incompleteMap = new HashMap<>(validMap);
         incompleteMap.remove("ray0.rgen.spv");
-        assertThrows(IllegalArgumentException.class, () -> DirtRtPipeline.loadShaderBundleFromMap(incompleteMap));
+        assertThrows(IllegalArgumentException.class, () -> RtPipeline.loadShaderBundleFromMap(incompleteMap));
     }
 
     @Test
@@ -391,11 +391,11 @@ class DirtRtPipelineTest {
                 modules.put(i, 0x2000L + i);
             }
 
-            VkPipelineShaderStageCreateInfo.Buffer stagesBuf = DirtRtPipeline.createPipelineShaderStages(stack, modules);
+            VkPipelineShaderStageCreateInfo.Buffer stagesBuf = RtPipelineLayouts.createPipelineShaderStages(stack, modules);
             assertNotNull(stagesBuf);
             assertEquals(12, stagesBuf.capacity());
 
-            List<StageDesc> stageDescs = DirtRtPipeline.buildStageDescriptors();
+            List<StageDesc> stageDescs = RtPipelineLayouts.buildStageDescriptors();
             for (int i = 0; i < 12; i++) {
                 VkPipelineShaderStageCreateInfo info = stagesBuf.get(i);
                 assertEquals(VK10.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, info.sType());
@@ -413,8 +413,8 @@ class DirtRtPipelineTest {
     @Test
     @DisplayName("9 shader groups in pass-order (default) map exactly to 3 general rgen, 3 general miss, 3 hit groups")
     void testShaderGroupsPassOrder() {
-        assertEquals(9, DirtRtPipeline.TOTAL_SHADER_GROUPS);
-        List<ShaderGroupDesc> groups = DirtRtPipeline.buildGroupDescriptors(false);
+        assertEquals(9, RtPipelineLayouts.TOTAL_SHADER_GROUPS);
+        List<ShaderGroupDesc> groups = RtPipelineLayouts.buildGroupDescriptors(false);
         assertEquals(9, groups.size());
 
         // Pass 0 (Diffuse)
@@ -497,7 +497,7 @@ class DirtRtPipelineTest {
     @Test
     @DisplayName("9 shader groups in stage-order arrange raygen 0..2, miss 3..5, hit 6..8")
     void testShaderGroupsStageOrder() {
-        List<ShaderGroupDesc> groups = DirtRtPipeline.buildGroupDescriptors(true);
+        List<ShaderGroupDesc> groups = RtPipelineLayouts.buildGroupDescriptors(true);
         assertEquals(9, groups.size());
 
         // Raygen groups: 0, 1, 2
@@ -534,7 +534,7 @@ class DirtRtPipelineTest {
     @DisplayName("VkRayTracingShaderGroupCreateInfoKHR buffer population on MemoryStack")
     void testPipelineShaderGroupsAllocation() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkRayTracingShaderGroupCreateInfoKHR.Buffer pGroups = DirtRtPipeline.createPipelineShaderGroups(stack, false);
+            VkRayTracingShaderGroupCreateInfoKHR.Buffer pGroups = RtPipelineLayouts.createPipelineShaderGroups(stack, false);
             assertNotNull(pGroups);
             assertEquals(9, pGroups.capacity());
 
@@ -564,11 +564,11 @@ class DirtRtPipelineTest {
     @DisplayName("SBT handles extraction and MultiPassSbt construction with 64-byte alignment")
     void testSbtBuildingFromGroupHandles() {
         SbtLayout layout = new SbtLayout(32, 32, 64);
-        ByteBuffer handles = DirtRtPipeline.createMockGroupHandles(32);
+        ByteBuffer handles = RtPipeline.createMockGroupHandles(32);
         assertEquals(9 * 32, handles.remaining());
 
         long baseDeviceAddress = 0x10000000L;
-        MultiPassSbt multiPassSbt = DirtRtPipeline.buildSbt(baseDeviceAddress, layout, handles);
+        MultiPassSbt multiPassSbt = RtPipeline.buildSbt(baseDeviceAddress, layout, handles);
         assertNotNull(multiPassSbt);
         assertEquals(3, multiPassSbt.passCount());
         assertEquals(baseDeviceAddress, multiPassSbt.bufferDeviceAddress());
@@ -576,7 +576,7 @@ class DirtRtPipelineTest {
 
         // Verify each pass in the multi-pass SBT
         for (int p = 0; p < 3; p++) {
-            RayPass pass = DirtRtPipelineConfig.PASSES.get(p);
+            RayPass pass = RtPipelineConfig.PASSES.get(p);
             PassSbt passSbt = multiPassSbt.pass(pass);
             assertEquals(pass, passSbt.rayPass());
 
@@ -643,11 +643,11 @@ class DirtRtPipelineTest {
                 modules.put(i, 0x3000L + i);
             }
 
-            VkPipelineShaderStageCreateInfo.Buffer stages = DirtRtPipeline.createPipelineShaderStages(stack, modules);
-            VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = DirtRtPipeline.createPipelineShaderGroups(stack, false);
+            VkPipelineShaderStageCreateInfo.Buffer stages = RtPipelineLayouts.createPipelineShaderStages(stack, modules);
+            VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = RtPipelineLayouts.createPipelineShaderGroups(stack, false);
             long dummyLayout = 0x5001L;
 
-            VkRayTracingPipelineCreateInfoKHR info = DirtRtPipeline.createRayTracingPipelineInfo(
+            VkRayTracingPipelineCreateInfoKHR info = RtPipelineLayouts.createRayTracingPipelineInfo(
                     stack,
                     dummyLayout,
                     stages,
@@ -685,29 +685,29 @@ class DirtRtPipelineTest {
     @DisplayName("Trace rays parameter validation guards against null and non-positive dimensions")
     void testTraceRaysValidation() {
         SbtLayout layout = new SbtLayout(32, 32, 64);
-        ByteBuffer handles = DirtRtPipeline.createMockGroupHandles(32);
-        MultiPassSbt sbt = DirtRtPipeline.buildSbt(0x10000000L, layout, handles);
+        ByteBuffer handles = RtPipeline.createMockGroupHandles(32);
+        MultiPassSbt sbt = RtPipeline.buildSbt(0x10000000L, layout, handles);
         PassSbt passSbt = sbt.pass(RayPass.DIFFUSE);
 
         try (MemoryStack stack = MemoryStack.stackPush()) {
             // Null command buffer
             assertThrows(NullPointerException.class, () ->
-                    DirtRtPipeline.recordTracePass(null, 1L, 2L, RayPass.DIFFUSE, passSbt, 1920, 1080, stack));
+                    RtPipeline.recordTracePass(null, 1L, 2L, RayPass.DIFFUSE, passSbt, 1920, 1080, stack));
 
             // Non-positive width/height
             // We pass a dummy non-null command buffer by creating one on stack or checking error before call
             // Instead test the static helper:
             assertThrows(IllegalArgumentException.class, () ->
-                    DirtRtPipeline.createMockGroupHandles(0, 32));
+                    RtPipeline.createMockGroupHandles(0, 32));
             assertThrows(IllegalArgumentException.class, () ->
-                    DirtRtPipeline.createMockGroupHandles(9, -1));
+                    RtPipeline.createMockGroupHandles(9, -1));
         }
     }
 
     @Test
-    @DisplayName("DirtRtPipeline uninitialized lifecycle inspection")
+    @DisplayName("RtPipeline uninitialized lifecycle inspection")
     void testPipelineLifecycle() {
-        DirtRtPipeline pipeline = new DirtRtPipeline();
+        RtPipeline pipeline = new RtPipeline();
         assertFalse(pipeline.isInitialized());
         assertEquals(0L, pipeline.pipeline());
         assertEquals(0L, pipeline.pipelineLayout());

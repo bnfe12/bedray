@@ -51,10 +51,11 @@ class RtSlangUpscalerJitterTest {
     @Test
     void theRendererHandsTheFrameTheJitterItGivesTheDenoiser() throws IOException {
         String renderer = Files.readString(RENDERER).replace("\r\n", "\n");
-        assertTrue(renderer.contains("        params.upscalerJittered = upscalerJittered;\n"
+        String header = Files.readString(RENDERER.resolveSibling("RtFrameHeader.java")).replace("\r\n", "\n");
+        assertTrue(header.contains("        params.upscalerJittered = upscalerJittered;\n"
             + "        params.upscalerJitterX = jitterPxX;\n"
             + "        params.upscalerJitterY = jitterPxY;"), "one value for StatsBuf, the Slang rays and DLSS-RR");
-        assertTrue(renderer.indexOf("params.upscalerJitterX = jitterPxX;") < renderer.indexOf("pass.dispatch(cmd, params, w, h);"),
+        assertTrue(renderer.indexOf("RtFrameHeader.writeCamera(") < renderer.indexOf("pass.dispatch(cmd, params, w, h);"),
             "set before the pass fills its frame");
     }
 }

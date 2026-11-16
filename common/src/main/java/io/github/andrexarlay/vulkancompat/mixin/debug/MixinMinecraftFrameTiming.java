@@ -16,6 +16,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(value = Minecraft.class, remap = false)
 public abstract class MixinMinecraftFrameTiming {
+    @Inject(method = "renderFrame(Z)V", at = @At("HEAD"))
+    private void vkb$cmdStart(boolean advanceGameTime, CallbackInfo ci) {
+        if (VulkanBridge.isVulkan()) {
+            PerfMonitor.cmdStart();
+        }
+    }
+
     @Inject(method = "renderFrame(Z)V",
         at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;render()V", shift = At.Shift.AFTER))
     private void vkb$renderEnd(boolean advanceGameTime, CallbackInfo ci) {
@@ -29,6 +36,45 @@ public abstract class MixinMinecraftFrameTiming {
     private void vkb$frameEnd(boolean advanceGameTime, CallbackInfo ci) {
         if (VulkanBridge.isVulkan()) {
             PerfMonitor.frameEnd();
+        }
+    }
+
+    private static final String ACQUIRE = "Lcom/mojang/renderpearl/api/device/GpuSurface;acquireNextTexture()V";
+    private static final String PRESENT = "Lcom/mojang/renderpearl/api/device/GpuSurface;present()V";
+
+    @Inject(method = "renderFrame(Z)V", at = @At(value = "INVOKE", target = ACQUIRE))
+    private void vkb$acquireBegin(boolean advanceGameTime, CallbackInfo ci) {
+        if (VulkanBridge.isVulkan()) {
+            PerfMonitor.acquireBegin();
+        }
+    }
+
+    @Inject(method = "renderFrame(Z)V", at = @At(value = "INVOKE", target = ACQUIRE, shift = At.Shift.AFTER))
+    private void vkb$acquireEnd(boolean advanceGameTime, CallbackInfo ci) {
+        if (VulkanBridge.isVulkan()) {
+            PerfMonitor.acquireEnd();
+        }
+    }
+
+    @Inject(method = "renderFrame(Z)V", at = @At(value = "INVOKE", target = PRESENT))
+    private void vkb$presentBegin(boolean advanceGameTime, CallbackInfo ci) {
+        if (VulkanBridge.isVulkan()) {
+            PerfMonitor.presentBegin();
+        }
+    }
+
+    @Inject(method = "renderFrame(Z)V", at = @At(value = "INVOKE", target = PRESENT, shift = At.Shift.AFTER))
+    private void vkb$presentEnd(boolean advanceGameTime, CallbackInfo ci) {
+        if (VulkanBridge.isVulkan()) {
+            PerfMonitor.presentEnd();
+        }
+    }
+
+    @Inject(method = "renderFrame(Z)V",
+        at = @At(value = "INVOKE", target = "Lcom/mojang/renderpearl/api/commands/CommandEncoder;submit()V", shift = At.Shift.AFTER))
+    private void vkb$afterSubmit(boolean advanceGameTime, CallbackInfo ci) {
+        if (VulkanBridge.isVulkan()) {
+            PerfMonitor.afterSubmit();
         }
     }
 }

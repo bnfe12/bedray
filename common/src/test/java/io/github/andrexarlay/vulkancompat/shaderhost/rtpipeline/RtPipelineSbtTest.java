@@ -1,4 +1,4 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
 import io.github.andrexarlay.vulkanbridge.api.DeviceRequirement;
 import io.github.andrexarlay.vulkanbridge.api.FeatureRequest;
@@ -18,30 +18,30 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * L2 JUnit tests for Dirt RT ray-tracing pipeline support:
+ * L2 JUnit tests for ray-tracing-pipeline pack support:
  * <ul>
- *   <li>{@link DirtRtDeviceRequirements}: device extensions, features, late provider registration, property defaults.</li>
- *   <li>{@link DirtRtSbtBuilder}: SBT offset and alignment calculations (64-byte base alignment boundary for raygen/miss/hit).</li>
+ *   <li>{@link RtPipelineDeviceRequirements}: device extensions, features, late provider registration, property defaults.</li>
+ *   <li>{@link RtPipelineSbtBuilder}: SBT offset and alignment calculations (64-byte base alignment boundary for raygen/miss/hit).</li>
  *   <li>{@link VkStridedDeviceAddressRegionKHR}: stride and size rules (raygen stride == size, 64-byte alignment).</li>
  *   <li>Shader group handle packing, extraction, and 3-pass multi-pass SBT serialization.</li>
  * </ul>
  */
-class DirtRtSbtTest {
+class RtPipelineSbtTest {
 
     // =========================================================================
-    // 1. DirtRtDeviceRequirements Tests
+    // 1. RtPipelineDeviceRequirements Tests
     // =========================================================================
 
     @Test
-    @DisplayName("DirtRtDeviceRequirements declares required extension, features, and properties")
+    @DisplayName("RtPipelineDeviceRequirements declares required extension, features, and properties")
     void testDeviceRequirementsSpecification() {
-        assertEquals("VK_KHR_ray_tracing_pipeline", DirtRtDeviceRequirements.EXTENSION_NAME);
-        assertEquals(Set.of("VK_KHR_ray_tracing_pipeline"), DirtRtDeviceRequirements.DEVICE_EXTENSIONS);
-        assertEquals(DirtRtDeviceRequirements.DEVICE_EXTENSIONS, DirtRtDeviceRequirements.extraDeviceExtensions());
+        assertEquals("VK_KHR_ray_tracing_pipeline", RtPipelineDeviceRequirements.EXTENSION_NAME);
+        assertEquals(Set.of("VK_KHR_ray_tracing_pipeline"), RtPipelineDeviceRequirements.DEVICE_EXTENSIONS);
+        assertEquals(RtPipelineDeviceRequirements.DEVICE_EXTENSIONS, RtPipelineDeviceRequirements.extraDeviceExtensions());
 
-        DeviceRequirement req = DirtRtDeviceRequirements.requirement();
-        assertEquals(DirtRtDeviceRequirements.ID, req.id());
-        assertEquals(DirtRtDeviceRequirements.DEVICE_EXTENSIONS, req.deviceExtensions());
+        DeviceRequirement req = RtPipelineDeviceRequirements.requirement();
+        assertEquals(RtPipelineDeviceRequirements.ID, req.id());
+        assertEquals(RtPipelineDeviceRequirements.DEVICE_EXTENSIONS, req.deviceExtensions());
         assertTrue(req.optional());
         assertTrue(req.conditionHolds());
 
@@ -52,11 +52,11 @@ class DirtRtSbtTest {
         assertEquals("rayTracingPipeline", features.get(0).field());
 
         // Default properties check
-        assertEquals(32, DirtRtDeviceRequirements.DEFAULT_SHADER_GROUP_HANDLE_SIZE);
-        assertEquals(32, DirtRtDeviceRequirements.DEFAULT_SHADER_GROUP_HANDLE_ALIGNMENT);
-        assertEquals(64, DirtRtDeviceRequirements.DEFAULT_SHADER_GROUP_BASE_ALIGNMENT);
+        assertEquals(32, RtPipelineDeviceRequirements.DEFAULT_SHADER_GROUP_HANDLE_SIZE);
+        assertEquals(32, RtPipelineDeviceRequirements.DEFAULT_SHADER_GROUP_HANDLE_ALIGNMENT);
+        assertEquals(64, RtPipelineDeviceRequirements.DEFAULT_SHADER_GROUP_BASE_ALIGNMENT);
 
-        DirtRtDeviceRequirements.DirtRtProperties props = DirtRtDeviceRequirements.DirtRtProperties.defaults();
+        RtPipelineDeviceRequirements.RtPipelineProperties props = RtPipelineDeviceRequirements.RtPipelineProperties.defaults();
         assertEquals(32, props.shaderGroupHandleSize());
         assertEquals(32, props.shaderGroupHandleAlignment());
         assertEquals(64, props.shaderGroupBaseAlignment());
@@ -64,34 +64,34 @@ class DirtRtSbtTest {
         assertEquals(4096, props.maxShaderGroupStride());
         assertTrue(props.isValid());
 
-        DirtRtPipelineConfig.SbtLayout layoutFromProps = props.toSbtLayout();
+        RtPipelineConfig.SbtLayout layoutFromProps = props.toSbtLayout();
         assertEquals(32, layoutFromProps.handleSize());
         assertEquals(32, layoutFromProps.handleAlignment());
         assertEquals(64, layoutFromProps.baseAlignment());
 
         // Extension support helper
-        assertTrue(DirtRtDeviceRequirements.isExtensionSupported(Set.of("VK_KHR_swapchain", "VK_KHR_ray_tracing_pipeline")));
-        assertFalse(DirtRtDeviceRequirements.isExtensionSupported(Set.of("VK_KHR_swapchain")));
-        assertFalse(DirtRtDeviceRequirements.isExtensionSupported(null));
+        assertTrue(RtPipelineDeviceRequirements.isExtensionSupported(Set.of("VK_KHR_swapchain", "VK_KHR_ray_tracing_pipeline")));
+        assertFalse(RtPipelineDeviceRequirements.isExtensionSupported(Set.of("VK_KHR_swapchain")));
+        assertFalse(RtPipelineDeviceRequirements.isExtensionSupported(null));
     }
 
     @Test
-    @DisplayName("DirtRtDeviceRequirements registers into DeviceFeatureRegistry directly and as late provider")
+    @DisplayName("RtPipelineDeviceRequirements registers into DeviceFeatureRegistry directly and as late provider")
     void testDeviceRequirementsRegistration() {
         // Direct registration
         DeviceFeatureRegistryImpl registry = new DeviceFeatureRegistryImpl();
-        DirtRtDeviceRequirements.register(registry);
+        RtPipelineDeviceRequirements.register(registry);
         assertEquals(1, registry.snapshot().size());
-        assertEquals(DirtRtDeviceRequirements.ID, registry.snapshot().get(0).id());
+        assertEquals(RtPipelineDeviceRequirements.ID, registry.snapshot().get(0).id());
 
         // Late provider registration
         DeviceFeatureRegistryImpl lateRegistry = new DeviceFeatureRegistryImpl();
-        DirtRtDeviceRequirements.registerLateProvider(lateRegistry);
+        RtPipelineDeviceRequirements.registerLateProvider(lateRegistry);
         assertTrue(lateRegistry.snapshot().isEmpty(), "No requirements before running late providers");
 
         lateRegistry.runLateProviders();
         assertEquals(1, lateRegistry.snapshot().size());
-        assertEquals(DirtRtDeviceRequirements.ID, lateRegistry.snapshot().get(0).id());
+        assertEquals(RtPipelineDeviceRequirements.ID, lateRegistry.snapshot().get(0).id());
     }
 
     // =========================================================================
@@ -101,8 +101,8 @@ class DirtRtSbtTest {
     @Test
     @DisplayName("Single pass SBT offsets and alignments conform to 64-byte base alignment")
     void testSinglePassSbtOffsetsAndAlignments() {
-        DirtRtPipelineConfig.SbtLayout layout = new DirtRtPipelineConfig.SbtLayout(32, 32, 64);
-        DirtRtSbtBuilder builder = new DirtRtSbtBuilder(layout);
+        RtPipelineConfig.SbtLayout layout = new RtPipelineConfig.SbtLayout(32, 32, 64);
+        RtPipelineSbtBuilder builder = new RtPipelineSbtBuilder(layout);
 
         byte[] dummy32 = new byte[32];
         builder.setRaygen(dummy32);
@@ -140,8 +140,8 @@ class DirtRtSbtTest {
     @Test
     @DisplayName("SBT offsets and alignments with multiple miss and hit handles")
     void testMultipleHandlesSbtOffsetsAndAlignments() {
-        DirtRtPipelineConfig.SbtLayout layout = new DirtRtPipelineConfig.SbtLayout(32, 32, 64);
-        DirtRtSbtBuilder builder = new DirtRtSbtBuilder(layout);
+        RtPipelineConfig.SbtLayout layout = new RtPipelineConfig.SbtLayout(32, 32, 64);
+        RtPipelineSbtBuilder builder = new RtPipelineSbtBuilder(layout);
 
         byte[] handle = new byte[32];
         builder.setRaygen(handle);
@@ -183,25 +183,25 @@ class DirtRtSbtTest {
     @Test
     @DisplayName("Three ray passes (ray0, ray1, ray2) offsets and alignments across entire buffer")
     void testThreePassOffsetsAndAlignments() {
-        DirtRtPipelineConfig.SbtLayout layout = new DirtRtPipelineConfig.SbtLayout(32, 32, 64);
+        RtPipelineConfig.SbtLayout layout = new RtPipelineConfig.SbtLayout(32, 32, 64);
         byte[] dummy = new byte[32];
 
-        DirtRtSbtBuilder pass0 = new DirtRtSbtBuilder(layout).setRayPass(DirtRtPipelineConfig.RayPass.DIFFUSE)
+        RtPipelineSbtBuilder pass0 = new RtPipelineSbtBuilder(layout).setRayPass(RtPipelineConfig.RayPass.DIFFUSE)
                 .setRaygen(dummy).addMiss(dummy).addHit(dummy);
-        DirtRtSbtBuilder pass1 = new DirtRtSbtBuilder(layout).setRayPass(DirtRtPipelineConfig.RayPass.REFLECTION)
+        RtPipelineSbtBuilder pass1 = new RtPipelineSbtBuilder(layout).setRayPass(RtPipelineConfig.RayPass.REFLECTION)
                 .setRaygen(dummy).addMiss(dummy).addHit(dummy);
-        DirtRtSbtBuilder pass2 = new DirtRtSbtBuilder(layout).setRayPass(DirtRtPipelineConfig.RayPass.REFRACTION)
+        RtPipelineSbtBuilder pass2 = new RtPipelineSbtBuilder(layout).setRayPass(RtPipelineConfig.RayPass.REFRACTION)
                 .setRaygen(dummy).addMiss(dummy).addHit(dummy);
 
         long baseAddress = 0x10000000L; // 64-byte aligned
-        DirtRtSbtBuilder.MultiPassSbt multi = DirtRtSbtBuilder.combine(baseAddress, layout, List.of(pass0, pass1, pass2));
+        RtPipelineSbtBuilder.MultiPassSbt multi = RtPipelineSbtBuilder.combine(baseAddress, layout, List.of(pass0, pass1, pass2));
 
         assertEquals(3, multi.passCount());
         assertEquals(576, multi.totalSizeBytes(), "3 passes * 192B = 576B");
         assertEquals(0, multi.totalSizeBytes() % 64);
 
         // Pass 0 (diffuse / ray0)
-        DirtRtSbtBuilder.PassSbt p0 = multi.pass(DirtRtPipelineConfig.RayPass.DIFFUSE);
+        RtPipelineSbtBuilder.PassSbt p0 = multi.pass(RtPipelineConfig.RayPass.DIFFUSE);
         assertEquals(0, p0.bufferOffset());
         assertEquals(192, p0.totalSizeBytes());
         assertEquals(0, p0.raygen().bufferOffset());
@@ -209,7 +209,7 @@ class DirtRtSbtTest {
         assertEquals(128, p0.hit().bufferOffset());
 
         // Pass 1 (reflection / ray1)
-        DirtRtSbtBuilder.PassSbt p1 = multi.pass(DirtRtPipelineConfig.RayPass.REFLECTION);
+        RtPipelineSbtBuilder.PassSbt p1 = multi.pass(RtPipelineConfig.RayPass.REFLECTION);
         assertEquals(192, p1.bufferOffset());
         assertEquals(192, p1.totalSizeBytes());
         assertEquals(192, p1.raygen().bufferOffset());
@@ -217,7 +217,7 @@ class DirtRtSbtTest {
         assertEquals(320, p1.hit().bufferOffset());
 
         // Pass 2 (refraction / ray2)
-        DirtRtSbtBuilder.PassSbt p2 = multi.pass(DirtRtPipelineConfig.RayPass.REFRACTION);
+        RtPipelineSbtBuilder.PassSbt p2 = multi.pass(RtPipelineConfig.RayPass.REFRACTION);
         assertEquals(384, p2.bufferOffset());
         assertEquals(192, p2.totalSizeBytes());
         assertEquals(384, p2.raygen().bufferOffset());
@@ -242,8 +242,8 @@ class DirtRtSbtTest {
     @Test
     @DisplayName("VkStridedDeviceAddressRegionKHR deviceAddress, stride, and size values satisfy Vulkan VUIDs")
     void testVkStridedDeviceAddressRegionStructure() {
-        DirtRtPipelineConfig.SbtLayout layout = new DirtRtPipelineConfig.SbtLayout(32, 32, 64);
-        DirtRtSbtBuilder builder = new DirtRtSbtBuilder(layout);
+        RtPipelineConfig.SbtLayout layout = new RtPipelineConfig.SbtLayout(32, 32, 64);
+        RtPipelineSbtBuilder builder = new RtPipelineSbtBuilder(layout);
 
         byte[] handle = new byte[32];
         builder.setRaygen(handle);
@@ -251,18 +251,18 @@ class DirtRtSbtTest {
         builder.addHit(handle);
 
         long gpuAddress = 0x20000000L; // 64-byte aligned
-        DirtRtSbtBuilder.PassSbt passSbt = builder.build(gpuAddress);
+        RtPipelineSbtBuilder.PassSbt passSbt = builder.build(gpuAddress);
 
         // 1. Raygen Region:
         // VUID-vkCmdTraceRaysKHR-size-04023: stride must equal size
-        DirtRtSbtBuilder.SbtRegion rgen = passSbt.raygen();
+        RtPipelineSbtBuilder.SbtRegion rgen = passSbt.raygen();
         assertEquals(0x20000000L, rgen.deviceAddress());
         assertEquals(32, rgen.size());
         assertEquals(32, rgen.stride(), "Raygen stride must equal size");
         assertEquals(0, rgen.deviceAddress() % 64, "Raygen deviceAddress must be aligned to 64B");
 
         // 2. Miss Region:
-        DirtRtSbtBuilder.SbtRegion miss = passSbt.miss();
+        RtPipelineSbtBuilder.SbtRegion miss = passSbt.miss();
         assertEquals(0x20000000L + 64, miss.deviceAddress());
         assertEquals(32, miss.size());
         assertEquals(32, miss.stride());
@@ -270,7 +270,7 @@ class DirtRtSbtTest {
         assertEquals(0, miss.stride() % 32, "Miss stride must be aligned to handleAlignment (32B)");
 
         // 3. Hit Region:
-        DirtRtSbtBuilder.SbtRegion hit = passSbt.hit();
+        RtPipelineSbtBuilder.SbtRegion hit = passSbt.hit();
         assertEquals(0x20000000L + 128, hit.deviceAddress());
         assertEquals(32, hit.size());
         assertEquals(32, hit.stride());
@@ -278,7 +278,7 @@ class DirtRtSbtTest {
         assertEquals(0, hit.stride() % 32, "Hit stride must be aligned to handleAlignment (32B)");
 
         // 4. Callable Region: empty
-        DirtRtSbtBuilder.SbtRegion callable = passSbt.callable();
+        RtPipelineSbtBuilder.SbtRegion callable = passSbt.callable();
         assertEquals(0L, callable.deviceAddress());
         assertEquals(0L, callable.stride());
         assertEquals(0L, callable.size());
@@ -286,7 +286,7 @@ class DirtRtSbtTest {
 
         // 5. Test allocation and population into native LWJGL structs
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            DirtRtSbtBuilder.VkRegions vk = passSbt.allocateVkRegions(stack);
+            RtPipelineSbtBuilder.VkRegions vk = passSbt.allocateVkRegions(stack);
 
             assertNotNull(vk.raygen());
             assertEquals(0x20000000L, vk.raygen().deviceAddress());
@@ -343,8 +343,8 @@ class DirtRtSbtTest {
     @Test
     @DisplayName("Shader group handle packing places handles and zero-padding at exact byte offsets")
     void testShaderGroupHandlePacking() {
-        DirtRtPipelineConfig.SbtLayout layout = new DirtRtPipelineConfig.SbtLayout(32, 32, 64);
-        DirtRtSbtBuilder builder = new DirtRtSbtBuilder(layout);
+        RtPipelineConfig.SbtLayout layout = new RtPipelineConfig.SbtLayout(32, 32, 64);
+        RtPipelineSbtBuilder builder = new RtPipelineSbtBuilder(layout);
 
         byte[] rgenHandle = new byte[32];
         Arrays.fill(rgenHandle, (byte) 0xAA);
@@ -391,7 +391,7 @@ class DirtRtSbtTest {
     @Test
     @DisplayName("Handle extraction from contiguous ByteBuffer source (vkGetRayTracingShaderGroupHandlesKHR simulation)")
     void testHandleExtractionFromByteBuffer() {
-        DirtRtPipelineConfig.SbtLayout layout = new DirtRtPipelineConfig.SbtLayout(32, 32, 64);
+        RtPipelineConfig.SbtLayout layout = new RtPipelineConfig.SbtLayout(32, 32, 64);
         int totalGroups = 9;
         ByteBuffer sourceHandles = ByteBuffer.allocateDirect(totalGroups * 32).order(ByteOrder.nativeOrder());
 
@@ -405,7 +405,7 @@ class DirtRtSbtTest {
         sourceHandles.flip();
 
         // Pass order: groups [0,1,2]=diffuse, [3,4,5]=reflection, [6,7,8]=refraction
-        DirtRtSbtBuilder.MultiPassSbt multiPass = DirtRtSbtBuilder.createThreePassSbt(
+        RtPipelineSbtBuilder.MultiPassSbt multiPass = RtPipelineSbtBuilder.createThreePassSbt(
                 0x30000000L, layout, sourceHandles, false);
 
         assertEquals(3, multiPass.passCount());
@@ -414,7 +414,7 @@ class DirtRtSbtTest {
         assertEquals(576, outBuffer.capacity());
 
         // Check Diffuse (ray0): rgen=0x10, miss=0x11, hit=0x12
-        DirtRtSbtBuilder.PassSbt p0 = multiPass.pass(DirtRtPipelineConfig.RayPass.DIFFUSE);
+        RtPipelineSbtBuilder.PassSbt p0 = multiPass.pass(RtPipelineConfig.RayPass.DIFFUSE);
         assertEquals(0x30000000L, p0.raygen().deviceAddress());
         assertEquals(0x30000040L, p0.miss().deviceAddress());
         assertEquals(0x30000080L, p0.hit().deviceAddress());
@@ -423,7 +423,7 @@ class DirtRtSbtTest {
         assertEquals((byte) 0x12, outBuffer.get(128));
 
         // Check Reflection (ray1): rgen=0x13, miss=0x14, hit=0x15
-        DirtRtSbtBuilder.PassSbt p1 = multiPass.pass(DirtRtPipelineConfig.RayPass.REFLECTION);
+        RtPipelineSbtBuilder.PassSbt p1 = multiPass.pass(RtPipelineConfig.RayPass.REFLECTION);
         assertEquals(0x30000000L + 192, p1.raygen().deviceAddress());
         assertEquals(0x30000000L + 256, p1.miss().deviceAddress());
         assertEquals(0x30000000L + 320, p1.hit().deviceAddress());
@@ -432,7 +432,7 @@ class DirtRtSbtTest {
         assertEquals((byte) 0x15, outBuffer.get(320));
 
         // Check Refraction (ray2): rgen=0x16, miss=0x17, hit=0x18
-        DirtRtSbtBuilder.PassSbt p2 = multiPass.pass(DirtRtPipelineConfig.RayPass.REFRACTION);
+        RtPipelineSbtBuilder.PassSbt p2 = multiPass.pass(RtPipelineConfig.RayPass.REFRACTION);
         assertEquals(0x30000000L + 384, p2.raygen().deviceAddress());
         assertEquals(0x30000000L + 448, p2.miss().deviceAddress());
         assertEquals(0x30000000L + 512, p2.hit().deviceAddress());
@@ -442,7 +442,7 @@ class DirtRtSbtTest {
 
         // Test stage order: [rgen0, rgen1, rgen2, miss0, miss1, miss2, hit0, hit1, hit2]
         sourceHandles.rewind();
-        DirtRtSbtBuilder.MultiPassSbt stageMulti = DirtRtSbtBuilder.createThreePassSbt(
+        RtPipelineSbtBuilder.MultiPassSbt stageMulti = RtPipelineSbtBuilder.createThreePassSbt(
                 0x30000000L, layout, sourceHandles, true);
         ByteBuffer stageOut = stageMulti.sbtBuffer();
 
@@ -469,8 +469,8 @@ class DirtRtSbtTest {
     @Test
     @DisplayName("Validation rejects unaligned addresses, negative values, and mismatched handle sizes")
     void testValidationAndErrors() {
-        DirtRtPipelineConfig.SbtLayout layout = new DirtRtPipelineConfig.SbtLayout(32, 32, 64);
-        DirtRtSbtBuilder builder = new DirtRtSbtBuilder(layout);
+        RtPipelineConfig.SbtLayout layout = new RtPipelineConfig.SbtLayout(32, 32, 64);
+        RtPipelineSbtBuilder builder = new RtPipelineSbtBuilder(layout);
 
         // Reject unaligned deviceAddress (0x1001 is not a multiple of 64)
         assertThrows(IllegalArgumentException.class, () -> builder.setDeviceAddress(0x1001L));
@@ -493,6 +493,6 @@ class DirtRtSbtTest {
 
         // Reject insufficient handles buffer for 3-pass creation
         ByteBuffer insufficient = ByteBuffer.allocate(8 * 32); // only 8 handles
-        assertThrows(IllegalArgumentException.class, () -> DirtRtSbtBuilder.createThreePassSbt(0L, layout, insufficient));
+        assertThrows(IllegalArgumentException.class, () -> RtPipelineSbtBuilder.createThreePassSbt(0L, layout, insufficient));
     }
 }
