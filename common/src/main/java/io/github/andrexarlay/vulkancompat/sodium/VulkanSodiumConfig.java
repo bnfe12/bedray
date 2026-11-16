@@ -111,9 +111,9 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     enum Mark { NONE, RT, PATH }
 
     /** Ids of every option per page / per collapsible group (for the reset buttons), refilled by registerConfigLate. */
-    private static final List<Identifier> PAGE_ESSENTIAL = new ArrayList<>();
+    static final List<Identifier> PAGE_ESSENTIAL = new ArrayList<>();
     private static final List<Identifier> PAGE_ADVANCED = new ArrayList<>();
-    private static final Map<String, List<Identifier>> GROUP_IDS = new LinkedHashMap<>();
+    static final Map<String, List<Identifier>> GROUP_IDS = new LinkedHashMap<>();
     /** Options whose whole row disappears while they are disabled. */
     private static final Set<Identifier> ROW_HIDDEN = new HashSet<>();
     private static List<Identifier> curPage = PAGE_ESSENTIAL;
@@ -125,6 +125,10 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     private static List<Identifier> curGroup = null;
 
     /** The id list of the group being built; the page classes record each option they add into it. */
+    static void clearCurGroup() {
+        curGroup = null;
+    }
+
     static List<Identifier> curGroupIds() {
         return curGroup;
     }
@@ -292,7 +296,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         OptionPageBuilder essential = builder.createOptionPage().setName(tr("bedray.page.main", "Bedray"));
         curPage = PAGE_ESSENTIAL;
         curGroup = null;
-        buildEssentialPage(builder, essential, backendId, modeId, gameDir, storage);
+        SodiumEssentialPage.build(builder, essential, backendId, modeId, gameDir, storage);
         modOptions.addPage(essential);
 
         OptionPageBuilder advanced = builder.createOptionPage().setName(tr("bedray.page.advanced_main", "Bedray Advanced"));
@@ -370,144 +374,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
 
     // ---------------------------------------------------------------- page 1: essentials
 
-    private void buildEssentialPage(ConfigBuilder builder, OptionPageBuilder page, Identifier backendId, Identifier modeId,
-                                    Path gameDir, StorageEventHandler st) {
-        Function<ConfigState, Boolean> anyRt = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class).isActive();
-        Function<ConfigState, Boolean> pathOn = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class) == RtMode.PATH_TRACED;
-        Identifier[] dMode = rtDependencies(modeId);
-
-        // ---- Ray tracing and light
-        OptionGroupBuilder rt = group(builder, "bedray.group.main_rt", "Ray Tracing & Light", new ArrayList<>());
-        GROUP_IDS.put("main_rt", curGroup);
-        EnumOptionBuilder<VulkanRtxConfig.RendererSelection> renderer = builder.createEnumOption(id("renderer"), VulkanRtxConfig.RendererSelection.class);
-        renderer.setName(nameOf("renderer")).setTooltip(v -> tipOf("renderer"))
-            .setDefaultValue(VulkanRtxConfig.RendererSelection.HARDWARE_RT)
-            .setAllowedValues(EnumSet.allOf(VulkanRtxConfig.RendererSelection.class))
-            .setElementNameProvider(VulkanSodiumConfig::rendererName)
-            .setBinding(VulkanSodiumConfig::applyRendererFromUi, VulkanRtxConfig::selectedRenderer)
-            .setImpact(OptionImpact.HIGH).setStorageHandler(st);
-        rt.addOption(track("renderer", renderer));
-        EnumOptionBuilder<RendererStatus> rendererStatus = builder.createEnumOption(id("renderer_status"), RendererStatus.class);
-        rendererStatus.setName(nameOf("renderer_status")).setTooltip(v -> Component.empty()
-            .append(tipOf("renderer_status")).append("\n").append(rendererStatus()))
-            .setDefaultValue(RendererStatus.STATUS).setElementNameProvider(v -> Component.literal(rendererStatus()))
-            .setEnabledProvider(s -> false).setControlHiddenWhenDisabled(false)
-            .setBinding(v -> {}, () -> RendererStatus.STATUS).setStorageHandler(st);
-        rt.addOption(track("renderer_status", rendererStatus));
-        EnumOptionBuilder<ShaderHostKind> shaderHost = builder.createEnumOption(id("shader_host"), ShaderHostKind.class);
-        shaderHost.setName(nameOf("shader_host")).setTooltip(v -> tipOf("shader_host"))
-            .setDefaultValue(ShaderHostKind.NATIVE)
-            .setAllowedValues(EnumSet.allOf(ShaderHostKind.class))
-            .setElementNameProvider(VulkanSodiumConfig::shaderHostName)
-            .setBinding(VulkanSodiumConfig::applyShaderHostFromUi, ShaderHostConfig::persisted)
-            .setImpact(OptionImpact.HIGH).setStorageHandler(st);
-        rt.addOption(track("shader_host", shaderHost));
-        EnumOptionBuilder<GiExecutionStatusRow> giStatus = builder.createEnumOption(id("gi_execution_status"), GiExecutionStatusRow.class);
-        giStatus.setName(nameOf("gi_execution_status")).setTooltip(v -> Component.empty()
-            .append(tipOf("gi_execution_status")).append("\n")
-            .append(io.github.andrexarlay.vulkancompat.rtx.raytracing.GiExecutionStatus.live()))
-            .setDefaultValue(GiExecutionStatusRow.STATUS)
-            .setElementNameProvider(v -> Component.literal(
-                io.github.andrexarlay.vulkancompat.rtx.raytracing.GiExecutionStatus.live()))
-            .setEnabledProvider(s -> false).setControlHiddenWhenDisabled(false)
-            .setBinding(v -> {}, () -> GiExecutionStatusRow.STATUS).setStorageHandler(st);
-        rt.addOption(track("gi_execution_status", giStatus));
-        for (boolean voxel : new boolean[] {false, true}) {
-            String path = voxel ? "voxel_quality_profile" : "path_quality_profile";
-            EnumOptionBuilder<QualityProfile> profile = builder.createEnumOption(id(path), QualityProfile.class);
-            profile.setName(nameOf(path)).setTooltip(v -> tipOf(path)).setDefaultValue(QualityProfile.CUSTOM)
-                .setAllowedValues(EnumSet.allOf(QualityProfile.class))
-                .setElementNameProvider(v -> tr("bedray.settings.profile." + v.name().toLowerCase(Locale.ROOT), v.name()))
-                .setBinding(v -> { if (voxel) VulkanRtxConfig.setVoxelQualityProfile(v.name()); else VulkanRtxConfig.setPathQualityProfile(v.name()); },
-                    () -> QualityProfile.valueOf(voxel ? VulkanRtxConfig.voxelQualityProfile() : VulkanRtxConfig.pathQualityProfile()))
-                .setStorageHandler(st);
-            rt.addOption(track(path, profile));
-        }
-        rt.addOption(boolOpt(builder, "voxel_distance_auto", true, VulkanRtxConfig::setVoxelDistanceAuto,
-            VulkanRtxConfig::voxelDistanceAuto, s -> !hardwareRenderer(s), new Identifier[] {id("renderer")},
-            Mark.NONE, OptionImpact.MEDIUM, false, st));
-        rt.addOption(intOpt(builder, "voxel_distance_chunks", 12, 2, 64, 1, unit(" chunks"),
-            VulkanRtxConfig::setVoxelDistanceChunks, VulkanRtxConfig::voxelDistanceChunks,
-            s -> !hardwareRenderer(s) && !s.readBooleanOption(id("voxel_distance_auto")),
-            new Identifier[] {id("renderer"), id("voxel_distance_auto")}, Mark.NONE, OptionImpact.HIGH, true, st));
-        rt.addOption(intOpt(builder, "voxel_memory_budget_mib", 256, 64, 1024, 64, unit(" MiB"),
-            VulkanRtxConfig::setVoxelMemoryBudgetMiB, VulkanRtxConfig::voxelMemoryBudgetMiB,
-            s -> !hardwareRenderer(s), new Identifier[] {id("renderer")}, Mark.NONE, OptionImpact.HIGH, false, st));
-        rt.addOption(boolOpt(builder, "voxel_diffuse_bounce", true, VulkanRtxConfig::setVoxelDiffuseBounce,
-            VulkanRtxConfig::voxelDiffuseBounce, s -> !hardwareRenderer(s), new Identifier[] {id("renderer")}, Mark.NONE, OptionImpact.HIGH, false, st));
-        rt.addOption(boolOpt(builder, "voxel_translucent_optics", true, VulkanRtxConfig::setVoxelTranslucentOptics,
-            VulkanRtxConfig::voxelTranslucentOptics, s -> !hardwareRenderer(s), new Identifier[] {id("renderer")}, Mark.NONE, OptionImpact.HIGH, false, st));
-        EnumOptionBuilder<RtMode> modeOpt = builder.createEnumOption(modeId, RtMode.class);
-        modeOpt.setName(nameOf("rt_mode")).setTooltip(v -> tipOf("rt_mode"))
-            .setDefaultValue(RtMode.OFF)
-            .setAllowedValues(allowedRtModes())
-            .setElementNameProvider(val -> switch (val) {
-                case OFF -> tr("bedray.rt_mode.off", "Off");
-                case RAY_TRACED -> tr("bedray.rt_mode.rays", "Ray Tracing (Fast, experimental)");
-                case PATH_TRACED -> tr("bedray.rt_mode.path", "Path Tracing (recommended)");
-                case AO -> tr("bedray.rt_mode.ao", "AO only (experimental)");
-                case DIRECT -> tr("bedray.rt_mode.direct", "Direct light only (experimental)");
-            })
-            .setEnabledProvider(s -> hardwareRenderer(s) && rtSupported(), id("renderer"))
-            .setControlHiddenWhenDisabled(false)
-            .setBinding(VulkanSodiumConfig::applyRtModeFromUi, () -> VulkanRtxConfig.rtMode)
-            .setImpact(OptionImpact.HIGH).setStorageHandler(st);
-        rt.addOption(track("rt_mode", modeOpt));
-        rt.addOption(intOpt(builder, "path_bounces", 4, 1, 8, 1, unit(" bounces"),
-            v -> RtSettings.pathBounces = v, () -> RtSettings.pathBounces, pathOn, dMode, Mark.PATH, OptionImpact.HIGH, false, st));
-        rt.addOption(boolOpt(builder, "path_auto_exposure", false,
-            v -> RtSettings.pathAutoExposure = v, () -> RtSettings.pathAutoExposure, pathOn, dMode, Mark.PATH, OptionImpact.LOW, false, st));
-        EnumOptionBuilder<WaterStyle> water = builder.createEnumOption(id("water_style"), WaterStyle.class);
-        water.setName(nameOf("water_style")).setTooltip(v -> tipOf("water_style")).setDefaultValue(WaterStyle.REALISTIC)
-            .setAllowedValues(EnumSet.allOf(WaterStyle.class))
-            .setElementNameProvider(v -> v == WaterStyle.VANILLA ? tr("bedray.water.vanilla", "Vanilla") : tr("bedray.water.realistic", "Realistic"))
-            .setEnabledProvider(anyRt, dMode).setControlHiddenWhenDisabled(false)
-            .setBinding(v -> RtSettings.waterStyle = v == WaterStyle.VANILLA ? RtSettings.WATER_STYLE_VANILLA : RtSettings.WATER_STYLE_REALISTIC,
-                () -> RtSettings.waterStyle == RtSettings.WATER_STYLE_VANILLA ? WaterStyle.VANILLA : WaterStyle.REALISTIC)
-            .setImpact(OptionImpact.LOW).setStorageHandler(st);
-        rt.addOption(track("water_style", water));
-        EnumOptionBuilder<SelfShadow> selfShadow = builder.createEnumOption(id("self_shadow"), SelfShadow.class);
-        selfShadow.setName(nameOf("self_shadow")).setTooltip(v -> tipOf("self_shadow")).setDefaultValue(SelfShadow.FULL)
-            .setAllowedValues(EnumSet.allOf(SelfShadow.class))
-            .setElementNameProvider(v -> switch (v) {
-                case FULL -> tr("bedray.self_shadow.full", "Full");
-                case OFF -> tr("bedray.self_shadow.off", "Off");
-            })
-            .setEnabledProvider(anyRt, dMode).setControlHiddenWhenDisabled(false)
-            .setBinding(v -> RtSettings.selfShadow = v.storedValue(),
-                () -> SelfShadow.fromStored(RtSettings.selfShadow))
-            .setImpact(OptionImpact.LOW).setStorageHandler(st);
-        rt.addOption(track("self_shadow", selfShadow));
-        rt.addOption(boolOpt(builder, "rays_optical_materials", true, v -> RtSettings.opticalMaterials = v,
-            () -> RtSettings.opticalMaterials, anyRt, dMode, Mark.NONE, OptionImpact.MEDIUM, false, st));
-        rt.addOption(boolOpt(builder, "rays_direct_translucent_shadows", true, v -> RtSettings.directTranslucentShadows = v,
-            () -> RtSettings.directTranslucentShadows, anyRt, dMode, Mark.NONE, OptionImpact.MEDIUM, false, st));
-        rt.addOption(boolOpt(builder, "rays_indirect_translucent_shadows", true, v -> RtSettings.indirectTranslucentShadows = v,
-            () -> RtSettings.indirectTranslucentShadows, anyRt, dMode, Mark.NONE, OptionImpact.MEDIUM, false, st));
-        rt.addOption(boolOpt(builder, "rays_cull_shared_glass", true, v -> RtSettings.cullSharedGlass = v,
-            () -> RtSettings.cullSharedGlass, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
-        rt.addOption(godRaysOption(builder, anyRt, dMode, st));
-        page.addOptionGroup(rt);
-
-        // ---- Upscaling
-        OptionGroupBuilder up = group(builder, "bedray.group.main_upscaling", "Upscaling & Frame Rate", new ArrayList<>());
-        GROUP_IDS.put("main_upscaling", curGroup);
-        addUpscalerBackend(builder, up, backendId, gameDir, st);
-        addQualityModes(builder, up, backendId, gameDir, st);
-        addDlssModel(builder, up, backendId, st);
-        up.addOption(track("frame_generation_provider", FrameGenOptions.provider(builder, st)));
-        up.addOption(track("frame_generation_mode", FrameGenOptions.mode(builder, st)));
-        page.addOptionGroup(up);
-
-        // ---- Presets, reset
-        OptionGroupBuilder tools = group(builder, "bedray.group.main_tools", "Presets & Reset", new ArrayList<>());
-        GROUP_IDS.put("main_tools", curGroup);
-        tools.addOption(nativesManagerButton(builder));
-        tools.addOption(presetsButton(builder));
-        tools.addOption(resetListButton(builder, "reset_page_main", "Reset this page", PAGE_ESSENTIAL));
-        page.addOptionGroup(tools);
-        curGroup = null;
-    }
 
     static Set<RtMode> allowedRtModes() {
         EnumSet<RtMode> set = VulkanRtxConfig.raysUnlocked() ? EnumSet.allOf(RtMode.class) : EnumSet.of(RtMode.OFF, RtMode.PATH_TRACED);
