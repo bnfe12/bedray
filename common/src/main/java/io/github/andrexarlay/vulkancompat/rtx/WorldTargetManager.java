@@ -1020,9 +1020,15 @@ public final class WorldTargetManager {
             .copyTextureToTexture(xessOutput.getColorTexture(), fullMain.getColorTexture(), 0, 0, 0, 0, 0, w, h);
     }
 
+    /**
+     * Neural Rendering runs after direct DLSS Super Resolution on the display-grid image, with the depth and the motion the SR
+     * pass itself used. That holds for the raster renderer and for ray and path tracing as long as DLSS SR (not Ray
+     * Reconstruction, see {@code colorResolved} at the call site) resolved the frame. It does not run next to the voxel renderer
+     * or an Iris pack, and not with frame generation: Streamline owns NGX while DLSS-G is active and the public Streamline SDK
+     * has no Neural Rendering feature ({@code DlssNrDeviceRequirements}: {@code streamline_owns_ngx}).
+     */
     private static boolean neuralRasterCompatible() {
-        return !VulkanRtxConfig.effectiveRtMode().isActive() && !RtGeometryGate.enabled()
-            && !VulkanRtxConfig.voxelRendererSelected() && IrisRenderBridge.activePackName() == null
+        return !VulkanRtxConfig.voxelRendererSelected() && IrisRenderBridge.activePackName() == null
             && FrameGenSettings.mode() == FrameGenSettings.Mode.OFF && !FrameGenRuntime.usable();
     }
 

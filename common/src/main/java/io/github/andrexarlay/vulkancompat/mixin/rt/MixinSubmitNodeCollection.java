@@ -24,7 +24,7 @@ public class MixinSubmitNodeCollection {
         return io.github.andrexarlay.vulkancompat.rt.entity.RtCaptureCollector.isWaterMask(renderType);
     }
 
-    @Inject(method = "submitModel", at = @At("HEAD"))
+    @Inject(method = "submitModel", at = @At("HEAD"), cancellable = true)
     private <S> void onModelSubmitted(
             Model<? super S> model, S state,
             PoseStack poseStack, RenderType renderType,
@@ -37,6 +37,12 @@ public class MixinSubmitNodeCollection {
         EntityCaptureManager capture = EntityCaptureManager.getInstance();
         if (capture.inHandPass()) {
             capture.noteHandSubmit("model", model.getClass().getSimpleName() + " uv=" + (uvMapping != null), renderType, light, overlay, poseStack);
+            if (EntityCaptureManager.handGeometryEnabled()
+                    && capture.stageHandModel(model, state, poseStack, renderType, light, overlay, color, uvMapping) > 0) {
+                // the arm is traced as scene geometry of the next frame: no raster copy of it
+                ci.cancel();
+                return;
+            }
         }
         capture.captureModel(model, state, poseStack, renderType, light, overlay, color, uvMapping);
     }

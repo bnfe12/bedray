@@ -3,8 +3,11 @@
 Bedray's initial Windows x64 path uses the direct Vulkan NGX session for
 DLSS Super Resolution. With `-Dbedray.dlss5=true`, it can run Neural Rendering
 on the raster world image after DLSS Super Resolution or DLAA and before the
-HUD. This path requires frame generation and Ray Reconstruction to be off.
-DLAA keeps the input at native resolution. Neural Rendering adds GPU work.
+HUD. It works with the raster renderer and with ray and path tracing as long as DLSS Super Resolution (not Ray Reconstruction)
+resolves the frame: Neural Rendering takes the same depth and motion as the SR pass. It does not run with frame generation
+(Streamline owns NGX while DLSS-G is active, and the public Streamline SDK has no Neural Rendering feature; the log says
+`streamline_owns_ngx`) or with Ray Reconstruction (RR resolves the frame at render size and Neural Rendering has no depth and
+motion for that path yet). DLAA keeps the input at native resolution. Neural Rendering adds GPU work.
 
 NVIDIA's general DLSS SDK channel currently distributes DLSS 4.5. NVIDIA
 describes general DLSS 5 SDK access as partner-only. The official RTX Remix

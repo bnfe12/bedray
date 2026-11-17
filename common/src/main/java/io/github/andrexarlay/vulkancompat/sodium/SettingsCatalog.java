@@ -410,11 +410,11 @@ public final class SettingsCatalog {
             "A mod that supplies lights, or the Bedray API test add-on; F3 shows the number of accepted lights.");
         putNoImage("hand_geometry", Tier.ADVANCED, "Held item as ray-traced geometry (experimental)",
             "Traces the item in your hand as real geometry, so glass in the hand is lit and refracted like glass in the "
-                + "world. The raster item is not drawn. The arm and the off-hand stay raster, and the item appears one frame "
-                + "late relative to its animation.",
+                + "world. The arm and the off-hand model are traced the same way. The raster copies are not drawn, and the hand "
+                + "appears one frame late relative to its animation.",
             "FPS: low; a few quads are added to the entity geometry each frame.",
             "Ray Tracing or Path Tracing.",
-            "Hold a glass block or a torch in first person and compare with the switch off.");
+            "Look at your hand: it should have a shadow and take light from the scene. Hold a glass block or a torch and compare with the switch off.");
         putNoImage("icon_light_sky", Tier.ADVANCED, "Sky mood on inventory icons (experimental)",
             "Tints the light on inventory item icons with the current sky colour instead of neutral white light, so icons "
                 + "match the time of day. Off keeps the neutral light.",

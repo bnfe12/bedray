@@ -519,6 +519,81 @@ public final class EntityCaptureManager {
         return staged;
     }
 
+    /** One staged model of the first-person hand pass (the arm): vertices as {@link CapturedVertexConsumer} records, in view space. */
+    private record HandModelStage(float[] vertices, int vertexCount, int[] indices, int indexCount) { }
+
+    private final CapturedVertexConsumer handModelConsumer = new CapturedVertexConsumer();
+    private final java.util.ArrayList<HandModelStage> handModels = new java.util.ArrayList<>();
+    private boolean handModelFailureLogged;
+
+    /**
+     * Stages a model of the hand pass (the player's arm and off-hand arm) the way {@link #stageHandGeometry} stages the held
+     * item: the vertices are recorded in view space, injected into the entity geometry of the next RT frame with that frame's
+     * camera, and the raster copy is not drawn. Only with {@code hand_geometry} on and while the hand pass belongs to an RT frame.
+     * Models without a texture slot (glint, trim and other overlay layers) stay raster. Returns the staged vertex count; 0 means
+     * the caller keeps drawing the model normally.
+     */
+    @SuppressWarnings("unchecked")
+    public synchronized <S> int stageHandModel(Model<? super S> model, S state, PoseStack poseStack, RenderType renderType,
+                                               int light, int overlay, int color,
+                                               net.minecraft.client.renderer.texture.UvMapping uvMapping) {
+        if (!handGeometry() || !handPass || open || model == null || poseStack == null) {
+            return 0;
+        }
+        int slot = 0;
+        if (uvMapping instanceof net.minecraft.client.renderer.texture.TextureAtlasSprite sprite) {
+            slot = EntityTextureAtlas.INSTANCE.spriteSlot(sprite.contents());
+        } else {
+            Identifier tex = textureOf(renderType);
+            if (tex != null) {
+                slot = EntityTextureAtlas.INSTANCE.slot(tex, 0, 0);
+            }
+        }
+        if (slot == 0) {
+            return 0;
+        }
+        try {
+            ((Model<S>) model).setupAnim(state);
+            handModelConsumer.clear();
+            handModelConsumer.setFlags(EntityGeometryFrame.CapturedEntity.FLAG_LIVING);
+            handModelConsumer.setAllowHurt(false);
+            handModelConsumer.setTexture(slot, null);
+            model.renderToBuffer(poseStack, handModelConsumer, light, overlay, color);
+            handModelConsumer.flushRemaining();
+            int vertexCount = handModelConsumer.getVertexCount();
+            int indexCount = handModelConsumer.getIndexCount();
+            if (vertexCount == 0 || indexCount == 0) {
+                return 0;
+            }
+            final int fpv = CapturedVertexConsumer.FLOATS_PER_VERTEX;
+            float[] v = java.util.Arrays.copyOf(handModelConsumer.vertexData(), vertexCount * fpv);
+            Vector4f tmp = new Vector4f();
+            for (int i = 0; i < vertexCount; i++) {
+                int o = i * fpv;
+                tmp.set(v[o], v[o + 1], v[o + 2], 1.0f).mul(handViewRotation);
+                v[o] = tmp.x;
+                v[o + 1] = tmp.y;
+                v[o + 2] = tmp.z;
+                tmp.set(v[o + 7], v[o + 8], v[o + 9], 0.0f).mul(handViewRotation);
+                v[o + 7] = tmp.x;
+                v[o + 8] = tmp.y;
+                v[o + 9] = tmp.z;
+            }
+            handModels.add(new HandModelStage(v, vertexCount, java.util.Arrays.copyOf(handModelConsumer.indexData(), indexCount), indexCount));
+            handGeoSeq = frameSeq;
+            handGeoLight = light;
+            return vertexCount;
+        } catch (RuntimeException e) {
+            if (!handModelFailureLogged) {
+                handModelFailureLogged = true;
+                LOGGER.error("[VK-ENTITY-CAPTURE] hand model staging failed model={}\n{}", model.getClass().getName(), LogPaths.stack(e));
+            }
+            return 0;
+        } finally {
+            handModelConsumer.setTexture(0, null);
+        }
+    }
+
     /**
      * Appends the staged held-item quads (of the PREVIOUS frame's hand pass) to this frame's entity capture, placed with this
      * frame's camera. Call after the world capture and before {@link #endFrame()}.
@@ -527,7 +602,7 @@ public final class EntityCaptureManager {
         if (!handGeometry() || !open || camera == null || camera.viewRotationMatrix == null) {
             return false;
         }
-        if (frameSeq - handGeoSeq > 1 || handGeo.isEmpty()) {
+        if (frameSeq - handGeoSeq > 1 || (handGeo.isEmpty() && handModels.isEmpty())) {
             return false;
         }
         Matrix4f inv = new Matrix4f(camera.viewRotationMatrix).invert();
@@ -567,6 +642,29 @@ public final class EntityCaptureManager {
             frameConsumer.setTexture(0, null);
             endEntity();
         }
+        if (!handModels.isEmpty()) {
+            beginEntity(-1, "hand_arm", null, EntityGeometryFrame.CapturedEntity.FLAG_LIVING);
+            try {
+                final int fpv = CapturedVertexConsumer.FLOATS_PER_VERTEX;
+                for (HandModelStage m : handModels) {
+                    frameConsumer.flushRemaining();
+                    int base = frameConsumer.getVertexCount();
+                    for (int i = 0; i < m.vertexCount(); i++) {
+                        int o = i * fpv;
+                        v.set(m.vertices()[o] * fovScale, m.vertices()[o + 1] * fovScale, m.vertices()[o + 2], 0.0f).mul(inv);
+                        float px = v.x, py = v.y, pz = v.z;
+                        v.set(m.vertices()[o + 7], m.vertices()[o + 8], m.vertices()[o + 9], 0.0f).mul(inv);
+                        frameConsumer.appendVertex(px, py, pz, m.vertices()[o + 3], m.vertices()[o + 4], m.vertices()[o + 5],
+                            m.vertices()[o + 6], v.x, v.y, v.z);
+                    }
+                    for (int k = 0; k < m.indexCount(); k++) {
+                        frameConsumer.appendIndex(base + m.indices()[k]);
+                    }
+                }
+            } finally {
+                endEntity();
+            }
+        }
         if (handGeoInjectLogged++ == 0) {
             LOGGER.info("[VKB-RT] hand_geometry injected quads={} light={} hudFov={} worldTanHalf={} fovScale={}", handGeo.size(),
                 Integer.toHexString(light), handHudFov, worldTanHalf, fovScale);
@@ -586,6 +684,7 @@ public final class EntityCaptureManager {
         handEmitterCount = 0;
         if (handPass) {
             handGeo.clear();
+            handModels.clear();
         }
     }
 
