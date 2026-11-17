@@ -103,6 +103,7 @@ public final class IrisPostExecutor implements AutoCloseable {
     private IrisResourcePlan resourcePlan;
     private RtMemory.Buf frameUniforms;
     private RtMemory.Buf worldUniforms;
+    private RtMemory.Buf mosaicUniforms;
     private boolean imagesInitialized = false;
 
     private final Map<String, Long> pipelines = new LinkedHashMap<>();
@@ -137,6 +138,8 @@ public final class IrisPostExecutor implements AutoCloseable {
         LOGGER.info("[IrisPostExecutor] Initializing Vulkan runtime resources (host format={})...", colorFormat);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             frameUniforms = memory.createBuffer("iris_frame", IrisUniforms.FRAME_BYTES,
+                VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+            mosaicUniforms = memory.createBuffer("iris_mosaic", IrisUniforms.MOSAIC_BYTES,
                 VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
             worldUniforms = memory.createBuffer("iris_world", IrisUniforms.WORLD_BYTES,
                 VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
@@ -173,7 +176,7 @@ public final class IrisPostExecutor implements AutoCloseable {
             int totalSets = FRAME_SLOTS * MAX_PASS_SETS;
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(2, stack);
             poolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(totalSets * IrisUniforms.SAMPLER_BINDINGS);
-            poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(totalSets * 2);
+            poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(totalSets * 3); // frame, world, Mosaic parameters
             RtFailure.check(VK10.vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
                 .maxSets(totalSets).pPoolSizes(poolSizes), null, p), "create_descriptor_pool");
             this.descriptorPool = p.get(0);
@@ -426,6 +429,13 @@ public final class IrisPostExecutor implements AutoCloseable {
                     + IrisUniforms.WORLD_BYTES + " bytes");
                 VK10.vkCmdUpdateBuffer(cmd, worldUniforms.handle, 0, world);
             }
+            // Mosaic shader parameters: a std140 block rewritten every frame, so preferences change without a recompile.
+            byte[] mosaic = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPostSource.parameterBytes();
+            if (mosaic != null) {
+                ByteBuffer params = stack.calloc(IrisUniforms.MOSAIC_BYTES);
+                params.put(0, mosaic, 0, Math.min(mosaic.length, IrisUniforms.MOSAIC_BYTES));
+                VK10.vkCmdUpdateBuffer(cmd, mosaicUniforms.handle, 0, params);
+            }
             VkBarriers.fullMemoryBarrier(cmd);
         }
         IrisRenderTargets.Resolution settings = resourcePlan.settings();
@@ -485,7 +495,7 @@ public final class IrisPostExecutor implements AutoCloseable {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 var bindings = IrisUniforms.samplerBindings();
                 var infos = VkDescriptorImageInfo.calloc(IrisUniforms.SAMPLER_BINDINGS, stack);
-                var writes = VkWriteDescriptorSet.calloc(IrisUniforms.SAMPLER_BINDINGS + 2, stack);
+                var writes = VkWriteDescriptorSet.calloc(IrisUniforms.SAMPLER_BINDINGS + 3, stack);
                 for (int i = 0; i < bindings.size(); i++) {
                     int binding = bindings.get(i), target = IrisUniforms.colorIndex(binding);
                     long view = fallback.baseView;
@@ -506,9 +516,12 @@ public final class IrisPostExecutor implements AutoCloseable {
                     if (descriptorsInitialized[slot][passIdx] && boundImages[slot][passIdx][i] != view)
                         throw new IllegalStateException("Retire Iris before replacing sampled image descriptors");
                 }
-                var bufferInfo = VkDescriptorBufferInfo.calloc(2, stack);
+                var bufferInfo = VkDescriptorBufferInfo.calloc(3, stack);
                 bufferInfo.get(0).buffer(frameUniforms.handle).offset(0).range(IrisUniforms.FRAME_BYTES);
                 bufferInfo.get(1).buffer(worldUniforms.handle).offset(0).range(IrisUniforms.WORLD_BYTES);
+                bufferInfo.get(2).buffer(mosaicUniforms.handle).offset(0).range(IrisUniforms.MOSAIC_BYTES);
+                writes.get(IrisUniforms.SAMPLER_BINDINGS + 2).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_MOSAIC)
+                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfo.slice(2, 1));
                 writes.get(IrisUniforms.SAMPLER_BINDINGS).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_FRAME)
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfo.slice(0, 1));
                 writes.get(IrisUniforms.SAMPLER_BINDINGS + 1).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_WORLD)
@@ -623,11 +636,13 @@ public final class IrisPostExecutor implements AutoCloseable {
 
     /** Stable set-0 layout: colortex0, depthtex0, frame UBO, colortex1..15, world UBO. */
     public static VkDescriptorSetLayoutBinding.Buffer createDescriptorBindings(MemoryStack stack) {
-        var bindings = VkDescriptorSetLayoutBinding.calloc(IrisUniforms.SAMPLER_BINDINGS + 2, stack);
+        var bindings = VkDescriptorSetLayoutBinding.calloc(IrisUniforms.SAMPLER_BINDINGS + 3, stack);
         var samplerBindings = IrisUniforms.samplerBindings();
         for (int i = 0; i < samplerBindings.size(); i++) bindings.get(i).binding(samplerBindings.get(i))
             .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(ALL_STAGES);
         bindings.get(IrisUniforms.SAMPLER_BINDINGS).binding(IrisUniforms.BINDING_FRAME)
+            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).stageFlags(ALL_STAGES);
+        bindings.get(IrisUniforms.SAMPLER_BINDINGS + 2).binding(IrisUniforms.BINDING_MOSAIC)
             .descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).stageFlags(ALL_STAGES);
         bindings.get(IrisUniforms.SAMPLER_BINDINGS + 1).binding(IrisUniforms.BINDING_WORLD)
             .descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).stageFlags(ALL_STAGES);
@@ -782,6 +797,7 @@ public final class IrisPostExecutor implements AutoCloseable {
         }
         if (memory != null && frameUniforms != null) { memory.destroy(frameUniforms); frameUniforms = null; }
         if (memory != null && worldUniforms != null) { memory.destroy(worldUniforms); worldUniforms = null; }
+        if (memory != null && mosaicUniforms != null) { memory.destroy(mosaicUniforms); mosaicUniforms = null; }
         allocatedTargets = Set.of(); allocatedWidth = allocatedHeight = 0; resourcePlan = null;
         imagesInitialized = false;
         activeGraph = null;

@@ -133,6 +133,34 @@ public final class IrisShaderHost implements ShaderHost {
         activeSettings = null;
         lastReport = null;
         lastStatus = null;
+        io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPostSource.clear();
+    }
+
+    /**
+     * Whether the fullscreen post host runs: the opt-in {@code -Dbedray.iris.post=true} for shaderpacks, or
+     * {@code -Dbedray.mosaic.post=true} for a Slang shader from the Mosaic SDK.
+     */
+    public static boolean postHostEnabled() {
+        return Boolean.getBoolean("bedray.iris.post")
+            || io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPostSource.enabled();
+    }
+
+    /**
+     * The Slang source: one final pass built straight from the SPIR-V that Mosaic compiled, no shaderpack involved. A missing
+     * manifest or no active shader reads as "not installed"; a shader that did not compile or is malformed is a compile failure.
+     */
+    private ShaderHostStatus probeMosaic(ShaderHostContext ctx) {
+        var result = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPostSource.load(
+            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPostSource.manifestPath(ctx.gameDir()));
+        if (result.loaded() == null) {
+            return status(result.recoverable() ? ShaderHostState.NOT_INSTALLED : ShaderHostState.COMPILE_FAILED, result.error());
+        }
+        IrisPassGraph graph = result.loaded().graph();
+        graphs = Map.of(graph.folder(), graph);
+        activeFolder = graph.folder();
+        return status(ShaderHostState.READY, "Mosaic Slang post shader " + result.loaded().asset() + " ("
+            + result.loaded().params().size() + " parameters, buffer binding " + io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisUniforms.BINDING_MOSAIC
+            + ") ready; in-game execution is not verified");
     }
 
     @Override
@@ -153,6 +181,7 @@ public final class IrisShaderHost implements ShaderHost {
         activeFolder = "";
         activeFullGraph = null;
         activeSettings = null;
+        if (io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPostSource.enabled()) return probeMosaic(ctx);
         Optional<String> choice;
         try {
             choice = IrisPackChoice.read(ctx.gameDir());
