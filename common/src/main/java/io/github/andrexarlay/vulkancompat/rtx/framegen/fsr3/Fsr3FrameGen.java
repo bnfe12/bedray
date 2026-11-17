@@ -394,6 +394,11 @@ public final class Fsr3FrameGen {
                 worldFail = "window_not_focused";
                 return;
             }
+            if (io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenMenuPolicy.fullscreenMenuOpen()) {
+                // full-screen menu (settings, pause): generated frames would be interpolated from mostly user interface
+                worldFail = "menu_open";
+                return;
+            }
             var world = WorldTargetManager.getWorldTarget();
             var depthCopy = WorldTargetManager.getDepthCopy();
             var mvTarget = WorldTargetManager.getMotionVectorsTarget();

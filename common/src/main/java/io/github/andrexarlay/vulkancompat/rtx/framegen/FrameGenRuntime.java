@@ -532,7 +532,11 @@ public final class FrameGenRuntime {
             boolean want = false;
             windowFocused = Minecraft.getInstance().getWindow().isFocused();
             FrameGenSettings.Mode wanted = FrameGenSettings.mode();
-            boolean allowed = windowFocused && needsDlssgInputs();
+            boolean menuOpen = FrameGenMenuPolicy.fullscreenMenuOpen();
+            if (menuOpen) {
+                idleReason = "menu_open";
+            }
+            boolean allowed = windowFocused && needsDlssgInputs() && !menuOpen;
             if (allowed && worldReady && !surfaceChanged) {
                 validFrames++;
                 sendFrameGenConstants(sl);
