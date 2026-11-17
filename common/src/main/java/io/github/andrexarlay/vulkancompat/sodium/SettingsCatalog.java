@@ -415,6 +415,42 @@ public final class SettingsCatalog {
             "FPS: low; a few quads are added to the entity geometry each frame.",
             "Ray Tracing or Path Tracing.",
             "Look at your hand: it should have a shadow and take light from the scene. Hold a glass block or a torch and compare with the switch off.");
+        putNoImage("dlss_nr_intensity", Tier.ADVANCED, "Neural Rendering: intensity",
+            "How strongly the Neural Rendering result replaces the Super Resolution picture. 0 % leaves the SR image as it is, "
+                + "100 % is the full effect. Takes effect immediately; the switch above needs a restart once.",
+            "FPS: none beyond the Neural Rendering pass itself.",
+            "DLSS Neural Rendering on, with DLSS Super Resolution or DLAA.",
+            "Move the slider while looking at a fixed scene: the image should change smoothly between the SR picture and the full effect.");
+        putNoImage("dlss_nr_tone_strength", Tier.ADVANCED, "Neural Rendering: local tone",
+            "How much Neural Rendering reshapes brightness and colour locally (light, shadow, contrast between areas). "
+                + "The default is 30 %.",
+            "FPS: none beyond the Neural Rendering pass itself.",
+            "DLSS Neural Rendering on.",
+            "Compare 0 %, 30 % and 100 % on a scene with sun and shade.");
+        putNoImage("dlss_nr_structure_strength", Tier.ADVANCED, "Neural Rendering: local structure",
+            "How much Neural Rendering adds or restores fine surface detail (materials, edges, texture structure). "
+                + "The default is 70 %.",
+            "FPS: none beyond the Neural Rendering pass itself.",
+            "DLSS Neural Rendering on.",
+            "Compare 0 % and 100 % on a stone or wood surface from a short distance.");
+        putNoImage("dlss_nr_model", Tier.ADVANCED, "Neural Rendering: appearance model",
+            "Selects one of the three appearance models of the Neural Rendering network (1 to 3). The models look different; "
+                + "the first is the default. Takes effect immediately.",
+            "FPS: may differ slightly between models; not measured.",
+            "DLSS Neural Rendering on.",
+            "Switch between 1, 2 and 3 on the same scene and keep the one you like.");
+        putNoImage("dlss_nr_auto_mask", Tier.ADVANCED, "Neural Rendering: automatic mask",
+            "Lets the network build its own mask of the picture so that regions such as skin can be treated separately. "
+                + "Needed for the skin structure control.",
+            "FPS: small; not measured.",
+            "DLSS Neural Rendering on.",
+            "Turn it on, then raise the skin structure strength and look at a player or villager.");
+        putNoImage("dlss_nr_skin_structure_strength", Tier.ADVANCED, "Neural Rendering: skin structure",
+            "How much detail Neural Rendering adds to skin. Only used while the automatic mask is on; with the mask off it is "
+                + "ignored and the value is not sent.",
+            "FPS: none beyond the Neural Rendering pass itself.",
+            "DLSS Neural Rendering on and the automatic mask on.",
+            "Look at a player in third person or a villager and compare 0 % and 100 %.");
         putNoImage("icon_light_sky", Tier.ADVANCED, "Sky mood on inventory icons (experimental)",
             "Tints the light on inventory item icons with the current sky colour instead of neutral white light, so icons "
                 + "match the time of day. Off keeps the neutral light.",

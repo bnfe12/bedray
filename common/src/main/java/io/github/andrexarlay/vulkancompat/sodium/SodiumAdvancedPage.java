@@ -423,6 +423,27 @@ final class SodiumAdvancedPage {
             () -> RtSettings.dlssNeuralRendering, s -> true, NO_DEPS, Mark.NONE, OptionImpact.HIGH, false, st);
         dlss5Option.setFlags(OptionFlag.REQUIRES_GAME_RESTART);
         experimental.addOption(dlss5Option);
+        // The Neural Rendering controls: rows stay hidden until the switch is on. The values are read on every evaluation, so
+        // changing them needs no restart; the skin control also waits for the automatic mask it depends on.
+        Identifier nrId = id("dlss_neural_rendering");
+        Identifier nrMaskId = id("dlss_nr_auto_mask");
+        Function<ConfigState, Boolean> nrOn = s -> s.readBooleanOption(nrId);
+        Identifier[] dNr = {nrId};
+        experimental.addOption(intOpt(builder, "dlss_nr_intensity", 100, 0, 100, 5, percent(),
+            v -> RtSettings.dlssNrIntensity = v, () -> RtSettings.dlssNrIntensity, nrOn, dNr, Mark.NONE, OptionImpact.LOW, true, st));
+        experimental.addOption(intOpt(builder, "dlss_nr_tone_strength", 30, 0, 100, 5, percent(),
+            v -> RtSettings.dlssNrToneStrength = v, () -> RtSettings.dlssNrToneStrength, nrOn, dNr, Mark.NONE, OptionImpact.LOW, true, st));
+        experimental.addOption(intOpt(builder, "dlss_nr_structure_strength", 70, 0, 100, 5, percent(),
+            v -> RtSettings.dlssNrStructureStrength = v, () -> RtSettings.dlssNrStructureStrength, nrOn, dNr, Mark.NONE,
+            OptionImpact.LOW, true, st));
+        experimental.addOption(intOpt(builder, "dlss_nr_model", 1, 1, 3, 1, v -> net.minecraft.network.chat.Component.literal(String.valueOf(v)),
+            v -> RtSettings.dlssNrModel = v, () -> RtSettings.dlssNrModel, nrOn, dNr, Mark.NONE, OptionImpact.LOW, true, st));
+        experimental.addOption(boolOpt(builder, "dlss_nr_auto_mask", false, v -> RtSettings.dlssNrAutoMask = v,
+            () -> RtSettings.dlssNrAutoMask, nrOn, dNr, Mark.NONE, OptionImpact.LOW, true, st));
+        experimental.addOption(intOpt(builder, "dlss_nr_skin_structure_strength", 0, 0, 100, 5, percent(),
+            v -> RtSettings.dlssNrSkinStructureStrength = v, () -> RtSettings.dlssNrSkinStructureStrength,
+            s -> s.readBooleanOption(nrId) && s.readBooleanOption(nrMaskId), new Identifier[] {nrId, nrMaskId}, Mark.NONE,
+            OptionImpact.LOW, true, st));
         experimental.addOption(boolOpt(builder, "hand_geometry", false, v -> RtSettings.handGeometry = v,
             () -> RtSettings.handGeometry, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         experimental.addOption(boolOpt(builder, "icon_light_sky", false, v -> RtSettings.iconLightSky = v,

@@ -122,7 +122,12 @@ public final class DlssNeuralRendering implements AutoCloseable {
         var info = new DlssNrNative.EvalInfo(reset || create || !acceptedPreviousFrame,
             input(color), destination, input(depth), input(motion), DlssNative.Image.NONE, jitterX, jitterY,
             (float) color.width() / motion.width(), (float) color.height() / motion.height(),
-            1.0f, 0.3f, 0.7f, 0.0f, 0, false, true);
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.dlssNrIntensity(),
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.dlssNrToneStrength(),
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.dlssNrStructureStrength(),
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.dlssNrSkinStructureStrength(),
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.dlssNrModel(),
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.dlssNrAutoMask(), true);
         DlssNative.Status status = api.evaluate(command.address(), feature.handle(), info);
         if (!status.ok()) return fail("evaluate", status.toString());
 

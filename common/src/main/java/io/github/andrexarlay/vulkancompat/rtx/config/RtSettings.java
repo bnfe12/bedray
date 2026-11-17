@@ -231,6 +231,21 @@ public final class RtSettings {
     public static boolean dlssNeuralRendering = false;
     /** The held item as real ray-traced geometry. Experimental. {@code -Dvkbridge.rt.handGeometry=true|false} overrides it. */
     public static boolean handGeometry = false;
+
+    // ---- DLSS Neural Rendering controls (shown once {@link #dlssNeuralRendering} is on). Percent values map to the 0..1 strengths
+    // of the NGX evaluation; the model is shown as 1..3 and sent as 0..2 (the wrapper's appearance model). ----
+    /** Overall effect strength, 0..100 percent. */
+    public static int dlssNrIntensity = 100;
+    /** Local tone strength, 0..100 percent. */
+    public static int dlssNrToneStrength = 30;
+    /** Local structure (detail) strength, 0..100 percent. */
+    public static int dlssNrStructureStrength = 70;
+    /** Skin structure strength, 0..100 percent; only used with the automatic mask. */
+    public static int dlssNrSkinStructureStrength = 0;
+    /** Let NGX build its own mask of the picture (needed for the skin controls). */
+    public static boolean dlssNrAutoMask = false;
+    /** Appearance model 1..3. */
+    public static int dlssNrModel = 1;
     /** Sky-model mood on inventory icons instead of the neutral light. {@code -Dvkbridge.rt.iconLight=sky|off} overrides it. */
     public static boolean iconLightSky = false;
     /** Feed the lights add-ons supply through the renderer API (LightProviders) into the emitter table. On by default; costs nothing without a provider. */
@@ -334,6 +349,12 @@ public final class RtSettings {
         bool("path_native_recording", () -> pathNativeRecording, v -> pathNativeRecording = v);
         bool("dlss_neural_rendering", () -> dlssNeuralRendering, v -> dlssNeuralRendering = v);
         bool("hand_geometry", () -> handGeometry, v -> handGeometry = v);
+        integer("dlss_nr_intensity", () -> dlssNrIntensity, v -> dlssNrIntensity = v, 0, 100);
+        integer("dlss_nr_tone_strength", () -> dlssNrToneStrength, v -> dlssNrToneStrength = v, 0, 100);
+        integer("dlss_nr_structure_strength", () -> dlssNrStructureStrength, v -> dlssNrStructureStrength = v, 0, 100);
+        integer("dlss_nr_skin_structure_strength", () -> dlssNrSkinStructureStrength, v -> dlssNrSkinStructureStrength = v, 0, 100);
+        bool("dlss_nr_auto_mask", () -> dlssNrAutoMask, v -> dlssNrAutoMask = v);
+        integer("dlss_nr_model", () -> dlssNrModel, v -> dlssNrModel = v, 1, 3);
         bool("icon_light_sky", () -> iconLightSky, v -> iconLightSky = v);
         bool("addon_lights", () -> addonLights, v -> addonLights = v);
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
@@ -551,6 +572,18 @@ public final class RtSettings {
     public static boolean dlssNeuralRendering() { return b("dlss_neural_rendering"); }
     /** Held item as RT geometry; see {@link #handGeometry}. */
     public static boolean handGeometry() { return b("hand_geometry"); }
+
+    /** Neural Rendering strengths as the 0..1 floats of the NGX evaluation; session overrides win like every other setting. */
+    public static float dlssNrIntensity() { return i("dlss_nr_intensity") / 100.0f; }
+    public static float dlssNrToneStrength() { return i("dlss_nr_tone_strength") / 100.0f; }
+    public static float dlssNrStructureStrength() { return i("dlss_nr_structure_strength") / 100.0f; }
+    /** Zero without the automatic mask: the wrapper ignores the skin strength then, and the settings row says so. */
+    public static float dlssNrSkinStructureStrength() {
+        return dlssNrAutoMask() ? i("dlss_nr_skin_structure_strength") / 100.0f : 0.0f;
+    }
+    public static boolean dlssNrAutoMask() { return b("dlss_nr_auto_mask"); }
+    /** Appearance model for the wrapper: 0..2. */
+    public static int dlssNrModel() { return i("dlss_nr_model") - 1; }
     /** Sky mood on icons; see {@link #iconLightSky}. */
     public static boolean iconLightSky() { return b("icon_light_sky"); }
     /** Add-on lights; see {@link #addonLights}. */
@@ -1059,6 +1092,18 @@ public final class RtSettings {
         w.write("water_style = " + waterStyle + "\n");
         w.write("# First-person body shadow: 0 = Full, 2 = Off\n");
         w.write("self_shadow = " + normalizeSelfShadow(selfShadow) + "\n");
+        w.write("# Experimental switches: DLSS Neural Rendering (applies after a restart) and its controls (percent 0..100, model 1..3),\n");
+        w.write("# the held item and arm as ray-traced geometry, sky mood on inventory icons, lights from add-on mods\n");
+        w.write("dlss_neural_rendering = " + dlssNeuralRendering + "\n");
+        w.write("dlss_nr_intensity = " + dlssNrIntensity + "\n");
+        w.write("dlss_nr_tone_strength = " + dlssNrToneStrength + "\n");
+        w.write("dlss_nr_structure_strength = " + dlssNrStructureStrength + "\n");
+        w.write("dlss_nr_skin_structure_strength = " + dlssNrSkinStructureStrength + "\n");
+        w.write("dlss_nr_auto_mask = " + dlssNrAutoMask + "\n");
+        w.write("dlss_nr_model = " + dlssNrModel + "\n");
+        w.write("hand_geometry = " + handGeometry + "\n");
+        w.write("icon_light_sky = " + iconLightSky + "\n");
+        w.write("addon_lights = " + addonLights + "\n");
         w.write("waving_foliage = " + wavingFoliage + "\n");
         w.write("waving_foliage_strength = " + wavingFoliageStrength + "\n");
         w.write("# Vibrant Visuals (Mojang vibrant palette)\n");

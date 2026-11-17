@@ -18,7 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
  * Every option the settings registry reads through a getter reaches code outside the config package. The six DLSS-NR
  * options ("DLSS 5 Neural Rendering") were stored, parsed, written to bedray.toml and reset, but no renderer read them:
  * the package behind them was a CPU colour mixer that nothing called. They are gone, and a new getter that nothing reads
- * fails here instead of becoming a switch that changes nothing.
+ * fails here instead of becoming a switch that changes nothing. The current {@code dlss_nr_*} options are different: each is
+ * read by {@code DlssNeuralRendering} and sent to the NGX evaluation, which the last test below pins.
  */
 class RtSettingsReachTest {
     private static final Path SOURCES = Path.of("src/main/java");
@@ -49,6 +50,29 @@ class RtSettingsReachTest {
     @Test
     void theNeuralRenderingStubIsGone() throws IOException {
         assertFalse(Files.exists(SOURCES.resolve("io/github/andrexarlay/vulkancompat/rt/upscale/dlss/nr")));
-        assertFalse(Files.readString(SETTINGS).contains("dlss_nr"), "no stored, parsed or written DLSS-NR option");
+        assertFalse(Files.readString(SETTINGS).contains("dlss_neural_intensity"), "no stored, parsed or written stub DLSS-NR option");
+    }
+
+    @Test
+    void everyNeuralRenderingOptionIsSentToTheEvaluation() throws IOException {
+        String settings = Files.readString(SETTINGS);
+        String evaluation = Files.readString(SOURCES.resolve(
+            "io/github/andrexarlay/vulkancompat/rtx/upscaler/dlss/DlssNeuralRendering.java"));
+        Matcher key = Pattern.compile("(?:integer|bool)\\(\"(dlss_nr_[a-z_]+)\"").matcher(settings);
+        List<String> unused = new ArrayList<>();
+        int found = 0;
+        while (key.find()) {
+            found++;
+            String accessor = "RtSettings.dlssNr" + camel(key.group(1).substring("dlss_nr_".length())) + "()";
+            if (!evaluation.contains(accessor)) unused.add(key.group(1) + " -> " + accessor);
+        }
+        assertEquals(6, found, "the six Neural Rendering controls are registered");
+        assertEquals(List.of(), unused, "controls the Neural Rendering evaluation does not read");
+    }
+
+    private static String camel(String snake) {
+        StringBuilder out = new StringBuilder();
+        for (String part : snake.split("_")) out.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1));
+        return out.toString();
     }
 }
