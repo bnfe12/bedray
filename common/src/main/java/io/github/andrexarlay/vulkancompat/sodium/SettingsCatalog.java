@@ -146,6 +146,8 @@ public final class SettingsCatalog {
         RtSettings.volumetricFogEnabled = true;
         RtAtmosphereSettings.set("godrays", RtAtmosphereSettings.GodRays.POST.ordinal());
         RtAtmosphereSettings.set("godrays_strength", 1.0);
+        RtAtmosphereSettings.set("emitter_glow", 1.0);
+        RtAtmosphereSettings.set("emitter_glow_density", 1.0);
         RtAtmosphereSettings.set("bloom", 1);
         RtAtmosphereSettings.set("bloom_strength", 0.25);
         RtAtmosphereSettings.set("sunglare", 1);
@@ -662,6 +664,12 @@ public final class SettingsCatalog {
         putNoImage("rt_fog_distance_scale", Tier.ADVANCED, "Fog Distance",
             "Changes the distance over which volumetric fog builds up.", "", "Volumetric fog.",
             "Compare fog falloff while looking across the world.");
+        putNoImage("atm_emitter_glow", Tier.ADVANCED, "Block Light Glow",
+            "Torches, lanterns, glowstone and other light blocks light the air around them: a soft halo and, in dark places, visible beams. 0 turns it off.", "", "Volumetric fog.",
+            "Stand a few blocks from a torch at night and look at it: the halo and the beams show up in the air, not on a surface.");
+        putNoImage("atm_emitter_glow_density", Tier.ADVANCED, "Block Light Glow Density",
+            "How thick the air around light blocks is. Higher values make the halos larger and brighter.", "", "Volumetric fog.",
+            "Shares the Block Light Glow view: the halos around a torch grow and brighten.");
         putNoImage("fsr1_sharpness", Tier.ADVANCED, "FSR 1 Sharpening",
             "Controls the RCAS filter in spatial FSR 1. Zero skips the sharpening pass.", "", "FSR 1.",
             "Check fine textures at your selected render scale.");

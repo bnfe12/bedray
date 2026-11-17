@@ -8,7 +8,7 @@
 
 namespace bedray::core {
 namespace {
-constexpr std::size_t frame_bytes = 608, march_bytes = 96, apply_bytes = 32;
+constexpr std::size_t frame_bytes = 608, march_bytes = 112, apply_bytes = 32;
 BedrayStatus fail(BedrayError* error, BedrayStatus status, const char* message) noexcept {
     if (error) { error->status = status; std::snprintf(error->message, sizeof(error->message), "%s", message); }
     return status;
@@ -35,6 +35,12 @@ BedrayResource image(std::uint32_t binding, std::uint64_t view) noexcept {
     BedrayResource resource{};
     resource.binding = binding; resource.descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     resource.image_layout = VK_IMAGE_LAYOUT_GENERAL; resource.handle = view;
+    return resource;
+}
+BedrayResource sampled(std::uint32_t binding, std::uint64_t view, std::uint64_t sampler) noexcept {
+    BedrayResource resource{};
+    resource.binding = binding; resource.descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    resource.image_layout = VK_IMAGE_LAYOUT_GENERAL; resource.handle = view; resource.sampler = sampler;
     return resource;
 }
 BedrayResource buffer(std::uint32_t binding, std::uint32_t type,
@@ -80,9 +86,12 @@ BedrayStatus VolumetricPass::configure(BedrayCore* core, const DeviceFns& fns,
     auto validate = [&](std::uint64_t program, bool march) {
         ProgramContract contract{};
         if (!program_contract(core, program, contract) || contract.push_constant_bytes != (march ? march_bytes : apply_bytes)
-            || contract.binding_count != (march ? 5u : 4u)) return false;
+            || contract.binding_count != (march ? 8u : 4u)) return false;
         if (march && (!program_has_binding(core, program, 0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
-            || !program_has_binding(core, program, 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER))) return false;
+            || !program_has_binding(core, program, 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+            || !program_has_binding(core, program, 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            || !program_has_binding(core, program, 9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            || !program_has_binding(core, program, 18, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER))) return false;
         if (!march && !program_has_binding(core, program, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)) return false;
         return program_has_binding(core, program, 11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
             && program_has_binding(core, program, 12, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
@@ -139,8 +148,15 @@ BedrayStatus VolumetricPass::render(const BedrayVolumetricFrameDesc& frame, Bedr
         || frame.sections_offset > std::numeric_limits<std::uint64_t>::max() - frame.sections_bytes
         || !frame.width || !frame.height || (frame.flags & ~allowed) || frame.reserved
         || !frame.frame_constants || frame.frame_constants_bytes != frame_bytes
-        || !frame.march_push || frame.march_push_bytes != march_bytes || !frame.apply_push || frame.apply_push_bytes != apply_bytes)
+        || !frame.march_push || frame.march_push_bytes != march_bytes || !frame.apply_push || frame.apply_push_bytes != apply_bytes
+        || !frame.atlas_view || !frame.material_view || !frame.atlas_sampler)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "invalid volumetric frame");
+    // An absent emitter list is all-zero and falls back to the sections table; a present one is a whole number of 16-byte
+    // records at a 16-byte aligned offset that does not wrap.
+    if (frame.emitters ? (!frame.emitters_bytes || frame.emitters_bytes % 16u || frame.emitters_offset % 16u
+            || frame.emitters_offset > std::numeric_limits<std::uint64_t>::max() - frame.emitters_bytes)
+        : (frame.emitters_offset || frame.emitters_bytes))
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "invalid volumetric emitter list");
     if (!(frame.flags & BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE))
         return fail(error, BEDRAY_ERROR_UNSUPPORTED, "volumetric requires a native scene table");
     if (recordings_.contains(frame.command_buffer)) return fail(error, BEDRAY_ERROR_IN_USE, "volumetric command pending");
@@ -154,6 +170,12 @@ BedrayStatus VolumetricPass::render(const BedrayVolumetricFrameDesc& frame, Bedr
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "volumetric FrameConstants extent mismatch");
     for (std::size_t offset = 0; offset <= 64; offset += 4)
         if (!std::isfinite(read<float>(march, offset))) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "non-finite volumetric march push");
+    // Block-light glow: density at 88, camera offset of the emitter list at 96..104, strength at 108. A strength of zero is
+    // legal (glow off); a negative or non-finite one is not.
+    for (std::size_t offset : {std::size_t{88}, std::size_t{96}, std::size_t{100}, std::size_t{104}, std::size_t{108}})
+        if (!std::isfinite(read<float>(march, offset))) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "non-finite volumetric glow push");
+    if (read<float>(march, 88) < 0 || read<float>(march, 108) < 0)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "negative volumetric glow push");
     if (!std::isfinite(read<float>(apply, 0)) || !std::isfinite(read<float>(apply, 4))
         || read<float>(march, 12) < 0 || read<float>(march, 28) <= 0 || read<float>(march, 56) < 0
         || read<float>(march, 64) < 0 || read<std::uint32_t>(march, 80) > 1
@@ -198,9 +220,13 @@ BedrayStatus VolumetricPass::render(const BedrayVolumetricFrameDesc& frame, Bedr
     const auto frame_resource = buffer(16, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, bits(upload.buffer), 0, frame_bytes);
     const auto history_resource = image(11, bits(history_view_.view));
     const auto depth_resource = image(12, frame.depth_view);
-    std::array<BedrayResource, 5> march_resources{tlas,
+    const bool has_emitters = frame.emitters != 0;
+    std::array<BedrayResource, 8> march_resources{tlas,
         buffer(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame.sections, frame.sections_offset, frame.sections_bytes),
-        history_resource, depth_resource, frame_resource};
+        sampled(3, frame.atlas_view, frame.atlas_sampler), sampled(9, frame.material_view, frame.atlas_sampler),
+        history_resource, depth_resource, frame_resource,
+        has_emitters ? buffer(18, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame.emitters, frame.emitters_offset, frame.emitters_bytes)
+            : buffer(18, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame.sections, frame.sections_offset, frame.sections_bytes)};
     BedrayFrameDesc call{};
     call.abi_version = BEDRAY_CORE_ABI_VERSION; call.command_buffer = frame.command_buffer; call.program = desc_.program_march_scene;
     call.group_count_x = (history_view_.width - 1) / 8 + 1;

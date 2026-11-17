@@ -8,6 +8,7 @@ import "contracts/frame.slang";
 import "contracts/hit.slang";
 import "contracts/math.slang";
 import "light/volumetric.slang";
+import "sampling.slang";
 import "traversal/traversal.slang";
 
 struct VolumetricMarchPush {
@@ -27,12 +28,15 @@ struct VolumetricMarchPush {
     uint   historyValid;      // 0 = store fresh only
     uint   flipY;             // renderer NDC.y flip flag
     uint   instanceMask;      // TLAS instance mask of the world
-    uint   pad0;
+    float  emitterGlowDensity;// air density multiplier of the block-light glow (was pad0)
+    float3 emitterCameraRelative; // camera minus the origin the emitter list was published at
+    float  emitterGlow;       // block-light glow strength; 0 = off (also when the list is empty)
 };
 
 void volumetricMarchEntry<T : ISceneTracer>(T traversal, uint3 dispatchThreadID,
         RWTexture2D<float> outDepth, RWTexture2D<float4> accumImage,
-        FrameConstants frame, VolumetricMarchPush pc)
+        FrameConstants frame, VolumetricMarchPush pc,
+        StructuredBuffer<uint4> emitters, Sampler2D albedoAtlas, Sampler2D materialAtlas)
 {
     // Accumulation image is hw x 2*hh; the entry covers the current half.
     uint2 accumSize;
@@ -80,6 +84,14 @@ void volumetricMarchEntry<T : ISceneTracer>(T traversal, uint3 dispatchThreadID,
     float3 scatter = marchLightShaft(traversal, frame.camera.origin.xyz, dir, tEnd, pc.steps, jitter,
         pc.keyDir, pc.keyColor, pc.worldHeightOffset, densityMul, dark,
         pc.inscatter, pc.strength, pc.rayBias);
+
+    if (pc.emitterGlow > 0.0) {
+        // Block lights scatter in the air too: independent of the key light, so they also work at night and in caves.
+        uint glowSeed = pcgHash(pf.x * 1973u + pf.y * 9277u + pc.frameIndex * 26699u + 1u);
+        scatter += marchEmitterGlow(traversal, emitters, albedoAtlas, materialAtlas, pc.emitterCameraRelative,
+            frame.camera.origin.xyz, dir, tEnd, pc.steps, jitter, glowSeed, pc.emitterGlowDensity,
+            pc.worldHeightOffset, pc.emitterGlow, pc.rayBias);
+    }
 
     // Temporal accumulation: reproject the end point of the ray into the
     // previous frame, 4 bilinear taps validated by the shaft range.

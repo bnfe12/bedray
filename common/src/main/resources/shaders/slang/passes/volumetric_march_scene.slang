@@ -14,6 +14,11 @@ import "traversal/hardware_traversal.slang";
 [[vk::image_format("r32f")]] [[vk::binding(12, 0)]] RWTexture2D<float> outDepth;
 [[vk::image_format("rgba32f")]] [[vk::binding(11, 0)]] RWTexture2D<float4> accumImage;
 [[vk::binding(2, 0)]] StructuredBuffer<GeometrySection> sections;
+// The path tracer's albedo and material atlases and BEM2 emitter list, bound for the block-light glow (same bindings as
+// path_trace_scene).
+[[vk::binding(3, 0)]] Sampler2D albedoAtlas;
+[[vk::binding(9, 0)]] Sampler2D materialAtlas;
+[[vk::binding(18, 0)]] StructuredBuffer<uint4> emitters;
 [[vk::binding(16, 0)]] ConstantBuffer<FrameConstants> frame;
 [[vk::push_constant]] VolumetricMarchPush pc;
 
@@ -27,5 +32,5 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     traversal.tlas = tlas;
     traversal.geometry = geometry;
     traversal.instanceMask = HARDWARE_INSTANCE_MASK_WORLD;
-    volumetricMarchEntry(traversal, dispatchThreadID, outDepth, accumImage, frame, pc);
+    volumetricMarchEntry(traversal, dispatchThreadID, outDepth, accumImage, frame, pc, emitters, albedoAtlas, materialAtlas);
 }

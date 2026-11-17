@@ -107,7 +107,9 @@ final class RtAtmosphere {
         boolean glow = RtAtmosphereSettings.bloom();
         boolean glare = sunGlare.active();
         logIfChanged(shafts);
-        if (!shafts && !aerial && !glow && !glare) {
+        // block lights glow in the air on their own: no shafts and no haze still needs the volumetric pass for them
+        boolean emitterGlow = RtSlangVolumetricPass.glowActive(p);
+        if (!shafts && !aerial && !glow && !glare && !emitterGlow) {
             return;
         }
         SlangRuntime runtime = slangRuntime(vulkanDevice);
@@ -119,7 +121,7 @@ final class RtAtmosphere {
                 bloomUnavailableLogged = true;
                 LOGGER.warn("[VKB-ATMO] event=feature_unavailable feature=hdr_bloom action=skip_bloom_and_glare reason=matching_native_core_required");
             }
-            if (!shafts) {
+            if (!shafts && !emitterGlow) {
                 return;
             }
             glow = false;
@@ -135,7 +137,7 @@ final class RtAtmosphere {
         if (timer != null) {
             timer.beginFrame(cmd);
         }
-        if ((shafts || aerial) && !shaftsUnavailable && volumetric == null) {
+        if ((shafts || aerial || emitterGlow) && !shaftsUnavailable && volumetric == null) {
             try {
                 volumetric = new RtSlangVolumetricPass(runtime);
             } catch (RuntimeException e) {
@@ -143,7 +145,7 @@ final class RtAtmosphere {
                 LOGGER.warn("[VKB-ATMO] light shafts unavailable: {}", e.getMessage());
             }
         }
-        if ((shafts || aerial) && volumetric != null) {
+        if ((shafts || aerial || emitterGlow) && volumetric != null) {
             if (timer != null) timer.stamp(cmd, 0, false);
             volumetric.record(cmd, views, p, w, h, shafts);
             if (timer != null) timer.stamp(cmd, 0, true);

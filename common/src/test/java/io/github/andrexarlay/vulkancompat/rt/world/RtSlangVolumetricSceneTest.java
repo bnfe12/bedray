@@ -26,6 +26,12 @@ class RtSlangVolumetricSceneTest {
         // four traversal setup statements removed. Normalize only the deliberate
         // origin input/endpoint coordinate changes; all other arithmetic remains pinned.
         // 2026-11-01: the second ndc.y mirror of the march was removed (RtSlangVolumetricFlipTest).
+        // The block-light glow (RtSlangVolumetricGlowTest pins it) is an addition after the march: cut it out so everything
+        // else, the ray, the history and the accumulation, stays pinned to the original fingerprint.
+        String glowHeader = "if (pc.emitterGlow > 0.0) ";
+        int glowAt = body.indexOf(glowHeader);
+        assertTrue(glowAt > 0, "the block-light glow call sits in the kernel");
+        body = body.substring(0, glowAt) + body.substring(glowAt + glowHeader.length() + block(body.substring(glowAt), glowHeader).length());
         body = body.replace("marchLightShaft(traversal, frame.camera.origin.xyz, dir,",
                 "marchLightShaft(traversal, dir,")
             .replace("float3 rayEnd = frame.camera.origin.xyz + dir * tEnd;", "float3 rayEnd = dir * tEnd;");
@@ -39,14 +45,17 @@ class RtSlangVolumetricSceneTest {
 
     @Test void marchBindsTheNativeWorldTraversal() {
         String scene = read("passes/volumetric_march_scene.slang");
-        assertEquals(5, scene.split("\\[\\[vk::binding\\(", -1).length - 1);
+        assertEquals(8, scene.split("\\[\\[vk::binding\\(", -1).length - 1);
+        assertTrue(scene.contains("[[vk::binding(3, 0)]] Sampler2D albedoAtlas;"));
+        assertTrue(scene.contains("[[vk::binding(9, 0)]] Sampler2D materialAtlas;"));
+        assertTrue(scene.contains("[[vk::binding(18, 0)]] StructuredBuffer<uint4> emitters;"));
         assertTrue(scene.contains("[[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;"));
         assertTrue(scene.contains("[[vk::image_format(\"r32f\")]] [[vk::binding(12, 0)]] RWTexture2D<float> outDepth;"));
         assertTrue(scene.contains("[[vk::image_format(\"rgba32f\")]] [[vk::binding(11, 0)]] RWTexture2D<float4> accumImage;"));
         assertTrue(scene.contains("[[vk::binding(16, 0)]] ConstantBuffer<FrameConstants> frame;"));
         assertTrue(scene.contains("[[vk::push_constant]] VolumetricMarchPush pc;"));
         assertTrue(scene.contains("[numthreads(8, 8, 1)]"));
-        assertTrue(scene.contains("volumetricMarchEntry(traversal, dispatchThreadID, outDepth, accumImage, frame, pc);"));
+        assertTrue(scene.contains("volumetricMarchEntry(traversal, dispatchThreadID, outDepth, accumImage, frame, pc, emitters, albedoAtlas, materialAtlas);"));
         assertFalse(scene.contains("marchLightShaft("), "march/store arithmetic belongs to the kernel");
         assertTrue(scene.contains("[[vk::binding(2, 0)]] StructuredBuffer<GeometrySection> sections;"));
         assertTrue(scene.contains("GeometryProvider geometry;"));
@@ -73,19 +82,22 @@ class RtSlangVolumetricSceneTest {
             .replaceAll("\\s+", "");
         assertEquals("{float3keyDir;floatstrength;float3keyColor;floatrange;float3prevOriginDelta;floatrain;"
             + "floatexposure;floatinscatter;floatdensity;floatworldHeightOffset;floatrayBias;uintsteps;"
-            + "uintframeIndex;uinthistoryValid;uintflipY;uintinstanceMask;uintpad0;}", push,
-            "same 96-byte size alone would not detect a reordered scalar in the host push contract");
+            + "uintframeIndex;uinthistoryValid;uintflipY;uintinstanceMask;floatemitterGlowDensity;float3emitterCameraRelative;floatemitterGlow;}", push,
+            "same 112-byte size alone would not detect a reordered scalar in the host push contract");
     }
 
     @Test void theCompiledMarchManifestMatchesTheNativeResourceContract() {
         String name = "volumetric_march_scene";
         Assumptions.assumeTrue(SlangPassLibrary.available(name), "native volumetric march was not compiled");
         var manifest = SlangPassLibrary.load(name).orElseThrow().manifest();
-        assertEquals(96, manifest.pushConstantBytes());
+        assertEquals(112, manifest.pushConstantBytes());
         assertArrayEquals(new int[]{8, 8, 1}, manifest.threadGroupSize());
-        assertEquals(5, manifest.bindings().size());
+        assertEquals(8, manifest.bindings().size());
         requireBinding(manifest, "tlas", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 0);
         requireBinding(manifest, "sections", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER, 64);
+        requireBinding(manifest, "albedoAtlas", 3, BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0);
+        requireBinding(manifest, "materialAtlas", 9, BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0);
+        requireBinding(manifest, "emitters", 18, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER, 16);
         requireBinding(manifest, "accumImage", 11, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE, 0);
         requireBinding(manifest, "outDepth", 12, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE, 0);
         requireBinding(manifest, "frame", 16, BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER, 608);

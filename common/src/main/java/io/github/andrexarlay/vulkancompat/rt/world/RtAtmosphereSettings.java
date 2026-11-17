@@ -47,6 +47,8 @@ public final class RtAtmosphereSettings {
     private static volatile float fogVanilla = (float) clamp(num("vkrtx.rt.fog.vanilla", 1.0), 0, 1);
     private static volatile float chunkFade = (float) clamp(num("vkrtx.rt.chunkfade", 1.5), 0, 4);
     private static volatile float fogAerial = (float) clamp(num("vkrtx.rt.fog.aerial", 1.0), 0, 2);
+    private static volatile float emitterGlow = (float) clamp(num("vkrtx.rt.emitterglow", 1.0), 0, 4);
+    private static volatile float emitterGlowDensity = (float) clamp(num("vkrtx.rt.emitterglow.density", 1.0), 0, 4);
 
     private RtAtmosphereSettings() {
     }
@@ -134,6 +136,16 @@ public final class RtAtmosphereSettings {
         return fogAerial;
     }
 
+    /** Strength of the glow block lights (torches, lanterns, glowstone) leave in the air; 0 = off. */
+    public static float emitterGlow() {
+        return emitterGlow;
+    }
+
+    /** How dense the air of that glow is, a multiplier of the built-in 0.08 per block. */
+    public static float emitterGlowDensity() {
+        return emitterGlowDensity;
+    }
+
     // ---- UI access ----
 
     public static List<Option> options() {
@@ -175,7 +187,12 @@ public final class RtAtmosphereSettings {
             new Option("sunglare_size", "Sun halo size", "Angular size of the halo around the sun.", Tier.ADVANCED,
                 Kind.SLIDER, 0.5, 2, 1, List.of()),
             new Option("sunglare_strength", "Sun glare strength", "Brightness of the sun halo.", Tier.ADVANCED, Kind.SLIDER, 0, 2, 1.0,
-                List.of()));
+                List.of()),
+            new Option("emitter_glow", "Block light glow", "Torches, lanterns, glowstone and other light blocks scatter light in the "
+                + "air around them: a soft halo and, with fog, visible beams. 0 = off. Needs Volumetric fog on.", Tier.ADVANCED, Kind.SLIDER,
+                0, 4, 1.0, List.of()),
+            new Option("emitter_glow_density", "Block light glow density", "How thick the air around light blocks is. Higher values "
+                + "make the halos larger and brighter.", Tier.ADVANCED, Kind.SLIDER, 0, 4, 1.0, List.of()));
     }
 
     /** Current value of option {@code key} (toggles 0/1, choices the index); NaN for an unknown key. */
@@ -199,6 +216,8 @@ public final class RtAtmosphereSettings {
             case "fog_vanilla" -> fogVanilla;
             case "fog_aerial" -> fogAerial;
             case "chunk_fade" -> chunkFade;
+            case "emitter_glow" -> emitterGlow;
+            case "emitter_glow_density" -> emitterGlowDensity;
             default -> Double.NaN;
         };
     }
@@ -227,6 +246,8 @@ public final class RtAtmosphereSettings {
             case "fog_vanilla" -> fogVanilla = (float) clamp(v, 0, 1);
             case "fog_aerial" -> fogAerial = (float) clamp(v, 0, 2);
             case "chunk_fade" -> chunkFade = (float) clamp(v, 0, 4);
+            case "emitter_glow" -> emitterGlow = (float) clamp(v, 0, 4);
+            case "emitter_glow_density" -> emitterGlowDensity = (float) clamp(v, 0, 4);
             default -> {
                 return false;
             }
@@ -237,8 +258,9 @@ public final class RtAtmosphereSettings {
     /** One line for the log. */
     public static String describe() {
         return String.format(Locale.ROOT, "godrays=%s steps=%d strength=%.2f range=%d bloom=%s sky=%s shape=%s strength=%.2f threshold=%.2f scatter=%.2f "
-                + "sunglare=%s strength=%.2f size=%d%% fog_vanilla=%.2f fog_aerial=%.2f chunk_fade=%.2f", godRays, godRaySteps(), godRayStrength, godRayRange,
-            bloom(), bloomSky(), bloomShape(), bloomStrength, bloomThreshold, bloomScatter, sunGlare(), sunGlareStrength, sunGlareSizePercent(), fogVanilla, fogAerial, chunkFade);
+                + "sunglare=%s strength=%.2f size=%d%% fog_vanilla=%.2f fog_aerial=%.2f chunk_fade=%.2f emitter_glow=%.2f emitter_glow_density=%.2f", godRays, godRaySteps(), godRayStrength, godRayRange,
+            bloom(), bloomSky(), bloomShape(), bloomStrength, bloomThreshold, bloomScatter, sunGlare(), sunGlareStrength, sunGlareSizePercent(), fogVanilla, fogAerial, chunkFade,
+            emitterGlow, emitterGlowDensity);
     }
 
     static GodRays parseGodRays(String s, GodRays def) {

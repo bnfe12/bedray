@@ -34,6 +34,8 @@ import "contracts/hit.slang";
 import "contracts/math.slang";
 import "tonemap_curve.slang";
 import "traversal/traversal.slang";
+import "light/block_emitters.slang";
+import "sampling.slang";
 
 // Length of god-ray march steps for short rays, in blocks.
 static const float VOLUMETRIC_STEP_BLOCKS = 3.0;
@@ -152,6 +154,95 @@ float3 marchLightShaft<T : ISceneTracer>(T traversal, float3 origin, float3 dir,
     scatter *= inscatter * strength;
     if (!isFinite(scatter)) return float3(0.0);
     return scatter;
+}
+
+// ---- Block-light glow -------------------------------------------------------
+
+// A torch, lantern or glowstone lights the air around it, not only the surfaces it touches. This is the single-scattering
+// counterpart of the emitter estimate of the path tracer: one emitter per step is drawn from the same light tree, the same
+// d^-1.25 kernel and window are used, and one visibility ray decides whether the air at that step can see the drawn point.
+// The sun shafts above only know the key light; without this term a lamp in fog had no halo and no beams.
+static const float EMITTER_GLOW_SIGMA = 0.08;        // scattering per block at host density 1.0 (the sun shafts use 0.012)
+static const float EMITTER_GLOW_PHASE = 0.0795775;   // isotropic 1 / (4 pi): a lamp scatters evenly in every direction
+static const float EMITTER_GLOW_MAX_RANGE = 64.0;    // the march ends here; lamps reach EMITTER_RADIUS from a sample only
+static const uint  EMITTER_GLOW_MAX_STEPS = 14u;
+static const float EMITTER_GLOW_MAX_ENERGY = 40.0;   // clamp of one sample before scattering: a tiny quad right next to a step
+
+// `table` is the BEM2 emitter list the path tracer reads, `cameraRelative` the camera minus the origin the list was
+// published at, `origin` / `dir` the view ray in raw-camera-relative space, `density` the host multiplier of the glow air.
+// The hue comes from the albedo texel of the drawn point (quads of captured entities live in an atlas this pass does not
+// bind and keep the warm block-light tint). Returns radiance in the same units as the shaft march.
+float3 marchEmitterGlow<T : ISceneTracer>(T traversal, StructuredBuffer<uint4> table, Sampler2D albedoAtlas,
+        Sampler2D materialAtlas, float3 cameraRelative, float3 origin, float3 dir, float tEnd, uint steps, float jitter, inout uint seed,
+        float density, float worldHeightOffset, float gain, float rayBias) {
+    if (gain <= 0.0 || density <= 0.0 || tEnd <= 0.5) return float3(0.0);
+    uint count = blockEmitterCount(table);
+    if (count == 0u) return float3(0.0);
+    float range = min(tEnd, EMITTER_GLOW_MAX_RANGE);
+    uint n = clamp(steps, 2u, EMITTER_GLOW_MAX_STEPS);
+    float dt = range / float(n);
+
+    float transmittance = 1.0;
+    float3 accumulation = float3(0.0);
+    for (uint i = 0u; i < n; ++i) {
+        float t = (float(i) + jitter) * dt;
+        float3 p = origin + dir * t;
+        float sigma = EMITTER_GLOW_SIGMA * density * fogHeightProfile(worldHeightOffset + p.y);
+        transmittance *= exp(-sigma * dt);
+        if (sigma <= VOLUMETRIC_MIN_CONTRIBUTION) continue;
+
+        // The light tree is keyed by position in the list's own frame: the sample point shifted by the camera offset.
+        BlockEmitterSelection chosen = blockEmitterSelect(table, p + cameraRelative, rand01(seed));
+        if (chosen.index >= count || !(chosen.probability > 0.0)) continue;
+        BlockEmitterRecord emitter = blockEmitterRecord(table, chosen.index);
+        float2 quad = float2(rand01(seed), rand01(seed));
+        float3 lightPoint = emitter.corner.xyz - cameraRelative + emitter.edge1.xyz * quad.x + emitter.edge2.xyz * quad.y;
+        float3 toLight = lightPoint - p;
+        float d2 = dot(toLight, toLight);
+        if (d2 > EMITTER_RADIUS * EMITTER_RADIUS || d2 < 1.0e-4) continue;
+        float distanceToLight = sqrt(d2);
+        float3 L = toLight / distanceToLight;
+
+        float3 crossEdge = cross(emitter.edge1.xyz, emitter.edge2.xyz);
+        float crossLength = length(crossEdge);
+        float3 emitterNormal = crossLength > 1.0e-6 ? crossEdge / crossLength : float3(0.0, 1.0, 0.0);
+        bool twoSided = emitter.edge2.w > 0.5;
+        float cosEmitter = dot(emitterNormal, -L);
+        float cosGeometry = twoSided ? abs(cosEmitter) : max(cosEmitter, 0.0);
+        if (cosGeometry <= 1.0e-5) continue;
+        float cosKernel = twoSided ? max(cosGeometry, 0.25) : cosGeometry;
+
+        // The emission of the drawn texel decides, exactly as for the surface NEE (blockEmitterCandidate): the blue channel of
+        // the material texel times the record's strength, the fixed red of a lit redstone texel, and for the quads of
+        // captured entities (their texels live in a buffer this pass does not bind) the record's strength and a warm tint.
+        float3 hue = float3(1.0, 0.82, 0.60);
+        float emission = max(emitter.edge1.w, 0.0);
+        if (uint(emitter.uvCorner.w + 0.5) == 0u) {
+            float2 uv = emitter.uvCorner.xy + emitter.uvEdges.xy * quad.x + emitter.uvEdges.zw * quad.y;
+            float4 materialTexel = materialAtlas.SampleLevel(uv, 0.0);
+            bool redstone = emitter.edge2.w > 1.5 && ((255u - uint(materialTexel.a * 255.0 + 0.5)) & 4u) != 0u;
+            if (redstone) {
+                hue = float3(1.0, 0.04, 0.02);
+                emission = 1.0;   // radiance / texelEmission * phat cancels the texel strength for a redstone texel
+            } else {
+                hue = emitterAttenuationColor(albedoAtlas.SampleLevel(uv, 0.0).rgb);
+                emission = materialTexel.b * emission;
+            }
+        }
+        if (emission <= 0.0) continue;
+        // The same estimate the surface NEE folds into its target density, times the quad area over the draw probability.
+        float3 energy = hue * (emission * EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN)
+            * (cosKernel * emitterWindow(d2, EMITTER_RADIUS) * emitterAttenuation(d2)
+               * max(emitter.corner.w, 1.0e-6) / max(chosen.probability, 1.0e-6));
+        float peak = max(energy.r, max(energy.g, energy.b));
+        if (peak > EMITTER_GLOW_MAX_ENERGY) energy *= EMITTER_GLOW_MAX_ENERGY / peak;
+
+        Ray shadowRay = makeRay(p, L, rayBias, max(distanceToLight - 0.05, 0.01));
+        if (!traversal.traceVisibility(shadowRay).visible) continue;
+        accumulation += energy * (sigma * EMITTER_GLOW_PHASE * transmittance * dt);
+    }
+    float3 glow = accumulation * gain;
+    return isFinite(glow) ? glow : float3(0.0);
 }
 
 // ---- Temporal reprojection --------------------------------------------------

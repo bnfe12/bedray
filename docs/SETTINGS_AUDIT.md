@@ -56,6 +56,7 @@ failure. These diagnostics describe current capture/command recording, not visua
 | | `path_denoiser` Denoiser | Off / NRD / DLSS Ray Reconstruction | medium | ADVANCED. Not an essential: the fallback to accumulation when a library is missing already happens automatically (logged), so the default NRD needs no choice |
 | | `path_caustics` Water Caustics | focused sunlight under water | medium | ADVANCED (off by default) |
 | Light & Atmosphere | `atm_godrays_strength` | beam brightness | none | ADVANCED (row hidden while Light Shafts are off) |
+| Light & Atmosphere | `atm_emitter_glow`, `atm_emitter_glow_density` | halo and beams of torches, lanterns, glowstone in the air (volumetric pass, same emitter list as the surface lighting) | low-medium (one shadow ray per step, at most 14 steps) | ADVANCED (rows hidden while Volumetric Fog is off); in-game look not yet checked |
 | | `atm_bloom`, `atm_bloom_strength` | glow around bright lights | low | ADVANCED (new in the UI; the toggle was only in `RtAtmosphereSettings`) |
 | | `atm_sunglare` | halo around the sun | none | ADVANCED |
 | | `rt_fog` Fog, `rt_fog_density` | atmospheric fog | low | ADVANCED (was "Volumetric / Distance Fog" in the Experimental page) |

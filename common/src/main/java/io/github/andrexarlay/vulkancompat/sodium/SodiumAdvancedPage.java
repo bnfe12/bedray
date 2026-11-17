@@ -310,6 +310,10 @@ final class SodiumAdvancedPage {
         look.addOption(intOpt(builder, "rt_fog_distance_scale", 100, 20, 200, 5, percent(),
             value -> RtSettings.fogDistanceScale = value / 100f, () -> Math.round(RtSettings.fogDistanceScale * 100f),
             fogOn, dFog, Mark.NONE, OptionImpact.LOW, true, st));
+        // Block lights also scatter in the air (marchEmitterGlow in the volumetric pass); it lives next to the fog rows because
+        // it is the same air and is only drawn while volumetric fog is on.
+        look.addOption(atmSlider(builder, "atm_emitter_glow", "emitter_glow", 100, 0, 400, 5, fogOn, dFog, true, st));
+        look.addOption(atmSlider(builder, "atm_emitter_glow_density", "emitter_glow_density", 100, 0, 400, 5, fogOn, dFog, true, st));
         Identifier waveId = id("waving_foliage");
         Identifier pixelShadowsId = id("rays_pixel_shadows");
         look.addOption(boolOpt(builder, "rays_pixel_shadows", false, v -> RtSettings.raysPixelShadows = v, () -> RtSettings.raysPixelShadows,

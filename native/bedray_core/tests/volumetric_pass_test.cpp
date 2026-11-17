@@ -13,7 +13,7 @@ bool wrong_binding = false, wrong_push = false, wrong_count = false;
 namespace bedray::core {
 bool program_contract(BedrayCore*, std::uint64_t handle, ProgramContract& out) noexcept {
     if (handle != 2 && handle != 3) return false;
-    out = {wrong_push ? 16u : handle == 3 ? 32u : 96u, wrong_count ? 1u : handle == 3 ? 4u : 5u};
+    out = {wrong_push ? 16u : handle == 3 ? 32u : 112u, wrong_count ? 1u : handle == 3 ? 4u : 8u};
     return true;
 }
 bool program_has_binding(BedrayCore*, std::uint64_t handle, std::uint32_t binding, std::uint32_t type) noexcept {
@@ -21,7 +21,8 @@ bool program_has_binding(BedrayCore*, std::uint64_t handle, std::uint32_t bindin
     if (binding == 11 || binding == 12 || (handle == 3 && binding == 1)) return type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     if (binding == 16) return type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     if (handle != 3 && binding == 0) return type == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    return handle != 3 && binding == 2 && type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    if (handle != 3 && (binding == 3 || binding == 9)) return type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    return handle != 3 && (binding == 2 || binding == 18) && type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 }
 }
 namespace {
@@ -45,12 +46,13 @@ std::vector<unsigned char> bytes(std::uint64_t buffer) {
 BedrayVolumetricDesc configuration() { return {BEDRAY_CORE_ABI_VERSION, sizeof(BedrayVolumetricDesc), 0, 2, 3, 0, 0}; }
 struct Input {
     std::array<unsigned char,608> constants{};
-    std::array<unsigned char,96> march{};
+    std::array<unsigned char,112> march{};
     std::array<unsigned char,32> apply{};
     BedrayVolumetricFrameDesc frame{};
     explicit Input(std::uint64_t command = 11, std::uint32_t index = 1) {
         frame = {BEDRAY_CORE_ABI_VERSION, sizeof(frame), command, 200, 201, 202, 203, 64, 128,
-            19, 11, BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE, index, constants.data(), 608, 96, march.data(), apply.data(), 32, 0};
+            19, 11, BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE, index, constants.data(), 608, 112, march.data(), apply.data(), 32, 0,
+            300, 304, 301, 0, 0, 0};
         extent(19, 11);
         put(march, 12, 0.75f); put(march, 28, 64.0f); put(march, 48, 1.1f); put(march, 56, 1.0f);
         put(march, 64, 0.01f); put(march, 68, 8u); put(march, 72, 999u); put(march, 76, 999u);
@@ -94,7 +96,19 @@ void configure_and_frame_validation() {
     invalid([](auto& i) { i.frame.flags = 0; }, BEDRAY_ERROR_UNSUPPORTED);
     invalid([](auto& i) { i.frame.reserved = 1; });
     invalid([](auto& i) { i.frame.frame_constants_bytes = 607; });
-    invalid([](auto& i) { i.frame.march_push_bytes = 95; });
+    invalid([](auto& i) { i.frame.march_push_bytes = 111; });
+    invalid([](auto& i) { i.frame.atlas_view = 0; });
+    invalid([](auto& i) { i.frame.material_view = 0; });
+    invalid([](auto& i) { i.frame.atlas_sampler = 0; });
+    invalid([](auto& i) { i.frame.emitters = 302; i.frame.emitters_bytes = 0; });
+    invalid([](auto& i) { i.frame.emitters = 302; i.frame.emitters_bytes = 24; });
+    invalid([](auto& i) { i.frame.emitters = 302; i.frame.emitters_bytes = 64; i.frame.emitters_offset = 8; });
+    invalid([](auto& i) { i.frame.emitters = 302; i.frame.emitters_bytes = 64; i.frame.emitters_offset = std::numeric_limits<std::uint64_t>::max() - 15; });
+    invalid([](auto& i) { i.frame.emitters = 0; i.frame.emitters_bytes = 64; }); // bytes without a list
+    invalid([](auto& i) { put(i.march, 108, std::numeric_limits<float>::infinity()); });
+    invalid([](auto& i) { put(i.march, 108, -1.0f); });
+    invalid([](auto& i) { put(i.march, 88, -0.5f); });
+    invalid([](auto& i) { put(i.march, 100, std::numeric_limits<float>::quiet_NaN()); });
     invalid([](auto& i) { i.frame.apply_push_bytes = 31; });
     invalid([](auto& i) { put(i.constants, 400, 20u); });
     invalid([](auto& i) { put(i.march, 12, std::numeric_limits<float>::quiet_NaN()); });
@@ -111,7 +125,12 @@ void dispatch_payloads_and_history() {
     const auto march = fake::render_calls[0], apply = fake::render_calls[1];
     CHECK(march.program == 2 && apply.program == 3);
     CHECK(march.group_x == 2 && march.group_y == 1 && apply.group_x == 3 && apply.group_y == 2);
-    CHECK(march.resources.size() == 5 && apply.resources.size() == 4 && march.push_bytes == 96 && apply.push_bytes == 32);
+    CHECK(march.resources.size() == 8 && apply.resources.size() == 4 && march.push_bytes == 112 && apply.push_bytes == 32);
+    // The atlas is a combined image sampler; no emitter list this frame means the sections table stands in at binding 18.
+    CHECK(resource(march, 3).descriptor_type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+    CHECK(resource(march, 3).handle == 300 && resource(march, 3).sampler == 301);
+    CHECK(resource(march, 9).handle == 304 && resource(march, 9).sampler == 301);
+    CHECK(resource(march, 18).handle == 203 && resource(march, 18).offset == 64 && resource(march, 18).range == 128);
     CHECK(get<std::uint32_t>(march.push, 72) == 1 && get<std::uint32_t>(march.push, 76) == 0);
     CHECK(get<std::uint32_t>(apply.push, 12) == 1);
     auto expected_march = first.march; put(expected_march, 72, 1u); put(expected_march, 76, 0u);
@@ -141,6 +160,25 @@ void dispatch_payloads_and_history() {
     CHECK(pass.render(reset.frame, &error) == BEDRAY_OK && get<std::uint32_t>(fake::render_calls[6].push, 76) == 0);
     CHECK(pass.release_recording(14) == BEDRAY_OK);
     CHECK(pass.release_recording(999) == BEDRAY_OK && pass.destroy() == BEDRAY_OK); clean();
+}
+void emitter_list_is_bound_and_the_glow_push_is_forwarded() {
+    fake::reset(); BedrayCore core; BedrayError error{}; bedray::core::VolumetricPass pass;
+    CHECK(pass.configure(&core, make_device_fns(), configuration(), &error) == BEDRAY_OK);
+    Input input;
+    input.frame.emitters = 302; input.frame.emitters_offset = 256; input.frame.emitters_bytes = 7 * 16 * 3;
+    put(input.march, 88, 1.5f);                         // glow air density
+    put(input.march, 96, 3.25f); put(input.march, 100, -4.5f); put(input.march, 104, 0.125f); // emitter list camera offset
+    put(input.march, 108, 2.0f);                        // glow strength
+    CHECK(pass.render(input.frame, &error) == BEDRAY_OK);
+    const auto march = fake::render_calls[0];
+    CHECK(march.resources.size() == 8);
+    CHECK(resource(march, 18).handle == 302 && resource(march, 18).offset == 256 && resource(march, 18).range == 336);
+    CHECK(resource(march, 18).descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    CHECK(resource(march, 2).handle == 203);             // the scene table is untouched
+    auto expected = input.march; put(expected, 72, 1u); put(expected, 76, 0u);
+    CHECK(march.push == std::vector<unsigned char>(expected.begin(), expected.end())); // the glow words arrive bit for bit
+    CHECK(get<float>(march.push, 88) == 1.5f && get<float>(march.push, 96) == 3.25f && get<float>(march.push, 108) == 2.0f);
+    CHECK(pass.release_recording(11) == BEDRAY_OK && pass.destroy() == BEDRAY_OK); clean();
 }
 void resize_discard_and_failure() {
     fake::reset(); BedrayCore core; BedrayError error{}; bedray::core::VolumetricPass pass;
@@ -198,7 +236,8 @@ void device_loss_waits_for_every_recording_proof() {
 }
 }
 int main() {
-    configure_and_frame_validation(); dispatch_payloads_and_history(); resize_discard_and_failure();
+    configure_and_frame_validation(); dispatch_payloads_and_history(); emitter_list_is_bound_and_the_glow_push_is_forwarded();
+    resize_discard_and_failure();
     precommand_upload_failure(); device_loss_waits_for_every_recording_proof();
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

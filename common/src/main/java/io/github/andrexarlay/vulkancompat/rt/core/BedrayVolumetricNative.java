@@ -9,7 +9,7 @@ import static java.lang.foreign.ValueLayout.*;
 
 /** Coarse recorder; native owns history, upload buffers, immutable descriptors and barriers. */
 public final class BedrayVolumetricNative implements AutoCloseable {
-    public static final int FRAME_CONSTANTS_BYTES = 608, MARCH_BYTES = 96, APPLY_BYTES = 32;
+    public static final int FRAME_CONSTANTS_BYTES = 608, MARCH_BYTES = 112, APPLY_BYTES = 32, FRAME_DESC_BYTES = 168;
     public static final int NATIVE_SCENE = 1, RESET_HISTORY = 2;
     private final BedrayCoreNative library;
     private final long core;
@@ -41,18 +41,29 @@ public final class BedrayVolumetricNative implements AutoCloseable {
         return desc;
     }
 
+    /**
+     * {@code atlasView}/{@code materialView}/{@code atlasSampler}: the albedo and material atlases the block-light glow reads
+     * its hue and strength from, and their sampler (required).
+     * {@code emitters}: the BEM2 emitter list of the frame, or 0 with offset and bytes 0 when the frame has none; the native
+     * pass then binds the section table in its place and the shader finds no valid list header.
+     */
     static MemorySegment frame(Arena arena, long command, long output, long depth, long tlas, long sections,
-                               long sectionOffset, long sectionBytes, int width, int height, int flags, int frameIndex,
+                               long sectionOffset, long sectionBytes, long atlasView, long materialView,
+                               long atlasSampler, long emitters, long emitterOffset, long emitterBytes,
+                               int width, int height, int flags, int frameIndex,
                                ByteBuffer constants, ByteBuffer march, ByteBuffer apply) {
         if (command == 0 || output == 0 || depth == 0 || tlas == 0 || sections == 0 || output == depth
             || sectionOffset < 0 || sectionBytes <= 0 || sectionBytes % 64 != 0 || width <= 0 || height <= 0
+            || atlasView == 0 || materialView == 0 || atlasSampler == 0
+            || (emitters == 0 ? (emitterOffset != 0 || emitterBytes != 0)
+                : (emitterOffset < 0 || emitterBytes <= 0 || emitterBytes % 16 != 0 || emitterOffset % 16 != 0))
             || (flags & NATIVE_SCENE) == 0 || (flags & ~(NATIVE_SCENE | RESET_HISTORY)) != 0)
             throw new IllegalArgumentException("invalid volumetric frame inputs");
         var constantsMemory = payload(constants, FRAME_CONSTANTS_BYTES);
         var marchMemory = payload(march, MARCH_BYTES);
         var applyMemory = payload(apply, APPLY_BYTES);
-        var desc = arena.allocate(120, 8);
-        desc.set(JAVA_INT, 0, BedrayCoreLayouts.ABI_VERSION); desc.set(JAVA_INT, 4, 120);
+        var desc = arena.allocate(FRAME_DESC_BYTES, 8);
+        desc.set(JAVA_INT, 0, BedrayCoreLayouts.ABI_VERSION); desc.set(JAVA_INT, 4, FRAME_DESC_BYTES);
         desc.set(JAVA_LONG, 8, command); desc.set(JAVA_LONG, 16, output); desc.set(JAVA_LONG, 24, depth);
         desc.set(JAVA_LONG, 32, tlas); desc.set(JAVA_LONG, 40, sections);
         desc.set(JAVA_LONG, 48, sectionOffset); desc.set(JAVA_LONG, 56, sectionBytes);
@@ -61,6 +72,8 @@ public final class BedrayVolumetricNative implements AutoCloseable {
         desc.set(ADDRESS, 80, constantsMemory); desc.set(JAVA_INT, 88, FRAME_CONSTANTS_BYTES);
         desc.set(JAVA_INT, 92, MARCH_BYTES); desc.set(ADDRESS, 96, marchMemory);
         desc.set(ADDRESS, 104, applyMemory); desc.set(JAVA_INT, 112, APPLY_BYTES); desc.set(JAVA_INT, 116, 0);
+        desc.set(JAVA_LONG, 120, atlasView); desc.set(JAVA_LONG, 128, materialView); desc.set(JAVA_LONG, 136, atlasSampler);
+        desc.set(JAVA_LONG, 144, emitters); desc.set(JAVA_LONG, 152, emitterOffset); desc.set(JAVA_LONG, 160, emitterBytes);
         return desc;
     }
 
@@ -71,12 +84,13 @@ public final class BedrayVolumetricNative implements AutoCloseable {
     }
 
     public void record(long command, long output, long depth, long tlas, long sections, long sectionBytes,
+                       long atlasView, long materialView, long atlasSampler, long emitters, long emitterOffset, long emitterBytes,
                        int width, int height, int flags, int frameIndex, ByteBuffer constants, ByteBuffer march, ByteBuffer apply) {
         if (closed) throw new IllegalStateException("native volumetric pass is closed");
         library.ensureOpen();
         try (Arena arena = Arena.ofConfined()) {
-            var desc = frame(arena, command, output, depth, tlas, sections, 0, sectionBytes, width, height, flags, frameIndex,
-                constants, march, apply);
+            var desc = frame(arena, command, output, depth, tlas, sections, 0, sectionBytes, atlasView, materialView, atlasSampler,
+                emitters, emitterOffset, emitterBytes, width, height, flags, frameIndex, constants, march, apply);
             var error = arena.allocate(BedrayCoreLayouts.ERROR);
             check("render_volumetric", (int) render.invokeExact(MemorySegment.ofAddress(core), desc, error), error);
         } catch (Throwable failure) { throw failure("render_volumetric", failure); }
