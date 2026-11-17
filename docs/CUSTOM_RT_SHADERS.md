@@ -20,13 +20,15 @@ Activation (session only):
 
 The pack must contain `shaders/bedray/rt.comp`. `#include` works inside the pack's `shaders/` folder with Iris
 semantics (pack-root confined). The entry is Vulkan GLSL 460, compiled for Vulkan 1.2 / SPIR-V 1.4, with
-`BEDRAY_CUSTOM_RT` defined to `1`. Restart after editing the shader.
+`BEDRAY_CUSTOM_RT` defined to `1`. Shader edits hot-reload in **folder** packs (see below); zip packs need a restart.
 
 The stage runs only in frames where hardware RT (`rt_mode` rays or path) replaced the world image, because only then
 does a scene TLAS exist. Temporal upscaling and frame generation must be off: their history would not contain the
 stage's output. Every refusal is shown in F3 (`[CUSTOM-RT]`, diag section) and in the log (`[VKB-CUSTOMRT]`).
 
 ### Bindings (set 0 only)
+
+Fixed contract bindings:
 
 | Binding | Declaration | Content |
 |---|---|---|
@@ -36,9 +38,50 @@ stage's output. Every refusal is shown in F3 (`[CUSTOM-RT]`, diag section) and i
 | 3 | `layout(rgba16f) uniform writeonly image2D` | Output. Blitted back over the whole world color after the dispatch; write every pixel |
 | 4 | `uniform sampler2D` | RT primary-ray distance in blocks (R32F, `1e6` = no hit) when `depthInfo.z == 1`; otherwise the slot holds the color copy and must not be read |
 
-Any other set, binding, descriptor array or a push-constant block is refused at startup with the reason. A shader may
-leave out bindings it does not use, but it must write binding 3. Device features beyond ray query (for example
-`Int64`, 8/16-bit storage, descriptor indexing) are refused: the stage only relies on the hardware RT device group.
+## Extended contract: user resources (Mosaic-friendly)
+
+Bindings **5..31 of set 0** may declare single descriptors the pack itself provides:
+
+| Shader declaration | Pack file |
+|---|---|
+| `set = 0, binding = N` uniform or storage buffer block | `shaders/bedray/buffer<N>.bin` (raw bytes; uniform cap 65536 B, single buffer cap 8 MiB, 16 MiB total) |
+| `set = 0, binding = N` `sampler2D` or `texture2D` | `shaders/bedray/texture<N>.png` (RGBA8, nearest/clamp, one mip; 2048x2048 cap) |
+
+A push-constant block is also allowed:
+
+| Shader declaration | Pack file |
+|---|---|
+| `layout(push_constant) uniform Push { … };` | `shaders/bedray/rt.push` (raw bytes, zero-filled to the device's `maxPushConstantsSize` and pushed every dispatch; the block must fit the device limit, at least 128 B everywhere) |
+
+Rules and limits:
+
+* Every extra binding **needs its file**; a missing file, a kind without a producer (storage images, standalone
+  samplers, texel buffers, input attachments), an array binding or a different set is refused at startup with the
+  reason in F3 and the log.
+* **Folder packs live-update**: when `shaders/bedray/buffer<N>.bin` or `rt.push` changes on disk, the new bytes are
+  re-read and reach the **next dispatch** — no game restart. A file that **grew beyond its creation size** needs a
+  restart (the GPU buffer is not reallocated). Zip packs load their bytes once at startup.
+* Textures are static for the session. A shader that **writes** a storage buffer keeps its writes between edits:
+  new bytes are uploaded only after the file changed, not every frame.
+* The fixed bindings (0..4), the output requirement and the device-feature refusal (ray query only) are unchanged.
+
+Any other set, binding, descriptor array or an extra device feature is still refused at startup with the reason.
+
+## Live parameter editing (Mosaic SDK path)
+
+The extended contract exists so a node editor can drive the shader without touching the SPIR-V: the editor writes
+parameter bytes into `rt.push` (per-frame small parameters: strength, bias, control flags) and slabs of state into
+`buffer<N>.bin` (content that survives between edits, e.g. a light list). Each changed file is picked up on the next
+hardware-RT frame.
+
+**Shader source hot reload (folder packs):** the host polls the pack's shader sources (`*.comp`, `*.glsl`, ray stages)
+every 0.5 s. When `rt.comp` or any of its includes changed, the same compile + contract check as the startup runs —
+on success the stage's pipeline and user resources are rebuilt between frames (a hash-free `reload #N` lands in F3
+and the log); on failure the **previous stage keeps rendering** and the reason is shown, so a typo never kills the
+session. This works after a failed startup too: fix the file and it compiles in-game. Device features beyond ray
+query (for example `Int64`, 8/16-bit storage, descriptor indexing) are refused at every reload: the stage only
+relies on the hardware RT device group. Hot reload rebuilds user resources from their files, so buffers may grow to
+the caps without a restart.
 
 ### `BedrayFrame` (std140, 320 bytes)
 
@@ -67,6 +110,10 @@ The world target keeps GL orientation: texel row 0 is the bottom of the screen. 
 opaque hit (from binding 4 when present, otherwise with a ray query) and darkens pixels whose ray toward a fixed sky
 direction is blocked. Its SPIR-V compiled to 4356 bytes through the startup path and passes the contract check
 (`CustomRtContractTest`). It has not been run on a GPU.
+
+[`examples/custom-rt-mosaic`](../examples/custom-rt-mosaic/README.md) demonstrates the extended contract: push
+constants from `rt.push`, a user parameter buffer (`buffer5.bin`) and a static LUT texture (`texture6.png`), all
+edit-live on a folder pack. It passes the contract check (`CustomRtContractTest`); it has not been run on a GPU.
 
 ## Ray-tracing-pipeline packs (Dirt RT)
 

@@ -36,6 +36,9 @@ public final class IrisUniforms {
     /** Typed world-state block (Iris world/celestial/weather/fog/eye uniforms), std140, written once per frame. */
     public static final int BINDING_WORLD = 18;
     public static final int WORLD_BYTES = 144;
+    /** Mosaic shader parameters: std140 uniform buffer, one float per parameter at byte offset 4 * index, rewritten every frame. */
+    public static final int BINDING_MOSAIC = 19;
+    public static final int MOSAIC_BYTES = 256;
     public static final Map<String, Member> WORLD;
 
     static {

@@ -77,6 +77,10 @@ public final class MaterialAtlasBaker {
                 LOGGER.warn("[VKB-RT] materials read_failed sprite={} {}", name, LogPaths.show(e));
             }
         }
+        // A sidecar may retune the automatic values; a LabPBR _s map is the stronger statement and wins.
+        if (spec == null) {
+            auto = SurfaceOverrides.apply(auto, name, resources, false);
+        }
         int[] material = new int[w * h];
         int[] normal = new int[w * h];
         int emissive = MaterialRegion.fill(material, normal, w, 0, 0, w, h, auto, albedo, spec, nrm, name.getPath());

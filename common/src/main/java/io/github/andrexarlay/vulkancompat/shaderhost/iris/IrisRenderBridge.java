@@ -506,7 +506,7 @@ public final class IrisRenderBridge {
             runtimeStatus = selection.requestedStatus().detail();
         boolean worldChanged = worldIdentity != world;
         boolean irisActive = selection != null && selection.active() == ShaderHostKind.IRIS;
-        if (worldChanged || world == null || !Boolean.getBoolean("bedray.iris.post") || !irisActive) {
+        if (worldChanged || world == null || !io.github.andrexarlay.vulkancompat.shaderhost.IrisShaderHost.postHostEnabled() || !irisActive) {
             retire();
         }
         if (worldChanged) {
@@ -550,7 +550,7 @@ public final class IrisRenderBridge {
     public static boolean renderFrame(RenderTarget target, CameraRenderState camera, WorldFrame.Renderer renderer) {
         // Optional custom ray-query stage over the producer's completed image, before the Iris post stage.
         io.github.andrexarlay.vulkancompat.shaderhost.customrt.CustomRtStage.render(target, camera, renderer);
-        if (failed || cleanupBroken || !Boolean.getBoolean("bedray.iris.post") || ShaderHosts.active() != ShaderHostKind.IRIS) return false;
+        if (failed || cleanupBroken || !io.github.andrexarlay.vulkancompat.shaderhost.IrisShaderHost.postHostEnabled() || ShaderHosts.active() != ShaderHostKind.IRIS) return false;
         var device = VulkanCapabilityChecker.getVulkanDevice();
         if (device == null) return false;
         try {
@@ -581,7 +581,7 @@ public final class IrisRenderBridge {
 
     /** The optional target identity belongs to resources that are actually prepared, including failed recordings. */
     private static boolean renderFrame(WorldFrame frame, RenderTarget target) {
-        if (failed || cleanupBroken || !Boolean.getBoolean("bedray.iris.post")
+        if (failed || cleanupBroken || !io.github.andrexarlay.vulkancompat.shaderhost.IrisShaderHost.postHostEnabled()
             || ShaderHosts.active()
                 != ShaderHostKind.IRIS) return false;
         IrisShaderHost host = ShaderHosts.iris();
