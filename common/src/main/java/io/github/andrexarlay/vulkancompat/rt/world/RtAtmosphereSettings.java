@@ -49,6 +49,8 @@ public final class RtAtmosphereSettings {
     private static volatile float fogAerial = (float) clamp(num("vkrtx.rt.fog.aerial", 1.0), 0, 2);
     private static volatile float emitterGlow = (float) clamp(num("vkrtx.rt.emitterglow", 1.0), 0, 4);
     private static volatile float emitterGlowDensity = (float) clamp(num("vkrtx.rt.emitterglow.density", 1.0), 0, 4);
+    private static volatile float cloudShadows = (float) clamp(num("vkrtx.rt.cloudshadows", 1.0), 0, 2);
+    private static volatile float lensFlare = (float) clamp(num("vkrtx.rt.lensflare", 0.0), 0, 2);
 
     private RtAtmosphereSettings() {
     }
@@ -141,6 +143,26 @@ public final class RtAtmosphereSettings {
         return emitterGlow;
     }
 
+    /** Strength of the lens ghosts of the sun (follows the sun glare); 0 = off, the default. */
+    public static float lensFlare() {
+        return lensFlare;
+    }
+
+    /** The strength as the percent the bloom push carries in bits 16..23 of its packed word (0..200). */
+    public static int lensFlarePercent() {
+        return Math.max(0, Math.min(255, Math.round(lensFlare * 100f)));
+    }
+
+    /** Strength of the shadows the clouds cast on the sun and the moon; 0 = off, 1 = the built-in extinction. */
+    public static float cloudShadows() {
+        return cloudShadows;
+    }
+
+    /** The strength as the percent the sky packet carries in its flag bits 12..19 (0..200, never above what 8 bits hold). */
+    public static int cloudShadowPercent() {
+        return Math.max(0, Math.min(255, Math.round(cloudShadows * 100f)));
+    }
+
     /** How dense the air of that glow is, a multiplier of the built-in 0.08 per block. */
     public static float emitterGlowDensity() {
         return emitterGlowDensity;
@@ -191,6 +213,10 @@ public final class RtAtmosphereSettings {
             new Option("emitter_glow", "Block light glow", "Torches, lanterns, glowstone and other light blocks scatter light in the "
                 + "air around them: a soft halo and, with fog, visible beams. 0 = off. Needs Volumetric fog on.", Tier.ADVANCED, Kind.SLIDER,
                 0, 4, 1.0, List.of()),
+            new Option("lens_flare", "Lens flare", "Soft ghosts of the sun in the lens when you look near it. 0 = off. Needs Sun "
+                + "glare on.", Tier.ADVANCED, Kind.SLIDER, 0, 2, 0.0, List.of()),
+            new Option("cloud_shadows", "Cloud shadows", "Clouds shadow the sun and the moon: the ground under a cloud is darker and the "
+                + "shadow drifts with it. 0 = off. Needs clouds on and ray tracing.", Tier.ADVANCED, Kind.SLIDER, 0, 2, 1.0, List.of()),
             new Option("emitter_glow_density", "Block light glow density", "How thick the air around light blocks is. Higher values "
                 + "make the halos larger and brighter.", Tier.ADVANCED, Kind.SLIDER, 0, 4, 1.0, List.of()));
     }
@@ -216,6 +242,8 @@ public final class RtAtmosphereSettings {
             case "fog_vanilla" -> fogVanilla;
             case "fog_aerial" -> fogAerial;
             case "chunk_fade" -> chunkFade;
+            case "lens_flare" -> lensFlare;
+            case "cloud_shadows" -> cloudShadows;
             case "emitter_glow" -> emitterGlow;
             case "emitter_glow_density" -> emitterGlowDensity;
             default -> Double.NaN;
@@ -246,6 +274,8 @@ public final class RtAtmosphereSettings {
             case "fog_vanilla" -> fogVanilla = (float) clamp(v, 0, 1);
             case "fog_aerial" -> fogAerial = (float) clamp(v, 0, 2);
             case "chunk_fade" -> chunkFade = (float) clamp(v, 0, 4);
+            case "lens_flare" -> lensFlare = (float) clamp(v, 0, 2);
+            case "cloud_shadows" -> cloudShadows = (float) clamp(v, 0, 2);
             case "emitter_glow" -> emitterGlow = (float) clamp(v, 0, 4);
             case "emitter_glow_density" -> emitterGlowDensity = (float) clamp(v, 0, 4);
             default -> {
@@ -258,9 +288,9 @@ public final class RtAtmosphereSettings {
     /** One line for the log. */
     public static String describe() {
         return String.format(Locale.ROOT, "godrays=%s steps=%d strength=%.2f range=%d bloom=%s sky=%s shape=%s strength=%.2f threshold=%.2f scatter=%.2f "
-                + "sunglare=%s strength=%.2f size=%d%% fog_vanilla=%.2f fog_aerial=%.2f chunk_fade=%.2f emitter_glow=%.2f emitter_glow_density=%.2f", godRays, godRaySteps(), godRayStrength, godRayRange,
+                + "sunglare=%s strength=%.2f size=%d%% fog_vanilla=%.2f fog_aerial=%.2f chunk_fade=%.2f emitter_glow=%.2f emitter_glow_density=%.2f cloud_shadows=%.2f lens_flare=%.2f", godRays, godRaySteps(), godRayStrength, godRayRange,
             bloom(), bloomSky(), bloomShape(), bloomStrength, bloomThreshold, bloomScatter, sunGlare(), sunGlareStrength, sunGlareSizePercent(), fogVanilla, fogAerial, chunkFade,
-            emitterGlow, emitterGlowDensity);
+            emitterGlow, emitterGlowDensity, cloudShadows, lensFlare);
     }
 
     static GodRays parseGodRays(String s, GodRays def) {

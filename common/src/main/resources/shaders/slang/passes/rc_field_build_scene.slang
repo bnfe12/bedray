@@ -5,6 +5,7 @@ import "contracts/contracts.slang";
 import "light/block_emitters.slang";
 import "light/sky.slang";
 import "light/sun.slang";
+import "light/cloud_shadow.slang";
 import "radiance_cascades/field_transport.slang";
 import "radiance_cascades/rc_trace_options.slang";
 import "sampling.slang";
@@ -67,7 +68,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     atlas.albedo = albedoAtlas; atlas.material = materialAtlas; atlas.normal = normalAtlas;
     atlas.entities = entityAtlas;
     BlockMaterialTable table; table.materials = blockMaterials; table.count = pc.materialCount;
-    SunMoonSampler key; key.sun = frame.sun; key.sunProbability = pc.sunProbability; key.hardShadows = false;
+    SunMoonSampler key; key.sun = frame.sun; key.sunProbability = pc.sunProbability; key.hardShadows = false; key.clouds = (CloudShadowSource)0;
     BlockEmitterSampler block;
     block.records = emitters; block.atlas = atlas;
     block.candidates = uint(max(pc.emitterCameraRelative.w, 1.0));

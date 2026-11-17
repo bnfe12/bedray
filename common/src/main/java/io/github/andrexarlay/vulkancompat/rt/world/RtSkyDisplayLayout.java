@@ -14,6 +14,8 @@ public final class RtSkyDisplayLayout {
     public static final int VERSION_MASK = 0xff000000;
     public static final int VERSION = 0x01000000;
     public static final int TONEMAPPED = 1 << 10;
+    /** Cloud shadow strength in percent, bits 12..19 of the flags (0 = off); read by cloud_shadow.slang. */
+    public static final int CLOUD_SHADOW_SHIFT = 12, CLOUD_SHADOW_MASK = 0xFF;
     public static final int ATLAS_HEADER_WORDS = 12 * 4;
 
     private RtSkyDisplayLayout() {}

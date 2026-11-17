@@ -171,6 +171,8 @@ final class RtBloomPass {
         // Signed percent offset. Zero retains the original 100% halo.
         int haloOffset = RtAtmosphereSettings.sunGlareSizePercent() - 100;
         displayFlags |= (haloOffset & 0xff) << 8;
+        // Lens flare strength in percent, bits 16..23 (a float holds up to 2^24 exactly); zero is the picture of every earlier build.
+        displayFlags |= (RtAtmosphereSettings.lensFlarePercent() & 0xff) << 16;
         pc.putFloat(112, displayFlags).putFloat(116, pr.scatter).putFloat(120, pr.sunNdcX).putFloat(124, pr.sunNdcY);
     }
 

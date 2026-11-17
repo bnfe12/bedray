@@ -37,6 +37,43 @@ float2 bloomShapeScale(BloomPush pc) {
     return float2(1.0);
 }
 
+// Lens flare strength in percent: bits 16..23 of the packed word (a float holds them exactly), 0 = off.
+float bloomLensFlareStrength(BloomPush pc) {
+    return float((uint(max(pc.p1.x, 0.0)) >> 16u) & 255u) * 0.01;
+}
+
+static const int   BLOOM_FLARE_GHOSTS = 4;
+static const float BLOOM_FLARE_AXIS[4]      = { -0.35, -0.80, 0.55, -1.55 };   // position on the sun-centre axis
+static const float BLOOM_FLARE_RADIUS[4]    = { 0.07, 0.11, 0.05, 0.17 };      // in half screen heights
+static const float BLOOM_FLARE_INTENSITY[4] = { 0.10, 0.06, 0.12, 0.045 };
+
+float3 bloomFlareTint(int i) {
+    if (i == 0) return float3(1.00, 0.62, 0.36);
+    if (i == 1) return float3(0.42, 0.80, 1.00);
+    if (i == 2) return float3(0.80, 1.00, 0.52);
+    return float3(1.00, 0.52, 0.82);
+}
+
+// Ghosts of the sun in the lens: soft discs on the line through the sun and the middle of the picture, mirrored to the
+// other side of the centre. `pixelNdc` and `sunNdc` are in the image-space convention of the sun position (no Y flip);
+// `visibility` is the already edge-faded sun visibility, so a hidden or off-screen sun draws nothing. Scene units, added
+// to the glow before the tone-map shoulder.
+float3 bloomLensFlare(float2 pixelNdc, float2 sunNdc, float aspect, float visibility, float strength) {
+    if (strength <= 0.0 || visibility <= 0.0) return float3(0.0);
+    // A sun in the middle of the picture would stack every ghost on its own disc: they grow in as the sun moves out.
+    float offAxis = 0.35 + 0.65 * smoothstep(0.0, 0.8, length(sunNdc));
+    float3 sum = float3(0.0);
+    for (int i = 0; i < BLOOM_FLARE_GHOSTS; ++i) {
+        float2 centre = sunNdc * BLOOM_FLARE_AXIS[i];
+        float d = length((pixelNdc - centre) * float2(aspect, 1.0)) / BLOOM_FLARE_RADIUS[i];
+        // a disc with a brighter rim, the look of an aperture ghost
+        float body = 1.0 - smoothstep(0.55, 1.0, d);
+        float rim = smoothstep(0.55, 0.9, d) * (1.0 - smoothstep(0.9, 1.05, d));
+        sum += bloomFlareTint(i) * ((0.35 * body + 0.9 * rim) * BLOOM_FLARE_INTENSITY[i]);
+    }
+    return sum * (strength * visibility * offAxis);
+}
+
 float bloomGlareSize(BloomPush pc) {
     uint encoded = (uint(pc.p1.x) >> 8u) & 255u;
     int offset = int(encoded ^ 128u) - 128;

@@ -47,8 +47,8 @@ final class SettingsDraft {
         "path_auto_exposure", "path_exposure_ev", "tonemapper", "atm_local_highlights", "atm_local_shadows", "vibrant_visuals",
         "atm_bloom", "atm_bloom_strength", "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky", "atm_bloom_shape",
         "atm_godrays", "atm_godrays_strength", "atm_godrays_quality", "atm_godrays_range",
-        "atm_sunglare", "atm_sunglare_strength", "atm_sunglare_size",
-        "rt_fog", "rt_fog_density", "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_aerial", "atm_fog_vanilla", "atm_emitter_glow", "atm_emitter_glow_density", "atm_chunk_fade",
+        "atm_sunglare", "atm_sunglare_strength", "atm_sunglare_size", "atm_lens_flare",
+        "rt_fog", "rt_fog_density", "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_aerial", "atm_fog_vanilla", "atm_cloud_shadows", "atm_emitter_glow", "atm_emitter_glow_density", "atm_chunk_fade",
         "vignette", "film_grain", "ui_menu_transparency"
     );
 
@@ -312,7 +312,7 @@ final class SettingsDraft {
         if (p.equals("dlss_rr_preset") && !e.option().isEnabled()) return false;
         if ((p.endsWith("custom_scale") || Set.of("fsr_sharpness", "fsr1_sharpness", "nis_sharpness",
                 "atm_bloom_threshold", "atm_bloom_scatter", "atm_bloom_sky", "atm_bloom_shape",
-                "atm_godrays_quality", "atm_godrays_range", "atm_sunglare_strength", "atm_sunglare_size",
+                "atm_godrays_quality", "atm_godrays_range", "atm_sunglare_strength", "atm_sunglare_size", "atm_lens_flare",
                 "rt_fog_in_scattering", "rt_fog_distance_scale", "atm_fog_vanilla", "atm_emitter_glow", "atm_emitter_glow_density", "auto_normal_strength",
                 "texture_lod_bias_offset", "manual_texture_lod_bias", "atm_local_highlights", "atm_local_shadows").contains(p))
                 && !e.option().isEnabled()) return false;

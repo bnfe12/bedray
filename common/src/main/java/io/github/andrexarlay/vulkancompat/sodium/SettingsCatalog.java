@@ -146,6 +146,8 @@ public final class SettingsCatalog {
         RtSettings.volumetricFogEnabled = true;
         RtAtmosphereSettings.set("godrays", RtAtmosphereSettings.GodRays.POST.ordinal());
         RtAtmosphereSettings.set("godrays_strength", 1.0);
+        RtAtmosphereSettings.set("cloud_shadows", 1.0);
+        RtAtmosphereSettings.set("lens_flare", 0.0);
         RtAtmosphereSettings.set("emitter_glow", 1.0);
         RtAtmosphereSettings.set("emitter_glow_density", 1.0);
         RtAtmosphereSettings.set("bloom", 1);
@@ -664,6 +666,12 @@ public final class SettingsCatalog {
         putNoImage("rt_fog_distance_scale", Tier.ADVANCED, "Fog Distance",
             "Changes the distance over which volumetric fog builds up.", "", "Volumetric fog.",
             "Compare fog falloff while looking across the world.");
+        putNoImage("atm_lens_flare", Tier.ADVANCED, "Lens Flare",
+            "Soft ghosts of the sun in the lens when you look near it. 0 turns it off.", "", "Needs Sun Glare on.",
+            "Look slightly away from the sun on a clear day: soft coloured discs sit on the line through the middle of the picture.");
+        putNoImage("atm_cloud_shadows", Tier.ADVANCED, "Cloud Shadows",
+            "The clouds shadow the sun and the moon: the ground under a cloud is darker and the shadow drifts with the cloud. 0 turns it off.", "", "Needs ray tracing and clouds on.",
+            "Stand in open ground on a day with clouds and watch the light on the ground: patches of shade move across it.");
         putNoImage("atm_emitter_glow", Tier.ADVANCED, "Block Light Glow",
             "Torches, lanterns, glowstone and other light blocks light the air around them: a soft halo and, in dark places, visible beams. 0 turns it off.", "", "Volumetric fog.",
             "Stand a few blocks from a torch at night and look at it: the halo and the beams show up in the air, not on a surface.");

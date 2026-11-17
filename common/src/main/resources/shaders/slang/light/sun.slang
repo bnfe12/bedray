@@ -10,6 +10,7 @@ import "contracts/frame.slang";
 import "contracts/light.slang";
 import "contracts/math.slang";
 import "sampling.slang";
+import "light/cloud_shadow.slang";
 
 static const float SUN_MIN_ANGULAR_RADIUS = 1.0e-4;
 static const float SUN_FAR_DISTANCE = 1.0e6;
@@ -32,6 +33,9 @@ struct SunMoonSampler : ILightSampler {
     // Draw the disc axis instead of a point of the disc.  The density stays the true disc's, so the flux the estimate
     // carries is unchanged and only the penumbra disappears: a hard-edged shadow from the same sun.
     bool hardShadows;
+    // The cloud layer in front of the light (plain data, zero = no cloud shadow). The host switches it on through the
+    // strength bits of the sky packet; a pass that never fills it must leave it zero (rc_field_build_scene does).
+    CloudShadowSource clouds;
 
     LightSample sample(LightReceiver receiver, inout uint seed) {
         LightSample result = invalidLightSample();
@@ -65,6 +69,9 @@ struct SunMoonSampler : ILightSampler {
         // A hard shadow samples the axis while keeping the disc's density: the same flux, no penumbra.
         float3 direction = hardShadows ? axis : coneAround(axis, radius, drawSeed);
         if (!receiver.stableSun) seed = drawSeed;
+        // Cloud shadow: the same factor evaluate() applies, so a reused sample is re-weighed with what it was drawn with.
+        radiance *= cloudShadowTransmittance(clouds, receiver.position, direction);
+        if (luminance(radiance) <= 0.0) return result;
         // A leaf card is one-sided for reflection but its far side transmits the key light: a plant seen against the
         // sun has the shaded face toward the camera, and gating on that face would hand it no sample at all - the
         // legacy path lit exactly this case with its own transmission term.  The acceptance must stay two-sided, so it
@@ -109,6 +116,8 @@ struct SunMoonSampler : ILightSampler {
         float cosSurface = receiver.foliage ? abs(dot(receiver.normal, direction))
                                             : lightCosine(receiver.normal, direction);
         if (cosSurface <= 0.0 || luminance(radiance) <= 0.0) return result;
+        radiance *= cloudShadowTransmittance(clouds, receiver.position, direction);
+        if (luminance(radiance) <= 0.0) return result;
 
         float sunIntensity = luminance(sun.color.rgb) * max(sun.color.w, 0.0);
         float moonIntensity = luminance(sun.moonColor.rgb) * max(sun.moonColor.w, 0.0);

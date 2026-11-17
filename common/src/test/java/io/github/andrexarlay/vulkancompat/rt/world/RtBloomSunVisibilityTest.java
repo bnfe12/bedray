@@ -46,6 +46,9 @@ class RtBloomSunVisibilityTest {
     void skyBloomIsPersistedAndUsesAnIndependentShaderFlag() throws IOException {
         double previous = RtAtmosphereSettings.get("bloom_sky");
         try {
+            // The first use of VulkanRtxConfig reads the local config file and applies its values over the settings: touch it
+            // before the value under test is set, or whichever test JVM runs this class first loses the value it just set.
+            io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.writeAll(new java.io.StringWriter());
             assertTrue(RtAtmosphereSettings.set("bloom_sky", 1));
             var config = new java.io.StringWriter();
             io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.writeAll(config);

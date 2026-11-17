@@ -283,6 +283,8 @@ final class SodiumAdvancedPage {
             s -> anyRt.apply(s) && s.readBooleanOption(glareId), rtDependencies(modeId, glareId), true, st));
         look.addOption(atmSlider(builder, "atm_sunglare_size", "sunglare_size", 100, 50, 200, 5,
             s -> anyRt.apply(s) && s.readBooleanOption(glareId), rtDependencies(modeId, glareId), true, st));
+        look.addOption(atmSlider(builder, "atm_lens_flare", "lens_flare", 0, 0, 200, 5,
+            s -> anyRt.apply(s) && s.readBooleanOption(glareId), rtDependencies(modeId, glareId), true, st));
         look.addOption(intOpt(builder, "sun_size_tenths", 5, 1, 50, 1,
             value -> Component.literal(String.format(Locale.ROOT, "%.1f°", value / 10.0)),
             value -> RtSettings.sunSizeTenths = value, () -> RtSettings.sunSizeTenths,
@@ -312,6 +314,7 @@ final class SodiumAdvancedPage {
             fogOn, dFog, Mark.NONE, OptionImpact.LOW, true, st));
         // Block lights also scatter in the air (marchEmitterGlow in the volumetric pass); it lives next to the fog rows because
         // it is the same air and is only drawn while volumetric fog is on.
+        look.addOption(atmSlider(builder, "atm_cloud_shadows", "cloud_shadows", 100, 0, 200, 5, anyRt, dMode, true, st));
         look.addOption(atmSlider(builder, "atm_emitter_glow", "emitter_glow", 100, 0, 400, 5, fogOn, dFog, true, st));
         look.addOption(atmSlider(builder, "atm_emitter_glow_density", "emitter_glow_density", 100, 0, 400, 5, fogOn, dFog, true, st));
         Identifier waveId = id("waving_foliage");

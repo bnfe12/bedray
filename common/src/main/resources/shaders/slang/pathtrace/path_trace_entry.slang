@@ -8,6 +8,7 @@ __exported import "contracts/contracts.slang";
 __exported import "light/block_emitters.slang";
 import "light/frame_sky.slang";
 import "light/sun.slang";
+import "light/cloud_shadow.slang";
 import "pathtrace/path_tracer.slang";
 import "restir/di_block_emitters.slang";
 __exported import "restir/restir_di.slang";
@@ -413,6 +414,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     keyLight.sunProbability = pc.sunProbability;
     // The ray profile's "Soft Shadows" switch decides whether the key light is sampled across its disc or at its axis.
     keyLight.hardShadows = (pc.flags & PATH_TRACE_OPTION_HARD_KEY_SHADOWS) != 0u;
+    keyLight.clouds = (CloudShadowSource)0;   // filled from the sky packet below, once it is read
 
     // Block emitters of this frame, in the list RtEmitters uploads for the legacy path as well. The receiver's own
     // emission reaches the sampler through LightReceiver, so a glowing face is not lit by its own quad.
@@ -462,6 +464,8 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     environment.fallback.dome.atmosphere = f.atmosphere;
     environment.fallback.sun = f.sun;
     environment.display = readSkyDisplayState(outPathStats);
+    // Clouds shadow the sun and the moon: the same cells the sky draws, the strength from the packet flags.
+    lights.keyLight.clouds = cloudShadowSource(environment.display);
 
     PathTraceOptions options = defaultPathTraceOptions();
     options.maxDepth = max(pc.maxDepth, 1u);

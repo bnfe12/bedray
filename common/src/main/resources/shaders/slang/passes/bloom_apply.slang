@@ -47,6 +47,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
     }
 
+    // Lens ghosts follow the sun glare: the same visibility, off when the glare is off.
+    float flare = bloomLensFlareStrength(pc);
+    if (flare > 0.0 && sunVisibility > 0.0) {
+        float2 pixelNdc = (float2(p) + 0.5) / float2(size) * 2.0 - 1.0;
+        add += bloomLensFlare(pixelNdc, pc.p1.zw, float(size.x) / float(size.y), sunVisibility * pc.sunDir.w, flare);
+    }
+
     add = bloomSanitize(add);
     if (bloomPeak(add) <= 1.0e-4) {
         return;

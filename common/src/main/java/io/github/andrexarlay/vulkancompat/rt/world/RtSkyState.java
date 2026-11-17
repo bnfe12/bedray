@@ -193,7 +193,8 @@ public final class RtSkyState {
         MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_MISC + 12, rainBrightness);
         MemoryUtil.memPutLong(slot + RtStatsLayout.SKY_TEX_ADDR, texAddress);
         int flags = (moonPhase & 7) | (hasSky ? 1 << 4 : 0) | (flipX ? 1 << 5 : 0)
-            | (isEnd ? 1 << 6 : 0) | (isNether ? 1 << 7 : 0) | ((cloudStatus & 3) << 8);
+            | (isEnd ? 1 << 6 : 0) | (isNether ? 1 << 7 : 0) | ((cloudStatus & 3) << 8)
+            | ((RtAtmosphereSettings.cloudShadowPercent() & RtSkyDisplayLayout.CLOUD_SHADOW_MASK) << RtSkyDisplayLayout.CLOUD_SHADOW_SHIFT);
         MemoryUtil.memPutInt(slot + RtStatsLayout.SKY_TEX_FLAGS, flags);
         MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_TILT, RtSky.tiltRad);   // StatsBuf.skyTilt
     }
