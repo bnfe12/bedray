@@ -4,13 +4,16 @@ import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
+import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvReflection;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.VulkanGlslPackCompiler;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRAccelerationStructure;
+import org.lwjgl.vulkan.VkBufferCopy;
+import org.lwjgl.vulkan.VkBufferImageCopy;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkComputePipelineCreateInfo;
-import org.lwjgl.vulkan.VkDescriptorImageInfo;
 import org.lwjgl.vulkan.VkDescriptorBufferInfo;
+import org.lwjgl.vulkan.VkDescriptorImageInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolSize;
 import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
@@ -20,7 +23,9 @@ import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkFormatProperties;
 import org.lwjgl.vulkan.VkImageBlit;
 import org.lwjgl.vulkan.VkImageCopy;
+import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
+import org.lwjgl.vulkan.VkPushConstantRange;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
@@ -28,13 +33,20 @@ import org.lwjgl.vulkan.VkWriteDescriptorSetAccelerationStructureKHR;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.List;
 
 import static org.lwjgl.vulkan.VK10.*;
 
 /**
- * Vulkan resources of {@link CustomRtStage}: one compute pipeline with the fixed set-0 layout, a device-local frame UBO
- * written by {@code vkCmdUpdateBuffer} (ordered with the frame, no CPU/GPU race), a sampled copy of the world color, an
- * RGBA16F output image and one descriptor set. Images stay in GENERAL like every engine texture.
+ * Vulkan resources of {@link CustomRtStage}: one compute pipeline, a device-local frame UBO written by
+ * {@code vkCmdUpdateBuffer} (ordered with the frame, no CPU/GPU race), a sampled copy of the world color, an RGBA16F
+ * output image and one descriptor set. Images stay in GENERAL like every engine texture.
+ * <p>
+ * Extended contract: when the shader declares a push-constant block, the layout carries one compute range of
+ * {@code maxPushConstantsSize} bytes and every dispatch pushes that range (zero-filled, front-loaded from the pack's
+ * {@code rt.push} file), so any push block that fits the device is covered. Extra set-0 bindings get one buffer or
+ * sampled image each; their bytes live in one host-visible staging buffer and reach the GPU only when the content
+ * changed on disk, so a shader writing a storage buffer keeps its writes between edits.
  * <p>
  * Descriptors are rewritten only in {@link #prepare}, outside an open command buffer, after queued host work was
  * submitted and the device went idle: the previous frame may still be reading the set.
@@ -46,6 +58,19 @@ final class CustomRtExecutor implements AutoCloseable {
     private final VkDevice device;
     private final RtMemory memory;
     private final int[] localSize;
+    private final CustomRtResources resources;
+    private final boolean pushConstants;
+    private final RtMemory.Buf[] userBuffers;
+    private final RtMemory.Img[] userTextures;
+    private final int[] bufferStagingOffset, bufferBytes;
+    private final int[] textureStagingOffset;
+    private final boolean[] bufferDirty;
+    private RtMemory.Buf staging;
+    private ByteBuffer stagingView;
+    private boolean texturesUploaded;
+    private ByteBuffer pushData;
+    private int maxPush;
+
     private long sampler, setLayout, pipelineLayout, pipeline, pool, set;
     private RtMemory.Buf frameUbo;
     private RtMemory.Img input, output;
@@ -58,20 +83,36 @@ final class CustomRtExecutor implements AutoCloseable {
     private float timeCounter, frameTime = 1f / 60f;
     private int frameCounter;
 
-    CustomRtExecutor(VkDevice device, VulkanGlslPackCompiler.Compiled compiled) {
+    CustomRtExecutor(VkDevice device, VulkanGlslPackCompiler.Compiled compiled, CustomRtResources resources) {
         this.device = device;
         this.memory = new RtMemory(device);
         this.localSize = compiled.module().localSize();
+        this.resources = resources;
+        this.pushConstants = compiled.module().pushConstants();
+        int bufferCount = resources == null ? 0 : resources.bufferSpecs().size();
+        int textureCount = resources == null ? 0 : resources.textureSpecs().size();
+        this.userBuffers = new RtMemory.Buf[bufferCount];
+        this.userTextures = new RtMemory.Img[textureCount];
+        this.bufferStagingOffset = new int[bufferCount];
+        this.bufferBytes = new int[bufferCount];
+        this.bufferDirty = new boolean[bufferCount];
+        this.textureStagingOffset = new int[textureCount];
         try {
-            create(compiled);
+            create(compiled, bufferCount, textureCount);
         } catch (RuntimeException | LinkageError e) {
             close();
             throw e;
         }
     }
 
-    private void create(VulkanGlslPackCompiler.Compiled compiled) {
+    private void create(VulkanGlslPackCompiler.Compiled compiled, int bufferCount, int textureCount) {
+        List<CustomRtResources.BufferSpec> bufferSpecs = resources == null ? List.of() : resources.bufferSpecs();
+        List<CustomRtResources.TextureSpec> textureSpecs = resources == null ? List.of() : resources.textureSpecs();
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            var props = VkPhysicalDeviceProperties.calloc(stack);
+            vkGetPhysicalDeviceProperties(device.getPhysicalDevice(), props);
+            maxPush = props.limits().maxPushConstantsSize() & ~3;
+
             var handle = stack.mallocLong(1);
             check(vkCreateSampler(device, VkSamplerCreateInfo.calloc(stack).sType$Default().magFilter(VK_FILTER_NEAREST)
                 .minFilter(VK_FILTER_NEAREST).mipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST)
@@ -79,17 +120,32 @@ final class CustomRtExecutor implements AutoCloseable {
                 .addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).maxLod(0), null, handle), "sampler");
             sampler = handle.get(0);
 
-            var b = VkDescriptorSetLayoutBinding.calloc(5, stack);
-            b.get(0).binding(CustomRtStage.B_SCENE).descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+            var bindings = VkDescriptorSetLayoutBinding.calloc(5 + bufferCount + textureCount, stack);
+            bindings.get(0).binding(CustomRtStage.B_SCENE)
+                .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
                 .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-            b.get(1).binding(CustomRtStage.B_FRAME).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-            b.get(2).binding(CustomRtStage.B_COLOR).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-            b.get(3).binding(CustomRtStage.B_OUTPUT).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-            b.get(4).binding(CustomRtStage.B_DEPTH).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-            check(vkCreateDescriptorSetLayout(device, VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(b), null, handle), "set layout");
+            bindings.get(1).binding(CustomRtStage.B_FRAME).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            bindings.get(2).binding(CustomRtStage.B_COLOR).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            bindings.get(3).binding(CustomRtStage.B_OUTPUT).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            bindings.get(4).binding(CustomRtStage.B_DEPTH).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            int slot = 5;
+            for (CustomRtResources.BufferSpec spec : bufferSpecs) {
+                bindings.get(slot++).binding(spec.binding()).descriptorType(bufferType(spec.kind()))
+                    .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            }
+            for (CustomRtResources.TextureSpec spec : textureSpecs) {
+                bindings.get(slot++).binding(spec.binding()).descriptorType(textureType(spec.kind()))
+                    .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            }
+            check(vkCreateDescriptorSetLayout(device, VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings), null, handle), "set layout");
             setLayout = handle.get(0);
-            check(vkCreatePipelineLayout(device, VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(stack.longs(setLayout)),
-                null, handle), "pipeline layout");
+            var layoutInfo = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(stack.longs(setLayout));
+            if (pushConstants) {
+                var range = VkPushConstantRange.calloc(1, stack);
+                range.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(maxPush);
+                layoutInfo.pPushConstantRanges(range);
+            }
+            check(vkCreatePipelineLayout(device, layoutInfo, null, handle), "pipeline layout");
             pipelineLayout = handle.get(0);
 
             check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(compiled.spirv()), null, handle),
@@ -105,11 +161,19 @@ final class CustomRtExecutor implements AutoCloseable {
                 vkDestroyShaderModule(device, module, null);
             }
 
-            var sizes = VkDescriptorPoolSize.calloc(4, stack);
+            int uniformBuffers = 1;
+            int combinedImages = 2;
+            int sampledImages = 0;
+            for (CustomRtResources.BufferSpec spec : bufferSpecs)
+                if (spec.kind() == SpirvReflection.DescriptorKind.UNIFORM_BUFFER) uniformBuffers++;
+            for (CustomRtResources.TextureSpec spec : textureSpecs)
+                if (spec.kind() == SpirvReflection.DescriptorKind.SAMPLED_IMAGE) sampledImages++;
+                else combinedImages++;
+            var sizes = VkDescriptorPoolSize.calloc(3 + (sampledImages > 0 ? 1 : 0), stack);
             sizes.get(0).type(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(1);
-            sizes.get(1).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
-            sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(2);
-            sizes.get(3).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1);
+            sizes.get(1).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(uniformBuffers);
+            sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(combinedImages);
+            if (sampledImages > 0) sizes.get(3).type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).descriptorCount(sampledImages);
             check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(sizes),
                 null, handle), "descriptor pool");
             pool = handle.get(0);
@@ -118,6 +182,101 @@ final class CustomRtExecutor implements AutoCloseable {
             set = handle.get(0);
             frameUbo = memory.createBuffer("customrt_frame", FRAME_UBO_BYTES,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+        }
+        createUserResources();
+    }
+
+    /** Maps a reflected extra-binding kind to its descriptor type; the validator refuses anything else. */
+    private static int bufferType(SpirvReflection.DescriptorKind kind) {
+        return kind == SpirvReflection.DescriptorKind.STORAGE_BUFFER
+            ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    }
+
+    private static int textureType(SpirvReflection.DescriptorKind kind) {
+        return kind == SpirvReflection.DescriptorKind.SAMPLED_IMAGE
+            ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    }
+
+    /** Allocates user hardware against real device limits and fills the staging buffer with the initial bytes. */
+    private void createUserResources() {
+        if (resources == null) return;
+        long stagingBytes = 0;
+        int bufferSlot = 0;
+        for (CustomRtResources.BufferSpec spec : resources.bufferSpecs()) {
+            int usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                | (spec.kind() == SpirvReflection.DescriptorKind.STORAGE_BUFFER ? VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            long aligned = (spec.size() + 3) & ~3L;
+            userBuffers[bufferSlot] = memory.createBuffer("customrt_user_buffer" + spec.binding(), aligned, usage, false);
+            bufferStagingOffset[bufferSlot] = (int) stagingBytes;
+            bufferBytes[bufferSlot] = (int) spec.size();
+            bufferDirty[bufferSlot] = true;
+            stagingBytes += aligned;
+            bufferSlot++;
+        }
+        for (CustomRtResources.TextureSpec spec : resources.textureSpecs()) {
+            userTextures[resources.textureSpecs().indexOf(spec)] = memory.createImage("customrt_user_texture" + spec.binding(),
+                spec.width(), spec.height(), VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            int index = resources.textureSpecs().indexOf(spec);
+            textureStagingOffset[index] = (int) stagingBytes;
+            stagingBytes += spec.width() * spec.height() * 4L;
+        }
+        staging = memory.createBuffer("customrt_staging", Math.max(1, stagingBytes), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+        copyInitialContent();
+    }
+
+    private void copyInitialContent() {
+        for (int i = 0; i < userBuffers.length; i++) {
+            copyIntoStaging(bufferStagingOffset[i], resources.bufferContent(i));
+            bufferDirty[i] = true;
+        }
+        for (int i = 0; i < userTextures.length; i++) {
+            copyIntoStaging(textureStagingOffset[i], resources.textureRgba(i));
+        }
+        pushRefresh();
+    }
+
+    private void copyIntoStaging(int offset, byte[] data) {
+        ByteBuffer target = stagingView();
+        target.position(offset);
+        target.put(data);
+    }
+
+    private ByteBuffer stagingView() {
+        if (stagingView == null) {
+            stagingView = org.lwjgl.system.MemoryUtil.memByteBuffer(staging.mapped, (int) staging.size).order(ByteOrder.nativeOrder());
+        }
+        return stagingView;
+    }
+
+    /**
+     * Copies fresh user buffer bytes (and re-derives the push data) after {@link CustomRtResources#refresh} saw a
+     * change. Runs with no command buffer open: the caller submitted queued work and this waits for the device, so an
+     * in-flight copy of an earlier frame never races the CPU write.
+     */
+    void stageUser(CustomRtResources res) {
+        int wait = vkDeviceWaitIdle(device);
+        if (wait != VK_SUCCESS) throw new IllegalStateException("custom RT wait failed: VkResult " + wait);
+        for (int i = 0; i < userBuffers.length; i++) {
+            byte[] data = res.bufferContent(i);
+            if (data.length > bufferBytes[i])
+                throw new IllegalStateException("custom RT user buffer " + i + " grew to " + data.length
+                    + " B but was created for " + bufferBytes[i] + " B; restart to pick up the larger file");
+            copyIntoStaging(bufferStagingOffset[i], data);
+            bufferBytes[i] = data.length;
+            bufferDirty[i] = true;
+        }
+        // Textures are static: only their bootstrap content is uploaded once.
+        pushRefresh();
+    }
+
+    private void pushRefresh() {
+        if (!pushConstants) return;
+        int capacity = Math.max(4, maxPush);
+        if (pushData == null) pushData = org.lwjgl.system.MemoryUtil.memCalloc(capacity).order(ByteOrder.nativeOrder());
+        byte[] content = resources.push(maxPush);
+        if (content != null) {
+            pushData.position(0);
+            pushData.put(content, 0, Math.min(content.length, capacity));
         }
     }
 
@@ -154,7 +313,7 @@ final class CustomRtExecutor implements AutoCloseable {
             height = color.height();
             colorFormat = color.format();
         }
-        writeDescriptors(tlas, depth);
+        writeDescriptors();
         boundTlas = tlas;
         boundDepthView = depthView;
         depthBound = depth != null;
@@ -174,33 +333,81 @@ final class CustomRtExecutor implements AutoCloseable {
         }
     }
 
-    private void writeDescriptors(long tlas, RtMemory.Img depth) {
+    private void writeDescriptors() {
+        if (resources == null) {
+            writeFixedDescriptors();
+            return;
+        }
+        List<CustomRtResources.BufferSpec> bufferSpecs = resources.bufferSpecs();
+        List<CustomRtResources.TextureSpec> textureSpecs = resources.textureSpecs();
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            var writes = VkWriteDescriptorSet.calloc(5, stack);
+            var bufferInfos = VkDescriptorBufferInfo.calloc(1 + bufferSpecs.size(), stack);
+            bufferInfos.get(0).buffer(frameUbo.handle).offset(0).range(FRAME_UBO_BYTES);
+            for (int i = 0; i < bufferSpecs.size(); i++) {
+                bufferInfos.get(1 + i).buffer(userBuffers[i].handle).offset(0).range(bufferBytes[i]);
+            }
+            var imageInfos = VkDescriptorImageInfo.calloc(3 + textureSpecs.size(), stack);
+            imageInfos.get(0).sampler(sampler).imageView(input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            imageInfos.get(1).imageView(output.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            // Without a depth guide the slot holds the color copy; BedrayFrame.depthInfo.z = 0 tells the shader not to read it.
+            imageInfos.get(2).sampler(sampler).imageView(depthBound ? boundDepthView : input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            for (int i = 0; i < textureSpecs.size(); i++) {
+                imageInfos.get(3 + i).sampler(sampler).imageView(userTextures[i].view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            }
+
+            var writes = VkWriteDescriptorSet.calloc(5 + bufferSpecs.size() + textureSpecs.size(), stack);
             var as = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack).sType$Default()
-                .pAccelerationStructures(stack.longs(tlas));
+                .pAccelerationStructures(stack.longs(boundTlas));
             writes.get(0).sType$Default().pNext(as.address()).dstSet(set).dstBinding(CustomRtStage.B_SCENE)
                 .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(1);
-            var buffers = VkDescriptorBufferInfo.calloc(1, stack);
-            buffers.get(0).buffer(frameUbo.handle).offset(0).range(FRAME_UBO_BYTES);
             writes.get(1).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_FRAME)
-                .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(buffers);
-            var images = VkDescriptorImageInfo.calloc(3, stack);
-            images.get(0).sampler(sampler).imageView(input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-            images.get(1).imageView(output.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-            // Without a depth guide the slot holds the color copy; BedrayFrame.depthInfo.z = 0 tells the shader not to read it.
-            images.get(2).sampler(sampler).imageView(depth != null ? depth.view : input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+                .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(0, 1));
             writes.get(2).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_COLOR)
-                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(images.slice(0, 1));
+                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(0, 1));
             writes.get(3).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_OUTPUT)
-                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).pImageInfo(images.slice(1, 1));
+                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).pImageInfo(imageInfos.slice(1, 1));
             writes.get(4).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_DEPTH)
-                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(images.slice(2, 1));
+                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(2, 1));
+            int w = 5;
+            for (int i = 0; i < bufferSpecs.size(); i++) {
+                writes.get(w++).sType$Default().dstSet(set).dstBinding(bufferSpecs.get(i).binding())
+                    .descriptorType(bufferType(bufferSpecs.get(i).kind())).descriptorCount(1).pBufferInfo(bufferInfos.slice(1 + i, 1));
+            }
+            for (int i = 0; i < textureSpecs.size(); i++) {
+                writes.get(w++).sType$Default().dstSet(set).dstBinding(textureSpecs.get(i).binding())
+                    .descriptorType(textureType(textureSpecs.get(i).kind())).descriptorCount(1).pImageInfo(imageInfos.slice(3 + i, 1));
+            }
             vkUpdateDescriptorSets(device, writes, null);
         }
     }
 
-    /** Records UBO update, color copy, dispatch and the blit back into the world color. */
+    /** The pre-extension descriptor write, kept for a shader with no user resources. */
+    private void writeFixedDescriptors() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var imageInfos = VkDescriptorImageInfo.calloc(3, stack);
+            imageInfos.get(0).sampler(sampler).imageView(input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            imageInfos.get(1).imageView(output.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            imageInfos.get(2).sampler(sampler).imageView(depthBound ? boundDepthView : input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            var writes = VkWriteDescriptorSet.calloc(5, stack);
+            var as = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack).sType$Default()
+                .pAccelerationStructures(stack.longs(boundTlas));
+            writes.get(0).sType$Default().pNext(as.address()).dstSet(set).dstBinding(CustomRtStage.B_SCENE)
+                .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(1);
+            var frameBufferInfo = VkDescriptorBufferInfo.calloc(1, stack);
+            frameBufferInfo.get(0).buffer(frameUbo.handle).offset(0).range(FRAME_UBO_BYTES);
+            writes.get(1).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_FRAME)
+                .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(frameBufferInfo);
+            writes.get(2).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_COLOR)
+                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(0, 1));
+            writes.get(3).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_OUTPUT)
+                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).pImageInfo(imageInfos.slice(1, 1));
+            writes.get(4).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_DEPTH)
+                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(2, 1));
+            vkUpdateDescriptorSets(device, writes, null);
+        }
+    }
+
+    /** Records UBO update, user uploads, color copy, dispatch and the blit back into the world color. */
     void record(VkCommandBuffer cmd, WorldFrame frame) {
         updateTiming();
         var color = frame.color();
@@ -214,6 +421,8 @@ final class CustomRtExecutor implements AutoCloseable {
             fillFrame(ubo, frame.camera(), color.width(), color.height());
             vkCmdUpdateBuffer(cmd, frameUbo.handle, 0, ubo);
 
+            recordUserUploads(cmd);
+
             var copy = VkImageCopy.calloc(1, stack);
             copy.get(0).srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
             copy.get(0).dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
@@ -223,6 +432,9 @@ final class CustomRtExecutor implements AutoCloseable {
 
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(set), null);
+            if (pushData != null) {
+                vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pushData);
+            }
             vkCmdDispatch(cmd, (color.width() + localSize[0] - 1) / localSize[0], (color.height() + localSize[1] - 1) / localSize[1], 1);
             VkBarriers.fullMemoryBarrier(cmd);
 
@@ -232,6 +444,37 @@ final class CustomRtExecutor implements AutoCloseable {
             blit.get(0).srcOffsets(1).set(color.width(), color.height(), 1);
             blit.get(0).dstOffsets(1).set(color.width(), color.height(), 1);
             vkCmdBlitImage(cmd, output.image, VK_IMAGE_LAYOUT_GENERAL, color.image(), VK_IMAGE_LAYOUT_GENERAL, blit, VK_FILTER_NEAREST);
+        }
+    }
+
+    /** Staging-to-buffer copies for changed user buffers, then the one-time texture upload from the same staging. */
+    private void recordUserUploads(VkCommandBuffer cmd) {
+        boolean copied = false;
+        for (int i = 0; i < userBuffers.length; i++) {
+            if (!bufferDirty[i]) continue;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                var copy = VkBufferCopy.calloc(1, stack);
+                copy.srcOffset(bufferStagingOffset[i]).dstOffset(0).size(bufferBytes[i]);
+                vkCmdCopyBuffer(cmd, staging.handle, userBuffers[i].handle, copy);
+            }
+            bufferDirty[i] = false;
+            copied = true;
+        }
+        if (copied) VkBarriers.fullMemoryBarrier(cmd);
+        for (int i = 0; i < userTextures.length; i++) {
+            if (texturesUploaded) break;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkBarriers.transition(cmd, userTextures[i].image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+                var copy = VkBufferImageCopy.calloc(1, stack);
+                copy.get(0).bufferOffset(textureStagingOffset[i]);
+                copy.get(0).imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+                copy.get(0).imageExtent().set(userTextures[i].width, userTextures[i].height, 1);
+                vkCmdCopyBufferToImage(cmd, staging.handle, userTextures[i].image, VK_IMAGE_LAYOUT_GENERAL, copy);
+            }
+        }
+        if (!texturesUploaded && userTextures.length > 0) {
+            VkBarriers.fullMemoryBarrier(cmd);
+            texturesUploaded = true;
         }
     }
 
@@ -257,6 +500,25 @@ final class CustomRtExecutor implements AutoCloseable {
 
     @Override
     public void close() {
+        for (int i = 0; i < userBuffers.length; i++) {
+            if (userBuffers[i] != null) {
+                memory.destroy(userBuffers[i]);
+                userBuffers[i] = null;
+            }
+        }
+        for (int i = 0; i < userTextures.length; i++) {
+            if (userTextures[i] != null) {
+                memory.destroy(userTextures[i]);
+                userTextures[i] = null;
+            }
+        }
+        if (staging != null) memory.destroy(staging);
+        staging = null;
+        stagingView = null;
+        if (pushData != null) {
+            org.lwjgl.system.MemoryUtil.memFree(pushData);
+            pushData = null;
+        }
         if (input != null) memory.destroy(input);
         if (output != null) memory.destroy(output);
         if (frameUbo != null) memory.destroy(frameUbo);

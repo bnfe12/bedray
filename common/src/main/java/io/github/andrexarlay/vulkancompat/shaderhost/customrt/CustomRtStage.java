@@ -25,6 +25,7 @@ import org.lwjgl.vulkan.VK10;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -62,10 +63,16 @@ public final class CustomRtStage {
     private static String pack = "none";
     private static String detail = "not requested (-D" + PACK_PROPERTY + "=<shaderpack>)";
     private static VulkanGlslPackCompiler.Compiled compiled;
+    private static CustomRtResources resources;
     private static CustomRtExecutor executor;
     private static VulkanDevice owner;
     private static long dispatches;
     private static boolean broken;
+    // Folder-pack hot reload (extended contract): shader source edits recompile without a game restart.
+    private static Path liveDir;
+    private static long lastSourceStamp = Long.MIN_VALUE;
+    private static long lastPollNanos;
+    private static long reloads;
 
     private CustomRtStage() {}
 
@@ -81,6 +88,11 @@ public final class CustomRtStage {
                 return;
             }
             try (PackSource src = PackSource.open(path, ScanLimits.defaults())) {
+                if (src.kind() == PackSource.Kind.DIRECTORY) {
+                    // A fixed typo later must not need a game restart either: enable hot reload even after a failed compile.
+                    liveDir = path;
+                    lastSourceStamp = sourceStamp();
+                }
                 String entry = src.entries().stream().filter(e -> e.equals(ENTRY) || e.endsWith("/" + ENTRY)).findFirst().orElse(null);
                 if (entry == null) {
                     fail("pack has no " + ENTRY);
@@ -99,11 +111,27 @@ public final class CustomRtStage {
                     fail(problem);
                     return;
                 }
+                try {
+                    resources = CustomRtResources.build(c.module(), root,
+                        (fileName, what) -> {
+                            try {
+                                return src.read(root + fileName);
+                            } catch (Exception read) {
+                                throw new IllegalArgumentException(fileName + " (" + what + "): " + read.getMessage());
+                            }
+                        },
+                        src.kind() == PackSource.Kind.DIRECTORY ? path.resolve(root) : null);
+                } catch (IllegalArgumentException e) {
+                    fail("user resources refused: " + e.getMessage());
+                    return;
+                }
                 compiled = c;
                 int[] ls = c.module().localSize();
                 state = State.COMPILED;
                 detail = "compiled " + c.spirv().remaining() + " B SPIR-V, local size " + ls[0] + "x" + ls[1] + "x" + ls[2]
-                    + ", bindings " + bindingNames(c.module().bindings()) + "; waiting for a hardware RT frame";
+                    + ", bindings " + bindingNames(c.module().bindings())
+                    + resourceSummary(resources)
+                    + "; waiting for a hardware RT frame";
                 LOGGER.info("[VKB-CUSTOMRT] pack=\"{}\" {}", pack, detail);
             }
         } catch (SpirvCompiler.SpirvCompileException e) {
@@ -117,14 +145,19 @@ public final class CustomRtStage {
     static String validate(VulkanGlslPackCompiler.Compiled c) {
         SpirvReflection.Module m = c.module();
         if (m.stage() != SpirvReflection.Stage.COMPUTE) return "entry is not a compute shader";
-        if (m.pushConstants()) return "push constants are not part of the contract; use the BedrayFrame block (binding 1)";
+        // Push constants are part of the extended contract: rt.push must cover the whole block (CustomRtResources).
         int[] ls = m.localSize();
         if (ls[2] != 1 || ls[0] < 1 || ls[1] < 1) return "local size must be X x Y x 1, found " + ls[0] + "x" + ls[1] + "x" + ls[2];
         for (SpirvReflection.Binding b : m.bindings()) {
             SpirvReflection.DescriptorKind expected = b.set() == 0 ? CONTRACT.get(b.binding()) : null;
-            if (expected == null || expected != b.kind() || b.count() != 1)
-                return "binding set " + b.set() + " binding " + b.binding() + " " + b.kind() + "[" + b.count()
-                    + "] is outside the contract (set 0: 0 scene TLAS, 1 BedrayFrame UBO, 2 color sampler, 3 rgba16f output image, 4 depth sampler)";
+            if (expected != null) {
+                if (expected != b.kind() || b.count() != 1)
+                    return "fixed binding set 0 binding " + b.binding() + " is " + b.kind() + "[" + b.count()
+                        + "], the contract requires " + expected + "[1]";
+                continue;
+            }
+            String refusal = extraBindingRefusal(b);
+            if (refusal != null) return refusal;
         }
         if (m.bindings().stream().noneMatch(b -> b.binding() == B_OUTPUT))
             return "shader never writes the output image (binding 3); nothing would reach the screen";
@@ -137,8 +170,29 @@ public final class CustomRtStage {
         return null;
     }
 
+    /**
+     * Extended set-0 bindings 5..31 are backed by pack files ({@code bedray/buffer<N>.bin} or
+     * {@code bedray/texture<N>.png}); one descriptor each, no arrays, only kinds with a known producer.
+     */
+    private static String extraBindingRefusal(SpirvReflection.Binding b) {
+        if (b.set() != 0)
+            return "binding set " + b.set() + " binding " + b.binding() + " is outside the contract (set 0 only: 0 scene TLAS,"
+                + " 1 BedrayFrame UBO, 2 color sampler, 3 rgba16f output image, 4 depth sampler, 5+ user resources)";
+        if (b.binding() < 5 || b.binding() > 31)
+            return "binding " + b.binding() + " is reserved by the fixed contract (bindings 0..4)";
+        if (b.count() != 1)
+            return "binding " + b.binding() + "[" + b.count() + "]: the extended contract supports single descriptors, not arrays";
+        if (b.kind() != SpirvReflection.DescriptorKind.UNIFORM_BUFFER && b.kind() != SpirvReflection.DescriptorKind.STORAGE_BUFFER
+            && b.kind() != SpirvReflection.DescriptorKind.COMBINED_IMAGE_SAMPLER && b.kind() != SpirvReflection.DescriptorKind.SAMPLED_IMAGE)
+            return "binding " + b.binding() + " kind " + b.kind() + " has no pack file producer"
+                + " (supported extras: uniform/storage buffer via bedray/buffer" + b.binding() + ".bin, sampled image via bedray/texture"
+                + b.binding() + ".png)";
+        return null;
+    }
+
     /** Called once per frame after the world producer, before the Iris post stage. Never throws. */
     public static synchronized void render(RenderTarget target, CameraRenderState camera, WorldFrame.Renderer renderer) {
+        if (liveDir != null) hotReload();
         if (compiled == null || broken) return;
         if (renderer != WorldFrame.Renderer.HARDWARE_RT) {
             waiting("hardware RT did not render this frame (" + renderer + "); the scene TLAS exists only then");
@@ -179,7 +233,12 @@ public final class CustomRtStage {
         try {
             if (executor == null) {
                 owner = device;
-                executor = new CustomRtExecutor(device.vkDevice(), compiled);
+                executor = new CustomRtExecutor(device.vkDevice(), compiled, resources);
+            }
+            // Folder-pack live editing: changed rt.push / buffer<N>.bin bytes reach the next dispatch without a restart.
+            if (resources != null && resources.refresh()) {
+                device.createCommandEncoder().submit(); // queued references first; the executor waits for the device itself
+                executor.stageUser(resources);
             }
             // After any frame without a dispatch the TLAS/depth objects may have been recreated under the same handle
             // values, so the set is rewritten. Changes happen here, outside an open command buffer (they may wait).
@@ -221,6 +280,106 @@ public final class CustomRtStage {
         }
     }
 
+    /** Highest modification stamp of the shader sources in a folder pack; -1 when the walk fails. */
+    private static long sourceStamp() {
+        if (liveDir == null) return -1;
+        long max = Long.MIN_VALUE;
+        int visited = 0;
+        try (var walk = Files.walk(liveDir)) {
+            for (java.util.Iterator<Path> it = walk.iterator(); it.hasNext() && visited < 2048; visited++) {
+                Path file = it.next();
+                String n = file.getFileName().toString();
+                if (!(n.endsWith(".comp") || n.endsWith(".glsl") || n.endsWith(".vert") || n.endsWith(".frag")
+                    || n.endsWith(".rgen") || n.endsWith(".rchit") || n.endsWith(".rmiss") || n.endsWith(".rahit"))) continue;
+                try {
+                    long m = Files.getLastModifiedTime(file).toMillis();
+                    if (m > max) max = m;
+                } catch (IOException ignored) {
+                    // a transient stat failure is not a change
+                }
+            }
+        } catch (IOException e) {
+            return -1;
+        }
+        return max;
+    }
+
+    /** 2 Hz source stamp poll from the render thread; recompiles when a shader source changed. */
+    private static void hotReload() {
+        long now = System.nanoTime();
+        if (now - lastPollNanos < 500_000_000L) return;
+        lastPollNanos = now;
+        long stamp = sourceStamp();
+        if (stamp <= 0 || stamp == lastSourceStamp) return;
+        lastSourceStamp = stamp;
+        reload();
+    }
+
+    /** Recompiles rt.comp from disk; on any failure the previous stage keeps rendering and the reason lands in F3. */
+    private static void reload() {
+        try (PackSource src = PackSource.open(liveDir, ScanLimits.defaults())) {
+            String entry = src.entries().stream().filter(e -> e.equals(ENTRY) || e.endsWith("/" + ENTRY)).findFirst().orElse(null);
+            if (entry == null) {
+                reloadFailed("no " + ENTRY);
+                return;
+            }
+            String root = entry.substring(0, entry.length() - "bedray/rt.comp".length());
+            Set<String> entries = new LinkedHashSet<>(src.entries());
+            IncludeExpander.Reader reader = e -> {
+                if (!entries.contains(e)) throw new java.io.IOException("missing pack file: " + e);
+                return new String(src.read(e), StandardCharsets.UTF_8);
+            };
+            VulkanGlslPackCompiler.Compiled c = VulkanGlslPackCompiler.compile(root, entry, reader,
+                VulkanGlslPackCompiler.Kind.COMPUTE, Map.of("BEDRAY_CUSTOM_RT", "1"));
+            String problem = validate(c);
+            if (problem != null) {
+                reloadFailed(problem);
+                return;
+            }
+            CustomRtResources fresh = CustomRtResources.build(c.module(), root,
+                (fileName, what) -> {
+                    try {
+                        return src.read(root + fileName);
+                    } catch (Exception read) {
+                        throw new IllegalArgumentException(fileName + " (" + what + "): " + read.getMessage());
+                    }
+                },
+                liveDir.resolve(root));
+            VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
+            if (device != null && owner != null && owner != device) {
+                reloadFailed("device changed without cleanup; restart required");
+                return;
+            }
+            // Resources may have grown or shrunk: the stage's executor is replaced wholesale, outside a frame.
+            if (device != null && executor != null) {
+                device.createCommandEncoder().submit(); // queued references first
+                VK10.vkDeviceWaitIdle(device.vkDevice());
+                executor.close();
+                executor = null;
+            }
+            compiled = c;
+            resources = fresh;
+            broken = false;
+            state = State.COMPILED;
+            reloads++;
+            int[] ls = c.module().localSize();
+            detail = "recompiled " + c.spirv().remaining() + " B SPIR-V, local size " + ls[0] + "x" + ls[1] + "x" + ls[2]
+                + ", bindings " + bindingNames(c.module().bindings()) + resourceSummary(fresh) + ", reload #" + reloads;
+            LOGGER.info("[VKB-CUSTOMRT] hot reload pack=\"{}\" {}", pack, detail);
+        } catch (SpirvCompiler.SpirvCompileException e) {
+            reloadFailed("compile failed: " + flat(e.errorLog()));
+        } catch (IllegalArgumentException e) {
+            reloadFailed("user resources refused: " + e.getMessage());
+        } catch (Exception | LinkageError e) {
+            reloadFailed("load failed: " + flat(String.valueOf(e.getMessage())));
+        }
+    }
+
+    private static void reloadFailed(String why) {
+        detail = LogPaths.show("hot reload kept the previous stage: " + why);
+        LOGGER.warn("[VKB-CUSTOMRT] pack=\"{}\" {}", pack, detail);
+    }
+
     /** Device close: release every resource of this stage (the bridge already flushed queued work). */
     public static synchronized void onDeviceClose(VulkanDevice device) {
         if (owner == device && executor != null) {
@@ -249,6 +408,13 @@ public final class CustomRtStage {
         state = State.FAILED;
         detail = LogPaths.show(why);
         LOGGER.warn("[VKB-CUSTOMRT] pack=\"{}\" {}", pack, detail);
+    }
+
+    /** One line for the F3 detail: what the extended-contract resources of this pack resolved to. */
+    private static String resourceSummary(CustomRtResources r) {
+        if (r == null) return "";
+        return ", push " + (r.pushBytes() > 0 ? r.pushBytes() + " B" : "off")
+            + ", user buffers " + r.bufferSpecs().size() + ", user textures " + r.textureSpecs().size();
     }
 
     private static String bindingNames(List<SpirvReflection.Binding> bindings) {

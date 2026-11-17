@@ -82,6 +82,7 @@ AMD Radeon and Intel Arc test reports are welcome.
 | Explore experimental features | [DLSS 5 setup and validation limits](docs/experiments/dlss5.md) |
 | Build or contribute | [Building](docs/BUILDING.md) · [Contributing](CONTRIBUTING.md) |
 | Integrate another mod | [Renderer API and add-on settings](docs/ADDON_SETTINGS_API.md) |
+| Author materials without LabPBR maps | [Surface material overrides](docs/SURFACE_MATERIAL_OVERRIDES.md) |
 
 ## Help shape Bedray
 
