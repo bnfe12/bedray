@@ -995,6 +995,13 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 result.flags |= PATH_TRACE_FLAG_RC_UNRESOLVED;
                 break;
             }
+            // The field adds no environment (RCEnvironmentPolicy.Disabled, no proven world boundary), so an estimate whose rays
+            // leave the finite window is a bounded miss, not proof of open sky. Ending the path there drops the sky light of
+            // everything near the camera: a dark window of about 9 x 9 x 9 blocks around the player that shows next to blocks.
+            // Only an estimate that is terminal everywhere (every ray ended on geometry, as in a closed room) owns the
+            // continuation; otherwise the ordinary path traces it, with the RC_OUTSIDE diagnostic below.
+            if (incoming.status == DIFFUSE_FIELD_VALID && !incoming.terminalKnown)
+                incoming.status = DIFFUSE_FIELD_OUTSIDE;
             if (incoming.status == DIFFUSE_FIELD_VALID) {
                 // The field's incoming term is this vertex's indirect light: it opens the window like a traced bounce.
                 if (!indirectStarted) {
