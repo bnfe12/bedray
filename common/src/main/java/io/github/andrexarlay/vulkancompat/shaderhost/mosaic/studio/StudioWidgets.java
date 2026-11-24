@@ -552,6 +552,22 @@ final class StudioWidgets {
                         g.drawRoundRect(1, 4, 8, 9, 2, 2);
                         g.drawPolyline(new int[] {5, 5, 13, 13, 10}, new int[] {4, 1, 1, 10, 10}, 5);
                     }
+                    case "brush" -> {
+                        g.drawLine(12, 2, 6, 8);
+                        g.fillOval(1, 8, 6, 5);
+                    }
+                    case "eraser" -> {
+                        g.drawPolygon(new int[] {1, 7, 13, 7}, new int[] {9, 3, 9, 13}, 4);
+                        g.drawLine(4, 6, 10, 12);
+                    }
+                    case "fill" -> {
+                        g.drawPolygon(new int[] {2, 7, 12, 7}, new int[] {7, 2, 7, 12}, 4);
+                        g.fillOval(10, 10, 4, 4);
+                    }
+                    case "picker" -> {
+                        g.drawLine(2, 12, 9, 5);
+                        g.fillOval(8, 1, 5, 5);
+                    }
                     case "start" -> {
                         g.drawLine(3, 1, 3, 13);
                         g.fillPolygon(new int[] {3, 12, 3}, new int[] {1, 4, 8}, 3);

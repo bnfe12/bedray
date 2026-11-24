@@ -152,6 +152,8 @@ public final class StudioSettings {
     public String vanillaJar = "";
     /** Last files of each workspace. */
     public String lastShader = "", lastMaterial = "";
+    /** Document tabs of the last session ("SHADERS|path", "MATERIALS|path"). */
+    public java.util.List<String> openTabs = new java.util.ArrayList<>();
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
@@ -193,6 +195,7 @@ public final class StudioSettings {
         gridStep = Math.clamp(gridStep, 8, 64);
         if (wheel == null) wheel = WheelMode.ZOOM;
         if (slangCompiler == null) slangCompiler = SlangCompiler.STUDIO;
+        if (openTabs == null) openTabs = new java.util.ArrayList<>();
         zoomSpeed = Math.clamp(zoomSpeed, 3, 40);
         if (keys == null) keys = new java.util.LinkedHashMap<>();
         if (hiddenLibraries == null) hiddenLibraries = new java.util.LinkedHashSet<>();

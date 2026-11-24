@@ -4,6 +4,7 @@ import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicCatalog;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicDocument;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicFunction;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph;
+import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicMaterial;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld;
 
 import javax.swing.*;
@@ -277,6 +278,65 @@ final class InspectorPanel extends Panels.Listening {
         content.add(cb);
     }
 
+    /** Image Texture: the picture, open a file (like Blender's Open), or drag one in from the Library. */
+    private void imageEditor(MosaicDocument.ENode n) {
+        content.add(section("Image"));
+        MosaicMaterial.Image img = n.mask == null ? null : model.images.get(n.mask);
+        if (img != null) content.add(picture(img));
+        JLabel name = label(n.mask == null ? "No image yet" : n.mask + (img == null ? "  (missing)" : "  " + img.w() + "x" + img.h()), img == null ? WARN : MUTED);
+        name.setAlignmentX(0);
+        content.add(name);
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        row.setOpaque(false);
+        row.setAlignmentX(0);
+        row.add(button("Open image...", "Choose a PNG / JPG: it is copied into the project", () -> {
+            JFileChooser fc = new JFileChooser();
+            fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Images", "png", "jpg", "jpeg", "bmp", "gif"));
+            if (fc.showOpenDialog(content) == JFileChooser.APPROVE_OPTION) model.setImage(n, fc.getSelectedFile());
+        }));
+        if (n.mask != null) row.add(button("Reload", "Read the file again (after editing it elsewhere)", () -> model.reloadImage(n)));
+        content.add(row);
+        JLabel hint = label("Or drag a texture from the Library onto the graph", FAINT);
+        hint.setFont(UI_S);
+        hint.setAlignmentX(0);
+        content.add(hint);
+    }
+
+    /** Block Texture: which texture of which source the material belongs to. */
+    private void textureInfo() {
+        content.add(section("Texture"));
+        if (model.baseImage == null) {
+            content.add(label("Pick a texture in the Library", WARN));
+            return;
+        }
+        content.add(picture(model.paintedBase()));
+        JLabel l = label(StudioLibrary.id(model.materialEntry) + "  " + model.baseImage.w() + "x" + model.baseImage.h()
+            + (model.materialSource == null ? "" : "  -  " + model.materialSource.label()), MUTED);
+        l.setAlignmentX(0);
+        content.add(l);
+    }
+
+    private JComponent picture(MosaicMaterial.Image img) {
+        int frame = Math.min(img.w(), img.h());
+        java.awt.image.BufferedImage b = StudioLibrary.fromArgb(img.w(), img.h(), img.argb());
+        JComponent c = new JComponent() {
+            @Override protected void paintComponent(Graphics g0) {
+                Graphics2D g = (Graphics2D) g0;
+                int s = Math.min(getWidth(), 160);
+                for (int y = 0; y < s; y += 8) for (int x = 0; x < s; x += 8) {
+                    g.setColor(((x + y) / 8) % 2 == 0 ? PANEL2 : PANEL);
+                    g.fillRect(x, y, 8, 8);
+                }
+                g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+                g.drawImage(b, 0, 0, s, s, 0, 0, frame, frame, null);
+            }
+        };
+        c.setPreferredSize(new Dimension(160, 160));
+        c.setMaximumSize(new Dimension(160, 160));
+        c.setAlignmentX(0);
+        return c;
+    }
+
     private void rampEditor(MosaicDocument.ENode n) {
         content.add(section("Color stops"));
         double[] s = n.value == null || n.value.length < 5 ? new double[] {0, 0, 0, 0, 1, 1, 1, 1, 1, 1} : n.value;
@@ -329,6 +389,8 @@ final class InspectorPanel extends Panels.Listening {
                 modeCombo(n, "Interpolation", MosaicGraph.RAMP_MODES, "linear");
                 rampEditor(n);
             }
+            case "mat.image" -> imageEditor(n);
+            case "mat.texture" -> textureInfo();
             case "mosaic.gradient" -> modeCombo(n, "Type", MosaicGraph.GRADIENT_MODES, "linear");
             case "mosaic.wave" -> modeCombo(n, "Type", MosaicGraph.WAVE_MODES, "bands");
             default -> { }

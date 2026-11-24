@@ -55,6 +55,7 @@ final class StudioApp {
         });
         kfm.addKeyEventDispatcher(this::dispatch);
         model.listen(this::updateStatus);
+        initTabs();
     }
 
     static Image appIcon() {
@@ -102,9 +103,16 @@ final class StudioApp {
         String shotMaterial = System.getProperty("mosaic.selfshot.material"); // e.g. block/copper_block: verification aid
         if (shot != null && shotMaterial != null) {
             Timer m = new Timer(1200, e -> {
-                switchWorkspace(StudioModel.Workspace.MATERIALS);
                 StudioLibrary.vanillaJars().stream().findFirst().ifPresent(src ->
-                    model.openMaterial(src, "assets/minecraft/textures/" + shotMaterial + ".png"));
+                    openMaterialTab(src, "assets/minecraft/textures/" + shotMaterial + ".png"));
+                if (Boolean.getBoolean("mosaic.selfshot.paint") && model.baseImage != null) { // a diagonal stroke
+                    model.paintTool = StudioModel.PaintTool.BRUSH;
+                    model.paintColor = new Color(0x30C0FF);
+                    model.beginStroke();
+                    for (int i = 0; i < model.baseImage.w(); i++) model.paintAt(i, i);
+                    model.endStroke();
+                    model.paintTool = StudioModel.PaintTool.NAVIGATE;
+                }
                 if (Boolean.getBoolean("mosaic.selfshot.back")) {
                     Timer back = new Timer(800, e2 -> switchWorkspace(StudioModel.Workspace.SHADERS));
                     back.setRepeats(false);
@@ -150,6 +158,9 @@ final class StudioApp {
             tabs.add(workspaceTabs, BorderLayout.CENTER);
             w.menuSlot.add(tabs, BorderLayout.EAST);
             w.quickSlot.add(quick());
+            tabStrip = new DocTabs(this);
+            model.listen(tabStrip::repaint);
+            body.add(tabStrip, BorderLayout.NORTH);
             body.add(w.root, BorderLayout.CENTER);
             body.add(statusBar(), BorderLayout.SOUTH);
             frame.add(body, BorderLayout.CENTER);
@@ -334,91 +345,87 @@ final class StudioApp {
     private final java.util.Map<StudioModel.Workspace, List<List<String>>> parkedHistory = new java.util.EnumMap<>(StudioModel.Workspace.class);
     private final java.util.Map<StudioModel.Workspace, Path> parkedFile = new java.util.EnumMap<>(StudioModel.Workspace.class);
 
-    /**
-     * Switches between Shaders and Materials without rebuilding anything: the open workspace's areas (with their graph
-     * view, scroll positions, panel state) are parked and the other's are put back, its pop-out windows hidden and shown,
-     * documents and undo histories swapped, with a short cross-fade.
-     */
-    void switchWorkspace(StudioModel.Workspace ws) {
-        if (switching || ws == model.workspace || main == null) {
-            workspaceTabs.select(ws.ordinal());
-            return;
+    // ================================================================== document tabs
+
+    final List<DocTabs.Tab> tabs = new ArrayList<>();
+    DocTabs.Tab active;
+    DocTabs tabStrip;
+
+    /** The first tab is the document the studio started with; tabs of the last session follow (loaded when opened). */
+    void initTabs() {
+        active = new DocTabs.Tab(model.workspace, model.doc.file);
+        tabs.add(active);
+        for (String s : settings.openTabs) {
+            int bar = s.indexOf('|');
+            if (bar < 0) continue;
+            try {
+                StudioModel.Workspace kind = StudioModel.Workspace.valueOf(s.substring(0, bar));
+                Path f = Path.of(s.substring(bar + 1));
+                if (Files.exists(f) && tabs.stream().noneMatch(t -> f.equals(t.file))) tabs.add(new DocTabs.Tab(kind, f));
+            } catch (Exception ignored) {
+                // a tab of a removed file
+            }
         }
+    }
+
+    private void storeTab(DocTabs.Tab t) {
+        t.file = model.doc.file;
+        t.history = model.doc.historyState();
+        if (t.kind == StudioModel.Workspace.MATERIALS) {
+            t.srcId = model.materialSource == null ? null : model.materialSource.id();
+            t.entry = model.materialEntry;
+            if (t.file != null) settings.lastMaterial = t.file.toString();
+        } else if (t.file != null) {
+            settings.lastShader = t.file.toString();
+            model.shaderFile = t.file;
+        }
+        GraphPanel g = model.activeGraph;
+        if (g != null) t.view = new double[] {g.panX, g.panY, g.zoom};
+    }
+
+    private void loadTab(DocTabs.Tab t) {
+        model.workspace = t.kind;
+        if (t.file != null && Files.exists(t.file)) {
+            if (t.kind == StudioModel.Workspace.MATERIALS) model.openMaterialFile(t.file);
+            else model.open(t.file);
+        } else {
+            model.replace("{\"nodes\": []}", null, t.kind == StudioModel.Workspace.MATERIALS ? "New material" : "New graph");
+            model.doc.file = null;
+            model.doc.dirty = false;
+            if (t.kind == StudioModel.Workspace.MATERIALS)
+                model.say("New material: double-click a block, item or entity texture in the Library", OK);
+        }
+        if (t.history != null && t.history.size() == 4) model.doc.restoreHistory(t.history.get(0), t.history.get(1), t.history.get(2), t.history.get(3));
+        else {
+            model.doc.resetHistory();
+            ProjectStore.load(model, null);
+        }
+        GraphPanel g = model.activeGraph;
+        if (g != null && t.view != null) {
+            g.panX = t.view[0];
+            g.panY = t.view[1];
+            g.zoom = t.view[2];
+            g.markFitted();
+            g.repaint();
+        }
+        t.used = System.nanoTime();
+    }
+
+    /** Shows a tab: parks the visible workspace when the kind changes, swaps document, history and view, cross-fades. */
+    void activate(DocTabs.Tab t) {
+        if (switching || t == active || main == null) return;
         switching = true;
         try {
             BufferedImage before = main.snapshot();
-            StudioModel.Workspace from = model.workspace;
             if (model.doc.dirty && model.doc.file != null) model.save(false);
-            if (main.maximized != null && main.root.getComponentCount() > 0 && main.root.getComponent(0) instanceof Dock.Area a)
-                Dock.maximize(a); // restore a maximized area before parking the tree
-            storeLayout();
-            // park the current workspace
-            if (model.doc.file != null) {
-                parkedFile.put(from, model.doc.file);
-                if (from == StudioModel.Workspace.MATERIALS) settings.lastMaterial = model.doc.file.toString();
-                else {
-                    settings.lastShader = model.doc.file.toString();
-                    model.shaderFile = model.doc.file;
-                }
-            }
-            parkedHistory.put(from, model.doc.historyState());
-            Component tree = main.root.getComponentCount() > 0 ? main.root.getComponent(0) : null;
-            if (tree != null) parkedTrees.put(from, tree);
-            List<Dock.StudioWindow> extras = new ArrayList<>();
-            for (Dock.StudioWindow w : windows) if (!w.main) extras.add(w);
-            for (Dock.StudioWindow w : extras) w.setVisible(false);
-            windows.removeAll(extras);
-            parkedWindows.put(from, extras);
-
-            // bring the other workspace's document
-            model.workspace = ws;
-            Path file = parkedFile.get(ws);
-            if (file == null) {
-                String last = ws == StudioModel.Workspace.MATERIALS ? settings.lastMaterial : settings.lastShader;
-                file = last == null || last.isBlank() ? null : Path.of(last);
-            }
-            if (ws == StudioModel.Workspace.MATERIALS) {
-                if (file != null && Files.exists(file)) model.openMaterialFile(file);
-                else {
-                    model.replace("{\"nodes\": []}", null, "Materials");
-                    model.doc.file = null;
-                    model.say("Materials: double-click a block or item texture in the Library to give it a surface", OK);
-                }
-            } else if (file != null) model.open(file);
-            List<List<String>> h = parkedHistory.get(ws);
-            if (h != null && h.size() == 4) model.doc.restoreHistory(h.get(0), h.get(1), h.get(2), h.get(3));
-            else {
-                model.doc.resetHistory();
-                ProjectStore.load(model, null);
-            }
-
-            // and its areas
-            Component next = parkedTrees.remove(ws);
-            if (next == null) {
-                var specs = Dock.parseWindows(currentLayout());
-                next = Dock.load(model, specs.get(0).getAsJsonObject().getAsJsonObject("tree"));
-                for (int i = 1; i < specs.size(); i++) {
-                    var o = specs.get(i).getAsJsonObject();
-                    Dock.StudioWindow w = newWindow(false, Dock.load(model, o.getAsJsonObject("tree")));
-                    if (o.has("w")) w.setBounds(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("w").getAsInt(), o.get("h").getAsInt());
-                    w.setVisible(true);
-                }
-            } else {
-                for (Dock.StudioWindow w : parkedWindows.getOrDefault(ws, List.of())) {
-                    windows.add(w);
-                    w.setVisible(true);
-                }
-            }
-            parkedWindows.remove(ws);
-            main.root.removeAll();
-            main.root.add(next, BorderLayout.CENTER);
-            main.root.revalidate();
-            main.root.repaint();
-            GraphPanel g = findGraph(next);
-            if (g != null) model.activeGraph = g;
+            if (active != null && tabs.contains(active)) storeTab(active);
+            if (t.kind != model.workspace) swapAreas(t.kind);
+            active = t;
+            loadTab(t);
             model.selectionChanged();
             model.fire();
-            workspaceTabs.select(ws.ordinal());
+            workspaceTabs.select(t.kind.ordinal());
+            if (tabStrip != null) tabStrip.repaint();
             main.fadeFrom(before);
             keepLayout = true;
             saveSettings();
@@ -426,6 +433,98 @@ final class StudioApp {
         } finally {
             switching = false;
         }
+    }
+
+    /** Parks the open workspace's areas and pop-out windows and brings (or builds) the other kind's. */
+    private void swapAreas(StudioModel.Workspace ws) {
+        StudioModel.Workspace from = model.workspace;
+        if (main.maximized != null && main.root.getComponentCount() > 0 && main.root.getComponent(0) instanceof Dock.Area a) Dock.maximize(a);
+        storeLayout();
+        Component tree = main.root.getComponentCount() > 0 ? main.root.getComponent(0) : null;
+        if (tree != null) parkedTrees.put(from, tree);
+        List<Dock.StudioWindow> extras = new ArrayList<>();
+        for (Dock.StudioWindow w : windows) if (!w.main) extras.add(w);
+        for (Dock.StudioWindow w : extras) w.setVisible(false);
+        windows.removeAll(extras);
+        parkedWindows.put(from, extras);
+        model.workspace = ws;
+        Component next = parkedTrees.remove(ws);
+        if (next == null) {
+            var specs = Dock.parseWindows(currentLayout());
+            next = Dock.load(model, specs.get(0).getAsJsonObject().getAsJsonObject("tree"));
+            for (int i = 1; i < specs.size(); i++) {
+                var o = specs.get(i).getAsJsonObject();
+                Dock.StudioWindow w = newWindow(false, Dock.load(model, o.getAsJsonObject("tree")));
+                if (o.has("w")) w.setBounds(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("w").getAsInt(), o.get("h").getAsInt());
+                w.setVisible(true);
+            }
+        } else for (Dock.StudioWindow w : parkedWindows.getOrDefault(ws, List.of())) {
+            windows.add(w);
+            w.setVisible(true);
+        }
+        parkedWindows.remove(ws);
+        main.root.removeAll();
+        main.root.add(next, BorderLayout.CENTER);
+        main.root.revalidate();
+        main.root.repaint();
+        GraphPanel g = findGraph(next);
+        if (g != null) model.activeGraph = g;
+    }
+
+    /** The Shaders / Materials switch: goes to the most recent tab of that kind (or opens one). */
+    void switchWorkspace(StudioModel.Workspace ws) {
+        if (switching || main == null) return;
+        if (active != null && active.kind == ws) {
+            workspaceTabs.select(ws.ordinal());
+            return;
+        }
+        DocTabs.Tab t = tabs.stream().filter(x -> x.kind == ws).max(java.util.Comparator.comparingLong(x -> x.used)).orElse(null);
+        if (t == null) {
+            String last = ws == StudioModel.Workspace.MATERIALS ? settings.lastMaterial : settings.lastShader;
+            Path f = last == null || last.isBlank() ? null : Path.of(last);
+            t = new DocTabs.Tab(ws, f != null && Files.exists(f) ? f : null);
+            tabs.add(t);
+        }
+        activate(t);
+    }
+
+    void newTab(StudioModel.Workspace kind) {
+        DocTabs.Tab t = new DocTabs.Tab(kind, null);
+        tabs.add(t);
+        activate(t);
+    }
+
+    /** Opens a texture's material in its own tab (or the tab that already has it). */
+    void openMaterialTab(StudioLibrary.Source src, String entry) {
+        Path file = StudioLibrary.materialPack(model).resolve(entry.substring(0, entry.length() - 4) + ".mosaic.json");
+        for (DocTabs.Tab t : tabs) {
+            Path f = t == active ? model.doc.file : t.file;
+            if (file.equals(f)) {
+                activate(t);
+                return;
+            }
+        }
+        DocTabs.Tab t = active != null && active.kind == StudioModel.Workspace.MATERIALS && model.doc.file == null && model.doc.nodes.isEmpty()
+            ? active : null; // reuse an empty "New material" tab
+        if (t == null) {
+            t = new DocTabs.Tab(StudioModel.Workspace.MATERIALS, null);
+            tabs.add(t);
+            activate(t);
+        }
+        model.openMaterial(src, entry);
+        t.file = model.doc.file;
+        if (tabStrip != null) tabStrip.repaint();
+    }
+
+    void closeTab(DocTabs.Tab t) {
+        if (t == active && model.doc.dirty && model.doc.file != null) model.save(false);
+        int i = tabs.indexOf(t);
+        tabs.remove(t);
+        if (tabs.isEmpty()) tabs.add(new DocTabs.Tab(StudioModel.Workspace.SHADERS,
+            settings.lastShader == null || settings.lastShader.isBlank() ? null : Path.of(settings.lastShader)));
+        if (t == active) activate(tabs.get(Math.max(0, Math.min(i, tabs.size()) - 1)));
+        if (tabStrip != null) tabStrip.repaint();
+        saveSettings();
     }
 
     static GraphPanel findGraph(Component c) {
@@ -572,7 +671,7 @@ final class StudioApp {
         if (model.compiling) {
             statusMid.setText("compiling...");
             statusMid.setForeground(MUTED);
-        } else if (model.materialDoc()) {
+        } else if (model.workspace == StudioModel.Workspace.MATERIALS || model.materialDoc()) {
             statusMid.setText(model.materialStatus);
             statusMid.setForeground(model.materialStatus.startsWith("Could not") ? BAD : OK);
         } else if (model.compile != null && model.generated != null) {
@@ -854,6 +953,11 @@ final class StudioApp {
 
     void saveSettings() {
         storeLayout();
+        settings.openTabs = new ArrayList<>();
+        for (DocTabs.Tab t : tabs) {
+            Path f = t == active ? model.doc.file : t.file;
+            if (f != null) settings.openTabs.add(t.kind + "|" + f);
+        }
         settings.keys = model.keys.toText();
         settings.save();
     }

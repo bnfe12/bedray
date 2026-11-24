@@ -136,3 +136,26 @@ compile cache in `<pack>/shaders/bedray/.studio/`), `Icons`, `StudioUi`, `Studio
 * `MosaicEditorScreen` (in game) predates functions/defaults/frames; it still compiles but does not expose them.
 * Docs to update when landing: docs/CUSTOM_RT_SHADERS.md (binding 15, timing.w, defaults/frames/functions fields),
   docs/MOSAIC_EDITOR.md (in-game), a new Studio doc.
+
+
+## Wishlist from the owner (2026-11-24) - not done yet, in rough priority
+
+1. **Node editor strong enough for a Complementary-class shader**: multi-pass graphs (named buffers / passes, previous
+   frame for temporal effects, mip / blur / bloom chains, shadow-like passes), weather / time / biome inputs, loops or
+   kernel nodes. Ties into "renderer passes as nodes" (item 3 above).
+2. **Agent tooling**: a console tool so an AI agent can do everything (list/add/connect/set/delete nodes, materials,
+   paint, settings and the design itself, export/import, run the game) with per-permission switches in Settings; the
+   studio reloads files changed outside.
+3. **Settings window redesign** (sidebar with icons, cards, search) and small UI animations everywhere.
+4. **Shader browser**: saved Mosaic graphs and installed Iris packs with thumbnails; import / export Iris packs as
+   zips (screen-space graphs could export as an Iris composite pass).
+5. **Preview window besides Result** (GPU preview inside the studio on the last game frame), **render and record**
+   (frame sequences / GIF / MP4 via ffmpeg when present) of the result.
+6. **Material preview**: HDRI environment maps, test lights, a small scene instead of one block; entity models
+   (export the game's model layers from the mod so the studio can show the entity and its UV layout).
+7. **Texturing**: layers per channel (roughness / height paint), selection, auto-unwrap for custom models.
+8. **Accounts and publishing**: AI API keys, Modrinth / CurseForge upload, GitHub save; later Microsoft sign-in.
+   Privacy policy and a GitHub page for the studio; app packaging (jpackage for Windows / macOS / Linux) and the mod
+   built into Bedray.
+9. **Mods**: materials for mod blocks (mod jars are already library sources), custom shaders for mods,
+   a node-based effect (particle / VFX) generator.

@@ -43,7 +43,13 @@ public final class MosaicMaterial {
      * Bakes the graph for a texture. {@code images} holds imported maps by the path in a {@code mat.image} node's mask.
      * Throws IllegalArgumentException for a graph that is not a material graph.
      */
-    public static Baked bake(MosaicGraph g, Image base, Map<String, Image> images) {
+    public static Baked bake(MosaicGraph g, Image base, Map<String, Image> images) { return bake(g, base, images, base); }
+
+    /**
+     * As {@link #bake(MosaicGraph, Image, Map)}, with {@code original} the untouched texture: the colours are written (and
+     * compared for the strong-change warning) against it, so a painted {@code base} counts as a change.
+     */
+    public static Baked bake(MosaicGraph g, Image base, Map<String, Image> images, Image original) {
         if (g == null || !g.isMaterial()) throw new IllegalArgumentException("not a material graph (needs a mat.output node)");
         Node out = g.node(g.outputId());
         String bsdfRef = out.inputs().get("surface");
@@ -62,7 +68,7 @@ public final class MosaicMaterial {
                 int i = y * w + x;
                 ev.at(x, y);
                 Surface s = ev.surface(bsdf);
-                int orig = base.argb()[i];
+                int orig = original.argb()[i];
                 double[] c = s.base();
                 int a = c.length > 3 ? clamp255(c[3]) : orig >>> 24;
                 int rgb = clamp255(c[0]) << 16 | clamp255(c[1]) << 8 | clamp255(c[2]);

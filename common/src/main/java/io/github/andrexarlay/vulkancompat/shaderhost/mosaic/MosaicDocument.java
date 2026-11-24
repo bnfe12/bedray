@@ -164,6 +164,20 @@ public final class MosaicDocument {
     /** Group boxes of this graph (written as "frames"; editor-only). */
     public final List<Frame> frames = new ArrayList<>();
 
+    /** Material paint layer: a base64 PNG drawn over the block texture (editor + bake; the game never reads it). */
+    public String paint;
+
+    static String readPaint(String json) {
+        try {
+            JsonElement root = JsonParser.parseString(json);
+            if (root.isJsonObject() && root.getAsJsonObject().has("paint") && root.getAsJsonObject().get("paint").isJsonPrimitive())
+                return root.getAsJsonObject().get("paint").getAsString();
+        } catch (RuntimeException ignored) {
+            // no paint
+        }
+        return null;
+    }
+
     public Frame frame(String id) {
         for (Frame f : frames) if (f.id.equals(id)) return f;
         return null;
@@ -251,6 +265,7 @@ public final class MosaicDocument {
             d.nodes.addAll(readNodes(text));
             d.functions.addAll(readFunctions(text));
             d.frames.addAll(readFrames(text));
+            d.paint = readPaint(text);
         } catch (RuntimeException e) {
             throw new java.io.IOException("mosaic.json: " + e.getMessage());
         }
@@ -365,6 +380,7 @@ public final class MosaicDocument {
             for (Frame f : frames) fr.add(f.toJson());
             root.add("frames", fr);
         }
+        if (paint != null && !paint.isEmpty()) root.addProperty("paint", paint);
         return GSON.toJson(root);
     }
 
@@ -623,6 +639,7 @@ public final class MosaicDocument {
         functions.addAll(readFunctions(state));
         frames.clear();
         frames.addAll(readFrames(state));
+        paint = readPaint(state);
         dirty = true;
         return true;
     }

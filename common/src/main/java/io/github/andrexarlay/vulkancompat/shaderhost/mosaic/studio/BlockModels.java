@@ -168,5 +168,57 @@ final class BlockModels {
         return new double[] {q.u1() + (q.u2() - q.u1()) * a, q.v1() + (q.v2() - q.v1()) * b};
     }
 
+    private static final Map<String, Map<String, List<String>>> INDEX = new ConcurrentHashMap<>();
+
+    /** Block models (ids) of a source whose own "textures" mention this texture: cube, fence post, stairs, slab... */
+    static List<String> modelsUsing(StudioLibrary.Source src, String textureEntry) {
+        Map<String, List<String>> index = INDEX.computeIfAbsent(src.id(), k -> buildIndex(src));
+        String id = StudioLibrary.id(textureEntry);
+        List<String> direct = index.getOrDefault(id, List.of());
+        List<String> out = new ArrayList<>(direct);
+        String name = id.substring(id.lastIndexOf('/') + 1), stem = name.replaceAll("_(planks|log|top|side|bottom)$", "");
+        out.sort(java.util.Comparator.comparingInt((String m) -> {
+            String n = m.substring(m.lastIndexOf('/') + 1);
+            return n.equals(name) ? 0 : n.startsWith(stem) ? 1 : 2;
+        }).thenComparingInt(String::length));
+        return out;
+    }
+
+    private static Map<String, List<String>> buildIndex(StudioLibrary.Source src) {
+        Map<String, List<String>> index = new HashMap<>();
+        java.util.regex.Pattern entry = java.util.regex.Pattern.compile("^assets/([a-z0-9_.-]+)/models/(block/.+)\\.json$");
+        try {
+            List<String> names = new ArrayList<>();
+            if (src.zip()) try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(src.path().toFile())) {
+                z.stream().map(java.util.zip.ZipEntry::getName).filter(n -> entry.matcher(n).matches()).forEach(names::add);
+                for (String n : names) {
+                    var m = entry.matcher(n);
+                    if (!m.matches()) continue;
+                    String text = new String(z.getInputStream(z.getEntry(n)).readAllBytes(), StandardCharsets.UTF_8);
+                    index(index, m.group(1) + ":" + m.group(2), text);
+                }
+            }
+        } catch (Exception ignored) {
+            // an unreadable jar has no models
+        }
+        return index;
+    }
+
+    private static void index(Map<String, List<String>> index, String modelId, String text) {
+        try {
+            JsonObject o = JsonParser.parseString(text).getAsJsonObject();
+            if (!o.has("textures")) return;
+            for (var e : o.getAsJsonObject("textures").entrySet()) {
+                String t = e.getValue().getAsString();
+                if (t.startsWith("#")) continue;
+                if (!t.contains(":")) t = "minecraft:" + t;
+                List<String> l = index.computeIfAbsent(t, k -> new ArrayList<>());
+                if (!l.contains(modelId)) l.add(modelId);
+            }
+        } catch (Exception ignored) {
+            // not a model
+        }
+    }
+
     static final Map<String, StudioLibrary.Source> NONE = new HashMap<>();
 }

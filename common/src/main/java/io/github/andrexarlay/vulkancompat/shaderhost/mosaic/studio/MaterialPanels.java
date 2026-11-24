@@ -28,6 +28,12 @@ final class MaterialPanels {
 
     static final String DRAG_IMAGE = "mosaic-image:";
 
+    private static final ExecutorService MODELS = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "mosaic-models");
+        t.setDaemon(true);
+        return t;
+    });
+
     private static final ExecutorService LOADER = Executors.newFixedThreadPool(2, r -> {
         Thread t = new Thread(r, "mosaic-library");
         t.setDaemon(true);
@@ -227,8 +233,7 @@ final class MaterialPanels {
         void open(String entry) {
             StudioLibrary.Source s = (StudioLibrary.Source) source.getSelectedItem();
             if (s == null) return;
-            StudioApp.get().switchWorkspace(StudioModel.Workspace.MATERIALS);
-            model.openMaterial(s, entry);
+            StudioApp.get().openMaterialTab(s, entry);
         }
 
         void importFiles() {
@@ -276,6 +281,29 @@ final class MaterialPanels {
         final JLabel status = label("", MUTED);
         double lightYaw = -0.7, lightPitch = 0.9, modelYaw = 0;
         BlockModels.Model blockModel;
+        final JComboBox<String> modelBox = new JComboBox<>();
+        final StudioWidgets.Segmented<StudioModel.PaintTool> tools = new StudioWidgets.Segmented<StudioModel.PaintTool>()
+            .add(StudioModel.PaintTool.NAVIGATE, "Turn", StudioWidgets.glyph("move", null), "Drag turns the block, Shift+drag moves the sun")
+            .add(StudioModel.PaintTool.BRUSH, "Brush", StudioWidgets.glyph("brush", null), "Paint pixels on the UV view or straight on the block")
+            .add(StudioModel.PaintTool.ERASER, "Erase", StudioWidgets.glyph("eraser", null), "Back to the original pixels")
+            .add(StudioModel.PaintTool.FILL, "Fill", StudioWidgets.glyph("fill", null), "Fill the touching pixels of the same colour")
+            .add(StudioModel.PaintTool.PICKER, "Pick", StudioWidgets.glyph("picker", null), "Take a colour from the texture");
+        final JButton swatch = new JButton() {
+            @Override protected void paintComponent(Graphics g0) {
+                Graphics2D g = StudioWidgets.smooth(g0);
+                g.setColor(MaterialPanel.this.model.paintColor);
+                g.fillRoundRect(2, 2, getWidth() - 4, getHeight() - 4, 6, 6);
+                g.setColor(EDGE);
+                g.drawRoundRect(2, 2, getWidth() - 5, getHeight() - 5, 6, 6);
+                g.dispose();
+            }
+        };
+        boolean seams = true;
+        int[] pick;
+        int pickSize, pickX, pickY;
+        int uvX, uvY, uvSize, uvFrame;
+        int lastTexel = -1;
+        boolean fillingModels;
         String modelFor;
         final java.util.Map<String, MosaicMaterial.Image> faceTextures = new java.util.HashMap<>();
         BufferedImage cache;
@@ -290,14 +318,83 @@ final class MaterialPanels {
             bar.setBorder(new EmptyBorder(5, 6, 5, 6));
             view.onChange(v -> root.repaint());
             bar.add(view, BorderLayout.CENTER);
+            modelBox.setToolTipText("Which model shows the material: every block model that uses this texture (cube, fence, stairs, slab...)");
+            modelBox.addActionListener(e -> {
+                if (fillingModels || modelBox.getSelectedItem() == null || model.materialSource == null) return;
+                blockModel = BlockModels.load(model.materialSource, (String) modelBox.getSelectedItem(), null);
+                cacheVersion = -1;
+                root.repaint();
+            });
+            JPanel paintRow = new JPanel(new BorderLayout(6, 0));
+            paintRow.setOpaque(false);
+            paintRow.setBorder(new EmptyBorder(5, 0, 0, 0));
+            tools.onChange(t -> {
+                model.paintTool = t;
+                root.repaint();
+            });
+            paintRow.add(tools, BorderLayout.CENTER);
+            JPanel extra = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+            extra.setOpaque(false);
+            swatch.setToolTipText("Paint colour (the picker takes it from the texture)");
+            swatch.setPreferredSize(new Dimension(26, 22));
+            swatch.addActionListener(e -> {
+                Color c = JColorChooser.showDialog(root, "Paint colour", model.paintColor);
+                if (c != null) model.paintColor = c;
+                swatch.repaint();
+            });
+            extra.add(swatch);
+            JComboBox<String> size = new JComboBox<>(new String[] {"1 px", "2 px", "3 px", "4 px"});
+            size.setToolTipText("Brush size in texture pixels");
+            size.addActionListener(e -> model.brushSize = size.getSelectedIndex() + 1);
+            extra.add(size);
+            JCheckBox seamBox = new JCheckBox("Seams", seams);
+            seamBox.setToolTipText("Red lines where the model's faces (UV islands) meet");
+            seamBox.addActionListener(e -> {
+                seams = seamBox.isSelected();
+                cacheVersion = -1;
+                root.repaint();
+            });
+            extra.add(seamBox);
+            extra.add(button("Clear paint", "Remove everything painted on this texture (undoable)", () -> {
+                if (model.doc.paint == null) return;
+                model.edit("Clear paint", () -> model.doc.paint = null);
+            }));
+            paintRow.add(extra, BorderLayout.SOUTH);
+            JPanel modelRow = new JPanel(new BorderLayout(6, 0));
+            modelRow.setOpaque(false);
+            modelRow.setBorder(new EmptyBorder(5, 0, 0, 0));
+            modelRow.add(label("Model", MUTED), BorderLayout.WEST);
+            modelRow.add(modelBox, BorderLayout.CENTER);
+            JPanel rows = new JPanel(new GridLayout(0, 1, 0, 0));
+            rows.setOpaque(false);
+            rows.add(modelRow);
+            JPanel both = new JPanel(new BorderLayout());
+            both.setOpaque(false);
+            both.add(modelRow, BorderLayout.NORTH);
+            both.add(paintRow, BorderLayout.SOUTH);
+            bar.add(both, BorderLayout.SOUTH);
             root.add(bar, BorderLayout.NORTH);
             JComponent canvas = new JComponent() {
                 @Override protected void paintComponent(Graphics g0) { paintView((Graphics2D) g0, getWidth(), getHeight()); }
             };
             MouseAdapter drag = new MouseAdapter() {
                 Point last;
-                @Override public void mousePressed(MouseEvent e) { last = e.getPoint(); }
+                @Override public void mousePressed(MouseEvent e) {
+                    last = e.getPoint();
+                    if (painting(e)) {
+                        model.beginStroke();
+                        lastTexel = -1;
+                        paint(e.getPoint());
+                    }
+                }
+                @Override public void mouseReleased(MouseEvent e) {
+                    if (painting(e)) model.endStroke();
+                }
                 @Override public void mouseDragged(MouseEvent e) {
+                    if (painting(e)) {
+                        if (model.paintTool != StudioModel.PaintTool.FILL) paint(e.getPoint());
+                        return;
+                    }
                     if (e.isShiftDown() || SwingUtilities.isRightMouseButton(e)) {
                         lightYaw += (e.getX() - last.x) * 0.012;
                         lightPitch = Math.clamp(lightPitch - (e.getY() - last.y) * 0.012, 0.05, 1.5);
@@ -309,7 +406,7 @@ final class MaterialPanels {
             };
             canvas.addMouseListener(drag);
             canvas.addMouseMotionListener(drag);
-            canvas.setToolTipText("Drag to turn the block, Shift+drag (or right drag) to move the sun");
+            canvas.setToolTipText("Turn: drag turns the block, Shift+drag (or right drag) moves the sun. Paint tools paint on the UV view or the block.");
             root.add(canvas, BorderLayout.CENTER);
             status.setFont(UI_S);
             status.setBorder(new EmptyBorder(4, 8, 4, 8));
@@ -345,6 +442,29 @@ final class MaterialPanels {
                 faceTextures.clear();
                 blockModel = BlockModels.forTexture(model.materialSource, model.materialEntry);
                 cacheVersion = -1;
+                StudioLibrary.Source src = model.materialSource;
+                String entry = model.materialEntry;
+                MODELS.execute(() -> {
+                    List<String> found = BlockModels.modelsUsing(src, entry);
+                    SwingUtilities.invokeLater(() -> {
+                        fillingModels = true;
+                        DefaultComboBoxModel<String> cm = new DefaultComboBoxModel<>();
+                        for (String f : found) cm.addElement(f);
+                        if (blockModel != null && !found.contains(blockModel.name())) cm.insertElementAt(blockModel.name(), 0);
+                        modelBox.setModel(cm);
+                        if (blockModel != null) modelBox.setSelectedItem(blockModel.name());
+                        modelBox.setEnabled(cm.getSize() > 1);
+                        fillingModels = false;
+                        if (blockModel == null && cm.getSize() > 0) {
+                            blockModel = BlockModels.load(src, cm.getElementAt(0), null);
+                            fillingModels = true;
+                            modelBox.setSelectedIndex(0);
+                            fillingModels = false;
+                            cacheVersion = -1;
+                            root.repaint();
+                        }
+                    });
+                });
             }
             if (v == View.UV) {
                 paintUv(g, w, h, b, base);
@@ -361,7 +481,9 @@ final class MaterialPanels {
             g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
             int frame = Math.min(cache.getWidth(), cache.getHeight());
             if (v == View.LIT) {
-                g.drawImage(cache, (w - cache.getWidth()) / 2, (h - cache.getHeight()) / 2, null);
+                pickX = (w - cache.getWidth()) / 2;
+                pickY = (h - cache.getHeight()) / 2;
+                g.drawImage(cache, pickX, pickY, null);
                 return;
             }
             int size = Math.max(16, Math.min(w, h) - 24);
@@ -373,11 +495,38 @@ final class MaterialPanels {
             g.drawImage(cache, x, y, x + size, y + size, 0, 0, frame, frame, null);
         }
 
+        boolean painting(MouseEvent e) {
+            return model.paintTool != StudioModel.PaintTool.NAVIGATE && SwingUtilities.isLeftMouseButton(e) && !e.isShiftDown()
+                && model.baked != null;
+        }
+
+        /** Screen point -> texel (UV view: the drawn texture; Lit view: the face under the cursor). */
+        void paint(Point p) {
+            int texel = -1;
+            MosaicMaterial.Image base = model.baseImage;
+            if (base == null) return;
+            if (view.getSelectedItem() == View.LIT) {
+                int x = p.x - pickX, y = p.y - pickY;
+                if (pick != null && x >= 0 && y >= 0 && x < pickSize && y < pickSize) texel = pick[y * pickSize + x];
+            } else if (uvSize > 0) {
+                int x = (p.x - uvX) * uvFrame / uvSize, y = (p.y - uvY) * uvFrame / uvSize;
+                if (x >= 0 && y >= 0 && x < uvFrame && y < uvFrame) texel = y * base.w() + x;
+            }
+            if (texel < 0 || texel == lastTexel) return;
+            lastTexel = texel;
+            model.paintAt(texel % base.w(), texel / base.w());
+            swatch.repaint();
+        }
+
         /** UV layout: the texture with the rectangle each model face samples, labelled by face. */
         void paintUv(Graphics2D g, int w, int h, MosaicMaterial.Baked b, MosaicMaterial.Image base) {
             BufferedImage tex = channel(b, base, View.ALBEDO);
             int frame = Math.min(tex.getWidth(), tex.getHeight());
             int size = Math.max(16, Math.min(w, h) - 30), x = (w - size) / 2, y = (h - size) / 2;
+            uvX = x;
+            uvY = y;
+            uvSize = size;
+            uvFrame = frame;
             g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
             g.drawImage(tex, x, y, x + size, y + size, 0, 0, frame, frame, null);
             g.setColor(new Color(255, 255, 255, 40));
@@ -420,6 +569,9 @@ final class MaterialPanels {
             BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
             double[] depth = new double[size * size];
             java.util.Arrays.fill(depth, -1e9);
+            int[] pk = new int[size * size];
+            java.util.Arrays.fill(pk, -1);
+            List<double[][]> edges = new ArrayList<>();
             double cy = Math.cos(modelYaw), sy = Math.sin(modelYaw);
             double lx = Math.cos(lightPitch) * Math.cos(lightYaw), ly = Math.sin(lightPitch), lz = Math.cos(lightPitch) * Math.sin(lightYaw);
             double scale = size / 30.0, c30 = Math.cos(Math.toRadians(30)), s30 = 0.5;
@@ -435,7 +587,8 @@ final class MaterialPanels {
                 double nl = Math.sqrt(dot(n, n));
                 if (nl < 1e-9) continue;
                 n = new double[] {n[0] / nl, n[1] / nl, n[2] / nl};
-                if (dot(n, new double[] {1, 1, 1}) < 0) n = new double[] {-n[0], -n[1], -n[2]}; // thin planes: face the viewer
+                boolean front = dot(n, new double[] {1, 1, 1}) > 0;
+                if (!front) n = new double[] {-n[0], -n[1], -n[2]}; // thin planes: face the viewer
                 double[] a = proj(p[0], scale, c30, s30, size), b1 = proj(p[1], scale, c30, s30, size), b3 = proj(p[3], scale, c30, s30, size);
                 double[] d1 = {b1[0] - a[0], b1[1] - a[1]}, d3 = {b3[0] - a[0], b3[1] - a[1]};
                 double det = d1[0] * d3[1] - d1[1] * d3[0];
@@ -447,6 +600,10 @@ final class MaterialPanels {
                     maxY = (int) Math.min(size - 1, Math.ceil(Math.max(Math.max(a[1], b1[1]), Math.max(b3[1], far[1]))));
                 double[] t = norm(e1), bt = norm(e3);
                 boolean mine = q.texture().equals(id);
+                if (front && mine) {
+                    double[] p2 = proj(p[2], scale, c30, s30, size);
+                    edges.add(new double[][] {a, b1, p2, b3});
+                }
                 MosaicMaterial.Image other = mine ? null : faceTexture(q.texture());
                 for (int py = minY; py <= maxY; py++)
                     for (int px = minX; px <= maxX; px++) {
@@ -465,7 +622,27 @@ final class MaterialPanels {
                         if (argb == 0) continue;
                         depth[i] = z;
                         img.setRGB(px, py, argb);
+                        if (mine) {
+                            int fr = Math.min(b.w(), b.h());
+                            int tx = Math.min(fr - 1, Math.max(0, (int) (uv[0] / 16 * fr))), ty = Math.min(fr - 1, Math.max(0, (int) (uv[1] / 16 * fr)));
+                            pk[i] = ty * b.w() + tx;
+                        } else pk[i] = -1;
                     }
+            }
+            pick = pk;
+            pickSize = size;
+            if (seams && !edges.isEmpty()) {
+                Graphics2D g = StudioWidgets.smooth(img.getGraphics());
+                g.setColor(new Color(0xFF4040));
+                g.setStroke(new BasicStroke(1.4f));
+                for (double[][] e : edges) {
+                    java.awt.geom.Path2D.Double path = new java.awt.geom.Path2D.Double();
+                    path.moveTo(e[0][0], e[0][1]);
+                    for (int k = 1; k < 4; k++) path.lineTo(e[k][0], e[k][1]);
+                    path.closePath();
+                    g.draw(path);
+                }
+                g.dispose();
             }
             return img;
         }

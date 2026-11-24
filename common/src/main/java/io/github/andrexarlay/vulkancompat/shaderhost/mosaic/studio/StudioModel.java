@@ -124,8 +124,142 @@ final class StudioModel {
         return g != null ? g.isMaterial() : doc.nodes.stream().anyMatch(n -> n.type.startsWith("mat."));
     }
 
+    // ------------------------------------------------------------------ texture painting
+
+    /** Paint tools of the material preview. */
+    enum PaintTool { NAVIGATE, BRUSH, ERASER, FILL, PICKER }
+
+    PaintTool paintTool = PaintTool.NAVIGATE;
+    Color paintColor = new Color(0xC8643C);
+    int brushSize = 1;
+    /** The paint layer being edited (decoded from doc.paint); same size as the texture. */
+    java.awt.image.BufferedImage paintLayer;
+    private String paintDecoded;
+    private String strokeBefore;
+    private int strokePixels;
+
+    private void syncPaint() {
+        if (baseImage == null) {
+            paintLayer = null;
+            paintDecoded = null;
+            return;
+        }
+        String p = doc.paint;
+        if (paintLayer != null && java.util.Objects.equals(p, paintDecoded) && paintLayer.getWidth() == baseImage.w()) return;
+        paintDecoded = p;
+        paintLayer = new java.awt.image.BufferedImage(baseImage.w(), baseImage.h(), java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        if (p == null || p.isEmpty()) return;
+        try {
+            java.awt.image.BufferedImage img = ImageIO.read(new java.io.ByteArrayInputStream(java.util.Base64.getDecoder().decode(p)));
+            if (img != null) paintLayer.getGraphics().drawImage(img, 0, 0, null);
+        } catch (Exception ignored) {
+            // a broken layer paints nothing
+        }
+    }
+
+    /** The texture with the paint layer on top: what Block Texture nodes see. */
+    MosaicMaterial.Image paintedBase() {
+        if (baseImage == null || paintLayer == null) return baseImage;
+        int[] out = baseImage.argb().clone();
+        int[] layer = paintLayer.getRGB(0, 0, baseImage.w(), baseImage.h(), null, 0, baseImage.w());
+        for (int i = 0; i < out.length; i++) {
+            int l = layer[i], a = l >>> 24;
+            if (a == 0) continue;
+            if (a == 255) {
+                out[i] = l;
+                continue;
+            }
+            int b = out[i];
+            int r = (((l >> 16) & 255) * a + ((b >> 16) & 255) * (255 - a)) / 255, g = (((l >> 8) & 255) * a + ((b >> 8) & 255) * (255 - a)) / 255,
+                bl = ((l & 255) * a + (b & 255) * (255 - a)) / 255;
+            out[i] = Math.max(a, b >>> 24) << 24 | r << 16 | g << 8 | bl;
+        }
+        return new MosaicMaterial.Image(baseImage.w(), baseImage.h(), out);
+    }
+
+    void beginStroke() {
+        strokeBefore = doc.snapshot();
+        strokePixels = 0;
+    }
+
+    /** Applies the current tool at texel (x, y) of the texture. */
+    void paintAt(int x, int y) {
+        syncPaint();
+        if (paintLayer == null || x < 0 || y < 0 || x >= baseImage.w() || y >= baseImage.h()) return;
+        MosaicMaterial.Image eff = paintedBase();
+        switch (paintTool) {
+            case PICKER -> {
+                paintColor = new Color(eff.argb()[y * eff.w() + x], true);
+                if (paintColor.getAlpha() == 0) paintColor = new Color(paintColor.getRGB() | 0xFF000000);
+                fire();
+                return;
+            }
+            case FILL -> {
+                int target = eff.argb()[y * eff.w() + x];
+                int frame = Math.min(eff.w(), eff.h()), fy0 = y / frame * frame;
+                java.util.ArrayDeque<int[]> q = new java.util.ArrayDeque<>();
+                boolean[] seen = new boolean[eff.w() * eff.h()];
+                q.add(new int[] {x, y});
+                while (!q.isEmpty()) {
+                    int[] p = q.poll();
+                    int px = p[0], py = p[1];
+                    if (px < 0 || py < fy0 || px >= eff.w() || py >= fy0 + frame) continue;
+                    int i = py * eff.w() + px;
+                    if (seen[i] || eff.argb()[i] != target) continue;
+                    seen[i] = true;
+                    paintLayer.setRGB(px, py, paintColor.getRGB());
+                    strokePixels++;
+                    q.add(new int[] {px + 1, py});
+                    q.add(new int[] {px - 1, py});
+                    q.add(new int[] {px, py + 1});
+                    q.add(new int[] {px, py - 1});
+                }
+            }
+            default -> {
+                int lo = -(brushSize - 1) / 2, hi = brushSize / 2;
+                for (int dy = lo; dy <= hi; dy++)
+                    for (int dx = lo; dx <= hi; dx++) {
+                        int px = x + dx, py = y + dy;
+                        if (px < 0 || py < 0 || px >= baseImage.w() || py >= baseImage.h()) continue;
+                        paintLayer.setRGB(px, py, paintTool == PaintTool.ERASER ? 0 : paintColor.getRGB());
+                        strokePixels++;
+                    }
+            }
+        }
+        MosaicGraph g = analysis.graph();
+        if (g != null && g.isMaterial()) bake(g);
+        fire();
+    }
+
+    /** Ends a stroke: the layer goes into the document as one undo step. */
+    void endStroke() {
+        if (strokeBefore == null || paintLayer == null) return;
+        try {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            ImageIO.write(paintLayer, "png", bytes);
+            boolean empty = true;
+            for (int v : paintLayer.getRGB(0, 0, paintLayer.getWidth(), paintLayer.getHeight(), null, 0, paintLayer.getWidth()))
+                if (v >>> 24 != 0) {
+                    empty = false;
+                    break;
+                }
+            doc.paint = empty ? null : java.util.Base64.getEncoder().encodeToString(bytes.toByteArray());
+            paintDecoded = doc.paint;
+        } catch (Exception e) {
+            say("Could not keep the paint: " + e.getMessage(), StudioUi.BAD);
+        }
+        String label = switch (paintTool) {
+            case FILL -> "Fill " + strokePixels + " px";
+            case ERASER -> "Erase " + strokePixels + " px";
+            default -> "Paint " + strokePixels + " px";
+        };
+        commitGesture(strokeBefore, label);
+        strokeBefore = null;
+    }
+
     private void bake(MosaicGraph g) {
         bakeVersion++;
+        syncPaint();
         if (baseImage == null) {
             baked = null;
             bakeError = "pick the texture this material is for: double-click it in the Library";
@@ -134,7 +268,7 @@ final class StudioModel {
         for (MosaicGraph.Node n : g.nodes())
             if (n.type().equals("mat.image") && n.mask() != null && !images.containsKey(n.mask())) loadImage(n.mask());
         try {
-            baked = MosaicMaterial.bake(g, baseImage, images);
+            baked = MosaicMaterial.bake(g, paintedBase(), images, baseImage);
             bakeError = null;
         } catch (IllegalArgumentException e) {
             baked = null;
@@ -245,6 +379,33 @@ final class StudioModel {
         } catch (Exception e) {
             say("Could not import the image: " + e.getMessage(), StudioUi.BAD);
         }
+    }
+
+    /** Image Texture > Open image: copies the file into the project and points the node at it (one undo step). */
+    void setImage(MosaicDocument.ENode n, java.io.File f) {
+        try {
+            java.awt.image.BufferedImage img = ImageIO.read(f);
+            if (img == null) {
+                say(f.getName() + " is not an image Java can read", StudioUi.BAD);
+                return;
+            }
+            Path dir = StudioLibrary.materialPack(this).resolve("assets/mosaic/textures/imported");
+            Files.createDirectories(dir);
+            StudioLibrary.ensurePack(StudioLibrary.materialPack(this));
+            String name = f.getName().replaceAll("(?i)[.](png|jpe?g|bmp|gif)$", "").toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_.-]", "_") + ".png";
+            ImageIO.write(img, "png", dir.resolve(name).toFile());
+            String mask = "imported/" + name;
+            images.remove(mask);
+            edit("Image " + name + " for " + n.id, () -> n.mask = mask);
+        } catch (Exception e) {
+            say("Could not open the image: " + e.getMessage(), StudioUi.BAD);
+        }
+    }
+
+    void reloadImage(MosaicDocument.ENode n) {
+        if (n.mask == null) return;
+        images.remove(n.mask);
+        changed();
     }
 
     /** Imports image files from disk into the project (Library > Import). */
@@ -389,6 +550,12 @@ final class StudioModel {
     /** Problems from the analyzer plus compiler errors mapped to nodes. */
     List<MosaicGraph.Problem> problems() {
         List<MosaicGraph.Problem> out = new ArrayList<>();
+        if (doc.nodes.isEmpty()) {
+            out.add(new MosaicGraph.Problem(MosaicGraph.Severity.HINT, null, null, workspace == Workspace.MATERIALS
+                ? "empty material: double-click a texture in the Library" : "empty graph: Space adds a node, Ctrl+N starts from a template",
+                MosaicGraph.Fix.NONE));
+            return out;
+        }
         if (compile != null && !compile.ok() && generated != null)
             for (MosaicShaderCheck.Error e : compile.errors())
                 out.add(new MosaicGraph.Problem(MosaicGraph.Severity.ERROR, e.node() != null ? e.node() : nodeOfFunction(e.function()),
@@ -743,6 +910,7 @@ final class StudioModel {
                 doc.nodes.addAll(loaded.nodes);
                 doc.functions.addAll(loaded.functions);
                 doc.frames.addAll(loaded.frames);
+                doc.paint = loaded.paint;
             } catch (Exception e) {
                 say("Could not read the graph: " + e.getMessage(), StudioUi.BAD);
             }
