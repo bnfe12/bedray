@@ -46,3 +46,6 @@ logs/
 /config/
 common/config/
 __pycache__/
+
+# Mosaic Studio per-project metadata and compile cache (next to a pack's mosaic.json)
+.studio/
