@@ -31,6 +31,8 @@ public final class MosaicDocument {
         public int x, y;
         /** Editor-only caption shown instead of the type name (the shader ignores it). */
         public String label;
+        /** Muted (M): passes its first input through; kept in mosaic.json so the game does the same. */
+        public boolean muted;
         /** Inline values of unwired inputs (Blender-style sliders / numbers); a wire overrides its port's value. */
         public final LinkedHashMap<String, double[]> defaults = new LinkedHashMap<>();
 
@@ -297,6 +299,7 @@ public final class MosaicDocument {
             if (o.has("size")) n.index = o.get("size").getAsInt();
             if (o.has("mask")) n.mask = o.get("mask").getAsString();
             if (o.has("label") && o.get("label").isJsonPrimitive()) n.label = o.get("label").getAsString();
+            if (o.has("muted") && o.get("muted").isJsonPrimitive()) n.muted = o.get("muted").getAsBoolean();
             if (o.has("defaults") && o.get("defaults").isJsonObject())
                 for (var e : o.getAsJsonObject("defaults").entrySet()) {
                     if (!e.getValue().isJsonArray()) continue;
@@ -342,6 +345,7 @@ public final class MosaicDocument {
                 o.add("inputs", in);
             }
             if (n.label != null && !n.label.isBlank()) o.addProperty("label", n.label);
+            if (n.muted) o.addProperty("muted", true);
             if (!n.defaults.isEmpty()) {
                 JsonObject defs = new JsonObject();
                 for (var e : n.defaults.entrySet()) {
@@ -419,6 +423,7 @@ public final class MosaicDocument {
             c.index = n.index;
             c.mask = n.mask;
             c.label = n.label;
+            c.muted = n.muted;
             for (var e : n.defaults.entrySet()) c.defaults.put(e.getKey(), e.getValue().clone());
             c.x = n.x;
             c.y = n.y;

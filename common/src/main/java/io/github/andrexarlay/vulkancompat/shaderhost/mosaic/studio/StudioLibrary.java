@@ -29,7 +29,15 @@ import java.util.zip.ZipFile;
  */
 final class StudioLibrary {
 
-    enum Kind { VANILLA, PACK, PROJECT }
+    enum Kind { VANILLA, PACK, PROJECT, MOD }
+
+    /** The version Bedray is written for: its textures are preferred and other versions are flagged. */
+    static final String TARGET = "26.3";
+
+    /** A game installation found in a launcher: its folder (resourcepacks/, mods/, shaderpacks/) and Minecraft version. */
+    record Instance(String launcher, String name, Path dir, String version) {
+        @Override public String toString() { return launcher + "  -  " + name + (version == null ? "" : "  (" + version + ")"); }
+    }
 
     record Source(String id, String label, Path path, Kind kind) {
         boolean zip() { return Files.isRegularFile(path); }
@@ -78,49 +86,181 @@ final class StudioLibrary {
         return Long.parseLong(m.group(1)) * 1_000_000 + Long.parseLong(m.group(2)) * 1_000 + (m.group(3) == null ? 0 : Long.parseLong(m.group(3)));
     }
 
-    /** Client jars found in the usual launcher and build caches, newest first. */
-    static List<Source> vanillaJars() {
+    private static Path appdata() {
+        String a = System.getenv("APPDATA");
+        return a == null ? null : Path.of(a);
+    }
+
+    /** Folders a launcher may keep its data in, per OS. */
+    private static List<Path> launcherRoots(String windowsName, String macName, String linuxName) {
+        List<Path> out = new ArrayList<>();
+        if (appdata() != null) out.add(appdata().resolve(windowsName));
+        out.add(home().resolve("Library/Application Support").resolve(macName));
+        out.add(home().resolve(".local/share").resolve(linuxName));
+        out.add(home().resolve(".config").resolve(linuxName));
+        return out;
+    }
+
+    /** Every client jar found, version -> jar (launchers, the official launcher, build caches, the chosen jar). */
+    static Map<String, Path> allJars() {
         Map<String, Path> found = new LinkedHashMap<>();
         String custom = StudioUi.settings.vanillaJar;
-        if (custom != null && !custom.isBlank() && Files.isRegularFile(Path.of(custom))) found.put("custom", Path.of(custom));
-        String appdata = System.getenv("APPDATA");
+        if (custom != null && !custom.isBlank() && Files.isRegularFile(Path.of(custom)))
+            found.put(versionIn(Path.of(custom).getFileName().toString(), "chosen"), Path.of(custom));
         List<Path> versionRoots = new ArrayList<>();
-        if (appdata != null) versionRoots.add(Path.of(appdata, ".minecraft", "versions"));
-        versionRoots.add(home().resolve(".minecraft").resolve("versions"));
-        versionRoots.add(home().resolve("Library/Application Support/minecraft/versions"));
+        for (Path r : launcherRoots(".minecraft", "minecraft", "../../.minecraft")) versionRoots.add(r.resolve("versions"));
+        versionRoots.add(home().resolve(".minecraft/versions"));
+        versionRoots.add(home().resolve("curseforge/minecraft/Install/versions"));
+        for (Path r : launcherRoots("ModrinthApp", "ModrinthApp", "ModrinthApp")) versionRoots.add(r.resolve("meta/versions"));
+        for (Path r : launcherRoots("com.modrinth.theseus", "com.modrinth.theseus", "com.modrinth.theseus")) versionRoots.add(r.resolve("meta/versions"));
         for (Path root : versionRoots)
             each(root, d -> {
                 Path jar = d.resolve(d.getFileName() + ".jar");
+                if (Files.isRegularFile(jar) && versionKey(d.getFileName().toString()) > 0) found.putIfAbsent(d.getFileName().toString(), jar);
+            });
+        for (Path r : launcherRoots("PrismLauncher", "PrismLauncher", "PrismLauncher"))
+            each(r.resolve("libraries/com/mojang/minecraft"), d -> {
+                Path jar = d.resolve("minecraft-" + d.getFileName() + "-client.jar");
                 if (Files.isRegularFile(jar)) found.putIfAbsent(d.getFileName().toString(), jar);
             });
         each(home().resolve(".gradle/caches/fabric-loom"), d -> {
             Path jar = d.resolve("minecraft-client.jar");
             if (Files.isRegularFile(jar) && versionKey(d.getFileName().toString()) > 0) found.putIfAbsent(d.getFileName().toString(), jar);
         });
-        List<Path> prism = new ArrayList<>();
-        if (appdata != null) prism.add(Path.of(appdata, "PrismLauncher"));
-        prism.add(home().resolve(".local/share/PrismLauncher"));
-        prism.add(home().resolve("Library/Application Support/PrismLauncher"));
-        for (Path p : prism)
-            each(p.resolve("libraries/com/mojang/minecraft"), d -> {
-                Path jar = d.resolve("minecraft-" + d.getFileName() + "-client.jar");
-                if (Files.isRegularFile(jar)) found.putIfAbsent(d.getFileName().toString(), jar);
+        // a Bedray checkout (libs/minecraft-<version>-client.jar) above the working folder: the version the mod is built for
+        for (Path p = Path.of(System.getProperty("user.dir")).toAbsolutePath(); p != null; p = p.getParent())
+            each(p.resolve("libs"), f -> {
+                Matcher m = Pattern.compile("minecraft-([0-9.]+)-client\\.jar").matcher(f.getFileName().toString());
+                if (m.matches()) found.putIfAbsent(m.group(1), f);
             });
+        each(home().resolve(".gradle/caches/neoformruntime/artifacts"), f -> {
+            Matcher m = Pattern.compile("minecraft_([0-9.]+)_client\\.jar").matcher(f.getFileName().toString());
+            if (m.matches()) found.putIfAbsent(m.group(1), f);
+        });
+        return found;
+    }
+
+    private static String versionIn(String name, String fallback) {
+        Matcher m = VERSION.matcher(name);
+        return m.find() ? m.group() : fallback;
+    }
+
+    /** Distance of a version from the target, for sorting: 26.3 first, then the closest. */
+    static long distance(String v) {
+        if (v == null) return Long.MAX_VALUE / 2;
+        return Math.abs(versionKey(v) - versionKey(TARGET));
+    }
+
+    /** Client jars as sources, the target version (26.3) or the closest first. */
+    static List<Source> vanillaJars() {
         List<Source> out = new ArrayList<>();
-        found.entrySet().stream()
-            .sorted(Comparator.comparingLong((Map.Entry<String, Path> e) -> e.getKey().equals("custom") ? Long.MAX_VALUE : versionKey(e.getKey())).reversed())
-            .limit(4)
-            .forEach(e -> out.add(new Source("jar:" + e.getValue(), "Minecraft " + (e.getKey().equals("custom") ? "(chosen jar)" : e.getKey()),
-                e.getValue(), Kind.VANILLA)));
+        allJars().entrySet().stream()
+            .sorted(Comparator.comparingLong((Map.Entry<String, Path> e) -> distance(e.getKey())))
+            .limit(6)
+            .forEach(e -> out.add(new Source("jar:" + e.getValue(), "Minecraft " + e.getKey()
+                + (e.getKey().equals(TARGET) ? "" : versionKey(e.getKey()) > 0 ? "  (Bedray: " + TARGET + ")" : ""), e.getValue(), Kind.VANILLA)));
         return out;
+    }
+
+    // ------------------------------------------------------------------ launcher instances
+
+    private static final Map<String, List<Instance>> INSTANCES = new ConcurrentHashMap<>();
+
+    static void forgetInstances() { INSTANCES.clear(); }
+
+    /** Game installations of the official launcher, Prism / MultiMC, CurseForge, Modrinth App, ATLauncher and GDLauncher. */
+    static List<Instance> instances() {
+        return INSTANCES.computeIfAbsent("all", k -> findInstances());
+    }
+
+    private static List<Instance> findInstances() {
+        List<Instance> out = new ArrayList<>();
+        for (Path r : List.of(appdata() == null ? home().resolve(".minecraft") : appdata().resolve(".minecraft"),
+            home().resolve("Library/Application Support/minecraft"), home().resolve(".minecraft")))
+            if (Files.isDirectory(r.resolve("versions")) && out.stream().noneMatch(i -> i.dir().equals(r))) {
+                String[] newest = {null};
+                each(r.resolve("versions"), d -> {
+                    String v = d.getFileName().toString();
+                    if (versionKey(v) > 0 && (newest[0] == null || distance(v) < distance(newest[0]))) newest[0] = v;
+                });
+                out.add(new Instance("Minecraft Launcher", ".minecraft", r, newest[0]));
+            }
+        for (String launcher : List.of("PrismLauncher", "MultiMC", "PolyMC"))
+            for (Path r : launcherRoots(launcher, launcher, launcher))
+                each(r.resolve("instances"), d -> {
+                    Path game = Files.isDirectory(d.resolve("minecraft")) ? d.resolve("minecraft") : d.resolve(".minecraft");
+                    if (!Files.isDirectory(game)) return;
+                    out.add(new Instance(launcher.equals("PrismLauncher") ? "Prism" : launcher, d.getFileName().toString(), game,
+                        jsonVersion(d.resolve("mmc-pack.json"), "net.minecraft")));
+                });
+        each(home().resolve("curseforge/minecraft/Instances"), d ->
+            out.add(new Instance("CurseForge", d.getFileName().toString(), d, jsonField(d.resolve("minecraftinstance.json"), "gameVersion"))));
+        for (String app : List.of("ModrinthApp", "com.modrinth.theseus"))
+            for (Path r : launcherRoots(app, app, app))
+                each(r.resolve("profiles"), d -> out.add(new Instance("Modrinth", d.getFileName().toString(), d,
+                    jsonField(d.resolve("profile.json"), "game_version"))));
+        for (Path r : launcherRoots("ATLauncher", "ATLauncher", "atlauncher"))
+            each(r.resolve("instances"), d -> out.add(new Instance("ATLauncher", d.getFileName().toString(), d,
+                jsonField(d.resolve("instance.json"), "minecraftVersion"))));
+        for (Path r : launcherRoots("gdlauncher_next", "gdlauncher_next", "gdlauncher_next"))
+            each(r.resolve("instances"), d -> out.add(new Instance("GDLauncher", d.getFileName().toString(), d,
+                jsonField(d.resolve("config.json"), "mcVersion"))));
+        out.sort(Comparator.comparingLong((Instance i) -> distance(i.version())).thenComparing(Instance::name));
+        return out;
+    }
+
+    /** The version of a component in a Prism/MultiMC mmc-pack.json. */
+    private static String jsonVersion(Path file, String uid) {
+        try {
+            var root = com.google.gson.JsonParser.parseString(Files.readString(file)).getAsJsonObject();
+            for (var c : root.getAsJsonArray("components")) {
+                var o = c.getAsJsonObject();
+                if (o.has("uid") && o.get("uid").getAsString().equals(uid) && o.has("version")) return o.get("version").getAsString();
+            }
+        } catch (Exception ignored) {
+            // unknown format
+        }
+        return null;
+    }
+
+    /** The first string value with this key anywhere in a JSON file (launchers nest it differently). */
+    private static String jsonField(Path file, String key) {
+        try {
+            if (!Files.isRegularFile(file) || Files.size(file) > 4_000_000) return null;
+            Matcher m = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\"([^\"]+)\"").matcher(Files.readString(file));
+            return m.find() ? m.group(1) : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** The instance the studio works with: the chosen game folder, else the one closest to 26.3. */
+    static Instance currentInstance(StudioModel model) {
+        Path g = gameDir(model);
+        for (Instance i : instances()) if (g != null && i.dir().toAbsolutePath().normalize().equals(g.toAbsolutePath().normalize())) return i;
+        return g != null ? new Instance("Folder", g.getFileName() == null ? g.toString() : g.getFileName().toString(), g, null) : null;
     }
 
     static List<Source> sources(StudioModel model) {
         List<Source> out = new ArrayList<>();
         Path pack = materialPack(model);
         out.add(new Source("project:" + pack, "Project: " + MATERIAL_PACK, pack, Kind.PROJECT));
-        out.addAll(vanillaJars());
+        Instance inst = currentInstance(model);
+        List<Source> jars = vanillaJars();
+        if (inst != null && inst.version() != null) {
+            Path own = allJars().get(inst.version());
+            if (own != null) {
+                jars.removeIf(s -> s.path().equals(own));
+                jars.add(0, new Source("jar:" + own, "Minecraft " + inst.version() + " (this instance)", own, Kind.VANILLA));
+            }
+        }
+        out.addAll(jars);
         Path g = gameDir(model);
+        if (g != null)
+            each(g.resolve("mods"), p -> {
+                String n = p.getFileName().toString();
+                if (n.toLowerCase(Locale.ROOT).endsWith(".jar")) out.add(new Source("mod:" + p, "Mod: " + n.replaceAll("(?i)\\.jar$", ""), p, Kind.MOD));
+            });
         if (g != null)
             each(g.resolve("resourcepacks"), p -> {
                 String n = p.getFileName().toString();
@@ -157,8 +297,18 @@ final class StudioLibrary {
         Path p = Path.of(id.substring(colon + 1));
         if (!Files.exists(p)) return null;
         String prefix = id.substring(0, colon);
-        Kind k = prefix.equals("jar") ? Kind.VANILLA : prefix.equals("pack") ? Kind.PACK : Kind.PROJECT;
-        String label = k == Kind.VANILLA ? "Minecraft (" + p.getFileName() + ")" : (k == Kind.PACK ? "Pack: " : "Project: ") + p.getFileName();
+        Kind k = switch (prefix) {
+            case "jar" -> Kind.VANILLA;
+            case "pack" -> Kind.PACK;
+            case "mod" -> Kind.MOD;
+            default -> Kind.PROJECT;
+        };
+        String label = switch (k) {
+            case VANILLA -> "Minecraft (" + p.getFileName() + ")";
+            case PACK -> "Pack: " + p.getFileName();
+            case MOD -> "Mod: " + p.getFileName();
+            default -> "Project: " + p.getFileName();
+        };
         return new Source(id, label, p, k);
     }
 

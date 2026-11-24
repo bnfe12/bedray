@@ -39,6 +39,9 @@ final class MaterialPanels {
     static final class LibraryPanel extends Panels.Listening {
         final JPanel root = new JPanel(new BorderLayout(0, 6));
         final JComboBox<StudioLibrary.Source> source = new JComboBox<>();
+        final JComboBox<Object> instance = new JComboBox<>();
+        final JLabel versionNote = label("", WARN);
+        private boolean fillingInstances;
         final JTextField search = field("");
         final StudioWidgets.Segmented<String> group = new StudioWidgets.Segmented<String>()
             .add("all", "All", null, "Every texture")
@@ -60,8 +63,22 @@ final class MaterialPanels {
             JPanel top = new JPanel(new BorderLayout(0, 6));
             top.setOpaque(false);
             source.addActionListener(e -> load());
-            source.setToolTipText("Where textures come from: Minecraft jars, resource packs of the game folder, this project");
-            top.add(source, BorderLayout.NORTH);
+            source.setToolTipText("Where textures come from: Minecraft jars, resource packs and mods of the instance, this project");
+            instance.setToolTipText("Game installations found in launchers (Prism, CurseForge, Modrinth, ATLauncher, GDLauncher, official)."
+                + " Materials go into the chosen one's resourcepacks/.");
+            instance.addActionListener(e -> {
+                if (fillingInstances || !(instance.getSelectedItem() instanceof StudioLibrary.Instance i)) return;
+                settings.gameDir = i.dir().toString();
+                StudioApp.get().saveSettings();
+                reloadSources();
+            });
+            JPanel pick = new JPanel(new GridLayout(0, 1, 0, 4));
+            pick.setOpaque(false);
+            pick.add(instance);
+            pick.add(source);
+            versionNote.setFont(UI_S);
+            pick.add(versionNote);
+            top.add(pick, BorderLayout.NORTH);
             search.setToolTipText("Filter by name (stone, oak, ...). Enter opens the first match as a material.");
             search.getDocument().addDocumentListener(onText(this::filter));
             search.addActionListener(e -> {
@@ -135,13 +152,30 @@ final class MaterialPanels {
             buttons.setOpaque(false);
             buttons.add(button("Import images...", "Copy PNG/JPG files into the project to use as maps", this::importFiles));
             buttons.add(button("Game folder...", "The Minecraft folder with Bedray: materials go to its resourcepacks/", this::chooseGame));
-            buttons.add(button("Refresh", "Look for jars and packs again", this::reloadSources));
+            buttons.add(button("Refresh", "Look for launchers, jars, packs and mods again", () -> {
+                StudioLibrary.forgetInstances();
+                reloadSources();
+            }));
             bottom.add(buttons, BorderLayout.CENTER);
             root.add(bottom, BorderLayout.SOUTH);
             reloadSources();
         }
 
+        void fillInstances() {
+            fillingInstances = true;
+            DefaultComboBoxModel<Object> im = new DefaultComboBoxModel<>();
+            StudioLibrary.Instance cur = StudioLibrary.currentInstance(model);
+            if (cur == null) im.addElement("Choose a game instance...");
+            for (StudioLibrary.Instance i : StudioLibrary.instances()) im.addElement(i);
+            if (cur != null && StudioLibrary.instances().stream().noneMatch(i -> i.dir().equals(cur.dir()))) im.insertElementAt(cur, 0);
+            instance.setModel(im);
+            if (cur != null) for (int i = 0; i < im.getSize(); i++)
+                if (im.getElementAt(i) instanceof StudioLibrary.Instance x && x.dir().equals(cur.dir())) instance.setSelectedIndex(i);
+            fillingInstances = false;
+        }
+
         void reloadSources() {
+            fillInstances();
             StudioLibrary.Source was = (StudioLibrary.Source) source.getSelectedItem();
             List<StudioLibrary.Source> list = StudioLibrary.sources(model);
             DefaultComboBoxModel<StudioLibrary.Source> cm = new DefaultComboBoxModel<>();
@@ -155,6 +189,9 @@ final class MaterialPanels {
 
         void load() {
             StudioLibrary.Source s = (StudioLibrary.Source) source.getSelectedItem();
+            String v = s == null || s.kind() != StudioLibrary.Kind.VANILLA ? null : s.label().replaceAll("^Minecraft ([0-9.]+).*$", "$1");
+            versionNote.setText(v != null && !v.equals(StudioLibrary.TARGET) && v.matches("[0-9.]+")
+                ? "Bedray is built for " + StudioLibrary.TARGET + ": textures of " + v + " may differ" : "");
             int token = ++loadToken;
             all = List.of();
             entries.clear();
@@ -223,11 +260,13 @@ final class MaterialPanels {
     // ================================================================== material preview
 
     static final class MaterialPanel extends Panels.Listening {
-        enum View { LIT, ALBEDO, ROUGHNESS, METAL, NORMAL, EMISSION, HEIGHT }
+        enum View { LIT, UV, ALBEDO, ROUGHNESS, METAL, NORMAL, EMISSION, HEIGHT }
 
         final JPanel root = new JPanel(new BorderLayout());
         final StudioWidgets.Segmented<View> view = new StudioWidgets.Segmented<View>()
-            .add(View.LIT, "Lit", StudioWidgets.glyph("shader", new Color(0x5AA0E0)), "The block lit by a sun you can drag")
+            .add(View.LIT, "Lit", StudioWidgets.glyph("shader", new Color(0x5AA0E0)),
+                "The block's real model (fences, stairs, plants...) with the material: drag to turn it, Shift+drag moves the sun")
+            .add(View.UV, "UV", StudioWidgets.glyph("split", null), "UV layout: which part of the texture each face of the model uses")
             .add(View.ALBEDO, "Colour", null, "Albedo (base colour)")
             .add(View.ROUGHNESS, "Rough", null, "Roughness: black = mirror, white = matte")
             .add(View.METAL, "Metal", null, "Metal (white) or F0 of non-metals")
@@ -235,7 +274,10 @@ final class MaterialPanels {
             .add(View.EMISSION, "Glow", null, "Emission")
             .add(View.HEIGHT, "Height", null, "Height (bump)");
         final JLabel status = label("", MUTED);
-        double lightYaw = -0.7, lightPitch = 0.9;
+        double lightYaw = -0.7, lightPitch = 0.9, modelYaw = 0;
+        BlockModels.Model blockModel;
+        String modelFor;
+        final java.util.Map<String, MosaicMaterial.Image> faceTextures = new java.util.HashMap<>();
         BufferedImage cache;
         int cacheVersion = -1, cacheW, cacheH;
         View cacheView;
@@ -256,8 +298,10 @@ final class MaterialPanels {
                 Point last;
                 @Override public void mousePressed(MouseEvent e) { last = e.getPoint(); }
                 @Override public void mouseDragged(MouseEvent e) {
-                    lightYaw += (e.getX() - last.x) * 0.012;
-                    lightPitch = Math.clamp(lightPitch - (e.getY() - last.y) * 0.012, 0.05, 1.5);
+                    if (e.isShiftDown() || SwingUtilities.isRightMouseButton(e)) {
+                        lightYaw += (e.getX() - last.x) * 0.012;
+                        lightPitch = Math.clamp(lightPitch - (e.getY() - last.y) * 0.012, 0.05, 1.5);
+                    } else modelYaw += (e.getX() - last.x) * 0.012;
                     last = e.getPoint();
                     cacheVersion = -1;
                     canvas.repaint();
@@ -265,7 +309,7 @@ final class MaterialPanels {
             };
             canvas.addMouseListener(drag);
             canvas.addMouseMotionListener(drag);
-            canvas.setToolTipText("Drag to move the sun");
+            canvas.setToolTipText("Drag to turn the block, Shift+drag (or right drag) to move the sun");
             root.add(canvas, BorderLayout.CENTER);
             status.setFont(UI_S);
             status.setBorder(new EmptyBorder(4, 8, 4, 8));
@@ -295,8 +339,20 @@ final class MaterialPanels {
                 return;
             }
             View v = view.getSelectedItem();
+            String key = model.materialSource == null ? null : model.materialSource.id() + "|" + model.materialEntry;
+            if (key != null && !key.equals(modelFor)) {
+                modelFor = key;
+                faceTextures.clear();
+                blockModel = BlockModels.forTexture(model.materialSource, model.materialEntry);
+                cacheVersion = -1;
+            }
+            if (v == View.UV) {
+                paintUv(g, w, h, b, base);
+                return;
+            }
             if (cache == null || cacheVersion != model.bakeVersion || cacheView != v || (v == View.LIT && (cacheW != w || cacheH != h))) {
-                cache = v == View.LIT ? lit(b, base, Math.max(32, Math.min(w, h) - 16)) : channel(b, base, v);
+                int size = Math.max(32, Math.min(w, h) - 16);
+                cache = v == View.LIT ? (blockModel != null ? renderModel(blockModel, b, base, size) : lit(b, base, size)) : channel(b, base, v);
                 cacheVersion = model.bakeVersion;
                 cacheView = v;
                 cacheW = w;
@@ -315,6 +371,138 @@ final class MaterialPanels {
                 g.fillRect(x + cx, y + cy, Math.min(8, size - cx), Math.min(8, size - cy));
             }
             g.drawImage(cache, x, y, x + size, y + size, 0, 0, frame, frame, null);
+        }
+
+        /** UV layout: the texture with the rectangle each model face samples, labelled by face. */
+        void paintUv(Graphics2D g, int w, int h, MosaicMaterial.Baked b, MosaicMaterial.Image base) {
+            BufferedImage tex = channel(b, base, View.ALBEDO);
+            int frame = Math.min(tex.getWidth(), tex.getHeight());
+            int size = Math.max(16, Math.min(w, h) - 30), x = (w - size) / 2, y = (h - size) / 2;
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+            g.drawImage(tex, x, y, x + size, y + size, 0, 0, frame, frame, null);
+            g.setColor(new Color(255, 255, 255, 40));
+            for (int i = 0; i <= frame && frame <= 64; i++) {
+                int p = i * size / frame;
+                g.drawLine(x + p, y, x + p, y + size);
+                g.drawLine(x, y + p, x + size, y + p);
+            }
+            if (blockModel == null) {
+                g.setColor(FAINT);
+                g.drawString(model.materialEntry != null && model.materialEntry.contains("/entity/")
+                    ? "Entity textures: the layout comes from the game's model (export from the game: in the queue)"
+                    : "No block model uses this texture: the whole texture is shown", 10, h - 10);
+                return;
+            }
+            String id = StudioLibrary.id(model.materialEntry);
+            java.util.Map<String, Color> colors = java.util.Map.of("up", new Color(0x5AA0E0), "down", new Color(0x8A6FC8), "north", new Color(0xE0605A),
+                "south", new Color(0x4FB886), "east", new Color(0xF0A830), "west", new Color(0xD06AB0));
+            g.setStroke(new BasicStroke(2f));
+            g.setFont(UI_S);
+            int labelled = 0;
+            for (BlockModels.Quad q : blockModel.quads()) {
+                if (!q.texture().equals(id)) continue;
+                double u1 = Math.min(q.u1(), q.u2()), u2 = Math.max(q.u1(), q.u2()), v1 = Math.min(q.v1(), q.v2()), v2 = Math.max(q.v1(), q.v2());
+                int rx = x + (int) Math.round(u1 / 16 * size), ry = y + (int) Math.round(v1 / 16 * size);
+                int rw = (int) Math.round((u2 - u1) / 16 * size), rh = (int) Math.round((v2 - v1) / 16 * size);
+                Color c = colors.getOrDefault(q.face(), Color.WHITE);
+                g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), 50));
+                g.fillRect(rx, ry, rw, rh);
+                g.setColor(c);
+                g.drawRect(rx, ry, rw, rh);
+                if (labelled++ < 24) g.drawString(q.face(), rx + 3, ry + 13);
+            }
+            g.setColor(MUTED);
+            g.drawString(blockModel.name() + "  -  " + blockModel.quads().size() + " faces", 10, h - 10);
+        }
+
+        /** The block model, software-rendered with the baked maps on faces that use this texture (others plain). */
+        BufferedImage renderModel(BlockModels.Model m, MosaicMaterial.Baked b, MosaicMaterial.Image base, int size) {
+            BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+            double[] depth = new double[size * size];
+            java.util.Arrays.fill(depth, -1e9);
+            double cy = Math.cos(modelYaw), sy = Math.sin(modelYaw);
+            double lx = Math.cos(lightPitch) * Math.cos(lightYaw), ly = Math.sin(lightPitch), lz = Math.cos(lightPitch) * Math.sin(lightYaw);
+            double scale = size / 30.0, c30 = Math.cos(Math.toRadians(30)), s30 = 0.5;
+            String id = StudioLibrary.id(model.materialEntry);
+            for (BlockModels.Quad q : m.quads()) {
+                double[][] p = new double[4][];
+                for (int i = 0; i < 4; i++) {
+                    double x = q.p()[i][0] - 8, y = q.p()[i][1] - 8, z = q.p()[i][2] - 8;
+                    p[i] = new double[] {x * cy - z * sy, y, x * sy + z * cy};
+                }
+                double[] e1 = sub(p[1], p[0]), e3 = sub(p[3], p[0]);
+                double[] n = cross(e3, e1);
+                double nl = Math.sqrt(dot(n, n));
+                if (nl < 1e-9) continue;
+                n = new double[] {n[0] / nl, n[1] / nl, n[2] / nl};
+                if (dot(n, new double[] {1, 1, 1}) < 0) n = new double[] {-n[0], -n[1], -n[2]}; // thin planes: face the viewer
+                double[] a = proj(p[0], scale, c30, s30, size), b1 = proj(p[1], scale, c30, s30, size), b3 = proj(p[3], scale, c30, s30, size);
+                double[] d1 = {b1[0] - a[0], b1[1] - a[1]}, d3 = {b3[0] - a[0], b3[1] - a[1]};
+                double det = d1[0] * d3[1] - d1[1] * d3[0];
+                if (Math.abs(det) < 1e-6) continue;
+                double[] far = {a[0] + d1[0] + d3[0], a[1] + d1[1] + d3[1]};
+                int minX = (int) Math.max(0, Math.floor(Math.min(Math.min(a[0], b1[0]), Math.min(b3[0], far[0])))),
+                    maxX = (int) Math.min(size - 1, Math.ceil(Math.max(Math.max(a[0], b1[0]), Math.max(b3[0], far[0])))),
+                    minY = (int) Math.max(0, Math.floor(Math.min(Math.min(a[1], b1[1]), Math.min(b3[1], far[1])))),
+                    maxY = (int) Math.min(size - 1, Math.ceil(Math.max(Math.max(a[1], b1[1]), Math.max(b3[1], far[1]))));
+                double[] t = norm(e1), bt = norm(e3);
+                boolean mine = q.texture().equals(id);
+                MosaicMaterial.Image other = mine ? null : faceTexture(q.texture());
+                for (int py = minY; py <= maxY; py++)
+                    for (int px = minX; px <= maxX; px++) {
+                        double X = px + 0.5 - a[0], Y = py + 0.5 - a[1];
+                        double s = (X * d3[1] - Y * d3[0]) / det, tt = (d1[0] * Y - d1[1] * X) / det;
+                        if (s < 0 || s >= 1 || tt < 0 || tt >= 1) continue;
+                        double[] P = {p[0][0] + e1[0] * s + e3[0] * tt, p[0][1] + e1[1] * s + e3[1] * tt, p[0][2] + e1[2] * s + e3[2] * tt};
+                        double z = P[0] + P[1] + P[2];
+                        int i = py * size + px;
+                        if (z <= depth[i]) continue;
+                        double[] uv = BlockModels.uvAt(q, s, tt);
+                        int argb;
+                        if (mine) argb = shade(b, base, uv[0] / 16, uv[1] / 16, n[0], n[1], n[2], t[0], t[1], t[2], bt[0], bt[1], bt[2], lx, ly, lz,
+                            Math.min(b.w(), b.h()));
+                        else argb = plain(other, uv[0] / 16, uv[1] / 16, n, lx, ly, lz);
+                        if (argb == 0) continue;
+                        depth[i] = z;
+                        img.setRGB(px, py, argb);
+                    }
+            }
+            return img;
+        }
+
+        MosaicMaterial.Image faceTexture(String id) {
+            return faceTextures.computeIfAbsent(id, k -> {
+                String ns = k.substring(0, k.indexOf(':')), path = k.substring(k.indexOf(':') + 1);
+                String entry = "assets/" + ns + "/textures/" + path + ".png";
+                BufferedImage img = model.materialSource == null ? null : StudioLibrary.image(model.materialSource, entry);
+                if (img == null) for (StudioLibrary.Source v : StudioLibrary.vanillaJars()) if ((img = StudioLibrary.image(v, entry)) != null) break;
+                return img == null ? null : StudioLibrary.toMaterial(img);
+            });
+        }
+
+        static int plain(MosaicMaterial.Image tex, double u, double v, double[] n, double lx, double ly, double lz) {
+            if (tex == null) return 0xFF6A6A6A;
+            int frame = Math.min(tex.w(), tex.h());
+            int x = Math.min(frame - 1, Math.max(0, (int) (u * frame))), y = Math.min(frame - 1, Math.max(0, (int) (v * frame)));
+            int c = tex.argb()[y * tex.w() + x];
+            if ((c >>> 24) < 128) return 0;
+            double k = 0.35 + 0.75 * Math.max(0, n[0] * lx + n[1] * ly + n[2] * lz);
+            int r = (int) Math.min(255, ((c >> 16) & 255) * k), g = (int) Math.min(255, ((c >> 8) & 255) * k), bl = (int) Math.min(255, (c & 255) * k);
+            return 0xFF000000 | r << 16 | g << 8 | bl;
+        }
+
+        static double[] proj(double[] p, double scale, double c30, double s30, int size) {
+            return new double[] {size / 2.0 + (p[0] - p[2]) * c30 * scale, size / 2.0 + ((p[0] + p[2]) * s30 - p[1]) * scale};
+        }
+
+        static double[] sub(double[] a, double[] b) { return new double[] {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
+        static double dot(double[] a, double[] b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+        static double[] cross(double[] a, double[] b) {
+            return new double[] {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+        }
+        static double[] norm(double[] a) {
+            double l = Math.sqrt(dot(a, a));
+            return l < 1e-12 ? a : new double[] {a[0] / l, a[1] / l, a[2] / l};
         }
 
         static BufferedImage channel(MosaicMaterial.Baked b, MosaicMaterial.Image base, View v) {

@@ -390,6 +390,7 @@ public final class MosaicGraph {
                 return done(null);
             }
             List<String> outputs = new ArrayList<>();
+            for (JsonElement el : root.getAsJsonArray("nodes")) if (el.isJsonObject()) mute(el.getAsJsonObject());
             for (JsonElement el : root.getAsJsonArray("nodes")) readNode(el, outputs);
             String outputId = outputs.isEmpty() ? null : outputs.get(0);
             if (outputs.size() != 1) {
@@ -461,6 +462,34 @@ public final class MosaicGraph {
         }
 
         // -------------------------------------------------------------- nodes
+
+        /**
+         * A muted node ({@code "muted": true}, M in the editor) passes its first wired input through unchanged, like
+         * Blender's mute; one with no wired input gives zero. Output nodes cannot be muted.
+         */
+        void mute(JsonObject o) {
+            if (!o.has("muted") || !o.get("muted").isJsonPrimitive() || !o.get("muted").getAsBoolean()) return;
+            String type = text(o, "type"), id = text(o, "id");
+            if (type == null || isOutput(type)) return;
+            JsonObject in = o.has("inputs") && o.get("inputs").isJsonObject() ? o.getAsJsonObject("inputs") : new JsonObject();
+            String ref = null;
+            for (Port p : portsOf(type, functions))
+                if (ref == null && in.has(p.name()) && in.get(p.name()).isJsonPrimitive()) ref = in.get(p.name()).getAsString();
+            if (ref == null) for (var e : in.entrySet()) if (ref == null && e.getValue().isJsonPrimitive()) ref = e.getValue().getAsString();
+            for (String k : List.of("mask", "index", "value", "defaults", "inputs")) o.remove(k);
+            if (ref != null) {
+                o.addProperty("type", "mosaic.reroute");
+                JsonObject a = new JsonObject();
+                a.addProperty("a", ref);
+                o.add("inputs", a);
+            } else {
+                o.addProperty("type", "mosaic.const");
+                JsonArray zero = new JsonArray();
+                zero.add(0.0);
+                o.add("value", zero);
+            }
+            hint(id, "node " + id + " is muted (M): it passes its input through", Fix.NONE);
+        }
 
         void readNode(JsonElement el, List<String> outputs) {
             if (!el.isJsonObject()) {

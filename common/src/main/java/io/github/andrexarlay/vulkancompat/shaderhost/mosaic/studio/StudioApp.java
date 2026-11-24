@@ -105,6 +105,11 @@ final class StudioApp {
                 switchWorkspace(StudioModel.Workspace.MATERIALS);
                 StudioLibrary.vanillaJars().stream().findFirst().ifPresent(src ->
                     model.openMaterial(src, "assets/minecraft/textures/" + shotMaterial + ".png"));
+                if (Boolean.getBoolean("mosaic.selfshot.back")) {
+                    Timer back = new Timer(800, e2 -> switchWorkspace(StudioModel.Workspace.SHADERS));
+                    back.setRepeats(false);
+                    back.start();
+                }
             });
             m.setRepeats(false);
             m.start();
@@ -323,48 +328,124 @@ final class StudioApp {
         else settings.layout = Dock.saveAll(windows);
     }
 
-    /** Switches between Shaders and Materials: each keeps its own document and window layout. */
+    /** Per workspace while another one is open: its area tree, its pop-out windows, its file and undo history. */
+    private final java.util.Map<StudioModel.Workspace, Component> parkedTrees = new java.util.EnumMap<>(StudioModel.Workspace.class);
+    private final java.util.Map<StudioModel.Workspace, List<Dock.StudioWindow>> parkedWindows = new java.util.EnumMap<>(StudioModel.Workspace.class);
+    private final java.util.Map<StudioModel.Workspace, List<List<String>>> parkedHistory = new java.util.EnumMap<>(StudioModel.Workspace.class);
+    private final java.util.Map<StudioModel.Workspace, Path> parkedFile = new java.util.EnumMap<>(StudioModel.Workspace.class);
+
+    /**
+     * Switches between Shaders and Materials without rebuilding anything: the open workspace's areas (with their graph
+     * view, scroll positions, panel state) are parked and the other's are put back, its pop-out windows hidden and shown,
+     * documents and undo histories swapped, with a short cross-fade.
+     */
     void switchWorkspace(StudioModel.Workspace ws) {
-        if (switching || ws == model.workspace) {
-            workspaceTabs.selected = ws.ordinal();
-            workspaceTabs.repaint();
+        if (switching || ws == model.workspace || main == null) {
+            workspaceTabs.select(ws.ordinal());
             return;
         }
         switching = true;
         try {
+            BufferedImage before = main.snapshot();
+            StudioModel.Workspace from = model.workspace;
             if (model.doc.dirty && model.doc.file != null) model.save(false);
+            if (main.maximized != null && main.root.getComponentCount() > 0 && main.root.getComponent(0) instanceof Dock.Area a)
+                Dock.maximize(a); // restore a maximized area before parking the tree
             storeLayout();
+            // park the current workspace
             if (model.doc.file != null) {
-                if (model.workspace == StudioModel.Workspace.MATERIALS) settings.lastMaterial = model.doc.file.toString();
+                parkedFile.put(from, model.doc.file);
+                if (from == StudioModel.Workspace.MATERIALS) settings.lastMaterial = model.doc.file.toString();
                 else {
                     settings.lastShader = model.doc.file.toString();
                     model.shaderFile = model.doc.file;
                 }
             }
+            parkedHistory.put(from, model.doc.historyState());
+            Component tree = main.root.getComponentCount() > 0 ? main.root.getComponent(0) : null;
+            if (tree != null) parkedTrees.put(from, tree);
+            List<Dock.StudioWindow> extras = new ArrayList<>();
+            for (Dock.StudioWindow w : windows) if (!w.main) extras.add(w);
+            for (Dock.StudioWindow w : extras) w.setVisible(false);
+            windows.removeAll(extras);
+            parkedWindows.put(from, extras);
+
+            // bring the other workspace's document
             model.workspace = ws;
+            Path file = parkedFile.get(ws);
+            if (file == null) {
+                String last = ws == StudioModel.Workspace.MATERIALS ? settings.lastMaterial : settings.lastShader;
+                file = last == null || last.isBlank() ? null : Path.of(last);
+            }
             if (ws == StudioModel.Workspace.MATERIALS) {
-                Path last = settings.lastMaterial == null || settings.lastMaterial.isBlank() ? null : Path.of(settings.lastMaterial);
-                if (last != null && Files.exists(last)) model.openMaterialFile(last);
+                if (file != null && Files.exists(file)) model.openMaterialFile(file);
                 else {
                     model.replace("{\"nodes\": []}", null, "Materials");
                     model.doc.file = null;
                     model.say("Materials: double-click a block or item texture in the Library to give it a surface", OK);
                 }
-            } else {
-                Path last = model.shaderFile != null ? model.shaderFile
-                    : settings.lastShader == null || settings.lastShader.isBlank() ? null : Path.of(settings.lastShader);
-                if (last != null) model.open(last);
+            } else if (file != null) model.open(file);
+            List<List<String>> h = parkedHistory.get(ws);
+            if (h != null && h.size() == 4) model.doc.restoreHistory(h.get(0), h.get(1), h.get(2), h.get(3));
+            else {
+                model.doc.resetHistory();
+                ProjectStore.load(model, null);
             }
-            model.doc.resetHistory();
-            ProjectStore.load(model, null);
-            workspaceTabs.selected = ws.ordinal();
+
+            // and its areas
+            Component next = parkedTrees.remove(ws);
+            if (next == null) {
+                var specs = Dock.parseWindows(currentLayout());
+                next = Dock.load(model, specs.get(0).getAsJsonObject().getAsJsonObject("tree"));
+                for (int i = 1; i < specs.size(); i++) {
+                    var o = specs.get(i).getAsJsonObject();
+                    Dock.StudioWindow w = newWindow(false, Dock.load(model, o.getAsJsonObject("tree")));
+                    if (o.has("w")) w.setBounds(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("w").getAsInt(), o.get("h").getAsInt());
+                    w.setVisible(true);
+                }
+            } else {
+                for (Dock.StudioWindow w : parkedWindows.getOrDefault(ws, List.of())) {
+                    windows.add(w);
+                    w.setVisible(true);
+                }
+            }
+            parkedWindows.remove(ws);
+            main.root.removeAll();
+            main.root.add(next, BorderLayout.CENTER);
+            main.root.revalidate();
+            main.root.repaint();
+            GraphPanel g = findGraph(next);
+            if (g != null) model.activeGraph = g;
+            model.selectionChanged();
+            model.fire();
+            workspaceTabs.select(ws.ordinal());
+            main.fadeFrom(before);
             keepLayout = true;
-            restyle(settings.copy());
-            saveSettings(); // before the new windows are laid out: keep the stored layouts as they are
+            saveSettings();
             keepLayout = false;
         } finally {
             switching = false;
         }
+    }
+
+    static GraphPanel findGraph(Component c) {
+        if (c instanceof GraphPanel g) return g;
+        if (c instanceof Container k) for (Component child : k.getComponents()) {
+            GraphPanel g = findGraph(child);
+            if (g != null) return g;
+        }
+        return null;
+    }
+
+    /** Theme changes rebuild the visible workspace; parked ones are rebuilt from their layout when opened. */
+    private void dropParked() {
+        for (Component t : parkedTrees.values()) if (t instanceof Container c) for (Dock.Area a : Dock.areas(c)) a.dispose();
+        parkedTrees.clear();
+        for (List<Dock.StudioWindow> ws : parkedWindows.values()) for (Dock.StudioWindow w : ws) {
+            for (Dock.Area a : Dock.areas(w.root)) a.dispose();
+            w.dispose();
+        }
+        parkedWindows.clear();
     }
 
     private JComponent quick() {
@@ -599,6 +680,7 @@ final class StudioApp {
             case RENAME -> { if (g != null) g.renameDialog(); }
             case GROUP -> model.group(h);
             case UNGROUP -> model.ungroup();
+            case MUTE -> model.toggleMute();
             case ARRANGE -> {
                 model.arrange(h);
                 if (g != null && model.selection.size() < 2) g.fit();
@@ -727,6 +809,7 @@ final class StudioApp {
     /** Applies new settings: every window is rebuilt with the new look and cross-fades from its old picture. */
     void restyle(StudioSettings next) {
         storeLayout();
+        dropParked();
         next.layout = settings.layout;
         next.materialLayout = settings.materialLayout;
         next.keys = model.keys.toText();

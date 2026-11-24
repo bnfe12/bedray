@@ -1017,6 +1017,7 @@ final class GraphPanel extends JComponent {
             return m;
         }
         item(m, "Rename / label...", k.humanFor(StudioKeys.Action.RENAME), this::renameDialog);
+        item(m, n.muted ? "Unmute" : "Mute (pass the input through)", k.humanFor(StudioKeys.Action.MUTE), model::toggleMute);
         item(m, model.gamePreview != null && model.gamePreview.equals(n.id) ? "Stop preview in game" : "Preview this node in game", "",
             () -> model.previewInGame(model.gamePreview != null && model.gamePreview.equals(n.id) ? null : n));
         item(m, "Wire output into...", k.humanFor(StudioKeys.Action.CONNECT_FROM), this::connectFrom);
@@ -1157,7 +1158,28 @@ final class GraphPanel extends JComponent {
         }
     }
 
+    /** A muted node is drawn faded with a red bypass line from its first input to its output. */
     private void node(Graphics2D g, MosaicDocument.ENode n) {
+        if (!n.muted) {
+            nodeBody(g, n);
+            return;
+        }
+        Composite was = g.getComposite();
+        g.setComposite(AlphaComposite.SrcOver.derive(0.4f));
+        nodeBody(g, n);
+        g.setComposite(was);
+        Stroke s = g.getStroke();
+        g.setColor(new Color(0xE0605A));
+        g.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        Point out = outSocket(n, 0);
+        Point in = inputs(n).isEmpty() ? new Point(n.x, out.y) : inSocket(n, 0);
+        g.drawLine(in.x, in.y, out.x, out.y);
+        g.setFont(UI_S);
+        g.drawString("muted", n.x + 6, n.y + height(n) + 13);
+        g.setStroke(s);
+    }
+
+    private void nodeBody(Graphics2D g, MosaicDocument.ENode n) {
         int h = height(n), w = W();
         boolean sel = model.selection.contains(n), prim = n == model.primary;
         List<MosaicGraph.Problem> probs = model.analysis == null ? List.of() : model.analysis.of(n.id);

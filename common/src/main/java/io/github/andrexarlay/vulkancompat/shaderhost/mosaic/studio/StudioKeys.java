@@ -25,6 +25,7 @@ public final class StudioKeys {
         GROUP("Group into a frame", "Nodes", "ctrl G"),
         UNGROUP("Remove frame", "Nodes", "ctrl shift G"),
         ARRANGE("Arrange by dependency", "Nodes", "ctrl L"),
+        MUTE("Mute / unmute selected nodes (pass the input through)", "Nodes", "M"),
         CONNECT_FROM("Wire selected output into ...", "Wires", "K"),
         CONNECT_INTO("Feed selected input from ...", "Wires", "shift K"),
         DISCONNECT("Disconnect inputs of selection", "Wires", "ctrl K"),

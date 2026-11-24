@@ -619,6 +619,19 @@ final class StudioModel {
             n -> MosaicGraph.portsOf(n.type, analysis.functions()).stream().map(MosaicGraph.Port::name).toList()));
     }
 
+    /** M: mutes the selection, or unmutes it when every selected node is muted already. */
+    void toggleMute() {
+        List<MosaicDocument.ENode> group = ordered().stream().filter(n -> !MosaicGraph.isOutput(n.type)).toList();
+        if (group.isEmpty()) {
+            say("Select nodes to mute (the output cannot be muted)", StudioUi.MUTED);
+            return;
+        }
+        boolean mute = group.stream().anyMatch(n -> !n.muted);
+        edit((mute ? "Mute " : "Unmute ") + (group.size() == 1 ? group.get(0).id : group.size() + " nodes"), () -> {
+            for (MosaicDocument.ENode n : group) n.muted = mute;
+        });
+    }
+
     /** Align / distribute the selection: left, top, horizontal spacing, vertical stack. */
     void align(String how, java.util.function.ToIntFunction<MosaicDocument.ENode> height) {
         if (selection.size() < 2) {

@@ -73,4 +73,23 @@ class MosaicMaterialTest {
             + "{\"id\": \"o\", \"type\": \"mosaic.output\", \"inputs\": {\"color\": \"t\"}}]}");
         assertTrue(s.problems().stream().anyMatch(p -> "t".equals(p.node()) && p.severity() == MosaicGraph.Severity.ERROR));
     }
+
+    @Test
+    void mutedNodesPassTheirInputThrough() {
+        String json = "{\"nodes\": [{\"id\": \"c\", \"type\": \"mosaic.sceneColor\"},"
+            + "{\"id\": \"v\", \"type\": \"vignette\", \"muted\": true, \"inputs\": {\"color\": \"c\"}},"
+            + "{\"id\": \"o\", \"type\": \"mosaic.output\", \"inputs\": {\"color\": \"v\"}}],"
+            + "\"functions\": []}";
+        // vignette is a library function: use a plain node instead so the file stands alone
+        json = json.replace("\"vignette\"", "\"mosaic.saturate\"").replace("\"color\": \"c\"}}", "\"a\": \"c\"}}");
+        MosaicGraph.Analysis a = MosaicGraph.analyze(json);
+        assertNull(a.firstError(), String.valueOf(a.problems()));
+        assertEquals("mosaic.reroute", a.graph().node("v").type());
+        assertTrue(a.problems().stream().anyMatch(p -> "v".equals(p.node()) && p.message().contains("muted")));
+        assertNotNull(MosaicCodegen.generate(a.graph(), MosaicCodegen.Options.DEFAULT, false).source());
+        MosaicGraph.Analysis lone = MosaicGraph.analyze("{\"nodes\": [{\"id\": \"t\", \"type\": \"mosaic.time\", \"muted\": true},"
+            + "{\"id\": \"o\", \"type\": \"mosaic.output\", \"inputs\": {\"color\": \"t\"}}]}");
+        assertNull(lone.firstError());
+        assertEquals("mosaic.const", lone.graph().node("t").type());
+    }
 }

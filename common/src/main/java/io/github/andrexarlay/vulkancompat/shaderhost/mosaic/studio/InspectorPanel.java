@@ -67,7 +67,8 @@ final class InspectorPanel extends Panels.Listening {
         MosaicDocument.ENode n = model.primary;
         String key = model.selection.size() + "|" + System.identityHashCode(n) + "|" + System.identityHashCode(model.selectedFrame) + "|"
             + (n == null ? "" : n.type + n.inputs + java.util.Arrays.toString(n.value) + n.mask + n.index + n.label + defaultsKey(n))
-            + "|" + model.analysis.problems().size() + "|" + width + "|" + model.doc.functions.size();
+            + "|" + model.analysis.problems().size() + "|" + width + "|" + model.doc.functions.size() + "|" + model.doc.nodes.size()
+            + "|" + model.doc.frames.size() + "|" + System.identityHashCode(model.doc.file);
         if (key.equals(shownKey)) return;
         Component focus = KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
         if (focus != null && SwingUtilities.isDescendingFrom(focus, content) && key.startsWith(shownKey.split("\\|")[0])) {

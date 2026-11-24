@@ -207,9 +207,37 @@ final class StudioWidgets {
 
         void setSelectedIndex(int i) {
             if (i < 0 || i >= items.size()) return;
+            boolean changed = i != selected;
             selected = i;
-            repaint();
+            if (changed) animate();
+            else repaint();
             for (Consumer<T> l : listeners) l.accept(getSelectedItem());
+        }
+
+        /** Shows {@code i} as selected without telling listeners (the app already switched). */
+        void select(int i) {
+            if (i < 0 || i >= items.size() || i == selected) return;
+            selected = i;
+            animate();
+        }
+
+        // the selection pill slides from the old segment to the new one
+        private double pillX = -1, pillW, fromX, fromW, toX, toW;
+        private long animStart;
+        private final javax.swing.Timer anim = new javax.swing.Timer(15, e -> {
+            double t = Math.min(1, (System.nanoTime() - animStart) / 1.6e8), k = 1 - Math.pow(1 - t, 3);
+            pillX = fromX + (toX - fromX) * k;
+            pillW = fromW + (toW - fromW) * k;
+            repaint();
+            if (t >= 1) ((javax.swing.Timer) e.getSource()).stop();
+        });
+
+        private void animate() {
+            fromX = pillX;
+            fromW = pillW;
+            animStart = System.nanoTime();
+            if (pillX < 0) repaint();
+            else anim.restart();
         }
 
         void setSelectedItem(T v) {
@@ -261,13 +289,22 @@ final class StudioWidgets {
             g.fillRoundRect(0, 0, getWidth() - 1, h + 1, 10, 10);
             g.setColor(EDGE);
             g.drawRoundRect(0, 0, getWidth() - 1, h + 1, 10, 10);
+            double drawnX = pillX;
+            if (pillX >= 0) {
+                g.setColor(mix(PANEL2, SELECT, 0.55));
+                g.fill(new RoundRectangle2D.Double(pillX, 2, pillW, h - 2, 8, 8));
+            }
             for (int i = 0; i < items.size(); i++) {
                 edges[i] = x;
                 int w = i == items.size() - 1 ? getWidth() - 1 - x : widths[i];
                 Item<T> it = items.get(i);
                 if (i == selected) {
-                    g.setColor(mix(PANEL2, SELECT, 0.55));
-                    g.fillRoundRect(x + 1, 2, w - 2, h - 2, 8, 8);
+                    toX = x + 1;
+                    toW = w - 2;
+                    if (pillX < 0 || !anim.isRunning()) {
+                        pillX = toX;
+                        pillW = toW;
+                    }
                 } else if (i == hover) {
                     g.setColor(mix(CODE_BG, TEXT, 0.08));
                     g.fillRoundRect(x + 1, 2, w - 2, h - 2, 8, 8);
@@ -287,6 +324,7 @@ final class StudioWidgets {
                 x += w;
             }
             edges[items.size()] = getWidth();
+            if (!anim.isRunning() && Math.abs(drawnX - pillX) > 0.5) repaint(); // first paint or a resize
             g.dispose();
         }
     }
