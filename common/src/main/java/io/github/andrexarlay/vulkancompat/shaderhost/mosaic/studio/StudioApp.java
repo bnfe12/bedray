@@ -99,6 +99,16 @@ final class StudioApp {
         ProjectStore.load(model, graph());
         updateStatus();
         String shot = System.getProperty("mosaic.selfshot");
+        String shotMaterial = System.getProperty("mosaic.selfshot.material"); // e.g. block/copper_block: verification aid
+        if (shot != null && shotMaterial != null) {
+            Timer m = new Timer(1200, e -> {
+                switchWorkspace(StudioModel.Workspace.MATERIALS);
+                StudioLibrary.vanillaJars().stream().findFirst().ifPresent(src ->
+                    model.openMaterial(src, "assets/minecraft/textures/" + shotMaterial + ".png"));
+            });
+            m.setRepeats(false);
+            m.start();
+        }
         if (shot != null) {
             Timer t = new Timer(3500, e -> {
                 try {
@@ -126,6 +136,14 @@ final class StudioApp {
             frame.remove(w.root);
             w.menuSlot.setOpaque(false);
             w.menuSlot.add(menus(), BorderLayout.CENTER);
+            JPanel tabs = new JPanel(new BorderLayout());
+            tabs.setOpaque(false);
+            tabs.setBorder(new EmptyBorder(2, 10, 2, 4));
+            workspaceTabs.selected = model.workspace.ordinal();
+            workspaceTabs.listeners.clear();
+            workspaceTabs.onChange(this::switchWorkspace);
+            tabs.add(workspaceTabs, BorderLayout.CENTER);
+            w.menuSlot.add(tabs, BorderLayout.EAST);
             w.quickSlot.add(quick());
             body.add(w.root, BorderLayout.CENTER);
             body.add(statusBar(), BorderLayout.SOUTH);
@@ -284,6 +302,71 @@ final class StudioApp {
     }
 
     /** The few always-visible controls: Live and the result view. */
+    // ================================================================== workspaces
+
+    final StudioWidgets.Segmented<StudioModel.Workspace> workspaceTabs = new StudioWidgets.Segmented<StudioModel.Workspace>()
+        .add(StudioModel.Workspace.SHADERS, "Shaders", StudioWidgets.glyph("shader", new Color(0x5AA0E0)), "Shader graphs: what the frame looks like")
+        .add(StudioModel.Workspace.MATERIALS, "Materials", StudioWidgets.glyph("vanilla", new Color(0xD08A4A)),
+            "Materials: the surface of each block and item texture (PBR), baked into a resource pack");
+    private boolean switching, keepLayout;
+
+    /** The layout of the open workspace, as saved (or its default). */
+    String currentLayout() {
+        String l = model.workspace == StudioModel.Workspace.MATERIALS ? settings.materialLayout : settings.layout;
+        return l != null ? l : model.workspace == StudioModel.Workspace.MATERIALS ? Dock.defaultMaterialLayout() : Dock.defaultLayout();
+    }
+
+    /** Remembers the arrangement of the open workspace. */
+    void storeLayout() {
+        if (windows.isEmpty() || keepLayout) return;
+        if (model.workspace == StudioModel.Workspace.MATERIALS) settings.materialLayout = Dock.saveAll(windows);
+        else settings.layout = Dock.saveAll(windows);
+    }
+
+    /** Switches between Shaders and Materials: each keeps its own document and window layout. */
+    void switchWorkspace(StudioModel.Workspace ws) {
+        if (switching || ws == model.workspace) {
+            workspaceTabs.selected = ws.ordinal();
+            workspaceTabs.repaint();
+            return;
+        }
+        switching = true;
+        try {
+            if (model.doc.dirty && model.doc.file != null) model.save(false);
+            storeLayout();
+            if (model.doc.file != null) {
+                if (model.workspace == StudioModel.Workspace.MATERIALS) settings.lastMaterial = model.doc.file.toString();
+                else {
+                    settings.lastShader = model.doc.file.toString();
+                    model.shaderFile = model.doc.file;
+                }
+            }
+            model.workspace = ws;
+            if (ws == StudioModel.Workspace.MATERIALS) {
+                Path last = settings.lastMaterial == null || settings.lastMaterial.isBlank() ? null : Path.of(settings.lastMaterial);
+                if (last != null && Files.exists(last)) model.openMaterialFile(last);
+                else {
+                    model.replace("{\"nodes\": []}", null, "Materials");
+                    model.doc.file = null;
+                    model.say("Materials: double-click a block or item texture in the Library to give it a surface", OK);
+                }
+            } else {
+                Path last = model.shaderFile != null ? model.shaderFile
+                    : settings.lastShader == null || settings.lastShader.isBlank() ? null : Path.of(settings.lastShader);
+                if (last != null) model.open(last);
+            }
+            model.doc.resetHistory();
+            ProjectStore.load(model, null);
+            workspaceTabs.selected = ws.ordinal();
+            keepLayout = true;
+            restyle(settings.copy());
+            saveSettings(); // before the new windows are laid out: keep the stored layouts as they are
+            keepLayout = false;
+        } finally {
+            switching = false;
+        }
+    }
+
     private JComponent quick() {
         JPanel p = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         p.setOpaque(false);
@@ -349,7 +432,7 @@ final class StudioApp {
         fc.setSelectedFile(new java.io.File("mosaic.export.comp"));
         if (fc.showSaveDialog(main) != JFileChooser.APPROVE_OPTION) return;
         try {
-            Files.writeString(fc.getSelectedFile().toPath(), model.generated.source());
+            if (model.generated != null) Files.writeString(fc.getSelectedFile().toPath(), model.generated.source());
             model.say("Exported " + fc.getSelectedFile(), OK);
         } catch (Exception ex) {
             model.say("Export failed: " + ex.getMessage(), BAD);
@@ -388,7 +471,13 @@ final class StudioApp {
             statusLeft.setText(model.message);
             statusLeft.setForeground(model.messageColor);
             model.message = "";
-        } else if (a.ok()) {
+        } else if (a.ok() && model.generated == null && model.materialDoc()) {
+            var b = model.baked;
+            statusLeft.setText("Material   " + model.doc.nodes.size() + " nodes" + (b == null ? "   - " + model.bakeError
+                : "   baked " + b.w() + "x" + b.h() + (b.albedo() != null ? ", new colours" : "") + (b.normal() != null ? ", normal + height" : "")
+                + (b.warnings().isEmpty() ? "" : "   - " + b.warnings().size() + " warning(s)")) + (model.doc.dirty ? "   - unsaved" : ""));
+            statusLeft.setForeground(b == null || !b.warnings().isEmpty() ? WARN : OK);
+        } else if (a.ok() && model.generated != null) {
             var s = model.generated.stats();
             statusLeft.setText("Valid   " + model.doc.nodes.size() + " nodes -> " + s.emitted() + " in the shader   (" + s.unused() + " unused, "
                 + s.folded() + " folded, " + s.merged() + " merged)   per pixel: " + s.cost().rays() + " rays, " + s.cost().samples() + " samples"
@@ -402,6 +491,9 @@ final class StudioApp {
         if (model.compiling) {
             statusMid.setText("compiling...");
             statusMid.setForeground(MUTED);
+        } else if (model.materialDoc()) {
+            statusMid.setText(model.materialStatus);
+            statusMid.setForeground(model.materialStatus.startsWith("Could not") ? BAD : OK);
         } else if (model.compile != null && model.generated != null) {
             statusMid.setText(model.compile.ok() ? "compiles: " + model.compile.spirvBytes() + " B SPIR-V, " + model.compile.micros() / 1000 + " ms"
                 : "compile error: " + model.compile.errors().get(0).where());
@@ -634,8 +726,9 @@ final class StudioApp {
 
     /** Applies new settings: every window is rebuilt with the new look and cross-fades from its old picture. */
     void restyle(StudioSettings next) {
-        settings.layout = Dock.saveAll(windows);
+        storeLayout();
         next.layout = settings.layout;
+        next.materialLayout = settings.materialLayout;
         next.keys = model.keys.toText();
         next.hiddenLibraries = settings.hiddenLibraries;
         next.collapsed = settings.collapsed;
@@ -653,7 +746,7 @@ final class StudioApp {
         model.keys = new StudioKeys(settings.keys);
         windows.clear();
         main = null;
-        var specs = Dock.parseWindows(settings.layout);
+        var specs = Dock.parseWindows(currentLayout());
         for (int i = 0; i < specs.size() && i < old.size(); i++) {
             var o = specs.get(i).getAsJsonObject();
             Dock.StudioWindow w = newWindow(o.get("main").getAsBoolean(), Dock.load(model, o.getAsJsonObject("tree")));
@@ -677,7 +770,7 @@ final class StudioApp {
     }
 
     void saveSettings() {
-        settings.layout = Dock.saveAll(windows);
+        storeLayout();
         settings.keys = model.keys.toText();
         settings.save();
     }

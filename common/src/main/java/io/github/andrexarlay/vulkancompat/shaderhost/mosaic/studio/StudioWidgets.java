@@ -233,6 +233,12 @@ final class StudioWidgets {
         }
 
         @Override public Dimension getPreferredSize() { return new Dimension(fullWidth(), 24); }
+
+        static String fit(String s, FontMetrics fm, int w) {
+            if (fm.stringWidth(s) <= w) return s;
+            for (int n = s.length() - 1; n > 0; n--) if (fm.stringWidth(s.substring(0, n) + ".") <= w) return s.substring(0, n) + ".";
+            return "";
+        }
         @Override public Dimension getMinimumSize() { return new Dimension(items.size() * 30, 24); }
 
         @Override protected void paintComponent(Graphics g0) {
@@ -266,15 +272,17 @@ final class StudioWidgets {
                     g.setColor(mix(CODE_BG, TEXT, 0.08));
                     g.fillRoundRect(x + 1, 2, w - 2, h - 2, 8, 8);
                 }
-                int content = (it.icon() != null ? it.icon().getIconWidth() : 0) + (compact ? 0 : (it.icon() != null ? 5 : 0) + fm.stringWidth(it.label()));
+                boolean text = !compact || it.icon() == null; // no icon: the label stays, even when narrow
+                String label = text && compact ? fit(it.label(), fm, w - 6) : it.label();
+                int content = (it.icon() != null ? it.icon().getIconWidth() : 0) + (text ? (it.icon() != null ? 5 : 0) + fm.stringWidth(label) : 0);
                 int cx = x + (w - content) / 2;
                 if (it.icon() != null) {
                     it.icon().paintIcon(this, g, cx, (h + 2 - it.icon().getIconHeight()) / 2);
                     cx += it.icon().getIconWidth() + 5;
                 }
-                if (!compact) {
+                if (text) {
                     g.setColor(i == selected ? Color.WHITE : i == hover ? TEXT : MUTED);
-                    g.drawString(it.label(), cx, (h + 2 + fm.getAscent() - fm.getDescent()) / 2);
+                    g.drawString(label, cx, (h + 2 + fm.getAscent() - fm.getDescent()) / 2);
                 }
                 x += w;
             }

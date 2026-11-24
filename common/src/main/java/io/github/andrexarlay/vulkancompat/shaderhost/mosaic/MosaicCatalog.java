@@ -27,7 +27,8 @@ public final class MosaicCatalog {
         TEXTURE("Textures", 0xFFC08A2E),
         MATH("Math", 0xFF4B8A4B),
         VECTOR("Vector", 0xFFA67C34),
-        LOGIC("Compare", 0xFF9A4D7A);
+        LOGIC("Compare", 0xFF9A4D7A),
+        MATERIAL("Material", 0xFFB86A3A);
 
         public final String label;
         public final int color;
@@ -46,6 +47,10 @@ public final class MosaicCatalog {
 
     private static final List<Entry> ALL = List.of(
         e("mosaic.output", "Output", Category.OUTPUT, "Final pixel color. float -> grey, vec3 -> opaque, vec4 as is."),
+        e("mat.output", "Material Output", Category.MATERIAL, "The texture's surface: baked into the albedo and LabPBR _s / _n maps."),
+        e("mat.bsdf", "Principled BSDF", Category.MATERIAL, "Base colour, roughness, metallic, specular, emission, height (bump), normal strength, AO."),
+        e("mat.texture", "Block Texture", Category.MATERIAL, "The texture this material belongs to, per pixel (or at uv)."),
+        e("mat.image", "Image Texture", Category.MATERIAL, "An imported image (roughness map, height map, ...), tiled over the texture."),
         e("mosaic.uv", "UV", Category.INPUT, "Pixel position, 0..1 across the screen."),
         e("mosaic.texel", "Pixel", Category.INPUT, "Pixel position in pixels."),
         e("mosaic.size", "Screen size", Category.INPUT, "Render target width and height in pixels."),

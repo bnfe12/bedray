@@ -143,10 +143,20 @@ public final class StudioSettings {
     public java.util.Set<String> collapsed = new java.util.LinkedHashSet<>();
     /** Saved window layout (see Dock), or null for the default. */
     public String layout;
+    /** Layout of the Materials workspace (the Shaders workspace uses {@link #layout}). */
+    public String materialLayout;
+    /** Minecraft folder with Bedray (resourcepacks/ for materials); empty: found from the shader pack path. */
+    public String gameDir = "";
+    /** A client jar to take vanilla textures from; empty: found in launcher and build caches. */
+    public String vanillaJar = "";
+    /** Last files of each workspace. */
+    public String lastShader = "", lastMaterial = "";
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     public static Path file() {
+        String custom = System.getProperty("mosaic.settings"); // a separate settings file (tests, portable installs)
+        if (custom != null && !custom.isBlank()) return Path.of(custom);
         return Path.of(System.getProperty("user.home"), ".bedray", "mosaic-studio.json");
     }
 

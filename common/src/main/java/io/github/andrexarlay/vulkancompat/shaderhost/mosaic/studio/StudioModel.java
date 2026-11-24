@@ -7,6 +7,7 @@ import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicDocument;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicEffects;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicFunction;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph;
+import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicMaterial;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicShaderCheck;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicTemplates;
 
@@ -89,7 +90,237 @@ final class StudioModel {
 
     private void analyze() {
         analysis = doc.analyze();
-        generated = analysis.ok() ? MosaicCodegen.generate(analysis.graph(), MosaicCodegen.Options.DEFAULT, false) : null;
+        MosaicGraph g = analysis.graph();
+        if (g != null && g.isMaterial()) {
+            generated = null;
+            bake(g);
+        } else {
+            baked = null;
+            bakeError = null;
+            generated = analysis.ok() ? MosaicCodegen.generate(g, MosaicCodegen.Options.DEFAULT, false) : null;
+        }
+    }
+
+    // ================================================================== workspaces and materials
+
+    /** Shaders: the frame's shader graph. Materials: per-texture surfaces baked into a resource pack. */
+    enum Workspace { SHADERS, MATERIALS }
+
+    Workspace workspace = Workspace.SHADERS;
+    /** The shader graph file while another workspace is open (game folder, switching back). */
+    Path shaderFile;
+    StudioLibrary.Source materialSource;
+    String materialEntry;
+    MosaicMaterial.Image baseImage;
+    MosaicMaterial.Baked baked;
+    String bakeError;
+    volatile String materialStatus = "";
+    volatile String materialGameStatus = "";
+    final java.util.Map<String, MosaicMaterial.Image> images = new java.util.HashMap<>();
+    int bakeVersion;
+
+    boolean materialDoc() {
+        MosaicGraph g = analysis.graph();
+        return g != null ? g.isMaterial() : doc.nodes.stream().anyMatch(n -> n.type.startsWith("mat."));
+    }
+
+    private void bake(MosaicGraph g) {
+        bakeVersion++;
+        if (baseImage == null) {
+            baked = null;
+            bakeError = "pick the texture this material is for: double-click it in the Library";
+            return;
+        }
+        for (MosaicGraph.Node n : g.nodes())
+            if (n.type().equals("mat.image") && n.mask() != null && !images.containsKey(n.mask())) loadImage(n.mask());
+        try {
+            baked = MosaicMaterial.bake(g, baseImage, images);
+            bakeError = null;
+        } catch (IllegalArgumentException e) {
+            baked = null;
+            bakeError = e.getMessage();
+        }
+    }
+
+    private void loadImage(String mask) {
+        try {
+            Path p = StudioLibrary.materialPack(this).resolve("assets/mosaic/textures").resolve(mask);
+            java.awt.image.BufferedImage img = javax.imageio.ImageIO.read(p.toFile());
+            if (img != null) images.put(mask, StudioLibrary.toMaterial(img));
+        } catch (Exception ignored) {
+            // reported by the bake as a missing image
+        }
+    }
+
+    /** Starts (or reopens) the material of a texture from a library source. */
+    void openMaterial(StudioLibrary.Source src, String entry) {
+        java.awt.image.BufferedImage img = StudioLibrary.image(src, entry);
+        if (img == null) {
+            say("Could not read " + entry, StudioUi.BAD);
+            return;
+        }
+        try {
+            Path pack = StudioLibrary.materialPack(this);
+            StudioLibrary.ensurePack(pack);
+            Path file = pack.resolve(entry.substring(0, entry.length() - 4) + ".mosaic.json");
+            Files.createDirectories(file.getParent());
+            boolean existed = Files.exists(file);
+            String json = existed ? Files.readString(file, StandardCharsets.UTF_8) : MosaicMaterial.starter(guessRoughness(entry), guessMetal(entry));
+            Files.writeString(baseFile(file), src.id() + "\n" + entry + "\n", StandardCharsets.UTF_8);
+            if (doc.file != null && !materialDoc()) shaderFile = doc.file;
+            setBase(src, entry, img);
+            workspace = Workspace.MATERIALS;
+            replace(json, file, (existed ? "Open material " : "New material ") + StudioLibrary.id(entry));
+            if (!existed) save(false);
+            doc.dirty = false;
+            say((existed ? "Material " : "New material for ") + StudioLibrary.id(entry) + ": edit the nodes, Live writes it to "
+                + StudioLibrary.MATERIAL_PACK + " and the game reloads it", StudioUi.OK);
+        } catch (Exception e) {
+            say("Could not start the material: " + e.getMessage(), StudioUi.BAD);
+        }
+    }
+
+    /** Reopens a material file (its base texture is remembered next to it). */
+    void openMaterialFile(Path file) {
+        try {
+            List<String> base = Files.exists(baseFile(file)) ? Files.readAllLines(baseFile(file)) : List.of();
+            StudioLibrary.Source src = base.isEmpty() ? null : StudioLibrary.fromId(base.get(0));
+            if (src != null && base.size() > 1) {
+                java.awt.image.BufferedImage img = StudioLibrary.image(src, base.get(1));
+                if (img != null) setBase(src, base.get(1), img);
+            }
+            workspace = Workspace.MATERIALS;
+            open(file);
+        } catch (Exception e) {
+            say("Could not open the material: " + e.getMessage(), StudioUi.BAD);
+        }
+    }
+
+    static Path baseFile(Path materialFile) {
+        String n = materialFile.getFileName().toString();
+        return materialFile.resolveSibling(n.substring(0, n.length() - ".mosaic.json".length()) + ".mosaic-base");
+    }
+
+    private void setBase(StudioLibrary.Source src, String entry, java.awt.image.BufferedImage img) {
+        materialSource = src;
+        materialEntry = entry;
+        baseImage = StudioLibrary.toMaterial(img);
+        images.clear();
+    }
+
+    static double guessRoughness(String entry) {
+        String e = entry.toLowerCase(java.util.Locale.ROOT);
+        if (e.contains("glass") || e.contains("ice")) return 0.05;
+        if (e.contains("gold") || e.contains("iron") || e.contains("copper") || e.contains("netherite") || e.contains("diamond")) return 0.3;
+        if (e.contains("polished") || e.contains("quartz") || e.contains("terracotta_glazed")) return 0.35;
+        if (e.contains("wool") || e.contains("dirt") || e.contains("sand") || e.contains("gravel") || e.contains("leaves")) return 0.95;
+        return 0.7;
+    }
+
+    static double guessMetal(String entry) {
+        String e = entry.toLowerCase(java.util.Locale.ROOT);
+        return e.contains("_block") && (e.contains("gold") || e.contains("iron") || e.contains("copper") || e.contains("netherite")) ? 1 : 0;
+    }
+
+    /** Puts an image from the library into the material as an Image Texture node (copied into the project). */
+    void addImageNode(StudioLibrary.Source src, String entry, Point world) {
+        try {
+            Path pack = StudioLibrary.materialPack(this);
+            StudioLibrary.ensurePack(pack);
+            String name = StudioLibrary.shortName(entry) + ".png";
+            String mask = "imported/" + name;
+            Path target = pack.resolve("assets/mosaic/textures").resolve(mask);
+            if (!(src.kind() == StudioLibrary.Kind.PROJECT && pack.resolve(entry).normalize().equals(target.normalize()))) {
+                Files.createDirectories(target.getParent());
+                Files.write(target, StudioLibrary.read(src, entry));
+            }
+            images.remove(mask);
+            MosaicDocument.ENode[] made = new MosaicDocument.ENode[1];
+            edit("Add image " + name, () -> {
+                MosaicDocument.ENode n = doc.add("mat.image", world.x, world.y);
+                n.mask = mask;
+                made[0] = n;
+            });
+            select(made[0]);
+        } catch (Exception e) {
+            say("Could not import the image: " + e.getMessage(), StudioUi.BAD);
+        }
+    }
+
+    /** Imports image files from disk into the project (Library > Import). */
+    void importImages(List<java.io.File> files) {
+        try {
+            Path dir = StudioLibrary.materialPack(this).resolve("assets/mosaic/textures/imported");
+            Files.createDirectories(dir);
+            StudioLibrary.ensurePack(StudioLibrary.materialPack(this));
+            int n = 0;
+            for (java.io.File f : files) {
+                java.awt.image.BufferedImage img = javax.imageio.ImageIO.read(f);
+                if (img == null) continue;
+                String name = f.getName().replaceAll("(?i)\\.(png|jpe?g|bmp|gif)$", "").toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_.-]", "_") + ".png";
+                javax.imageio.ImageIO.write(img, "png", dir.resolve(name).toFile());
+                n++;
+            }
+            say("Imported " + n + " image(s) into Project: drag them onto a material", StudioUi.OK);
+            fire();
+        } catch (Exception e) {
+            say("Import failed: " + e.getMessage(), StudioUi.BAD);
+        }
+    }
+
+    /** Writes the baked maps next to the material and asks the game to reload resources. */
+    void writeMaterial() {
+        MosaicMaterial.Baked b = baked;
+        Path file = doc.file;
+        if (b == null || file == null) return;
+        String base = file.getFileName().toString().replace(".mosaic.json", "");
+        Path dir = file.getParent();
+        StudioLibrary.Source src = materialSource;
+        String entry = materialEntry;
+        Path game = StudioLibrary.gameDir(this);
+        slangWorker.execute(() -> {
+            try {
+                List<String> wrote = new ArrayList<>();
+                png(dir.resolve(base + "_s.png"), b.w(), b.h(), b.specular());
+                wrote.add("_s");
+                if (b.normal() != null) {
+                    png(dir.resolve(base + "_n.png"), b.w(), b.h(), b.normal());
+                    wrote.add("_n");
+                } else Files.deleteIfExists(dir.resolve(base + "_n.png"));
+                if (b.albedo() != null) {
+                    png(dir.resolve(base + ".png"), b.w(), b.h(), b.albedo());
+                    wrote.add("colour");
+                    if (src != null && entry != null) try {
+                        Files.write(dir.resolve(base + ".png.mcmeta"), StudioLibrary.read(src, entry + ".mcmeta"));
+                    } catch (Exception ignored) {
+                        // not animated
+                    }
+                } else {
+                    Files.deleteIfExists(dir.resolve(base + ".png"));
+                    Files.deleteIfExists(dir.resolve(base + ".png.mcmeta"));
+                }
+                if (game != null) {
+                    Path link = game.resolve("bedray-studio");
+                    Files.createDirectories(link);
+                    Path tmp = link.resolve("materials.json.tmp");
+                    Files.writeString(tmp, "{\"reload\": " + System.currentTimeMillis() + ", \"pack\": \"" + StudioLibrary.MATERIAL_PACK + "\"}",
+                        StandardCharsets.UTF_8);
+                    Files.move(tmp, link.resolve("materials.json"), java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                }
+                materialStatus = "Baked " + b.w() + "x" + b.h() + " (" + String.join(", ", wrote) + ")"
+                    + (game == null ? " - set the game folder (Library) so Minecraft picks it up" : " - Minecraft reloads it");
+            } catch (Exception e) {
+                materialStatus = "Could not write the material: " + e.getMessage();
+            }
+            javax.swing.SwingUtilities.invokeLater(this::fire);
+        });
+    }
+
+    private static void png(Path p, int w, int h, int[] argb) throws java.io.IOException {
+        Path tmp = p.resolveSibling(p.getFileName() + ".tmp");
+        javax.imageio.ImageIO.write(StudioLibrary.fromArgb(w, h, argb), "png", tmp.toFile());
+        Files.move(tmp, p, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
     }
 
     /** After every document change. */
@@ -108,6 +339,13 @@ final class StudioModel {
     private void settled() {
         if (activeGraph != null) activeGraph.finishGlide();
         ProjectStore.save(this, activeGraph);
+        if (baked != null) {
+            if (live && doc.file != null) {
+                save(false);
+                writeMaterial();
+            }
+            return;
+        }
         if (generated == null) return;
         compileNow();
     }
@@ -155,6 +393,11 @@ final class StudioModel {
             for (MosaicShaderCheck.Error e : compile.errors())
                 out.add(new MosaicGraph.Problem(MosaicGraph.Severity.ERROR, e.node() != null ? e.node() : nodeOfFunction(e.function()),
                     null, "compiler (" + e.where() + "): " + e.message(), e.function() != null ? MosaicGraph.Fix.EDIT_CODE : MosaicGraph.Fix.NONE));
+        if (bakeError != null && materialDoc())
+            out.add(new MosaicGraph.Problem(MosaicGraph.Severity.WARNING, null, null, "material: " + bakeError, MosaicGraph.Fix.NONE));
+        if (baked != null)
+            for (String w : baked.warnings())
+                out.add(new MosaicGraph.Problem(MosaicGraph.Severity.WARNING, null, null, "material: " + w, MosaicGraph.Fix.NONE));
         out.addAll(analysis.problems());
         return out;
     }
@@ -243,8 +486,12 @@ final class StudioModel {
 
     List<Item> items() {
         List<Item> items = new ArrayList<>();
-        for (MosaicCatalog.Entry e : MosaicCatalog.all())
+        boolean materials = workspace == Workspace.MATERIALS;
+        for (MosaicCatalog.Entry e : MosaicCatalog.all()) {
+            if (materials ? !MosaicGraph.MATERIAL_SAFE.contains(e.type()) : e.category() == MosaicCatalog.Category.MATERIAL) continue;
             items.add(new Item(e.type(), e.label(), e.category().label, new Color(e.category().color, true), e.help(), null));
+        }
+        if (materials) return items; // effects and code nodes run on the GPU, materials bake on the CPU
         for (MosaicFunction f : MosaicEffects.all())
             items.add(new Item(f.type(), f.label(), f.category(), StudioUi.categoryColor(f.category()), f.help(), f));
         for (MosaicDocument.FDef f : doc.functions)
@@ -538,7 +785,7 @@ final class StudioModel {
     private void shipSpirv() {
         if (StudioUi.settings.slangCompiler != StudioSettings.SlangCompiler.STUDIO || doc.file == null) return;
         MosaicGraph g = analysis.graph();
-        if (g == null) return;
+        if (g == null || g.isMaterial()) return;
         Path bedray = doc.file.getParent();
         Path cacheDir = bedray.resolve(".studio").resolve("cache");
         slangWorker.execute(() -> {
@@ -595,7 +842,20 @@ final class StudioModel {
     /** Folder the game writes result frames into: next to mosaic.json, in .studio/. */
     Path linkDir() { return doc.file == null ? null : doc.file.getParent().resolve(".studio"); }
 
+    private long materialStamp = -1;
+
     private void pollGame() {
+        Path game = workspace == Workspace.MATERIALS ? StudioLibrary.gameDir(this) : null;
+        if (game != null) try {
+            Path st = game.resolve("bedray-studio").resolve("materials-status.txt");
+            if (Files.exists(st) && Files.getLastModifiedTime(st).toMillis() != materialStamp) {
+                materialStamp = Files.getLastModifiedTime(st).toMillis();
+                materialGameStatus = Files.readString(st, StandardCharsets.UTF_8).trim();
+                fire();
+            }
+        } catch (Exception ignored) {
+            // the game may be writing it
+        }
         Path dir = linkDir();
         if (dir == null) {
             gameStatus = "save the graph into a pack to connect a game";

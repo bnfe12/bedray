@@ -49,3 +49,6 @@ __pycache__/
 
 # Mosaic Studio per-project metadata and compile cache (next to a pack's mosaic.json)
 .studio/
+# SPIR-V Mosaic Studio builds next to a pack's mosaic.json (regenerated on save)
+mosaic.spv
+mosaic.spv.json

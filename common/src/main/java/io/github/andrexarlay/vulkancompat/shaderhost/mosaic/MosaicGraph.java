@@ -138,7 +138,20 @@ public final class MosaicGraph {
         // procedural textures
         "mosaic.noise", "mosaic.voronoi", "mosaic.whiteNoise", "mosaic.checker", "mosaic.wave", "mosaic.gradient",
         // output
-        "mosaic.output")));
+        "mosaic.output",
+        // material graphs (baked on the CPU into LabPBR textures, see MosaicMaterial)
+        "mat.texture", "mat.image", "mat.bsdf", "mat.output")));
+
+    /** The output node of a shader graph ({@code mosaic.output}) or of a material graph ({@code mat.output}). */
+    public static boolean isOutput(String type) { return type.equals("mosaic.output") || type.equals("mat.output"); }
+
+    /** Node types a material graph may use: CPU-evaluable, no scene or ray inputs. */
+    public static final Set<String> MATERIAL_SAFE = Set.of("mosaic.uv", "mosaic.texel", "mosaic.size", "mosaic.const", "mosaic.swizzle",
+        "mosaic.vec", "mosaic.add", "mosaic.sub", "mosaic.mul", "mosaic.div", "mosaic.gt", "mosaic.lt", "mosaic.min", "mosaic.max",
+        "mosaic.mix", "mosaic.clamp", "mosaic.step", "mosaic.dot", "mosaic.cross", "mosaic.reflect", "mosaic.neg", "mosaic.floor",
+        "mosaic.fract", "mosaic.sqrt", "mosaic.exp", "mosaic.abs", "mosaic.saturate", "mosaic.normalize", "mosaic.length", "mosaic.lum",
+        "mosaic.math", "mosaic.mixColor", "mosaic.mapRange", "mosaic.colorRamp", "mosaic.reroute", "mosaic.noise", "mosaic.voronoi",
+        "mosaic.whiteNoise", "mosaic.checker", "mosaic.wave", "mosaic.gradient", "mat.texture", "mat.image", "mat.bsdf", "mat.output");
 
     private static final Map<String, List<Port>> PORTS = buildPorts();
 
@@ -151,6 +164,12 @@ public final class MosaicGraph {
             new Port("origin", Kind.V3, false), new Port("direction", Kind.V3, false), new Port("tMax", Kind.F, false)));
         m.put("mosaic.shadow", List.of(new Port("direction", Kind.V3, false), new Port("origin", Kind.V3, false)));
         m.put("mosaic.output", List.of(new Port("color", Kind.V4, true)));
+        m.put("mat.texture", List.of(new Port("uv", Kind.V2, false)));
+        m.put("mat.image", List.of(new Port("uv", Kind.V2, false)));
+        m.put("mat.bsdf", List.of(new Port("baseColor", Kind.V4, false), new Port("roughness", Kind.F, false),
+            new Port("metallic", Kind.F, false), new Port("specular", Kind.F, false), new Port("emission", Kind.F, false),
+            new Port("height", Kind.F, false), new Port("normalStrength", Kind.F, false), new Port("ao", Kind.F, false)));
+        m.put("mat.output", List.of(new Port("surface", Kind.V4, true)));
         for (String t : List.of("mosaic.position", "mosaic.normal", "mosaic.worldPos", "mosaic.waterDepth", "mosaic.waterMask", "mosaic.lavaMask",
             "mosaic.hitMaterial", "mosaic.materialMask", "mosaic.materialDepth", "mosaic.skyLight", "mosaic.blockLight"))
             m.put(t, List.of(new Port("uv", Kind.V2, false)));
@@ -268,6 +287,7 @@ public final class MosaicGraph {
             case "mosaic.math", "mosaic.mixColor" -> port.equals("a") || port.equals("b");
             case "mosaic.mapRange" -> port.equals("value");
             case "mosaic.reroute" -> port.equals("a");
+            case "mat.bsdf" -> port.equals("baseColor");
             default -> false;
         };
     }
@@ -279,7 +299,7 @@ public final class MosaicGraph {
     public static Kind acceptedKind(String type, String port) { return acceptedKind(type, port, null); }
 
     public static Kind acceptedKind(String type, String port, Map<String, MosaicFunction> functions) {
-        if (type.equals("mosaic.output") || type.equals("mosaic.dot")) return null;
+        if (isOutput(type) || type.equals("mosaic.dot")) return null;
         if ((port.equals("a") || port.equals("b")) && (PASS_THROUGH.contains(type) || ARITH.contains(type))) return null;
         if (anyKind(type, port)) return null;
         for (Port p : portsOf(type, functions)) if (p.name().equals(port)) return p.kind();
@@ -379,6 +399,15 @@ public final class MosaicGraph {
                     error(outputs.get(i), null, "the graph needs exactly one output node, found " + outputs.size()
                         + " (" + outputs.get(i) + " is extra)", Fix.DELETE_NODE);
             }
+            String outType = outputId == null ? null : nodes.get(outputId).type();
+            for (Node n : nodes.values()) {
+                if ("mat.output".equals(outType) && !MATERIAL_SAFE.contains(n.type()))
+                    error(n.id(), null, "node " + n.id() + " (" + n.type() + ") reads the rendered scene and cannot be baked into a texture;"
+                        + " material graphs use textures, values, math and procedural nodes", Fix.DELETE_NODE);
+                if ("mosaic.output".equals(outType) && n.type().startsWith("mat."))
+                    error(n.id(), null, "node " + n.id() + " (" + n.type() + ") belongs to material graphs (Materials mode),"
+                        + " not to a shader graph", Fix.DELETE_NODE);
+            }
             for (Node n : nodes.values()) kindOf(n.id(), new ArrayList<>());
             for (Node n : nodes.values()) {
                 if (broken.contains(n.id())) continue;
@@ -390,8 +419,8 @@ public final class MosaicGraph {
 
         Analysis done(String outputId) {
             Set<String> reachable = new LinkedHashSet<>();
-            if (outputId != null || nodes.values().stream().anyMatch(n -> n.type().equals("mosaic.output")))
-                for (Node n : nodes.values()) if (n.type().equals("mosaic.output")) upstream(n.id(), reachable);
+            if (outputId != null || nodes.values().stream().anyMatch(n -> isOutput(n.type())))
+                for (Node n : nodes.values()) if (isOutput(n.type())) upstream(n.id(), reachable);
             warnings(reachable);
             boolean hasErrors = problems.stream().anyMatch(p -> p.severity() == Severity.ERROR);
             MosaicGraph g = hasErrors || outputId == null ? null
@@ -556,7 +585,7 @@ public final class MosaicGraph {
             if (modeError != null) error(id, null, "node " + id + ": " + modeError, Fix.CHANGE_PARAM);
             nodes.put(id, new Node(id, type, Map.copyOf(inputs), value, index, mask, Collections.unmodifiableMap(defaults)));
             if (!ok) broken.add(id);
-            if (type.equals("mosaic.output")) outputs.add(id);
+            if (isOutput(type)) outputs.add(id);
         }
 
         /** Color ramp stops: groups of 5 numbers (position, r, g, b, a), 1 to 16 stops, positions ascending in 0..1. */
@@ -668,7 +697,7 @@ public final class MosaicGraph {
                 case "mosaic.const" -> n.value() == null ? null : Kind.ofSize(n.value().length);
                 case "mosaic.vec" -> Kind.ofSize(n.index());
                 case "mosaic.swizzle" -> swizzleKind(n, visiting);
-                case "mosaic.output" -> Kind.V4;
+                case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf" -> Kind.V4;
                 case "mosaic.gt", "mosaic.lt", "mosaic.dot", "mosaic.length", "mosaic.lum" -> Kind.F;
                 case "mosaic.cross", "mosaic.reflect" -> Kind.V3;
                 case "mosaic.math" -> {
@@ -766,7 +795,7 @@ public final class MosaicGraph {
             }
             if (s == null) return; // unknown upstream: its own problem is already reported
             Kind want = acceptedKind(n.type(), port, functions);
-            if (n.type().equals("mosaic.output")) {
+            if (isOutput(n.type())) {
                 // float, vec2, vec3 and vec4 all widen to the stored color
             } else if (want != null && s != want) {
                 error(n.id(), port, "node " + n.id() + ": port " + port + " takes " + label(want) + ", found "
@@ -809,7 +838,7 @@ public final class MosaicGraph {
         // -------------------------------------------------------------- warnings and cost
 
         void warnings(Set<String> reachable) {
-            boolean anyOutput = nodes.values().stream().anyMatch(n -> n.type().equals("mosaic.output"));
+            boolean anyOutput = nodes.values().stream().anyMatch(n -> isOutput(n.type()));
             for (Node n : nodes.values()) {
                 if (anyOutput && !reachable.contains(n.id()) && !broken.contains(n.id()))
                     warn(n.id(), "node " + n.id() + " is not connected to the output, so it does nothing", Fix.DELETE_NODE);
@@ -922,6 +951,9 @@ public final class MosaicGraph {
 
     public boolean needsBuffer() { return uses("mosaic.buffer"); }
     public boolean needsLut() { return uses("mosaic.lut"); }
+
+    /** A material graph (output {@code mat.output}): baked on the CPU, never compiled into a shader. */
+    public boolean isMaterial() { return node(outputId) != null && node(outputId).type().equals("mat.output"); }
     public boolean needsPush() { return uses("mosaic.push"); }
     /** Highest push slot the graph reads; the emitter sizes the push block to cover exactly this. */
     public int maxPushIndex() {

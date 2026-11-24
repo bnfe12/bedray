@@ -341,6 +341,7 @@ public final class CustomRtStage {
 
     /** Called once per frame after the world producer, before the Iris post stage. Never throws. */
     public static synchronized void render(RenderTarget target, CameraRenderState camera, WorldFrame.Renderer renderer) {
+        MaterialLink.tick();
         if (liveDir != null) hotReload();
         if (compiled == null || broken) return;
         boolean traces = usesTlas();

@@ -50,6 +50,8 @@ final class Icons {
             case GAME -> new Color(0x3E9E8A);
             case ADDONS -> new Color(0xB08A3E);
             case KEYS -> new Color(0x8792A8);
+            case LIBRARY -> new Color(0x3E8FB0);
+            case MATERIAL -> new Color(0xB86A3A);
         };
     }
 
@@ -137,6 +139,16 @@ final class Icons {
                 g.drawRoundRect((int) a - 2, (int) (a + 2), (int) (b - a) + 4, (int) (b - a) - 3, 3, 3);
                 for (int i = 0; i < 3; i++) g.fill(new java.awt.geom.Rectangle2D.Float(a + i * 3.5f, m - 2, 2, 2));
                 g.draw(new java.awt.geom.Line2D.Float(a + 1, b - 4, b - 1, b - 4));
+            }
+            case LIBRARY -> { // a stack of pictures
+                g.drawRoundRect((int) a + 2, (int) a, (int) (b - a) - 2, (int) (b - a) - 4, 3, 3);
+                g.drawRoundRect((int) a, (int) a + 3, (int) (b - a) - 2, (int) (b - a) - 3, 3, 3);
+                g.draw(new java.awt.geom.Line2D.Float(a + 2, b - 3, m, m + 1));
+                g.draw(new java.awt.geom.Line2D.Float(m, m + 1, b - 4, b - 3));
+            }
+            case MATERIAL -> { // a lit sphere
+                g.drawOval((int) a, (int) a, (int) (b - a), (int) (b - a));
+                g.fill(new java.awt.geom.Ellipse2D.Float(a + (b - a) * 0.25f, a + (b - a) * 0.2f, (b - a) * 0.25f, (b - a) * 0.25f));
             }
         }
     }

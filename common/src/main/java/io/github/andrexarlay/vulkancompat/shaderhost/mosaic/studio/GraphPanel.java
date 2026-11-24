@@ -107,6 +107,19 @@ final class GraphPanel extends JComponent {
             @Override public boolean importData(TransferSupport s) {
                 try {
                     String text = (String) s.getTransferable().getTransferData(java.awt.datatransfer.DataFlavor.stringFlavor);
+                    if (text.startsWith(MaterialPanels.DRAG_IMAGE)) {
+                        String[] parts = text.substring(MaterialPanels.DRAG_IMAGE.length()).split("\\|", 2);
+                        StudioLibrary.Source src = StudioLibrary.fromId(parts[0]);
+                        if (src == null || parts.length < 2) return false;
+                        Point w = toWorld(s.getDropLocation().getDropPoint());
+                        if (model.workspace != StudioModel.Workspace.MATERIALS) {
+                            model.say("Images go into materials: switch to Materials (or double-click the texture in the Library)", MUTED);
+                            return false;
+                        }
+                        model.addImageNode(src, parts[1], new Point(w.x - W() / 2, w.y - HEAD / 2));
+                        requestFocusInWindow();
+                        return true;
+                    }
                     if (!text.startsWith(NodeTree.DRAG_PREFIX)) return false;
                     String type = text.substring(NodeTree.DRAG_PREFIX.length());
                     StudioModel.Item it = model.items().stream().filter(x -> x.type().equals(type)).findFirst().orElse(null);

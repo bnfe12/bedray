@@ -39,7 +39,9 @@ final class Panels {
         CODE("Generated code", "Diagnostics", "The shader this graph compiles to"),
         KEYS("Keys", "Diagnostics", "All shortcuts and mouse gestures"),
         GAME("Game link", "Game", "Pack file, game status, Live save, run the game"),
-        ADDONS("Add-ons", "Game", "Node libraries and the game's add-ons");
+        ADDONS("Add-ons", "Game", "Node libraries and the game's add-ons"),
+        LIBRARY("Library", "Data", "Textures from Minecraft, resource packs and the project; drag or double-click"),
+        MATERIAL("Material", "Main", "The material on a lit block and each baked map");
 
         final String label, group, help;
 
@@ -70,6 +72,8 @@ final class Panels {
                 case GAME -> new GamePanel(m);
                 case ADDONS -> new AddonsPanel(m);
                 case KEYS -> new KeysPanel(m);
+                case LIBRARY -> new MaterialPanels.LibraryPanel(m);
+                case MATERIAL -> new MaterialPanels.MaterialPanel(m);
             };
         }
     }
@@ -131,8 +135,9 @@ final class Panels {
 
         @Override void refresh() {
             int hidden = settings.hiddenLibraries.hashCode();
-            if (model.doc.functions.size() != functionsSeen || hidden != hiddenSeen) {
-                functionsSeen = model.doc.functions.size();
+            int fs = model.doc.functions.size() * 2 + model.workspace.ordinal();
+            if (fs != functionsSeen || hidden != hiddenSeen) {
+                functionsSeen = fs;
                 hiddenSeen = hidden;
                 tree.rebuild();
             }
@@ -359,7 +364,9 @@ final class Panels {
                     int step = (Integer) v;
                     List<String> done = model.doc.undoSteps(), redo = model.doc.redoSteps();
                     int current = done.size();
-                    String name = step == 0 ? "Start" : step <= current ? done.get(step - 1) : redo.get(step - current - 1);
+                    int r = step - current - 1;
+                    String name = step == 0 ? "Start" : step <= current ? (step - 1 < done.size() ? done.get(step - 1) : "")
+                        : r < redo.size() ? redo.get(r) : "";
                     String num = "<span style='color:" + hex(FAINT) + "'>" + step + "</span>&nbsp;&nbsp;";
                     c.setText("<html>" + num + esc(name) + "</html>");
                     c.setForeground(step > current ? FAINT : step == current ? TEXT : MUTED);

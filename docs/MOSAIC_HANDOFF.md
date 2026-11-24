@@ -103,14 +103,19 @@ compile cache in `<pack>/shaders/bedray/.studio/`), `Icons`, `StudioUi`, `Studio
    reservoirs, history) + the module. Needs a **data-driven native frame graph** (today the C++ core records passes in a
    fixed order) - port manifests already come from Slang reflection (`gradle/slang.gradle`). Alternatives in one slot:
    ReSTIR DI/GI/PT variants, denoisers (NRD, own), upscalers. Must be built and GPU-tested on the RTX PC.
-4. **Material system (Principled BSDF).** Material graphs: `Principled BSDF` -> `Material Output` with base color,
-   roughness, metallic, F0, emission, normal, height (parallax), AO; each input slider / number / texture map. Bake on the
-   CPU per texel into **LabPBR** `_s` (R smoothness, G F0/metal, B porosity/SSS, A emission) and `_n` (normal + AO +
-   height in alpha) PNGs plus `.bedray.json` sidecars (see docs/SURFACE_MATERIAL_OVERRIDES.md and
-   TRANSPARENT_MATERIALS.md), into a resource pack, then reload resources. Needs: CPU noise twins identical to the GLSL
-   ones; texture browser (vanilla client jar `assets/minecraft/textures`, resource packs, PNG import); a 16x16 texture
-   paint editor; **warnings for strong changes** (large color drift from the source, noise frequencies above the texel
-   Nyquist, upscaled textures, normal maps on 16 px, emission on non-light blocks).
+4. **Material system - first version implemented (CPU bake verified in tests and the studio; game reload compile-verified).**
+   Studio has workspaces (title bar: Shaders | Materials, each with its own document and layout). Materials: Library
+   (textures of Minecraft client jars found in launcher/build caches, game resource packs, the project; search, groups,
+   thumbnails, double-click starts a material, drag adds an Image Texture node, Import copies files in), nodes
+   `mat.texture` / `mat.image` / `mat.bsdf` (Principled: base colour, roughness, metallic, specular, emission, height,
+   normal strength, AO) / `mat.output` plus every CPU-safe node (`MosaicGraph.MATERIAL_SAFE`), `MosaicMaterial` bakes per
+   texel (procedural textures tile across the texture) into albedo (only when changed, mcmeta copied), LabPBR `_s` and
+   `_n` (DirectX, AO, height) in `<game>/resourcepacks/Mosaic Materials/`, next to `<texture>.mosaic.json`; warnings for
+   strong colour changes, noise finer than the texture, oversized images. The Material panel shows a CPU-lit block (drag
+   the sun) and every map. The game (`customrt/MaterialLink`, ticked from `CustomRtStage.render`) watches
+   `<game>/bedray-studio/materials.json`, enables the pack once and reloads resources. **Verify in game**: pack format
+   accepted by 26.x, reload cost, that the path tracer picks the new maps after reload. Still open: texture painting,
+   GPU preview, per-block (not per-texture) materials, texture browser for mod jars.
 5. **New render targets.** Entities (RT entity instances exist, mask 0x02), partial blocks (fences, slabs, panes: add
    shape bits to the world volume - a contract change, bump the cell layout), 2D/GUI items (inventory item rendering
    hooks; e.g. reflective diamond sword in the inventory), parallax (LabPBR height; POM in the path tracer), third-party

@@ -91,7 +91,12 @@ class MosaicGroupTest {
     @Test
     void labelsAndFramesAreEditorOnlyAndSurviveHistory() throws Exception {
         MosaicDocument d = example();
-        for (int i = 0; i < d.nodes.size(); i++) d.nodes.get(i).x = i * 200; // spread out: the example has no positions
+        for (int i = 0; i < d.nodes.size(); i++) { // spread out in a row, whatever the example file holds
+            d.nodes.get(i).x = 1000 + i * 200;
+            d.nodes.get(i).y = 0;
+        }
+        d.byId("tint").x = 0;
+        d.byId("strength").x = 200;
         String before = d.snapshot();
         d.byId("tint").label = "Tint from rt.push";
         MosaicDocument.Frame f = d.frameAround(List.of(d.byId("tint"), d.byId("strength")), "Tint", 0x8844AA, n -> 124, n -> 40);

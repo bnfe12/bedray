@@ -295,6 +295,17 @@ final class Dock {
                  "b": {"split": "stack", "ratio": 0.42, "a": {"panel": "RESULT"}, "b": {"panel": "INSPECTOR"}}}}}]}""";
     }
 
+    /** Materials: library on the left, graph in the middle, the lit block and properties on the right. */
+    static String defaultMaterialLayout() {
+        return """
+            {"windows": [{"main": true, "tree":
+              {"split": "side", "ratio": 0.2, "a": {"split": "stack", "ratio": 0.62, "a": {"panel": "LIBRARY"}, "b": {"panel": "PALETTE"}},
+               "b": {"split": "side", "ratio": 0.64,
+                 "a": {"split": "stack", "ratio": 0.74, "a": {"panel": "GRAPH"},
+                        "b": {"split": "side", "ratio": 0.6, "a": {"panel": "PROBLEMS"}, "b": {"panel": "HISTORY"}}},
+                 "b": {"split": "stack", "ratio": 0.55, "a": {"panel": "MATERIAL"}, "b": {"panel": "INSPECTOR"}}}}}]}""";
+    }
+
     static String saveAll(List<StudioWindow> windows) {
         JsonObject root = new JsonObject();
         JsonArray arr = new JsonArray();

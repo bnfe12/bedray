@@ -553,6 +553,14 @@ public final class MosaicDocument {
     public List<String> redoSteps() { return new ArrayList<>(redoLabels); }
 
     /** The undo/redo stacks (states and names), oldest undo first, for saving the history with a project. */
+    /** Forgets undo / redo (another document was opened in place of this one). */
+    public void resetHistory() {
+        undoStack.clear();
+        redoStack.clear();
+        undoLabels.clear();
+        redoLabels.clear();
+    }
+
     public List<List<String>> historyState() {
         List<String> u = new ArrayList<>(undoStack), ul = new ArrayList<>(undoLabels), r = new ArrayList<>(redoStack), rl = new ArrayList<>(redoLabels);
         java.util.Collections.reverse(u);
