@@ -48,6 +48,7 @@ final class SettingsWindow extends Dock.StudioWindow {
         page("Layout", "Areas and windows", "frame", new Color(0x8A6FC8), this::layout);
         page("Compiler", "Slang and SPIR-V", "code", new Color(0x5E9E4E), this::compiler);
         page("Game", "Running Minecraft from the studio", "vanilla", new Color(0xD08A4A), this::game);
+        page("Agent", "What an AI agent may do through the mosaic command", "code", new Color(0xE0605A), this::agent);
 
         CardLayout cards = new CardLayout();
         JPanel content = new JPanel(cards);
@@ -429,6 +430,50 @@ final class SettingsWindow extends Dock.StudioWindow {
             app.main.root.repaint();
             app.saveSettings();
         }
+    }
+
+    /** Quiet JVM: the shader compiler's native access is expected. */
+    static final String JVM_FLAGS = "--enable-native-access=ALL-UNNAMED -XX:+IgnoreUnrecognizedVMOptions --sun-misc-unsafe-memory-access=allow";
+
+    private void agent(Form f) {
+        StudioSettings.Agent a = draft.agent;
+        f.section("Access");
+        f.wide(check("Let AI agents use Mosaic Studio (the mosaic command)", a.enabled, v -> a.enabled = v));
+        f.wide(check("Edit shader graphs (add, connect, set, delete nodes)", a.editGraphs, v -> a.editGraphs = v));
+        f.wide(check("Edit materials and bake textures", a.editMaterials, v -> a.editMaterials = v));
+        f.wide(check("Change the studio's design and settings (theme, colours, sizes...)", a.editDesign, v -> a.editDesign = v));
+        f.wide(check("Compile shaders to check them", a.compile, v -> a.compile = v));
+        f.wide(wrapped("Every change an agent makes appears in the studio as an undoable step (\"External edit\"). Agents cannot change "
+            + "these switches. Every call is written to " + esc(AgentCli.logFile().toString()) + ".", MUTED, 440));
+        f.section("Command");
+        f.wide(wrapped("Agents (and you) run: <b>mosaic help</b>, <b>mosaic types</b>, <b>mosaic info graph.json</b>, "
+            + "<b>mosaic add graph.json noise n1</b>, <b>mosaic connect graph.json n1 out.color</b>, <b>mosaic compile graph.json</b>, "
+            + "<b>mosaic set-setting theme OLED</b>... Add --json for machine-readable output.", TEXT, 440));
+        f.wide(button("Create the mosaic command", "Writes mosaic.cmd and mosaic (shell) into ~/.bedray/bin for this studio", () -> {
+            try {
+                java.nio.file.Path bin = StudioSettings.file().resolveSibling("bin");
+                java.nio.file.Files.createDirectories(bin);
+                String javaExe = java.nio.file.Path.of(System.getProperty("java.home"), "bin", "java").toString();
+                String cp = System.getProperty("java.class.path");
+                java.nio.file.Files.writeString(bin.resolve("mosaic.cmd"), "@echo off\r\n\"" + javaExe + "\" " + JVM_FLAGS + " -cp \"" + cp + "\" "
+                    + AgentCli.class.getName() + " %*\r\n");
+                java.nio.file.Path sh = bin.resolve("mosaic");
+                java.nio.file.Files.writeString(sh, "#!/bin/sh\nexec \"" + javaExe + "\" " + JVM_FLAGS + " -cp \"" + cp + "\" " + AgentCli.class.getName() + " \"$@\"\n");
+                sh.toFile().setExecutable(true);
+                app.model.say("Created " + bin.resolve("mosaic.cmd") + " (add " + bin + " to PATH)", OK);
+            } catch (Exception ex) {
+                app.model.say("Could not create the command: " + ex.getMessage(), BAD);
+            }
+        }));
+        f.section("Recent agent activity");
+        String recent;
+        try {
+            java.util.List<String> lines = java.nio.file.Files.exists(AgentCli.logFile()) ? java.nio.file.Files.readAllLines(AgentCli.logFile()) : java.util.List.of();
+            recent = lines.isEmpty() ? "Nothing yet." : String.join("<br>", lines.subList(Math.max(0, lines.size() - 10), lines.size()).stream().map(StudioUi::esc).toList());
+        } catch (Exception ex) {
+            recent = "The log cannot be read.";
+        }
+        f.wide(wrapped(recent, MUTED, 440));
     }
 
     private void compiler(Form f) {

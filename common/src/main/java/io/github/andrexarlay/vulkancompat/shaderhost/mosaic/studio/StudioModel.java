@@ -929,6 +929,7 @@ final class StudioModel {
             String json = Files.exists(p) ? Files.readString(p, StandardCharsets.UTF_8) : "{\"nodes\": []}";
             replace(json, p, "Open " + p.getFileName());
             doc.dirty = false;
+            stampFile();
             fire();
         } catch (Exception e) {
             say("Open failed: " + e.getMessage(), StudioUi.BAD);
@@ -940,6 +941,7 @@ final class StudioModel {
         if (activeGraph != null) activeGraph.finishGlide();
         try {
             doc.save();
+            stampFile();
             shipSpirv();
             if (loud) say("Saved " + doc.file, StudioUi.OK);
             else fire();
@@ -1025,7 +1027,45 @@ final class StudioModel {
 
     private long materialStamp = -1;
 
+    /** Modification time of the open file as this studio last wrote or read it: anything else is an external edit. */
+    private long fileStamp = -1;
+    private Path stampedFile;
+
+    void stampFile() {
+        try {
+            stampedFile = doc.file;
+            fileStamp = doc.file != null && Files.exists(doc.file) ? Files.getLastModifiedTime(doc.file).toMillis() : -1;
+        } catch (Exception e) {
+            fileStamp = -1;
+        }
+    }
+
+    /** An agent (mosaic command) or another editor changed the open file: take it in as one undoable step. */
+    private void pollExternal() {
+        try {
+            if (doc.file == null || !Files.exists(doc.file)) return;
+            if (!doc.file.equals(stampedFile)) {
+                stampFile();
+                return;
+            }
+            long m = Files.getLastModifiedTime(doc.file).toMillis();
+            if (m == fileStamp) return;
+            fileStamp = m;
+            String text = Files.readString(doc.file, StandardCharsets.UTF_8);
+            if (com.google.gson.JsonParser.parseString(text).equals(com.google.gson.JsonParser.parseString(doc.toJson()))) return;
+            java.util.Set<String> selected = new java.util.HashSet<>();
+            for (MosaicDocument.ENode n : selection) selected.add(n.id);
+            replace(text, doc.file, "External edit (agent)");
+            for (MosaicDocument.ENode n : doc.nodes) if (selected.contains(n.id)) selection.add(n);
+            doc.dirty = false;
+            say("The file changed outside the studio: taken in as one step (Ctrl+Z undoes it)", StudioUi.MUTED);
+        } catch (Exception ignored) {
+            // being written right now: the next poll reads it
+        }
+    }
+
     private void pollGame() {
+        pollExternal();
         Path game = workspace == Workspace.MATERIALS ? StudioLibrary.gameDir(this) : null;
         if (game != null) try {
             Path st = game.resolve("bedray-studio").resolve("materials-status.txt");

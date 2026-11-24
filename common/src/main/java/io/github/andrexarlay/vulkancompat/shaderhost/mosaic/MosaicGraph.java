@@ -970,7 +970,7 @@ public final class MosaicGraph {
     }
 
     /** Splits an edge reference "id" or "id.outname"; the primary output has no suffix. */
-    static String[] split(String ref) {
+    public static String[] split(String ref) {
         int dot = ref.indexOf('.');
         if (dot <= 0 || dot == ref.length() - 1) return new String[] {ref, ""};
         return new String[] {ref.substring(0, dot), ref.substring(dot + 1)};

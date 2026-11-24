@@ -22,6 +22,23 @@ to Minecraft, or without it.
 | **Result** | The frame of the running game before and after the shader, side by side, split, or against an earlier step. |
 | **Workflow** | Document tabs, Blender-like areas you can split, pop out and dock back, rebindable keys (also on the Russian layout), themes including OLED black, named undo history per tab. |
 
+## AI agents
+
+An AI agent (or you, in a terminal) can do everything through the `mosaic` command: list node types, read a graph,
+add / connect / set / mute / delete nodes, arrange, compile with errors on nodes, bake materials and change the
+studio's design. `--json` gives machine-readable output.
+
+    mosaic new shader.json Cinematic
+    mosaic add shader.json noise n1
+    mosaic connect shader.json n1 mix.fac
+    mosaic compile shader.json
+    mosaic set-setting theme OLED
+
+A running studio takes every change in as one undoable step ("External edit"). Access is **off** until you turn it on
+in **Settings > Agent**, with separate switches for graphs, materials, design and compiling; agents cannot change
+those switches. Every call is logged to `~/.bedray/agent-log.txt`. **Settings > Agent > Create the mosaic command**
+writes `mosaic.cmd` / `mosaic` into `~/.bedray/bin`.
+
 ## Files it writes
 
 * `~/.bedray/mosaic-studio.json` – studio settings, layouts and open tabs.

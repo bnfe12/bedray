@@ -56,6 +56,13 @@ final class StudioApp {
         kfm.addKeyEventDispatcher(this::dispatch);
         model.listen(this::updateStatus);
         initTabs();
+        try {
+            StudioSettings.ownWrite = Files.exists(StudioSettings.file()) ? Files.getLastModifiedTime(StudioSettings.file()).toMillis() : -1;
+        } catch (Exception ignored) {
+            // no settings file yet
+        }
+        Timer external = new Timer(1000, e -> applyExternalSettings());
+        external.start();
     }
 
     static Image appIcon() {
@@ -962,6 +969,22 @@ final class StudioApp {
             settingsWindow.toFront();
         }
         updateStatus();
+    }
+
+    /** Settings changed by the mosaic command (an agent changing the design): apply them like the settings window does. */
+    private void applyExternalSettings() {
+        try {
+            Path f = StudioSettings.file();
+            if (!Files.exists(f)) return;
+            long m = Files.getLastModifiedTime(f).toMillis();
+            if (m == StudioSettings.ownWrite) return;
+            StudioSettings.ownWrite = m;
+            StudioSettings next = StudioSettings.load();
+            restyle(next);
+            model.say("Settings changed outside the studio (agent): applied", MUTED);
+        } catch (Exception ignored) {
+            // being written
+        }
     }
 
     void saveSettings() {

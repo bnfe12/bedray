@@ -152,6 +152,17 @@ public final class StudioSettings {
     public String vanillaJar = "";
     /** Last files of each workspace. */
     public String lastShader = "", lastMaterial = "";
+    /** What an AI agent may do through the mosaic command (Settings > Agent). Off until the user turns it on. */
+    public static final class Agent {
+        public boolean enabled = false;
+        public boolean editGraphs = true;
+        public boolean editMaterials = true;
+        public boolean editDesign = false;
+        public boolean compile = true;
+    }
+
+    public Agent agent = new Agent();
+
     /** Document tabs of the last session ("SHADERS|path", "MATERIALS|path"). */
     public java.util.List<String> openTabs = new java.util.ArrayList<>();
 
@@ -162,6 +173,9 @@ public final class StudioSettings {
         if (custom != null && !custom.isBlank()) return Path.of(custom);
         return Path.of(System.getProperty("user.home"), ".bedray", "mosaic-studio.json");
     }
+
+    /** When this process last wrote the settings file: a newer file came from outside (the mosaic command). */
+    static volatile long ownWrite = -1;
 
     public static StudioSettings load() {
         try {
@@ -179,6 +193,7 @@ public final class StudioSettings {
             Path f = file();
             Files.createDirectories(f.getParent());
             Files.writeString(f, GSON.toJson(sanitized()), StandardCharsets.UTF_8);
+            ownWrite = Files.getLastModifiedTime(f).toMillis();
         } catch (Exception ignored) {
             // settings are a convenience; failing to save must not break editing
         }
@@ -196,6 +211,7 @@ public final class StudioSettings {
         if (wheel == null) wheel = WheelMode.ZOOM;
         if (slangCompiler == null) slangCompiler = SlangCompiler.STUDIO;
         if (openTabs == null) openTabs = new java.util.ArrayList<>();
+        if (agent == null) agent = new Agent();
         zoomSpeed = Math.clamp(zoomSpeed, 3, 40);
         if (keys == null) keys = new java.util.LinkedHashMap<>();
         if (hiddenLibraries == null) hiddenLibraries = new java.util.LinkedHashSet<>();
