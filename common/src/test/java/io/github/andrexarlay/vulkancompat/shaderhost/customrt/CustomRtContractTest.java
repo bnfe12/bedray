@@ -23,6 +23,13 @@ class CustomRtContractTest {
         throw new IllegalStateException("examples/custom-rt-sky-shadow not found");
     }
 
+    private static Path mosaicExample() {
+        for (Path p : List.of(Path.of("..", "examples", "custom-rt-mosaic"), Path.of("examples", "custom-rt-mosaic"))) {
+            if (Files.isDirectory(p)) return p;
+        }
+        throw new IllegalStateException("examples/custom-rt-mosaic not found");
+    }
+
     private static VulkanGlslPackCompiler.Compiled compile(Map<String, String> files, String entry,
                                                            VulkanGlslPackCompiler.Kind kind) throws Exception {
         IncludeExpander.Reader reader = e -> {
@@ -62,6 +69,113 @@ class CustomRtContractTest {
         String problem = CustomRtStage.validate(compiled);
         assertNotNull(problem);
         assertTrue(problem.contains("set 1 binding 0"), problem);
+    }
+
+    @Test
+    void pushConstantsAndExtraBindingsSatisfyTheExtendedContract() throws Exception {
+        // The extended contract: a push-constant block plus pack-file-backed bindings 5..31.
+        String source = """
+            #version 460
+            #extension GL_EXT_ray_query : require
+            layout(local_size_x = 8, local_size_y = 8) in;
+            layout(push_constant) uniform Push { vec4 strength; float bias; } push;
+            layout(set = 0, binding = 0) uniform accelerationStructureEXT scene;
+            layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D bedrayOutput;
+            layout(std430, set = 0, binding = 5) buffer Params { vec4 data[]; } params;
+            layout(set = 0, binding = 6) uniform sampler2D lut;
+            layout(set = 0, binding = 7) uniform texture2D gradient;
+            void main() {
+                vec4 v = params.data[0] + push.strength + texelFetch(lut, ivec2(0), 0);
+                imageStore(bedrayOutput, ivec2(gl_GlobalInvocationID.xy), v);
+            }
+            """;
+        var compiled = compile(Map.of(CustomRtStage.ENTRY, source), CustomRtStage.ENTRY, VulkanGlslPackCompiler.Kind.COMPUTE);
+        assertNull(CustomRtStage.validate(compiled));
+        assertTrue(compiled.module().pushConstants());
+        SpirvReflection.Binding params = compiled.module().bindings().stream().filter(b -> b.binding() == 5).findFirst().orElseThrow();
+        assertEquals(SpirvReflection.DescriptorKind.STORAGE_BUFFER, params.kind());
+        assertEquals(SpirvReflection.DescriptorKind.SAMPLED_IMAGE,
+            compiled.module().bindings().stream().filter(b -> b.binding() == 7).findFirst().orElseThrow().kind());
+    }
+
+    @Test
+    void mosaicExampleSatisfiesTheExtendedContract() throws Exception {
+        Path pack = mosaicExample();
+        String source = Files.readString(pack.resolve("shaders/bedray/rt.comp"), StandardCharsets.UTF_8);
+        var compiled = compile(Map.of(CustomRtStage.ENTRY, source), CustomRtStage.ENTRY, VulkanGlslPackCompiler.Kind.COMPUTE);
+        assertNull(CustomRtStage.validate(compiled), "extended-contract example must pass the contract check");
+        assertTrue(compiled.module().pushConstants(), "the demo shader declares a push-constant block");
+
+        Map<String, byte[]> userFiles = new java.util.HashMap<>();
+        userFiles.put("bedray/rt.push", Files.readAllBytes(pack.resolve("shaders/bedray/rt.push")));
+        userFiles.put("bedray/buffer5.bin", Files.readAllBytes(pack.resolve("shaders/bedray/buffer5.bin")));
+        userFiles.put("bedray/texture6.png", Files.readAllBytes(pack.resolve("shaders/bedray/texture6.png")));
+        CustomRtResources resources = CustomRtResources.build(compiled.module(), "shaders/",
+            (name, what) -> {
+                byte[] data = userFiles.get(name);
+                if (data == null) throw new IllegalArgumentException("missing " + name + " (" + what + ")");
+                return data;
+            },
+            null);
+
+        assertEquals(1, resources.bufferSpecs().size());
+        assertEquals(1, resources.textureSpecs().size());
+        assertEquals(5, resources.bufferSpecs().get(0).binding());
+        assertEquals(6, resources.textureSpecs().get(0).binding());
+        assertTrue(resources.pushBytes() > 0);
+        byte[] push = resources.push(128);
+        assertNotNull(push);
+        assertEquals(16, push.length, "push stays at the file's bytes, zero-filled on the GPU side");
+        assertFalse(resources.refresh(), "a zip pack (null live root) has nothing to live-update");
+
+        byte[] grow = java.util.Arrays.copyOf(userFiles.get("bedray/buffer5.bin"), 80);
+        userFiles.put("bedray/buffer5.bin", grow);
+        CustomRtResources grown = CustomRtResources.build(compiled.module(), "shaders/",
+            (name, what) -> userFiles.get(name), null);
+        assertEquals(1, grown.bufferSpecs().size(), "the grown file still builds its spec at bootstrap; the live cap is in CustomRtResources");
+    }
+
+    @Test
+    void aCombinedSamplerExtraBindingIsAccepted() throws Exception {
+        String source = """
+            #version 460
+            layout(local_size_x = 8, local_size_y = 8) in;
+            layout(set = 0, binding = 5) uniform sampler2D tint;
+            layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D bedrayOutput;
+            void main() { imageStore(bedrayOutput, ivec2(gl_GlobalInvocationID.xy), texture(tint, vec2(0.5))); }
+            """;
+        var compiled = compile(Map.of(CustomRtStage.ENTRY, source), CustomRtStage.ENTRY, VulkanGlslPackCompiler.Kind.COMPUTE);
+        assertNull(CustomRtStage.validate(compiled));
+    }
+
+    @Test
+    void reservedAndArrayExtrasAreRefused() throws Exception {
+        String source = """
+            #version 460
+            layout(local_size_x = 8, local_size_y = 8) in;
+            layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D bedrayOutput;
+            layout(std430, set = 0, binding = 2) buffer Clash { vec4 v[]; } clash;
+            void main() { imageStore(bedrayOutput, ivec2(gl_GlobalInvocationID.xy), clash.v[0]); }
+            """;
+        var compiled = compile(Map.of(CustomRtStage.ENTRY, source), CustomRtStage.ENTRY, VulkanGlslPackCompiler.Kind.COMPUTE);
+        String problem = CustomRtStage.validate(compiled);
+        assertNotNull(problem);
+        assertTrue(problem.contains("binding 2 is reserved"), problem);
+    }
+
+    @Test
+    void storageImageExtrasWithoutAProducerAreRefused() throws Exception {
+        String source = """
+            #version 460
+            layout(local_size_x = 8, local_size_y = 8) in;
+            layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D bedrayOutput;
+            layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D scratch;
+            void main() { imageStore(bedrayOutput, ivec2(gl_GlobalInvocationID.xy), vec4(0)); }
+            """;
+        var compiled = compile(Map.of(CustomRtStage.ENTRY, source), CustomRtStage.ENTRY, VulkanGlslPackCompiler.Kind.COMPUTE);
+        String problem = CustomRtStage.validate(compiled);
+        assertNotNull(problem);
+        assertTrue(problem.contains("no pack file producer"), problem);
     }
 
     @Test

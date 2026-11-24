@@ -24,7 +24,10 @@ public final class OpticalMaterials {
     public static final int TINTED_GLASS_PROFILE_ID = 5;
     private static final Logger LOG = LoggerFactory.getLogger("VKB-RT");
     private static final AtomicInteger WARNINGS = new AtomicInteger();
-    private static final Set<String> KEYS = Set.of("ior", "thickness", "measurementDistance", "diffuseLayer", "transmittance", "kind", "cullSharedFaces");
+    /** Optical keys this class validates; surface fields from
+     * {@link SurfaceOverrides#KEYS} live in the same sidecar without optical meaning. */
+    static final Set<String> KEYS = Set.of("ior", "thickness", "measurementDistance", "diffuseLayer", "transmittance", "kind", "cullSharedFaces",
+        "roughness", "f0", "metal", "emission", "emissionMode");
     // Zero transmittance: the visibility walk stops light here, while the camera path keeps the pane a translucent filter.
     private static final Profile TINTED_GLASS_BLOCKER = new Profile(1.52f, 1f, 1f, 0f, 0f, 0f, 0f, 1, true);
 
