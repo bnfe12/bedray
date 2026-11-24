@@ -1056,6 +1056,7 @@ final class GraphPanel extends JComponent {
         grid(g);
         g.translate(panX, panY);
         g.scale(zoom, zoom);
+        trackAppearances();
         for (MosaicDocument.Frame f : model.doc.frames) frame(g, f);
         g.setStroke(new BasicStroke(settings.wireWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         for (MosaicDocument.ENode n : model.doc.nodes) {
@@ -1158,8 +1159,52 @@ final class GraphPanel extends JComponent {
         }
     }
 
+    /** Nodes that appeared in the last moment (added, pasted, duplicated): they scale and fade in. */
+    private final Map<MosaicDocument.ENode, Long> born = new java.util.WeakHashMap<>();
+    private final java.util.Set<MosaicDocument.ENode> seen = java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    private boolean seenReady;
+    private final javax.swing.Timer appearTimer = new javax.swing.Timer(15, e -> {
+        long now = System.nanoTime();
+        born.values().removeIf(t -> now - t > 2.2e8);
+        if (born.isEmpty()) ((javax.swing.Timer) e.getSource()).stop();
+        repaint();
+    });
+
+    private int seenCount;
+
+    /** Animates only real additions (a few new nodes, more than before), not whole-graph swaps like undo or open. */
+    private void trackAppearances() {
+        List<MosaicDocument.ENode> fresh = new ArrayList<>();
+        for (MosaicDocument.ENode n : model.doc.nodes) if (seen.add(n)) fresh.add(n);
+        int count = model.doc.nodes.size();
+        if (seenReady && !fresh.isEmpty() && fresh.size() <= 12 && count > seenCount && fresh.size() == count - seenCount) {
+            long now = System.nanoTime();
+            for (MosaicDocument.ENode n : fresh) born.put(n, now);
+            appearTimer.start();
+        }
+        seenCount = count;
+        seenReady = true;
+    }
+
     /** A muted node is drawn faded with a red bypass line from its first input to its output. */
     private void node(Graphics2D g, MosaicDocument.ENode n) {
+        Long b = born.get(n);
+        if (b != null) {
+            double t = Math.min(1, (System.nanoTime() - b) / 2.2e8), k = 1 - Math.pow(1 - t, 3);
+            Graphics2D a = (Graphics2D) g.create();
+            double cx = n.x + W() / 2.0, cy = n.y + height(n) / 2.0, s = 0.85 + 0.15 * k;
+            a.translate(cx, cy);
+            a.scale(s, s);
+            a.translate(-cx, -cy);
+            a.setComposite(AlphaComposite.SrcOver.derive((float) k));
+            nodeInner(a, n);
+            a.dispose();
+            return;
+        }
+        nodeInner(g, n);
+    }
+
+    private void nodeInner(Graphics2D g, MosaicDocument.ENode n) {
         if (!n.muted) {
             nodeBody(g, n);
             return;

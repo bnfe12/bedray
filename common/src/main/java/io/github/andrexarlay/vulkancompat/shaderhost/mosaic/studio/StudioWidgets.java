@@ -151,7 +151,54 @@ final class StudioWidgets {
         }
     }
 
+    /** Flat slider: thin rounded track filled with the accent, round knob that grows on hover. */
+    public static final class Slider extends javax.swing.plaf.basic.BasicSliderUI {
+        private boolean hover;
+
+        public static ComponentUI createUI(JComponent c) { return new Slider((JSlider) c); }
+
+        Slider(JSlider s) {
+            super(s);
+            s.setOpaque(false);
+            s.addMouseListener(new MouseAdapter() {
+                @Override public void mouseEntered(MouseEvent e) { hover = true; s.repaint(); }
+                @Override public void mouseExited(MouseEvent e) { hover = false; s.repaint(); }
+            });
+        }
+
+        @Override protected Dimension getThumbSize() { return new Dimension(16, 16); }
+
+        @Override public void paintFocus(Graphics g) { }
+
+        @Override public void paintTrack(Graphics g0) {
+            Graphics2D g = smooth(g0);
+            Rectangle t = trackRect;
+            int cy = t.y + t.height / 2, x = thumbRect.x + thumbRect.width / 2;
+            g.setColor(mix(CODE_BG, EDGE, 0.8));
+            g.fillRoundRect(t.x, cy - 2, t.width, 4, 4, 4);
+            g.setColor(slider.isEnabled() ? SELECT : FAINT);
+            g.fillRoundRect(t.x, cy - 2, Math.max(0, x - t.x), 4, 4, 4);
+            g.dispose();
+        }
+
+        @Override public void paintThumb(Graphics g0) {
+            Graphics2D g = smooth(g0);
+            Rectangle r = thumbRect;
+            int d = hover || isDragging() ? 16 : 13, cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+            g.setColor(new Color(0, 0, 0, 70));
+            g.fillOval(cx - d / 2, cy - d / 2 + 1, d, d);
+            g.setColor(Color.WHITE);
+            g.fillOval(cx - d / 2, cy - d / 2, d, d);
+            g.setColor(SELECT);
+            g.setStroke(new BasicStroke(2f));
+            g.drawOval(cx - d / 2 + 1, cy - d / 2 + 1, d - 2, d - 2);
+            g.dispose();
+        }
+    }
+
     static void install() {
+        UIManager.put("SliderUI", Slider.class.getName());
+        UIManager.put(Slider.class.getName(), Slider.class);
         UIManager.put("CheckBox.icon", new CheckIcon());
         UIManager.put("CheckBoxMenuItem.checkIcon", new CheckIcon());
         UIManager.put("CheckBox.background", PANEL);
@@ -160,6 +207,146 @@ final class StudioWidgets {
         UIManager.put("CheckBox.focus", new Color(0, 0, 0, 0));
         UIManager.put("ComboBoxUI", Combo.class.getName());
         UIManager.put(Combo.class.getName(), Combo.class); // the UI class itself, found without a class loader lookup
+    }
+
+    // ------------------------------------------------------------------ toast
+
+    /** A short message that slides up from the bottom-right of a window and fades away. */
+    static void toast(JFrame frame, String text, Color accent) {
+        if (frame == null || !frame.isShowing() || text == null || text.isBlank()) return;
+        JLayeredPane layers = frame.getLayeredPane();
+        for (Component c : layers.getComponentsInLayer(JLayeredPane.POPUP_LAYER)) if (c instanceof Toast t) t.retire();
+        Toast t = new Toast(text.length() > 140 ? text.substring(0, 137) + "..." : text, accent);
+        layers.add(t, JLayeredPane.POPUP_LAYER);
+        t.start(layers);
+    }
+
+    static final class Toast extends JComponent {
+        private final String text;
+        private final Color accent;
+        private long born;
+        private float alpha;
+        private int targetY;
+        private final javax.swing.Timer tick = new javax.swing.Timer(15, null);
+        private boolean retiring;
+
+        Toast(String text, Color accent) {
+            this.text = text;
+            this.accent = accent;
+            setFont(UI);
+        }
+
+        void start(JLayeredPane layers) {
+            FontMetrics fm = getFontMetrics(getFont());
+            int w = Math.min(layers.getWidth() - 40, fm.stringWidth(text) + 44), h = 34;
+            targetY = layers.getHeight() - h - 40;
+            setBounds(layers.getWidth() - w - 18, targetY + 24, w, h);
+            born = System.currentTimeMillis();
+            tick.addActionListener(e -> step(layers));
+            tick.start();
+        }
+
+        void retire() {
+            retiring = true;
+            born = Math.min(born, System.currentTimeMillis() - 2600);
+        }
+
+        private void step(JLayeredPane layers) {
+            long age = System.currentTimeMillis() - born;
+            if (age < 220) {
+                double k = 1 - Math.pow(1 - age / 220.0, 3);
+                alpha = (float) k;
+                setLocation(getX(), (int) Math.round(targetY + 24 * (1 - k)));
+            } else if (age > 2800) {
+                alpha = Math.max(0, 1 - (age - 2800) / 300f);
+                if (alpha <= 0) {
+                    tick.stop();
+                    layers.remove(this);
+                    layers.repaint();
+                    return;
+                }
+            } else {
+                alpha = 1;
+                setLocation(getX(), targetY);
+            }
+            repaint();
+        }
+
+        @Override protected void paintComponent(Graphics g0) {
+            Graphics2D g = smooth(g0);
+            g.setComposite(AlphaComposite.SrcOver.derive(Math.clamp(alpha, 0f, 1f)));
+            g.setColor(new Color(0, 0, 0, 90));
+            g.fillRoundRect(2, 3, getWidth() - 3, getHeight() - 3, 12, 12);
+            g.setColor(PANEL2);
+            g.fillRoundRect(0, 0, getWidth() - 2, getHeight() - 3, 12, 12);
+            g.setColor(EDGE);
+            g.drawRoundRect(0, 0, getWidth() - 3, getHeight() - 4, 12, 12);
+            g.setColor(accent);
+            g.fillRoundRect(10, (getHeight() - 3) / 2 - 4, 8, 8, 8, 8);
+            g.setColor(TEXT);
+            g.setFont(getFont());
+            FontMetrics fm = g.getFontMetrics();
+            g.drawString(Segmented.fit(text, fm, getWidth() - 40), 26, (getHeight() - 3 + fm.getAscent() - fm.getDescent()) / 2);
+            g.dispose();
+        }
+    }
+
+    // ------------------------------------------------------------------ toggle switch
+
+    /** An on/off switch whose knob slides (and colour fades) in 150 ms. */
+    static final class Toggle extends JComponent {
+        private boolean on;
+        private double pos;
+        private final Consumer<Boolean> changed;
+        private final javax.swing.Timer anim = new javax.swing.Timer(15, null);
+
+        Toggle(boolean on, Consumer<Boolean> changed) {
+            this.on = on;
+            this.pos = on ? 1 : 0;
+            this.changed = changed;
+            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            setFocusable(true);
+            anim.addActionListener(e -> {
+                double target = this.on ? 1 : 0;
+                pos += (target - pos) * 0.35;
+                if (Math.abs(target - pos) < 0.02) {
+                    pos = target;
+                    anim.stop();
+                }
+                repaint();
+            });
+            addMouseListener(new MouseAdapter() {
+                @Override public void mousePressed(MouseEvent e) { flip(); }
+            });
+            addKeyListener(new java.awt.event.KeyAdapter() {
+                @Override public void keyPressed(java.awt.event.KeyEvent e) {
+                    if (e.getKeyCode() == java.awt.event.KeyEvent.VK_SPACE || e.getKeyCode() == java.awt.event.KeyEvent.VK_ENTER) flip();
+                }
+            });
+        }
+
+        void flip() {
+            on = !on;
+            anim.start();
+            changed.accept(on);
+        }
+
+        @Override public Dimension getPreferredSize() { return new Dimension(38, 22); }
+
+        @Override protected void paintComponent(Graphics g0) {
+            Graphics2D g = smooth(g0);
+            int w = 36, h = 20, y = (getHeight() - h) / 2;
+            g.setColor(mix(mix(CODE_BG, EDGE, 0.6), SELECT, pos));
+            g.fillRoundRect(0, y, w, h, h, h);
+            int knob = h - 6, x = (int) Math.round(3 + (w - knob - 6) * pos);
+            g.setColor(Color.WHITE);
+            g.fillOval(x, y + 3, knob, knob);
+            if (hasFocus()) {
+                g.setColor(SELECT);
+                g.drawRoundRect(-1 + 1, y - 1 + 1, w - 2, h, h, h);
+            }
+            g.dispose();
+        }
     }
 
     // ------------------------------------------------------------------ segmented control

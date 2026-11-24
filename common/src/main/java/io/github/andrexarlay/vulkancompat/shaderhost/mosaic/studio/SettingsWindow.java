@@ -5,6 +5,7 @@ import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
@@ -26,7 +27,7 @@ final class SettingsWindow extends Dock.StudioWindow {
             app.settings.save();
         });
         apply.setRepeats(false);
-        setSize(560, 600);
+        setSize(820, 640);
         setLocationRelativeTo(app.main);
         build();
     }
@@ -39,73 +40,207 @@ final class SettingsWindow extends Dock.StudioWindow {
     private void build() {
         draft = app.settings.copy();
         root.removeAll();
-        root.setBackground(PANEL);
-        JTabbedPane tabs = new JTabbedPane();
-        tabs.setFont(UI);
-        tabs.addTab("Look", page(this::look));
-        tabs.addTab("Input", page(this::input));
-        tabs.addTab("Keys", keys());
-        tabs.addTab("Layout", page(this::layout));
-        tabs.addTab("Compiler", page(this::compiler));
-        tabs.addTab("Game", page(this::game));
-        tabs.setSelectedIndex(Math.min(tab, tabs.getTabCount() - 1));
-        tabs.addChangeListener(e -> tab = tabs.getSelectedIndex());
-        root.add(tabs, BorderLayout.CENTER);
-        JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 6));
-        bottom.setBackground(PANEL2);
-        bottom.add(label("Saved automatically to " + StudioSettings.file(), FAINT));
-        bottom.add(button("Close", null, this::dispose));
-        root.add(bottom, BorderLayout.SOUTH);
+        root.setBackground(BG);
+        pages.clear();
+        page("Look", "Theme, colours, nodes and wires", "shader", new Color(0x5AA0E0), this::look);
+        page("Input", "Mouse, touchpad and keyboard", "move", new Color(0x4FB886), this::input);
+        pages.add(new Page("Keys", "Every shortcut, rebindable", StudioWidgets.glyph("tag", new Color(0xB07CD8)), keys(), List.of("keys", "shortcut")));
+        page("Layout", "Areas and windows", "frame", new Color(0x8A6FC8), this::layout);
+        page("Compiler", "Slang and SPIR-V", "code", new Color(0x5E9E4E), this::compiler);
+        page("Game", "Running Minecraft from the studio", "vanilla", new Color(0xD08A4A), this::game);
+
+        CardLayout cards = new CardLayout();
+        JPanel content = new JPanel(cards);
+        content.setBackground(BG);
+        for (Page p : pages) {
+            JPanel holder = new JPanel(new BorderLayout());
+            holder.setBackground(BG);
+            JPanel head = new JPanel(new GridLayout(0, 1));
+            head.setOpaque(false);
+            head.setBorder(new EmptyBorder(16, 22, 8, 22));
+            JLabel t = new JLabel(p.title());
+            t.setFont(UI_B.deriveFont(UI_B.getSize2D() + 6));
+            t.setForeground(TEXT);
+            head.add(t);
+            head.add(label(p.subtitle(), MUTED));
+            holder.add(head, BorderLayout.NORTH);
+            holder.add(p.body(), BorderLayout.CENTER);
+            content.add(holder, p.title());
+        }
+
+        DefaultListModel<Page> lm = new DefaultListModel<>();
+        pages.forEach(lm::addElement);
+        JList<Page> side = new JList<>(lm);
+        side.setBackground(PANEL);
+        side.setFixedCellHeight(36);
+        side.setCellRenderer(new DefaultListCellRenderer() {
+            @Override public Component getListCellRendererComponent(JList<?> l, Object v, int i, boolean s, boolean f) {
+                JLabel c = (JLabel) super.getListCellRendererComponent(l, ((Page) v).title(), i, s, false);
+                c.setIcon(((Page) v).icon());
+                c.setIconTextGap(10);
+                c.setFont(UI);
+                c.setForeground(s ? TEXT : MUTED);
+                c.setBackground(s ? StudioWidgets.mix(PANEL, SELECT, 0.3) : PANEL);
+                c.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0, 3, 0, 0, s ? SELECT : PANEL),
+                    new EmptyBorder(0, 12, 0, 8)));
+                return c;
+            }
+        });
+        side.addListSelectionListener(e -> {
+            if (side.getSelectedValue() == null) return;
+            tab = pages.indexOf(side.getSelectedValue());
+            cards.show(content, side.getSelectedValue().title());
+        });
+        JTextField search = field("");
+        search.setToolTipText("Find a setting");
+        search.getDocument().addDocumentListener(onText(() -> {
+            String q = search.getText().trim().toLowerCase(java.util.Locale.ROOT);
+            lm.clear();
+            for (Page p : pages) {
+                boolean any = q.isEmpty() || p.title().toLowerCase(java.util.Locale.ROOT).contains(q);
+                for (Row r : p.rows()) {
+                    boolean m = q.isEmpty() || r.text().contains(q);
+                    r.comp().setVisible(m || p.title().toLowerCase(java.util.Locale.ROOT).contains(q));
+                    any |= m;
+                }
+                if (any) lm.addElement(p);
+            }
+            if (!lm.isEmpty()) side.setSelectedIndex(0);
+            content.revalidate();
+            content.repaint();
+        }));
+        JPanel left = new JPanel(new BorderLayout(0, 8));
+        left.setBackground(PANEL);
+        left.setBorder(new EmptyBorder(12, 10, 12, 0));
+        left.setPreferredSize(new Dimension(190, 10));
+        JPanel searchBox = new JPanel(new BorderLayout());
+        searchBox.setOpaque(false);
+        searchBox.setBorder(new EmptyBorder(0, 0, 0, 10));
+        searchBox.add(search);
+        left.add(searchBox, BorderLayout.NORTH);
+        left.add(side, BorderLayout.CENTER);
+        JLabel where = label("Saved automatically", FAINT);
+        where.setFont(UI_S);
+        where.setToolTipText(StudioSettings.file().toString());
+        left.add(where, BorderLayout.SOUTH);
+
+        root.add(left, BorderLayout.WEST);
+        root.add(content, BorderLayout.CENTER);
+        side.setSelectedIndex(Math.min(tab, pages.size() - 1));
         root.revalidate();
         root.repaint();
     }
 
-    private JComponent page(Consumer<Form> fill) {
-        Form f = new Form();
-        fill.accept(f);
-        return scroll(f.panel);
+    /** A settings page: sidebar entry, header, body; rows are kept for search. */
+    private record Page(String title, String subtitle, Icon icon, JComponent body, List<String> words) {
+        List<Row> rows() { return rowsOf.getOrDefault(title, List.of()); }
+        @Override public String toString() { return title; }
     }
 
-    /** A two-column form. */
-    private final class Form {
-        final JPanel panel = new JPanel(new GridBagLayout());
-        final GridBagConstraints c = new GridBagConstraints();
+    private record Row(String text, JComponent comp) {}
 
-        Form() {
-            panel.setBackground(PANEL);
-            panel.setBorder(new EmptyBorder(12, 14, 12, 14));
-            c.gridy = 0;
-            c.anchor = GridBagConstraints.WEST;
-            c.insets = new Insets(5, 4, 5, 10);
-            c.fill = GridBagConstraints.HORIZONTAL;
+    private final List<Page> pages = new java.util.ArrayList<>();
+    private static final java.util.Map<String, List<Row>> rowsOf = new java.util.HashMap<>();
+
+    private void page(String title, String subtitle, String glyph, Color color, Consumer<Form> fill) {
+        Form f = new Form(title);
+        fill.accept(f);
+        f.end();
+        rowsOf.put(title, f.rows);
+        pages.add(new Page(title, subtitle, StudioWidgets.glyph(glyph, color), scroll(f.panel), List.of()));
+    }
+
+    /** Cards of rows: a title and a grey line of explanation on the left, the control on the right. */
+    private final class Form {
+        final JPanel panel = new JPanel();
+        final List<Row> rows = new java.util.ArrayList<>();
+        JPanel card;
+        final String page;
+
+        Form(String page) {
+            this.page = page;
+            panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+            panel.setBackground(BG);
+            panel.setBorder(new EmptyBorder(4, 18, 18, 18));
         }
 
-        void row(String label, JComponent field) {
-            c.gridx = 0;
-            c.gridwidth = 1;
-            c.weightx = 0;
-            panel.add(StudioUi.label(label, TEXT), c);
-            c.gridx = 1;
-            c.weightx = 1;
-            panel.add(field, c);
-            c.gridy++;
+        /** Starts a card with a small heading. */
+        void section(String title) {
+            JLabel h = label(title.toUpperCase(java.util.Locale.ROOT), FAINT);
+            h.setFont(UI_S.deriveFont(Font.BOLD));
+            h.setBorder(new EmptyBorder(14, 6, 6, 0));
+            h.setAlignmentX(0);
+            panel.add(h);
+            card = new JPanel() {
+                @Override protected void paintComponent(Graphics g0) {
+                    Graphics2D g = StudioWidgets.smooth(g0);
+                    g.setColor(PANEL);
+                    g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+                    g.setColor(EDGE);
+                    g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+                    g.dispose();
+                }
+            };
+            card.setOpaque(false);
+            card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+            card.setBorder(new EmptyBorder(4, 0, 4, 0));
+            card.setAlignmentX(0);
+            panel.add(card);
+        }
+
+        private JPanel card() {
+            if (card == null) section(page);
+            return card;
+        }
+
+        void row(String label, JComponent field) { row(label, null, field); }
+
+        void row(String label, String help, JComponent field) {
+            JPanel r = new JPanel(new BorderLayout(16, 0));
+            r.setOpaque(false);
+            r.setBorder(new EmptyBorder(9, 14, 9, 14));
+            JPanel text = new JPanel(new GridLayout(0, 1, 0, 1));
+            text.setOpaque(false);
+            text.add(StudioUi.label(label, TEXT));
+            if (help != null) {
+                JLabel h = StudioUi.label(help, FAINT);
+                h.setFont(UI_S);
+                text.add(h);
+            }
+            r.add(text, BorderLayout.CENTER);
+            JPanel right = new JPanel(new BorderLayout());
+            right.setOpaque(false);
+            field.setPreferredSize(new Dimension(Math.max(170, Math.min(240, field.getPreferredSize().width)), field.getPreferredSize().height));
+            right.add(field, BorderLayout.CENTER);
+            r.add(right, BorderLayout.EAST);
+            add(r, label + " " + (help == null ? "" : help));
         }
 
         void wide(JComponent comp) {
-            c.gridx = 0;
-            c.gridwidth = 2;
-            c.weightx = 1;
-            panel.add(comp, c);
-            c.gridy++;
-            c.gridwidth = 1;
+            JPanel r = new JPanel(new BorderLayout());
+            r.setOpaque(false);
+            r.setBorder(new EmptyBorder(8, 14, 8, 14));
+            r.add(comp, BorderLayout.CENTER);
+            String text = comp instanceof AbstractButton b ? b.getText() : comp instanceof JLabel l ? l.getText() : comp.getToolTipText();
+            add(r, text == null ? "" : text);
         }
 
-        void end() {
-            c.gridx = 0;
-            c.gridwidth = 2;
-            c.weighty = 1;
-            panel.add(Box.createVerticalGlue(), c);
+        private void add(JComponent r, String text) {
+            JPanel c = card();
+            if (c.getComponentCount() > 0) {
+                JSeparator s = new JSeparator();
+                s.setForeground(StudioWidgets.mix(PANEL, EDGE, 0.7));
+                s.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+                c.add(s);
+            }
+            r.setAlignmentX(0);
+            r.setMaximumSize(new Dimension(Integer.MAX_VALUE, r.getPreferredSize().height + 4));
+            c.add(r);
+            rows.add(new Row(text.toLowerCase(java.util.Locale.ROOT), r));
+            c.setMaximumSize(new Dimension(Integer.MAX_VALUE, c.getPreferredSize().height + 8));
         }
+
+        void end() { panel.add(Box.createVerticalGlue()); }
     }
 
     private void changed() { apply.restart(); }
@@ -130,30 +265,41 @@ final class SettingsWindow extends Dock.StudioWindow {
         return s;
     }
 
-    private JCheckBox check(String label, boolean value, Consumer<Boolean> on) {
-        JCheckBox cb = new JCheckBox(label, value);
-        cb.setOpaque(false);
-        cb.setForeground(TEXT);
-        cb.addActionListener(e -> {
-            on.accept(cb.isSelected());
+    /** A row with a sliding switch (the whole row is clickable). */
+    private JComponent check(String label, boolean value, Consumer<Boolean> on) {
+        StudioWidgets.Toggle t = new StudioWidgets.Toggle(value, v -> {
+            on.accept(v);
             changed();
         });
-        return cb;
+        JPanel r = new JPanel(new BorderLayout(16, 0));
+        r.setOpaque(false);
+        JLabel l = StudioUi.label(label, TEXT);
+        r.add(l, BorderLayout.CENTER);
+        r.add(t, BorderLayout.EAST);
+        r.setToolTipText(label);
+        l.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mouseClicked(java.awt.event.MouseEvent e) { t.flip(); }
+        });
+        return r;
     }
 
     private void look(Form f) {
-        f.row("Theme", combo(StudioSettings.Theme.values(), draft.theme, v -> draft.theme = v));
-        f.row("Accent", combo(StudioSettings.Accent.values(), draft.accent, v -> draft.accent = v));
-        f.row("Window buttons", combo(StudioSettings.WindowButtons.values(), draft.windowButtons, v -> draft.windowButtons = v));
-        f.row("Text size", slider(80, 160, draft.fontPercent, v -> draft.fontPercent = v));
-        f.row("Wires", combo(StudioSettings.WireStyle.values(), draft.wires, v -> draft.wires = v));
-        f.row("Wire thickness", slider(10, 50, Math.round(draft.wireWidth * 10), v -> draft.wireWidth = v / 10f));
-        f.row("Node width", slider(130, 260, draft.nodeWidth, v -> draft.nodeWidth = v));
-        f.row("Grid", combo(StudioSettings.GridStyle.values(), draft.grid, v -> draft.grid = v));
-        f.row("Grid step", slider(8, 64, draft.gridStep, v -> draft.gridStep = v));
-        f.wide(check("Snap nodes to the grid (hold Alt to place freely)", draft.snap, v -> draft.snap = v));
+        f.section("Appearance");
+        f.row("Theme", "Colours of the whole studio; OLED black turns pixels off", combo(StudioSettings.Theme.values(), draft.theme, v -> draft.theme = v));
+        f.row("Accent", "Selection, focus and highlights", combo(StudioSettings.Accent.values(), draft.accent, v -> draft.accent = v));
+        f.row("Window buttons", "Mosaic set on the right or traffic lights on the left", combo(StudioSettings.WindowButtons.values(), draft.windowButtons, v -> draft.windowButtons = v));
+        f.row("Text size", "Scales every font of the studio", slider(80, 160, draft.fontPercent, v -> draft.fontPercent = v));
+        f.section("Nodes and wires");
+        f.row("Wires", "Curved, straight or angled", combo(StudioSettings.WireStyle.values(), draft.wires, v -> draft.wires = v));
+        f.row("Wire thickness", null, slider(10, 50, Math.round(draft.wireWidth * 10), v -> draft.wireWidth = v / 10f));
+        f.row("Node width", null, slider(130, 260, draft.nodeWidth, v -> draft.nodeWidth = v));
         f.wide(check("Port names on nodes", draft.portNames, v -> draft.portNames = v));
+        f.section("Canvas");
+        f.row("Grid", null, combo(StudioSettings.GridStyle.values(), draft.grid, v -> draft.grid = v));
+        f.row("Grid step", "Pixels between grid lines", slider(8, 64, draft.gridStep, v -> draft.gridStep = v));
+        f.wide(check("Snap nodes to the grid (hold Alt to place freely)", draft.snap, v -> draft.snap = v));
         f.wide(check("Live save on when the studio starts", draft.liveByDefault, v -> draft.liveByDefault = v));
+        f.section("Reset");
         f.wide(button("Reset look to defaults", null, () -> {
             StudioSettings d = new StudioSettings();
             draft.theme = d.theme;
@@ -168,19 +314,19 @@ final class SettingsWindow extends Dock.StudioWindow {
             draft.portNames = d.portNames;
             changed();
         }));
-        f.end();
     }
 
     private void input(Form f) {
-        f.row("Scrolling", combo(StudioSettings.WheelMode.values(), draft.wheel, v -> draft.wheel = v));
-        f.row("Zoom speed", slider(3, 40, draft.zoomSpeed, v -> draft.zoomSpeed = v));
+        f.section("Mouse and touchpad");
+        f.row("Scrolling", "Wheel zooms or pans the graph", combo(StudioSettings.WheelMode.values(), draft.wheel, v -> draft.wheel = v));
+        f.row("Zoom speed", "Percent per wheel step", slider(3, 40, draft.zoomSpeed, v -> draft.zoomSpeed = v));
         f.wide(check("Invert wheel / scroll direction", draft.invertWheel, v -> draft.invertWheel = v));
         f.wide(check("Alt + left drag pans (touchpads without a middle button)", draft.altDragPans, v -> draft.altDragPans = v));
         f.wide(check("Right drag on empty canvas pans (a short right click opens the add menu)", draft.rightDragPans, v -> draft.rightDragPans = v));
+        f.section("Keyboard");
         f.wide(check("Keyboard hints: outline the keyboard node and the focused area", draft.keyboardHints, v -> draft.keyboardHints = v));
         f.wide(wrapped("Keyboard only: Tab / Alt+arrows walk the nodes, arrows move them, Space adds, K / Shift+K wire, F2 renames, "
             + "Enter edits properties, F6 switches areas, Ctrl+Space maximizes one. Everything is rebindable in Keys.", MUTED, 440));
-        f.end();
     }
 
     private JComponent keys() {
@@ -264,7 +410,6 @@ final class SettingsWindow extends Dock.StudioWindow {
             app.model.say("Layout saved", OK);
         }));
         f.wide(button("Reset to the default layout", null, this::resetLayout));
-        f.end();
     }
 
     void resetLayout() {
@@ -302,7 +447,6 @@ final class SettingsWindow extends Dock.StudioWindow {
             + "live editing works for everyone using the studio.<br><br>In game: the optional Slang compiler add-on (about 30 MB "
             + "on Windows, separate builds for Linux and macOS) compiles inside Minecraft, so graphs can change without the studio."
             + "<br><br>Iris shader packs are GLSL by nature and keep the GLSL path.", MUTED, 440));
-        f.end();
     }
 
     private void game(Form f) {
@@ -318,7 +462,6 @@ final class SettingsWindow extends Dock.StudioWindow {
             + "\" --launch \"MyInstance\". Give that instance the JVM argument -Dbedray.customrt=&lt;pack folder name&gt; so it loads this "
             + "graph's pack; Live save then shows every change in the game within half a second. Enter saves the command.", MUTED, 440));
         f.wide(button("Run game now", null, app::runGame));
-        f.end();
     }
 
     /** Cross-fade helper for this window's own rebuild. */

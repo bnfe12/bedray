@@ -122,9 +122,21 @@ final class StudioApp {
             m.setRepeats(false);
             m.start();
         }
+        if (shot != null && Boolean.getBoolean("mosaic.selfshot.settings")) {
+            Timer s = new Timer(1000, e -> {
+                settingsWindow = new SettingsWindow(this);
+                settingsWindow.setVisible(true);
+            });
+            s.setRepeats(false);
+            s.start();
+        }
         if (shot != null) {
             Timer t = new Timer(3500, e -> {
                 try {
+                    if (settingsWindow != null && settingsWindow.isShowing()) {
+                        java.awt.image.BufferedImage si = settingsWindow.snapshot();
+                        if (si != null) javax.imageio.ImageIO.write(si, "png", new java.io.File(shot.replace(".png", "-settings.png")));
+                    }
                     for (int i = 0; i < windows.size(); i++) {
                         java.awt.image.BufferedImage img = windows.get(i).snapshot();
                         if (img != null) javax.imageio.ImageIO.write(img, "png", new java.io.File(shot.replace(".png", "-" + i + ".png")));
@@ -650,6 +662,7 @@ final class StudioApp {
         if (!model.message.isEmpty()) {
             statusLeft.setText(model.message);
             statusLeft.setForeground(model.messageColor);
+            if (model.messageColor == OK || model.messageColor == BAD) StudioWidgets.toast(main, model.message, model.messageColor);
             model.message = "";
         } else if (a.ok() && model.generated == null && model.materialDoc()) {
             var b = model.baked;
