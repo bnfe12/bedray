@@ -535,6 +535,20 @@ final class StudioApp {
         if (tabStrip != null) tabStrip.repaint();
     }
 
+    /** Opens a shader graph in its own tab (or the tab that has it). */
+    void openShaderTab(Path graph) {
+        for (DocTabs.Tab t : tabs) {
+            Path f = t == active ? model.doc.file : t.file;
+            if (graph.equals(f)) {
+                activate(t);
+                return;
+            }
+        }
+        DocTabs.Tab t = new DocTabs.Tab(StudioModel.Workspace.SHADERS, graph);
+        tabs.add(t);
+        activate(t);
+    }
+
     void closeTab(DocTabs.Tab t) {
         if (t == active && model.doc.dirty && model.doc.file != null) model.save(false);
         int i = tabs.indexOf(t);

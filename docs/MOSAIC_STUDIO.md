@@ -19,7 +19,8 @@ to Minecraft, or without it.
 | **Materials** | A Principled BSDF graph per block, item or entity texture, baked into LabPBR `_s` / `_n` maps and the albedo of a resource pack that the game reloads by itself. |
 | **Texturing** | The real block model in the preview (fences, stairs, plants...), UV layout with seams, pixel painting (brush, eraser, fill, picker) on the UV view or straight on the model. |
 | **Library** | Textures of Minecraft (26.3 first), resource packs and mods of every game instance found in the official launcher, Prism / MultiMC, CurseForge, Modrinth, ATLauncher and GDLauncher. |
-| **Result** | The frame of the running game before and after the shader, side by side, split, or against an earlier step. |
+| **Shader browser** | Every shader pack of the game folder (Mosaic graphs and Iris packs) with its last frame; open a graph in a tab, choose an Iris pack for the game, new pack from a template, import / export zips. |
+| **Result** | The frame of the running game before and after the shader, side by side, split, or against an earlier step; record GIF / MP4, save frames. |
 | **Workflow** | Document tabs, Blender-like areas you can split, pop out and dock back, rebindable keys (also on the Russian layout), themes including OLED black, named undo history per tab. |
 
 ## AI agents

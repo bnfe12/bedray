@@ -52,6 +52,7 @@ final class Icons {
             case KEYS -> new Color(0x8792A8);
             case LIBRARY -> new Color(0x3E8FB0);
             case MATERIAL -> new Color(0xB86A3A);
+            case BROWSER -> new Color(0x5A7AC8);
         };
     }
 
@@ -145,6 +146,13 @@ final class Icons {
                 g.drawRoundRect((int) a, (int) a + 3, (int) (b - a) - 2, (int) (b - a) - 3, 3, 3);
                 g.draw(new java.awt.geom.Line2D.Float(a + 2, b - 3, m, m + 1));
                 g.draw(new java.awt.geom.Line2D.Float(m, m + 1, b - 4, b - 3));
+            }
+            case BROWSER -> { // a grid of cards
+                float h = (b - a) / 2f - 1;
+                g.drawRoundRect((int) a, (int) a, (int) h, (int) h, 2, 2);
+                g.drawRoundRect((int) (a + h + 2), (int) a, (int) h, (int) h, 2, 2);
+                g.drawRoundRect((int) a, (int) (a + h + 2), (int) h, (int) h, 2, 2);
+                g.drawRoundRect((int) (a + h + 2), (int) (a + h + 2), (int) h, (int) h, 2, 2);
             }
             case MATERIAL -> { // a lit sphere
                 g.drawOval((int) a, (int) a, (int) (b - a), (int) (b - a));

@@ -288,7 +288,7 @@ final class Dock {
     static String defaultLayout() {
         return """
             {"windows": [{"main": true, "tree":
-              {"split": "side", "ratio": 0.16, "a": {"panel": "PALETTE"},
+              {"split": "side", "ratio": 0.16, "a": {"split": "stack", "ratio": 0.6, "a": {"panel": "PALETTE"}, "b": {"panel": "BROWSER"}},
                "b": {"split": "side", "ratio": 0.68,
                  "a": {"split": "stack", "ratio": 0.74, "a": {"panel": "GRAPH"},
                         "b": {"split": "side", "ratio": 0.6, "a": {"panel": "PROBLEMS"}, "b": {"panel": "HISTORY"}}},
