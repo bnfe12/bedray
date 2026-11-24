@@ -91,7 +91,10 @@ final class StudioUi {
         UIManager.put("Button.foreground", TEXT);
         UIManager.put("Separator.foreground", EDGE);
         UIManager.put("ToolBar.background", PANEL2);
+        StudioWidgets.install();
     }
+
+    static String hex(Color c) { return String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue()); }
 
     static void style(AbstractButton b) {
         b.setFocusable(false);

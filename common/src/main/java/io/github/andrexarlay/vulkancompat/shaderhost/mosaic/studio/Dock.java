@@ -340,6 +340,30 @@ final class Dock {
         final JPanel menuSlot = new JPanel(new BorderLayout());
         final JPanel quickSlot = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         private Point dragOffset;
+        /** Holders for the window buttons: left for the macOS style, right for the Mosaic style. */
+        final JPanel leftChrome = new JPanel(new BorderLayout()), rightChrome = new JPanel(new BorderLayout());
+
+        /** (Re)creates the window buttons for the current style setting. */
+        void rebuildChrome() {
+            leftChrome.removeAll();
+            rightChrome.removeAll();
+            StudioWidgets.WindowButtons wb = new StudioWidgets.WindowButtons(this, this::toggleMaximize, this::closeWindow);
+            (StudioWidgets.macStyle() ? leftChrome : rightChrome).add(wb, BorderLayout.CENTER);
+            leftChrome.revalidate();
+            rightChrome.revalidate();
+            leftChrome.repaint();
+            rightChrome.repaint();
+        }
+
+        void closeWindow() {
+            if (main) StudioApp.get().requestClose();
+            else if (!dockable) dispose();
+            else {
+                for (Area a : areas(root)) a.dispose();
+                StudioApp.get().windows.remove(this);
+                dispose();
+            }
+        }
         private BufferedImage fade;
         private float fadeAlpha;
 
@@ -359,6 +383,12 @@ final class Dock {
             frame.add(root, BorderLayout.CENTER);
             setContentPane(frame);
             Resizer.install(this);
+            root.setCursor(Cursor.getDefaultCursor());
+            addWindowStateListener(e -> repaint());
+            addWindowFocusListener(new java.awt.event.WindowAdapter() {
+                @Override public void windowGainedFocus(java.awt.event.WindowEvent e) { repaint(); }
+                @Override public void windowLostFocus(java.awt.event.WindowEvent e) { repaint(); }
+            });
             setGlassPane(new JComponent() {
                 @Override protected void paintComponent(Graphics g) {
                     if (fade == null) return;
@@ -384,6 +414,7 @@ final class Dock {
             left.add(logo);
             left.add(menuSlot);
             bar.add(left, BorderLayout.WEST);
+            bar.setCursor(Cursor.getDefaultCursor());
             titleLabel.setHorizontalAlignment(SwingConstants.CENTER);
             bar.add(titleLabel, BorderLayout.CENTER);
             quickSlot.setOpaque(false);
@@ -391,22 +422,11 @@ final class Dock {
             buttons.setOpaque(false);
             buttons.add(quickSlot);
             if (dockable) buttons.add(chrome(null, "Dock back into the main window", () -> dockBack(this)));
-            buttons.add(chrome("min", "Minimize", () -> setState(Frame.ICONIFIED)));
-            buttons.add(chrome("max", "Maximize / restore", this::toggleMaximize));
-            JButton close = chrome("close", "Close", () -> {
-                if (main) StudioApp.get().requestClose();
-                else if (!dockable) dispose();
-                else {
-                    for (Area a : areas(root)) a.dispose();
-                    StudioApp.get().windows.remove(this);
-                    dispose();
-                }
-            });
-            close.addMouseListener(new MouseAdapter() {
-                @Override public void mouseEntered(MouseEvent e) { close.setBackground(new Color(0xC42B1C)); close.setOpaque(true); close.repaint(); }
-                @Override public void mouseExited(MouseEvent e) { close.setBackground(BUTTON); close.setOpaque(false); close.repaint(); }
-            });
-            buttons.add(close);
+            buttons.add(rightChrome);
+            rightChrome.setOpaque(false);
+            leftChrome.setOpaque(false);
+            left.add(leftChrome, 0);
+            rebuildChrome();
             bar.add(buttons, BorderLayout.EAST);
             MouseAdapter drag = new MouseAdapter() {
                 @Override public void mousePressed(MouseEvent e) { dragOffset = e.getPoint(); }
@@ -562,6 +582,15 @@ final class Dock {
                 default -> Cursor.DEFAULT_CURSOR;
             };
             frame.getContentPane().setCursor(Cursor.getPredefinedCursor(cursor));
+        }
+
+        @Override public void mouseExited(MouseEvent e) {
+            if (edges == 0) frame.getContentPane().setCursor(Cursor.getDefaultCursor());
+        }
+
+        @Override public void mouseReleased(MouseEvent e) {
+            edges = 0;
+            mouseMoved(e);
         }
 
         @Override public void mousePressed(MouseEvent e) {

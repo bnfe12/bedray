@@ -127,6 +127,14 @@ public final class StudioSettings {
     public java.util.Map<String, java.util.List<String>> keys = new java.util.LinkedHashMap<>();
     /** Command that starts Minecraft with Bedray (for example a Prism Launcher --launch call); empty = ask. */
     public String gameCommand = "";
+    /** Title-bar buttons: AUTO draws traffic lights on macOS and the Mosaic set elsewhere. */
+    public enum WindowButtons {
+        AUTO("Match the system"), MOSAIC("Mosaic (right)"), MAC("Traffic lights (left)");
+        public final String label;
+        WindowButtons(String l) { label = l; }
+        @Override public String toString() { return label; }
+    }
+    public WindowButtons windowButtons = WindowButtons.AUTO;
     /** slangc to use; empty finds it (BEDRAY_SLANGC, PATH, ~/.bedray/slang, SLANG_DIR). */
     public String slangcPath = "";
     /** Palette libraries the user switched off (categories: Effects, Rendering, Shading, My nodes...). */

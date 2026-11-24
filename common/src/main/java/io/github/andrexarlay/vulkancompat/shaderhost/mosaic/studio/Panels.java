@@ -360,13 +360,20 @@ final class Panels {
                     List<String> done = model.doc.undoSteps(), redo = model.doc.redoSteps();
                     int current = done.size();
                     String name = step == 0 ? "Start" : step <= current ? done.get(step - 1) : redo.get(step - current - 1);
-                    c.setText((step == current ? "  >  " : "     ") + step + "   " + name);
+                    String num = "<span style='color:" + hex(FAINT) + "'>" + step + "</span>&nbsp;&nbsp;";
+                    c.setText("<html>" + num + esc(name) + "</html>");
                     c.setForeground(step > current ? FAINT : step == current ? TEXT : MUTED);
-                    c.setBackground(s ? SELECT.darker().darker() : PANEL);
+                    c.setBackground(s ? StudioWidgets.mix(PANEL, SELECT, 0.35) : PANEL);
                     StudioModel.Shot shot = model.shotFor(step);
-                    c.setIcon(shot == null ? null : new ImageIcon(thumb(shot.after(), 64, 36)));
-                    c.setIconTextGap(8);
-                    c.setBorder(new EmptyBorder(3, 4, 3, 4));
+                    Icon action = StudioWidgets.historyIcon(name);
+                    c.setIcon(StudioWidgets.pair(action, shot == null ? null : new ImageIcon(thumb(shot.after(), 64, 36)), 8));
+                    c.setIconTextGap(9);
+                    // accent bar on the current step, dimmed icons for steps that can only be redone
+                    c.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createMatteBorder(0, 3, 0, 0, step == current ? SELECT : (s ? StudioWidgets.mix(PANEL, SELECT, 0.35) : PANEL)),
+                        new EmptyBorder(4, 8, 4, 6)));
+                    c.setEnabled(step <= current);
+                    if (step > current) c.setDisabledIcon(StudioWidgets.pair(StudioWidgets.glyph("dot", FAINT), null, 0));
                     return c;
                 }
             });
@@ -413,7 +420,12 @@ final class Panels {
         }
 
         final JPanel root = new JPanel(new BorderLayout());
-        final JComboBox<Mode> mode = new JComboBox<>(Mode.values());
+        final StudioWidgets.Segmented<Mode> mode = new StudioWidgets.Segmented<Mode>()
+            .add(Mode.AFTER, "Shader", StudioWidgets.glyph("shader", new Color(0x5AA0E0)), "The game's frame with this graph (1)")
+            .add(Mode.BEFORE, "Vanilla", StudioWidgets.glyph("vanilla", new Color(0x7FB069)), "The same frame without the shader (2)")
+            .add(Mode.SPLIT, "Split", StudioWidgets.glyph("split", null), "Drag the line to compare before / after (3, Left / Right)")
+            .add(Mode.SIDE, "Side", StudioWidgets.glyph("side", null), "Before and after next to each other (4)")
+            .add(Mode.HISTORY, "Earlier", StudioWidgets.glyph("history", null), "Compare with a result from an earlier step (5)");
         final DefaultListModel<StudioModel.Shot> shots = new DefaultListModel<>();
         final JList<StudioModel.Shot> strip = new JList<>(shots);
         double split = 0.5;
@@ -422,12 +434,11 @@ final class Panels {
         ResultPanel(StudioModel m) {
             super(m);
             root.setBackground(PANEL);
-            JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+            JPanel bar = new JPanel(new BorderLayout());
             bar.setBackground(PANEL2);
-            bar.add(label("View:", MUTED));
-            mode.addActionListener(e -> root.repaint());
-            mode.setToolTipText("Left/Right move the split, 1-5 switch views; double-click an earlier result to restore that graph");
-            bar.add(mode);
+            bar.setBorder(new EmptyBorder(5, 6, 5, 6));
+            mode.onChange(v -> root.repaint());
+            bar.add(mode, BorderLayout.CENTER);
             root.add(bar, BorderLayout.NORTH);
             view = new JComponent() {
                 @Override protected void paintComponent(Graphics g0) { paintResult((Graphics2D) g0, getWidth(), getHeight()); }
@@ -523,7 +534,7 @@ final class Panels {
                 }
                 return;
             }
-            Mode md = (Mode) mode.getSelectedItem();
+            Mode md = mode.getSelectedItem();
             StudioModel.Shot other = strip.getSelectedValue();
             switch (md) {
                 case AFTER -> draw(g, after, 0, 0, w, h);

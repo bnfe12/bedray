@@ -408,9 +408,11 @@ final class StudioApp {
             statusMid.setForeground(model.compile.ok() ? OK : BAD);
         }
         statusRight.setText((model.slangStatus.isEmpty() ? "" : model.slangStatus + "    ") + "game: " + model.gameStatus + "    F1 keys");
-        String t = "Mosaic Studio - " + (model.doc.file == null ? "untitled" : model.doc.file.getFileName() + "  (" + model.doc.file.getParent() + ")")
-            + (model.doc.dirty ? "  *" : "");
-        if (main != null && !main.titleLabel.getText().equals(t)) main.titleLabel.setText(t);
+        String t = (model.doc.dirty ? "• " : "") + (model.doc.file == null ? "untitled" : packName(model.doc.file) + "  /  " + model.doc.file.getFileName());
+        if (main != null && !main.titleLabel.getText().equals(t)) {
+            main.titleLabel.setText(t);
+            main.titleLabel.setToolTipText(model.doc.file == null ? "Not saved yet" : model.doc.file.toString());
+        }
         updateLive();
     }
 
@@ -695,6 +697,15 @@ final class StudioApp {
     }
 
     // ================================================================== entry
+
+    /** The shader pack folder a mosaic.json belongs to (<pack>/shaders/bedray/mosaic.json), else its folder. */
+    static String packName(Path file) {
+        Path p = file.toAbsolutePath().getParent();
+        if (p != null && p.getFileName() != null && p.getFileName().toString().equals("bedray") && p.getParent() != null
+            && p.getParent().getFileName().toString().equals("shaders") && p.getParent().getParent() != null)
+            return p.getParent().getParent().getFileName().toString();
+        return p == null || p.getFileName() == null ? "" : p.getFileName().toString();
+    }
 
     static void launch(String[] args) throws Exception {
         System.setProperty("awt.useSystemAAFontSettings", "on");

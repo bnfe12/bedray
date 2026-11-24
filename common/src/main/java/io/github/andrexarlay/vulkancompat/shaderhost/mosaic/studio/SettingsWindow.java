@@ -144,6 +144,7 @@ final class SettingsWindow extends Dock.StudioWindow {
     private void look(Form f) {
         f.row("Theme", combo(StudioSettings.Theme.values(), draft.theme, v -> draft.theme = v));
         f.row("Accent", combo(StudioSettings.Accent.values(), draft.accent, v -> draft.accent = v));
+        f.row("Window buttons", combo(StudioSettings.WindowButtons.values(), draft.windowButtons, v -> draft.windowButtons = v));
         f.row("Text size", slider(80, 160, draft.fontPercent, v -> draft.fontPercent = v));
         f.row("Wires", combo(StudioSettings.WireStyle.values(), draft.wires, v -> draft.wires = v));
         f.row("Wire thickness", slider(10, 50, Math.round(draft.wireWidth * 10), v -> draft.wireWidth = v / 10f));
