@@ -18,6 +18,7 @@ public final class MosaicEffects {
     private MosaicEffects() {}
 
     private static final Map<String, MosaicFunction> ALL = new LinkedHashMap<>();
+    private static final Map<String, String> SLANG = slangBodies();
 
     private static void add(String signature, String label, String help, String body) {
         add("Effects", signature, label, help, body);
@@ -25,8 +26,24 @@ public final class MosaicEffects {
 
     private static void add(String category, String signature, String label, String help, String body) {
         MosaicFunction f = MosaicFunction.parseSignature(signature, body);
-        ALL.put(f.name(), new MosaicFunction(f.name(), label, category, help, f.params(), f.output(), body, null));
+        ALL.put(f.name(), new MosaicFunction(f.name(), label, category, help, f.params(), f.output(), body, SLANG.get(f.name())));
     }
+
+    /** Hand-written Slang bodies where the automatic GLSL translation does not apply (matrix products). */
+    private static Map<String, String> slangBodies() { return Map.of("rtReflections", """
+        float m = mosaicHitMaterial(uv);
+        if (mosaicDepth(uv) >= 1.0e5 || (material >= 0.0 && m != floor(material + 0.5))) return color;
+        float3 n = mosaicNormal(uv), v = mosaicViewDir(uv);
+        float3 r = reflect(v, n), p = mosaicHitPos(uv) + n * 0.02;
+        float t = mosaicTrace(p, r, 128.0);
+        float3 refl = mosaicSky(r);
+        if (t >= 0.0) {
+            float4 clip = mul(frame.projection, mul(frame.modelView, float4(p + r * t, 1.0)));
+            float2 suv = clip.xy / clip.w * 0.5 + 0.5;
+            refl = (clip.w > 0.0 && all(suv >= 0.0) && all(suv <= 1.0)) ? mosaicScene(suv).rgb : color.rgb * 0.5;
+        }
+        float fres = 0.02 + 0.98 * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
+        return float4(lerp(color.rgb, refl, clamp(amount + fres, 0.0, 1.0) * amount * 2.0), color.a);"""); }
 
     static {
         add("vec4 vignette(vec4 color, vec2 uv, float strength = 0.6, float radius = 0.75)", "Vignette",

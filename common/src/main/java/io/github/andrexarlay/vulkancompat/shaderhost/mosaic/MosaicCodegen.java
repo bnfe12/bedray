@@ -726,8 +726,7 @@ public final class MosaicCodegen {
         sig.append(')');
         o.a("\n// node code: ").a(f.label().replace('\n', ' ')).a("\n").a(sig.toString()).a(" {\n");
         int bodyFirst = o.line;
-        String body = slang ? f.slang() : f.glsl();
-        if (body == null) body = "    return " + MosaicEval.literal(new double[] {0}, f.output(), true) + "; // no Slang code for this node";
+        String body = slang ? (f.slang() != null ? f.slang() : MosaicSlang.fromGlsl(f.glsl())) : f.glsl();
         o.a(body.endsWith("\n") ? body : body + "\n");
         o.a("}\n");
         o.spans.add(new Span(first, o.line - 1, null, f.name(), bodyFirst));

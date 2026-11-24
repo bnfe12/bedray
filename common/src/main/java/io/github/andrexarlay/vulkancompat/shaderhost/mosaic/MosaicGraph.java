@@ -835,9 +835,7 @@ public final class MosaicGraph {
             if (rays > 3)
                 warn(null, rays + " ray queries per pixel: each one traces the whole scene, expect a large frame cost",
                     Fix.NONE);
-            for (MosaicFunction f : functions.values())
-                if (f.slang() == null)
-                    hint(null, "function " + f.name() + " has no Slang code: the Slang mirror returns zero for it", Fix.EDIT_CODE);
+
         }
 
         double[] constValue(String ref) {
