@@ -73,15 +73,17 @@ class MosaicGroupTest {
         }
         int minX = d.nodes.stream().mapToInt(n -> n.x).min().orElseThrow();
         int minY = d.nodes.stream().mapToInt(n -> n.y).min().orElseThrow();
+        int outBefore = d.byId("out").x;
         MosaicArrange.arrange(d.nodes, 124, n -> 40);
+        assertEquals(outBefore, d.byId("out").x, "the output stays where it was; the rest flows to its left");
         for (MosaicDocument.ENode n : d.nodes)
             for (String ref : n.inputs.values())
                 assertTrue(d.byId(MosaicGraph.split(ref)[0]).x < n.x, ref + " -> " + n.id + " runs backwards");
         for (MosaicDocument.ENode a : d.nodes)
             for (MosaicDocument.ENode b : d.nodes)
                 if (a != b && a.x == b.x) assertTrue(Math.abs(a.y - b.y) >= 40, a.id + " overlaps " + b.id);
-        assertEquals(minX, d.nodes.stream().mapToInt(n -> n.x).min().orElseThrow());
-        assertEquals(minY, d.nodes.stream().mapToInt(n -> n.y).min().orElseThrow());
+        int outX = d.byId("out").x;
+        assertTrue(minX <= outX && minY <= d.byId("out").y + 10_000); // the output side keeps its place (checked below)
         assertEquals("out", d.nodes.stream().max(java.util.Comparator.comparingInt(n -> n.x)).orElseThrow().id);
         assertNull(d.validate());
     }
@@ -115,5 +117,38 @@ class MosaicGroupTest {
         MosaicArrange.alignTop(List.of(a, b));
         assertEquals(10, b.x);
         assertEquals(20, a.y);
+    }
+
+    @Test
+    void arrangeKeepsWiresLeftToRightWithoutOverlap() {
+        List<MosaicDocument.ENode> nodes = MosaicDocument.readFragment("{\"nodes\": [" +
+            "{\"id\": \"c\", \"type\": \"mosaic.sceneColor\", \"x\": 500, \"y\": 400}," +
+            "{\"id\": \"t\", \"type\": \"mosaic.time\", \"x\": 0, \"y\": 0}," +
+            "{\"id\": \"n\", \"type\": \"mosaic.noise\", \"x\": 300, \"y\": 900}," +
+            "{\"id\": \"m\", \"type\": \"mosaic.mixColor\", \"inputs\": {\"a\": \"c\", \"b\": \"n.color\", \"fac\": \"t\"}, \"x\": 10, \"y\": 10}," +
+            "{\"id\": \"v\", \"type\": \"mosaic.uv\", \"x\": 40, \"y\": 700}," +
+            "{\"id\": \"lonely\", \"type\": \"mosaic.time\", \"x\": 900, \"y\": 50}," +
+            "{\"id\": \"o\", \"type\": \"mosaic.output\", \"inputs\": {\"color\": \"m\"}, \"x\": 1000, \"y\": 300}]}");
+        java.util.function.ToIntFunction<MosaicDocument.ENode> h = n -> 60 + 20 * n.inputs.size();
+        java.util.Map<String, MosaicDocument.ENode> ids = new java.util.HashMap<>();
+        for (MosaicDocument.ENode n : nodes) ids.put(n.id, n);
+        record D(java.util.Map<String, MosaicDocument.ENode> m, List<MosaicDocument.ENode> nodes) {
+            MosaicDocument.ENode byId(String id) { return m.get(id); }
+        }
+        D d = new D(ids, nodes);
+        MosaicArrange.arrange(d.nodes, 160, h, n -> MosaicGraph.portsOf(n.type, MosaicEffects.all().stream().collect(java.util.stream.Collectors.toMap(MosaicFunction::name, f -> f)))
+            .stream().map(MosaicGraph.Port::name).toList());
+        MosaicDocument.ENode o = d.byId("o"), m = d.byId("m"), t = d.byId("t"), c = d.byId("c"), lonely = d.byId("lonely");
+        assertEquals(1000, o.x, "the output keeps its place");
+        for (MosaicDocument.ENode n : d.nodes)
+            for (String ref : n.inputs.values()) assertTrue(d.byId(MosaicGraph.split(ref)[0]).x < n.x, "wire into " + n.id + " runs right");
+        assertEquals(m.x - 160 - MosaicArrange.COLUMN_GAP, t.x, "time sits right next to the mix that uses it");
+        assertEquals(t.x, c.x);
+        // the inputs follow the socket order of the mix: a (color) above b (noise) above fac (time)
+        assertTrue(c.y < d.byId("n").y && d.byId("n").y < t.y);
+        for (MosaicDocument.ENode a : d.nodes)
+            for (MosaicDocument.ENode b : d.nodes)
+                if (a != b && a.x == b.x) assertTrue(a.y + h.applyAsInt(a) <= b.y || b.y + h.applyAsInt(b) <= a.y, a.id + " overlaps " + b.id);
+        assertTrue(lonely.y > o.y && lonely.y > m.y, "unconnected nodes go underneath");
     }
 }

@@ -106,6 +106,7 @@ final class StudioModel {
     }
 
     private void settled() {
+        if (activeGraph != null) activeGraph.finishGlide();
         ProjectStore.save(this, activeGraph);
         if (generated == null) return;
         compileNow();
@@ -367,7 +368,44 @@ final class StudioModel {
 
     void arrange(java.util.function.ToIntFunction<MosaicDocument.ENode> height) {
         List<MosaicDocument.ENode> group = selection.size() >= 2 ? ordered() : new ArrayList<>(doc.nodes);
-        edit("Arrange " + group.size() + " nodes", () -> MosaicArrange.arrange(group, StudioUi.settings.nodeWidth, height));
+        tidy("Arrange " + group.size() + " nodes", group, () -> MosaicArrange.arrange(group, StudioUi.settings.nodeWidth, height,
+            n -> MosaicGraph.portsOf(n.type, analysis.functions()).stream().map(MosaicGraph.Port::name).toList()));
+    }
+
+    /** Align / distribute the selection: left, top, horizontal spacing, vertical stack. */
+    void align(String how, java.util.function.ToIntFunction<MosaicDocument.ENode> height) {
+        if (selection.size() < 2) {
+            say("Select two or more nodes to align", StudioUi.MUTED);
+            return;
+        }
+        List<MosaicDocument.ENode> group = ordered();
+        tidy(switch (how) {
+            case "left" -> "Align left";
+            case "top" -> "Align top";
+            case "row" -> "Distribute in a row";
+            default -> "Stack in a column";
+        }, group, () -> {
+            switch (how) {
+                case "left" -> MosaicArrange.alignLeft(group);
+                case "top" -> MosaicArrange.alignTop(group);
+                case "row" -> {
+                    MosaicArrange.alignTop(group);
+                    MosaicArrange.distributeHorizontally(group, StudioUi.settings.nodeWidth);
+                }
+                default -> {
+                    MosaicArrange.alignLeft(group);
+                    MosaicArrange.distributeVertically(group, height);
+                }
+            }
+        });
+    }
+
+    /** One undo step that moves nodes; the canvas glides them from where they were. */
+    private void tidy(String label, List<MosaicDocument.ENode> group, Runnable layout) {
+        java.util.Map<MosaicDocument.ENode, java.awt.Point> from = new java.util.LinkedHashMap<>();
+        for (MosaicDocument.ENode n : group) from.put(n, new java.awt.Point(n.x, n.y));
+        edit(label, layout);
+        if (activeGraph != null) activeGraph.glide(from);
     }
 
     void group(java.util.function.ToIntFunction<MosaicDocument.ENode> height) {
@@ -471,6 +509,7 @@ final class StudioModel {
 
     boolean save(boolean loud) {
         if (doc.file == null) return false;
+        if (activeGraph != null) activeGraph.finishGlide();
         try {
             doc.save();
             shipSpirv();

@@ -64,6 +64,15 @@ final class GraphPanel extends JComponent {
             @Override public void mouseReleased(MouseEvent e) { release(e); }
             @Override public void mouseMoved(MouseEvent e) {
                 mouseScreen = e.getPoint();
+                Tool t = toolAt(e.getPoint());
+                if (t != hoverTool) {
+                    hoverTool = t;
+                    repaint();
+                }
+                if (t != null) {
+                    setToolTipText(t.tip());
+                    return;
+                }
                 Socket s = socketAt(e.getPoint());
                 setToolTipText(s == null ? nodeTip(e.getPoint()) : socketTip(s));
             }
@@ -268,9 +277,155 @@ final class GraphPanel extends JComponent {
             || (settings.altDragPans && SwingUtilities.isLeftMouseButton(e) && e.isAltDown());
     }
 
+    // ================================================================== glide, edge pan, selection bar
+
+    private final Map<MosaicDocument.ENode, Point> glideFrom = new LinkedHashMap<>(), glideTo = new LinkedHashMap<>();
+    private long glideStart;
+    private final javax.swing.Timer glideTimer = new javax.swing.Timer(15, e -> glideStep());
+
+    /** Animates nodes from {@code from} to where they are now (they already hold the final, committed positions). */
+    void glide(Map<MosaicDocument.ENode, Point> from) {
+        finishGlide();
+        for (var en : from.entrySet()) {
+            MosaicDocument.ENode n = en.getKey();
+            if (n.x == en.getValue().x && n.y == en.getValue().y) continue;
+            glideTo.put(n, new Point(n.x, n.y));
+            glideFrom.put(n, en.getValue());
+            n.x = en.getValue().x;
+            n.y = en.getValue().y;
+        }
+        if (glideTo.isEmpty()) return;
+        glideStart = System.nanoTime();
+        glideTimer.start();
+    }
+
+    private void glideStep() {
+        double t = Math.min(1, (System.nanoTime() - glideStart) / 1.8e8);
+        double k = 1 - Math.pow(1 - t, 3); // ease out
+        for (var en : glideTo.entrySet()) {
+            Point a = glideFrom.get(en.getKey()), b = en.getValue();
+            en.getKey().x = (int) Math.round(a.x + (b.x - a.x) * k);
+            en.getKey().y = (int) Math.round(a.y + (b.y - a.y) * k);
+        }
+        if (t >= 1) finishGlide();
+        repaint();
+    }
+
+    /** Snaps a running glide to its end (before saving, or when the user grabs a node). */
+    void finishGlide() {
+        glideTimer.stop();
+        for (var en : glideTo.entrySet()) {
+            en.getKey().x = en.getValue().x;
+            en.getKey().y = en.getValue().y;
+        }
+        glideTo.clear();
+        glideFrom.clear();
+    }
+
+    private static final int EDGE_PAN = 44;
+    private MouseEvent lastDrag;
+    private Point dragOrigin;
+    private final javax.swing.Timer edgeTimer = new javax.swing.Timer(15, e -> edgeStep());
+
+    /** While dragging a node, frame, wire or box near the canvas edge, the view scrolls and the dragged thing follows. */
+    private double[] edgeSpeed(Point p) {
+        double vx = 0, vy = 0;
+        if (p.x < EDGE_PAN) vx = -(EDGE_PAN - p.x);
+        else if (p.x > getWidth() - EDGE_PAN) vx = p.x - (getWidth() - EDGE_PAN);
+        if (p.y < EDGE_PAN) vy = -(EDGE_PAN - p.y);
+        else if (p.y > getHeight() - EDGE_PAN) vy = p.y - (getHeight() - EDGE_PAN);
+        double s = 18.0 / EDGE_PAN;
+        return new double[] {Math.clamp(vx * s, -40, 40), Math.clamp(vy * s, -40, 40)};
+    }
+
+    private boolean edgeGesture() { return dragNode != null || dragFrame != null || wireFrom != null || boxing || resizeFrame != null; }
+
+    private void edgeStep() {
+        if (lastDrag == null || !edgeGesture()) {
+            edgeTimer.stop();
+            return;
+        }
+        double[] v = edgeSpeed(lastDrag.getPoint());
+        if (v[0] == 0 && v[1] == 0) {
+            edgeTimer.stop();
+            return;
+        }
+        panX -= v[0];
+        panY -= v[1];
+        if (boxing) pressScreen = new Point((int) Math.round(pressScreen.x - v[0]), (int) Math.round(pressScreen.y - v[1]));
+        drag(lastDrag);
+    }
+
+    private record Tool(Rectangle r, String label, String tip, Runnable run) {}
+    private final List<Tool> tools = new ArrayList<>();
+
+    /** The bar over a multi-selection: arrange, align, distribute, group. */
+    private void selectionBar(Graphics2D g) {
+        tools.clear();
+        if (model.selection.size() < 2 || edgeGesture() || panning) return;
+        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        for (MosaicDocument.ENode n : model.selection) {
+            minX = Math.min(minX, n.x);
+            minY = Math.min(minY, n.y);
+            maxX = Math.max(maxX, n.x + W());
+        }
+        String[][] items = {{"Arrange", "Tidy the selection by its wires (" + model.keys.humanFor(StudioKeys.Action.ARRANGE) + ")", "arrange"},
+            {"Left", "Align left edges", "left"}, {"Top", "Align top edges", "top"}, {"Row", "Line up in a row, even spacing", "row"},
+            {"Column", "Stack in a column", "column"}, {"Group", "Frame behind the selection", "group"}};
+        g.setFont(UI.deriveFont(UI.getSize2D() - 0.5f));
+        java.awt.FontMetrics fm = g.getFontMetrics();
+        int h = 24, pad = 9, total = 6;
+        for (String[] it : items) total += fm.stringWidth(it[0]) + pad * 2;
+        int cx = (int) Math.round((minX + maxX) / 2.0 * zoom + panX);
+        int x = Math.clamp(cx - total / 2, 4, Math.max(4, getWidth() - total - 4));
+        int y = Math.clamp((int) Math.round(minY * zoom + panY) - h - 10, 4, Math.max(4, getHeight() - h - 4));
+        g.setColor(new Color(0, 0, 0, 60));
+        g.fillRoundRect(x + 1, y + 2, total, h, 12, 12);
+        g.setColor(PANEL2);
+        g.fillRoundRect(x, y, total, h, 12, 12);
+        g.setColor(EDGE);
+        g.drawRoundRect(x, y, total, h, 12, 12);
+        int bx = x + 3;
+        for (String[] it : items) {
+            int bw = fm.stringWidth(it[0]) + pad * 2;
+            Rectangle r = new Rectangle(bx, y + 2, bw, h - 4);
+            String how = it[2];
+            tools.add(new Tool(r, it[0], it[1], () -> {
+                switch (how) {
+                    case "arrange" -> model.arrange(this::height);
+                    case "group" -> model.group(this::height);
+                    default -> model.align(how, this::height);
+                }
+            }));
+            boolean hover = mouseScreen != null && r.contains(mouseScreen);
+            if (hover) {
+                g.setColor(new Color(SELECT.getRed(), SELECT.getGreen(), SELECT.getBlue(), 70));
+                g.fillRoundRect(r.x, r.y, r.width, r.height, 9, 9);
+            }
+            g.setColor(hover ? TEXT : MUTED);
+            g.drawString(it[0], bx + pad, y + (h + fm.getAscent() - fm.getDescent()) / 2);
+            bx += bw;
+        }
+    }
+
+    private Tool hoverTool;
+
+    private Tool toolAt(Point p) {
+        for (Tool t : tools) if (t.r().contains(p)) return t;
+        return null;
+    }
+
     private void press(MouseEvent e) {
         requestFocusInWindow();
         model.activeGraph = this;
+        finishGlide();
+        Tool tool = SwingUtilities.isLeftMouseButton(e) ? toolAt(e.getPoint()) : null;
+        if (tool != null) {
+            tool.run().run();
+            repaint();
+            return;
+        }
+        dragOrigin = e.getPoint();
         pressScreen = e.getPoint();
         pressWorld = toWorld(e.getPoint());
         if (SwingUtilities.isRightMouseButton(e) && e.isControlDown()) {
@@ -393,10 +548,17 @@ final class GraphPanel extends JComponent {
         } else if (boxing) {
             boxEnd = e.getPoint();
         }
+        lastDrag = e;
+        if (edgeGesture() && dragOrigin != null && dragOrigin.distance(e.getPoint()) > 8 && !edgeTimer.isRunning()) {
+            double[] v = edgeSpeed(e.getPoint());
+            if (v[0] != 0 || v[1] != 0) edgeTimer.start();
+        }
         repaint();
     }
 
     private void release(MouseEvent e) {
+        edgeTimer.stop();
+        lastDrag = null;
         if (!knife.isEmpty()) {
             cutWires();
             knife.clear();
@@ -908,6 +1070,7 @@ final class GraphPanel extends JComponent {
             for (int i = 1; i < knife.size(); i++) g.drawLine(knife.get(i - 1).x, knife.get(i - 1).y, knife.get(i).x, knife.get(i).y);
         }
         g.dispose();
+        selectionBar((Graphics2D) g0);
         if (boxing && boxEnd != null) {
             Rectangle r = new Rectangle(Math.min(pressScreen.x, boxEnd.x), Math.min(pressScreen.y, boxEnd.y),
                 Math.abs(pressScreen.x - boxEnd.x), Math.abs(pressScreen.y - boxEnd.y));
