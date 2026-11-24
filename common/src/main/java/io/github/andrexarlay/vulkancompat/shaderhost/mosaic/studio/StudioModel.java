@@ -518,6 +518,40 @@ final class StudioModel {
         }
     }
 
+    /** Node the game shows instead of the output (debug preview), or null. */
+    String gamePreview;
+    boolean gameNanCheck;
+
+    /** Writes the studio's commands for the game (keeps keys it does not own, e.g. disabledAddons). */
+    void writeControl() {
+        Path dir = linkDir();
+        if (dir == null) {
+            say("Save the graph into a pack first: the game reads commands next to it", StudioUi.MUTED);
+            return;
+        }
+        try {
+            Files.createDirectories(dir);
+            Path f = dir.resolve("control.json");
+            com.google.gson.JsonObject o = Files.exists(f)
+                ? com.google.gson.JsonParser.parseString(Files.readString(f, StandardCharsets.UTF_8)).getAsJsonObject() : new com.google.gson.JsonObject();
+            if (gamePreview == null) o.remove("previewNode");
+            else o.addProperty("previewNode", gamePreview);
+            o.addProperty("nanCheck", gameNanCheck);
+            Path tmp = dir.resolve("control.json.tmp");
+            Files.writeString(tmp, o.toString(), StandardCharsets.UTF_8);
+            Files.move(tmp, f, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (Exception e) {
+            say("Could not write the game commands: " + e.getMessage(), StudioUi.BAD);
+        }
+    }
+
+    /** Shows one node's value in the game instead of the output (null stops). */
+    void previewInGame(MosaicDocument.ENode n) {
+        gamePreview = n == null ? null : n.id;
+        writeControl();
+        say(n == null ? "Game shows the output again" : "Game shows node " + n.id + " (stop: Node > Stop preview in game)", StudioUi.MUTED);
+    }
+
     /** Result frame recorded for a history step, if any. */
     Shot shotFor(int step) {
         for (int i = shots.size() - 1; i >= 0; i--) if (shots.get(i).step() == step) return shots.get(i);

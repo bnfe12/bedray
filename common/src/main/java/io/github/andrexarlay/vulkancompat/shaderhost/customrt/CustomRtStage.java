@@ -357,6 +357,7 @@ public final class CustomRtStage {
         try {
             VkBarriers.fullMemoryBarrier(command);
             executor.timeOfDay = timeOfDay();
+            executor.captureRequested = StudioLink.tick(liveDir);
             executor.record(command, frame, updateWorld(frame.camera()));
             recorded = true;
         } catch (RuntimeException | LinkageError e) {

@@ -81,12 +81,14 @@ compile cache in `<pack>/shaders/bedray/.studio/`), `Icons`, `StudioUi`, `Studio
 
 ## 4. Hard queue (not easy; do in this order)
 
-1. **Game side of the Studio link.** In `CustomRtExecutor.record`: every ~250 ms copy a downscaled before (input) and
-   after (output) image to a host-visible buffer (`vkCmdBlitImage` to a small image, then `vkCmdCopyImageToBuffer`,
-   read it a frame later with a fence, never `vkDeviceWaitIdle` per frame), encode PNG off-thread into
-   `<pack>/shaders/bedray/.studio/{before,after}.png`, write `status.txt` (state, compile ms, last problem from
-   `CustomRtStage.status()`), `addons.json` (renderer-api add-on registry: id, name, version, kind) and read
-   `control.json` (`disabledAddons`, later scene/camera/debug commands). Atomic writes (temp + move): Studio polls.
+1. **Game side of the Studio link - implemented, compile-verified only** (`customrt/StudioLink`, capture in
+   `CustomRtExecutor.recordCapture`): every 250 ms the before/after images are blitted (flipped, NEAREST) into RGBA8,
+   copied to a double-buffered host-visible readback and handed over one capture later (no GPU wait); PNG encoding and
+   `status.txt` / `addons.json` run on a daemon thread with atomic moves; `control.json` applies `disabledAddons`
+   (new additive `LightProviders.setUserEnabled`), `previewNode` and `nanCheck` (Studio: Node menu / node context
+   menu). Active only when `.studio/` exists. **Verify on the RTX PC**: image orientation, HDR values clip at 1 (a
+   tonemap before the blit may be wanted), cost of the capture, world-color formats without blit support.
+   Still to add: scene / camera / time commands, before-only capture when the stage is off.
 2. **Mosaic on Slang.** Generate Slang only (mirror exists; function bodies and the effect library are GLSL today and
    must be written in Slang), compile in Studio with slangc (bundle it with Studio), ship SPIR-V + reflection next to
    mosaic.json; teach `CustomRtStage` to load prebuilt SPIR-V. Then the in-game compiler add-on via Java FFM on

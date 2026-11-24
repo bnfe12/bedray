@@ -683,7 +683,9 @@ final class Panels {
                 java.util.Set<String> off = disabledGameAddons();
                 if (on) off.remove(id);
                 else off.add(id);
-                com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+                java.nio.file.Path cf = model.linkDir().resolve("control.json");
+                com.google.gson.JsonObject o = java.nio.file.Files.exists(cf)
+                    ? com.google.gson.JsonParser.parseString(java.nio.file.Files.readString(cf)).getAsJsonObject() : new com.google.gson.JsonObject();
                 com.google.gson.JsonArray a = new com.google.gson.JsonArray();
                 off.forEach(a::add);
                 o.add("disabledAddons", a);

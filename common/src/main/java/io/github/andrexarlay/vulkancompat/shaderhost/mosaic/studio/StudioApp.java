@@ -174,6 +174,14 @@ final class StudioApp {
         bar.add(e);
 
         JMenu n = menu("Node");
+        n.add(item("Preview selected node in game", () -> model.previewInGame(model.primary)));
+        n.add(item("Stop preview in game", () -> model.previewInGame(null)));
+        n.add(item("Toggle NaN / Inf highlight in game", () -> {
+            model.gameNanCheck = !model.gameNanCheck;
+            model.writeControl();
+            model.say("NaN / Inf highlight in game " + (model.gameNanCheck ? "on (magenta)" : "off"), MUTED);
+        }));
+        n.addSeparator();
         for (StudioKeys.Action a : new StudioKeys.Action[] {StudioKeys.Action.ADD_NODE, null, StudioKeys.Action.CONNECT_FROM,
             StudioKeys.Action.CONNECT_INTO, StudioKeys.Action.DISCONNECT, null, StudioKeys.Action.GROUP, StudioKeys.Action.UNGROUP,
             StudioKeys.Action.ARRANGE})

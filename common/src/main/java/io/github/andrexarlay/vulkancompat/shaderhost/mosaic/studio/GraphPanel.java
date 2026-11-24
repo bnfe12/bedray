@@ -842,6 +842,8 @@ final class GraphPanel extends JComponent {
             return m;
         }
         item(m, "Rename / label...", k.humanFor(StudioKeys.Action.RENAME), this::renameDialog);
+        item(m, model.gamePreview != null && model.gamePreview.equals(n.id) ? "Stop preview in game" : "Preview this node in game", "",
+            () -> model.previewInGame(model.gamePreview != null && model.gamePreview.equals(n.id) ? null : n));
         item(m, "Wire output into...", k.humanFor(StudioKeys.Action.CONNECT_FROM), this::connectFrom);
         item(m, "Feed input from...", k.humanFor(StudioKeys.Action.CONNECT_INTO), this::connectInto);
         m.addSeparator();

@@ -88,6 +88,12 @@ final class CustomRtExecutor implements AutoCloseable {
     private final boolean usesTlas, usesWorld;
     private RtMemory.Buf worldBuffer;
     private long worldVersion = -1;
+    /** Studio link capture: small before/after images and a double-buffered host-visible readback. */
+    boolean captureRequested;
+    private RtMemory.Img capBefore, capAfter;
+    private final RtMemory.Buf[] capRead = new RtMemory.Buf[2];
+    private int capSlot, capW, capH;
+    private boolean capReady, capInitialized;
 
     CustomRtExecutor(VkDevice device, VulkanGlslPackCompiler.Compiled compiled, CustomRtResources resources) {
         this.device = device;
@@ -332,7 +338,8 @@ final class CustomRtExecutor implements AutoCloseable {
             input = null;
             output = null;
             input = memory.createImage("customrt_color", color.width(), color.height(), color.format(),
-                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+            destroyCapture();
             output = memory.createImage("customrt_output", color.width(), color.height(), OUTPUT_FORMAT,
                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
             imagesInitialized = false;
@@ -526,7 +533,70 @@ final class CustomRtExecutor implements AutoCloseable {
             blit.get(0).srcOffsets(1).set(color.width(), color.height(), 1);
             blit.get(0).dstOffsets(1).set(color.width(), color.height(), 1);
             vkCmdBlitImage(cmd, output.image, VK_IMAGE_LAYOUT_GENERAL, color.image(), VK_IMAGE_LAYOUT_GENERAL, blit, VK_FILTER_NEAREST);
+            if (captureRequested) recordCapture(cmd, stack);
         }
+    }
+
+    /**
+     * Shrinks the before (input) and after (output) images into RGBA8, flipped to top-down rows, and copies them into
+     * this capture's readback slot. The previous slot - written at least one capture interval ago, so long complete -
+     * is handed to the studio link first; no wait on the GPU.
+     */
+    private void recordCapture(VkCommandBuffer cmd, MemoryStack stack) {
+        captureRequested = false;
+        if (capBefore == null) {
+            capW = Math.min(StudioLink.MAX_WIDTH, width);
+            capH = Math.max(1, Math.round(capW * (height / (float) width)));
+            int usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            capBefore = memory.createImage("customrt_cap_before", capW, capH, VK_FORMAT_R8G8B8A8_UNORM, usage);
+            capAfter = memory.createImage("customrt_cap_after", capW, capH, VK_FORMAT_R8G8B8A8_UNORM, usage);
+            for (int i = 0; i < 2; i++)
+                capRead[i] = memory.createBuffer("customrt_cap_read" + i, (long) capW * capH * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+            capInitialized = false;
+            capReady = false;
+        }
+        if (capReady) {
+            RtMemory.Buf prev = capRead[capSlot ^ 1];
+            StudioLink.deliver(capW, capH, org.lwjgl.system.MemoryUtil.memByteBuffer(prev.mapped, (int) prev.size));
+        }
+        if (!capInitialized) {
+            VkBarriers.transition(cmd, capBefore.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+            VkBarriers.transition(cmd, capAfter.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+            capInitialized = true;
+        }
+        VkBarriers.fullMemoryBarrier(cmd);
+        for (int i = 0; i < 2; i++) {
+            var b = VkImageBlit.calloc(1, stack);
+            b.get(0).srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            b.get(0).dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            b.get(0).srcOffsets(1).set(width, height, 1);
+            // the world target is bottom-up (GL origin): flip into top-down rows for the PNG
+            b.get(0).dstOffsets(0).set(0, capH, 0);
+            b.get(0).dstOffsets(1).set(capW, 0, 1);
+            vkCmdBlitImage(cmd, (i == 0 ? input : output).image, VK_IMAGE_LAYOUT_GENERAL, (i == 0 ? capBefore : capAfter).image,
+                VK_IMAGE_LAYOUT_GENERAL, b, VK_FILTER_NEAREST); // NEAREST: every blittable format supports it
+        }
+        VkBarriers.fullMemoryBarrier(cmd);
+        RtMemory.Buf slot = capRead[capSlot];
+        for (int i = 0; i < 2; i++) {
+            var region = VkBufferImageCopy.calloc(1, stack);
+            region.get(0).bufferOffset((long) i * capW * capH * 4);
+            region.get(0).imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            region.get(0).imageExtent().set(capW, capH, 1);
+            vkCmdCopyImageToBuffer(cmd, (i == 0 ? capBefore : capAfter).image, VK_IMAGE_LAYOUT_GENERAL, slot.handle, region);
+        }
+        VkBarriers.fullMemoryBarrier(cmd);
+        capSlot ^= 1;
+        capReady = true;
+    }
+
+    private void destroyCapture() {
+        if (capBefore != null) memory.destroy(capBefore);
+        if (capAfter != null) memory.destroy(capAfter);
+        for (int i = 0; i < 2; i++) if (capRead[i] != null) memory.destroy(capRead[i]);
+        capBefore = capAfter = null;
+        capRead[0] = capRead[1] = null;
+        capReady = false;
     }
 
     /** Staging-to-buffer copies for changed user buffers, then the one-time texture upload from the same staging. */
@@ -606,6 +676,7 @@ final class CustomRtExecutor implements AutoCloseable {
         if (frameUbo != null) memory.destroy(frameUbo);
         if (worldBuffer != null) memory.destroy(worldBuffer);
         worldBuffer = null;
+        destroyCapture();
         input = output = null;
         frameUbo = null;
         if (pool != 0) vkDestroyDescriptorPool(device, pool, null);

@@ -74,7 +74,7 @@ public final class LightProviders {
         List<PointLight> out = new ArrayList<>();
         for (Map.Entry<String, Entry> e : PROVIDERS.entrySet()) {
             Entry entry = e.getValue();
-            if (entry.disabled) {
+            if (entry.disabled || USER_OFF.contains(e.getKey())) {
                 continue;
             }
             List<PointLight> got;
@@ -115,6 +115,18 @@ public final class LightProviders {
         }
         return List.copyOf(list);
     }
+
+    /** Add-on ids the player switched off (host tools such as Mosaic Studio); providers stay registered. */
+    private static final java.util.Set<String> USER_OFF = new java.util.LinkedHashSet<>();
+
+    /** Host only: switches an add-on's lights off or on without unregistering it. */
+    public static synchronized void setUserEnabled(String addonId, boolean enabled) {
+        if (enabled) USER_OFF.remove(addonId);
+        else USER_OFF.add(addonId);
+    }
+
+    /** Whether the player switched this add-on off. */
+    public static synchronized boolean userEnabled(String addonId) { return !USER_OFF.contains(addonId); }
 
     private static volatile boolean applied;
 
