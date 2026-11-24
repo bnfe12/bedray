@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -23,7 +24,11 @@ final class BlockModels {
     private BlockModels() {}
 
     /** A quad: corners p[0..3] in block units (0..16) matching uv (u1,v1),(u2,v1),(u2,v2),(u1,v2); texture id; face name. */
-    record Quad(double[][] p, double u1, double v1, double u2, double v2, int uvRotation, String texture, String face) {}
+    record Quad(double[][] p, double u1, double v1, double u2, double v2, int uvRotation, String texture, String face, double[][] uv4) {
+        Quad(double[][] p, double u1, double v1, double u2, double v2, int uvRotation, String texture, String face) {
+            this(p, u1, v1, u2, v2, uvRotation, texture, face, null);
+        }
+    }
 
     record Model(String name, List<Quad> quads) {}
 
@@ -158,6 +163,11 @@ final class BlockModels {
 
     /** Texture coordinate (0..16) at parameters s (along p0->p1) and t (along p0->p3), honouring the face's UV rotation. */
     static double[] uvAt(Quad q, double s, double t) {
+        if (q.uv4() != null) { // entity polygons: per-corner UV in 0..1
+            double[][] u = q.uv4();
+            return new double[] {(u[0][0] + (u[1][0] - u[0][0]) * s + (u[3][0] - u[0][0]) * t) * 16,
+                (u[0][1] + (u[1][1] - u[0][1]) * s + (u[3][1] - u[0][1]) * t) * 16};
+        }
         double a = s, b = t;
         switch (((q.uvRotation() % 360) + 360) % 360) {
             case 90 -> { a = t; b = 1 - s; }
@@ -218,6 +228,92 @@ final class BlockModels {
         } catch (Exception ignored) {
             // not a model
         }
+    }
+
+    // ------------------------------------------------------------------ entity models (exported by the game)
+
+    private static Path entityFile;
+    private static long entityStamp = -1;
+    private static Map<String, double[]> entityLayers = Map.of();
+
+    /** The entity model export of the game folder: layer id -> flat x,y,z,u,v floats (4 per quad). */
+    static synchronized Map<String, double[]> entityLayers(Path gameDir) {
+        if (gameDir == null) return Map.of();
+        Path f = gameDir.resolve("bedray-studio/models/entities.json");
+        try {
+            if (!java.nio.file.Files.exists(f)) return Map.of();
+            long m = java.nio.file.Files.getLastModifiedTime(f).toMillis();
+            if (f.equals(entityFile) && m == entityStamp) return entityLayers;
+            Map<String, double[]> out = new java.util.TreeMap<>();
+            JsonObject root = JsonParser.parseString(java.nio.file.Files.readString(f)).getAsJsonObject();
+            for (JsonElement el : root.getAsJsonArray("layers")) {
+                JsonObject o = el.getAsJsonObject();
+                JsonArray q = o.getAsJsonArray("q");
+                double[] v = new double[q.size()];
+                for (int i = 0; i < v.length; i++) v[i] = q.get(i).getAsDouble();
+                out.put(o.get("id").getAsString(), v);
+            }
+            entityFile = f;
+            entityStamp = m;
+            entityLayers = out;
+        } catch (Exception e) {
+            return Map.of();
+        }
+        return entityLayers;
+    }
+
+    /** Entity layers that probably use this texture (entity/cow/cow.png -> minecraft:cow#main), best first. */
+    static List<String> entityModelsFor(Path gameDir, String textureEntry) {
+        Map<String, double[]> layers = entityLayers(gameDir);
+        String id = StudioLibrary.id(textureEntry);
+        String path = id.substring(id.indexOf(':') + 1).replace("entity/", "");
+        String[] words = path.split("[/_]");
+        String last = path.substring(path.lastIndexOf('/') + 1);
+        List<String> out = new ArrayList<>();
+        for (String l : layers.keySet()) {
+            String model = l.contains(":") ? l.substring(l.indexOf(':') + 1) : l;
+            model = model.contains("#") ? model.substring(0, model.indexOf('#')) : model;
+            boolean hit = model.equals(last) || model.equals(path.replace('/', '_'));
+            for (String w : words) if (w.length() > 2 && model.contains(w)) hit = true;
+            if (hit) out.add("entity:" + l);
+        }
+        // best first: the layer whose name shares the most words with the texture (cow_cold -> cold_cow), main layers, short names
+        java.util.Set<String> want = new java.util.HashSet<>();
+        for (String w : last.split("_")) if (w.length() > 2) want.add(w);
+        out.sort(java.util.Comparator.comparingInt((String l) -> {
+            String m = l.substring(l.indexOf(':', 7) + 1);
+            m = m.contains("#") ? m.substring(0, m.indexOf('#')) : m;
+            int shared = 0;
+            for (String w : m.split("_")) if (want.contains(w)) shared++;
+            int extra = m.split("_").length - shared;
+            return m.equals(last) ? -100 : -shared * 10 + extra * 3;
+        }).thenComparing(l -> !l.endsWith("#main")).thenComparingInt(String::length));
+        return out;
+    }
+
+    /** An exported entity layer as a model fitted into the 0..16 preview box, every quad textured with {@code textureId}. */
+    static Model entity(Path gameDir, String layerId, String textureId) {
+        double[] v = entityLayers(gameDir).get(layerId);
+        if (v == null) return null;
+        double minX = 1e9, minY = 1e9, minZ = 1e9, maxX = -1e9, maxY = -1e9, maxZ = -1e9;
+        for (int i = 0; i + 4 < v.length; i += 5) {
+            minX = Math.min(minX, v[i]); maxX = Math.max(maxX, v[i]);
+            minY = Math.min(minY, -v[i + 1]); maxY = Math.max(maxY, -v[i + 1]);
+            minZ = Math.min(minZ, v[i + 2]); maxZ = Math.max(maxZ, v[i + 2]);
+        }
+        double size = Math.max(1e-6, Math.max(maxX - minX, Math.max(maxY - minY, maxZ - minZ))), k = 16 / size;
+        double cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, cz = (minZ + maxZ) / 2;
+        List<Quad> quads = new ArrayList<>();
+        for (int i = 0; i + 19 < v.length; i += 20) {
+            double[][] p = new double[4][], uv = new double[4][];
+            for (int c = 0; c < 4; c++) {
+                int o = i + c * 5;
+                p[c] = new double[] {8 + (v[o] - cx) * k, 8 + (-v[o + 1] - cy) * k, 8 + (v[o + 2] - cz) * k};
+                uv[c] = new double[] {v[o + 3], v[o + 4]};
+            }
+            quads.add(new Quad(p, 0, 0, 16, 16, 0, textureId, "part", uv));
+        }
+        return new Model(layerId, quads);
     }
 
     static final Map<String, StudioLibrary.Source> NONE = new HashMap<>();

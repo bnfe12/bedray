@@ -321,7 +321,7 @@ final class MaterialPanels {
             modelBox.setToolTipText("Which model shows the material: every block model that uses this texture (cube, fence, stairs, slab...)");
             modelBox.addActionListener(e -> {
                 if (fillingModels || modelBox.getSelectedItem() == null || model.materialSource == null) return;
-                blockModel = BlockModels.load(model.materialSource, (String) modelBox.getSelectedItem(), null);
+                blockModel = loadModel((String) modelBox.getSelectedItem());
                 cacheVersion = -1;
                 root.repaint();
             });
@@ -440,12 +440,14 @@ final class MaterialPanels {
             if (key != null && !key.equals(modelFor)) {
                 modelFor = key;
                 faceTextures.clear();
-                blockModel = BlockModels.forTexture(model.materialSource, model.materialEntry);
+                boolean entity = model.materialEntry.contains("/entity/");
+                blockModel = entity ? null : BlockModels.forTexture(model.materialSource, model.materialEntry);
                 cacheVersion = -1;
                 StudioLibrary.Source src = model.materialSource;
                 String entry = model.materialEntry;
+                java.nio.file.Path game = StudioLibrary.gameDir(model);
                 MODELS.execute(() -> {
-                    List<String> found = BlockModels.modelsUsing(src, entry);
+                    List<String> found = entity ? BlockModels.entityModelsFor(game, entry) : BlockModels.modelsUsing(src, entry);
                     SwingUtilities.invokeLater(() -> {
                         fillingModels = true;
                         DefaultComboBoxModel<String> cm = new DefaultComboBoxModel<>();
@@ -456,7 +458,7 @@ final class MaterialPanels {
                         modelBox.setEnabled(cm.getSize() > 1);
                         fillingModels = false;
                         if (blockModel == null && cm.getSize() > 0) {
-                            blockModel = BlockModels.load(src, cm.getElementAt(0), null);
+                            blockModel = loadModel(cm.getElementAt(0));
                             fillingModels = true;
                             modelBox.setSelectedIndex(0);
                             fillingModels = false;
@@ -493,6 +495,14 @@ final class MaterialPanels {
                 g.fillRect(x + cx, y + cy, Math.min(8, size - cx), Math.min(8, size - cy));
             }
             g.drawImage(cache, x, y, x + size, y + size, 0, 0, frame, frame, null);
+        }
+
+        /** A block model id, or "entity:<layer>" for an entity layer exported by the game. */
+        BlockModels.Model loadModel(String id) {
+            if (id == null || model.materialSource == null) return null;
+            if (id.startsWith("entity:"))
+                return BlockModels.entity(StudioLibrary.gameDir(model), id.substring("entity:".length()), StudioLibrary.id(model.materialEntry));
+            return BlockModels.load(model.materialSource, id, null);
         }
 
         boolean painting(MouseEvent e) {
@@ -538,7 +548,7 @@ final class MaterialPanels {
             if (blockModel == null) {
                 g.setColor(FAINT);
                 g.drawString(model.materialEntry != null && model.materialEntry.contains("/entity/")
-                    ? "Entity textures: the layout comes from the game's model (export from the game: in the queue)"
+                    ? "Entity models come from the game: start Minecraft with Bedray once (it exports them to bedray-studio/models)"
                     : "No block model uses this texture: the whole texture is shown", 10, h - 10);
                 return;
             }
@@ -550,6 +560,20 @@ final class MaterialPanels {
             int labelled = 0;
             for (BlockModels.Quad q : blockModel.quads()) {
                 if (!q.texture().equals(id)) continue;
+                if (q.uv4() != null) { // entity polygon: its own four UV corners
+                    java.awt.geom.Path2D.Double poly = new java.awt.geom.Path2D.Double();
+                    for (int k = 0; k < 4; k++) {
+                        double px = x + q.uv4()[k][0] * size, py = y + q.uv4()[k][1] * size;
+                        if (k == 0) poly.moveTo(px, py);
+                        else poly.lineTo(px, py);
+                    }
+                    poly.closePath();
+                    g.setColor(new Color(255, 80, 80, 40));
+                    g.fill(poly);
+                    g.setColor(new Color(0xFF5050));
+                    g.draw(poly);
+                    continue;
+                }
                 double u1 = Math.min(q.u1(), q.u2()), u2 = Math.max(q.u1(), q.u2()), v1 = Math.min(q.v1(), q.v2()), v2 = Math.max(q.v1(), q.v2());
                 int rx = x + (int) Math.round(u1 / 16 * size), ry = y + (int) Math.round(v1 / 16 * size);
                 int rw = (int) Math.round((u2 - u1) / 16 * size), rh = (int) Math.round((v2 - v1) / 16 * size);

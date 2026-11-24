@@ -32,6 +32,7 @@ final class MaterialLink {
             Minecraft mc = Minecraft.getInstance();
             if (mc == null || mc.gameDirectory == null) return;
             Path dir = mc.gameDirectory.toPath().resolve("bedray-studio");
+            exportModels(mc, dir);
             Path f = dir.resolve("materials.json");
             if (!Files.exists(f)) return;
             long stamp = Files.getLastModifiedTime(f).toMillis();
@@ -49,6 +50,26 @@ final class MaterialLink {
         } catch (Exception e) {
             // the studio may be writing the file; next check retries
         }
+    }
+
+    private static volatile boolean exported;
+
+    /** Once per session, when the studio is in use: every entity model layer (vanilla and mods) for its previews. */
+    private static void exportModels(Minecraft mc, Path dir) {
+        if (exported || !Files.isDirectory(dir)) return;
+        exported = true;
+        Object models = mc.getEntityModels();
+        Thread t = new Thread(() -> {
+            try {
+                int n = EntityModelExport.export(EntityModelExport.gameRoots(models), dir.resolve("models").resolve("entities.json"));
+                org.slf4j.LoggerFactory.getLogger("Bedray").info("[VKB-STUDIO] exported {} entity model layers for Mosaic Studio", n);
+            } catch (Exception e) {
+                org.slf4j.LoggerFactory.getLogger("Bedray").warn("[VKB-STUDIO] entity model export failed: {}", e.toString());
+            }
+        }, "bedray-model-export");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        t.start();
     }
 
     private static void apply(Minecraft mc, Path dir, String id, boolean reload) {
