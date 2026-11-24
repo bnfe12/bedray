@@ -31,8 +31,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 final class StudioLink {
 
-    static final long FRAME_MS = 250, STATUS_MS = 1000;
-    static final int MAX_WIDTH = 480;
+    static final long STATUS_MS = 1000;
+    /** Result frame interval and width; the studio raises them while it records (control.json captureMs / captureWidth). */
+    static volatile long frameMs = 250;
+    static volatile int MAX_WIDTH = 480;
 
     private static Path dir;
     private static long lastFrame, lastStatus, controlStamp = -1;
@@ -58,7 +60,7 @@ final class StudioLink {
             readControl();
             writeStatus();
         }
-        if (now - lastFrame >= FRAME_MS && !writing.get()) {
+        if (now - lastFrame >= frameMs && !writing.get()) {
             lastFrame = now;
             return true;
         }
@@ -144,6 +146,8 @@ final class StudioLink {
             for (LightProviders.Status a : LightProviders.status()) LightProviders.setUserEnabled(a.addonId(), !off.contains(a.addonId()));
             String preview = o.has("previewNode") && !o.get("previewNode").isJsonNull() ? o.get("previewNode").getAsString() : null;
             boolean nan = o.has("nanCheck") && o.get("nanCheck").getAsBoolean();
+            if (o.has("captureMs")) frameMs = Math.clamp(o.get("captureMs").getAsLong(), 33, 2000);
+            if (o.has("captureWidth")) MAX_WIDTH = Math.clamp(o.get("captureWidth").getAsInt(), 160, 1920);
             CustomRtStage.setMosaicDebug(preview == null || preview.isBlank() ? null : preview, nan);
         } catch (Exception ignored) {
             // the studio may be writing it right now

@@ -31,3 +31,19 @@ nick, UUIDs, e-mail addresses, IP addresses and values after `token` / `password
 
 No files are uploaded by Bedray. The GitHub action opens a review form and the reports folder; the user attaches and submits.
 Scrubbing is automatic but not perfect: read the report before posting and remove anything else you do not want to share.
+
+## Mosaic Studio
+
+Mosaic Studio, the node editor app, makes **no network requests**. It has no telemetry, no account and no update check.
+
+* **Reads** (never changes): Minecraft launcher folders (official launcher, Prism / MultiMC / PolyMC, CurseForge, Modrinth App,
+  ATLauncher, GDLauncher) and Gradle caches, to list game instances, client jars, resource packs and mods for the texture
+  library. Only file names, versions and the textures you open are read.
+* **Writes** only where you work: its settings (`~/.bedray/mosaic-studio.json`), your shader graphs and their `.studio/`
+  folder, the `Mosaic Materials` resource pack and `bedray-studio/` of the game folder you chose (or `~/.bedray/studio/`).
+* **The game side** writes small result frames, a status line and the list of Bedray add-ons into `.studio/` of the active
+  shader pack only when the studio created that folder, and reads the studio's requests from it. Nothing leaves your computer.
+* Planned features that will talk to services (AI assistants, Modrinth / CurseForge publishing, GitHub saving) will be
+  opt-in, will ask before sending anything, and will keep keys only on your computer. This section will say exactly what
+  each one sends before it ships.
+

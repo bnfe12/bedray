@@ -446,6 +446,25 @@ final class Panels {
             bar.setBorder(new EmptyBorder(5, 6, 5, 6));
             mode.onChange(v -> root.repaint());
             bar.add(mode, BorderLayout.CENTER);
+            JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+            actions.setOpaque(false);
+            JButton rec = button("Record", "Save every game frame while it runs; Stop writes a GIF (and an MP4 when ffmpeg is installed)", () -> { });
+            rec.addActionListener(e -> {
+                if (model.recording()) model.stopRecording();
+                else {
+                    StudioModel.RecordWhat what = switch (mode.getSelectedItem()) {
+                        case BEFORE -> StudioModel.RecordWhat.BEFORE;
+                        case SPLIT, SIDE -> StudioModel.RecordWhat.SIDE;
+                        default -> StudioModel.RecordWhat.AFTER;
+                    };
+                    model.startRecording(what);
+                }
+                rec.setText(model.recording() ? "Stop" : "Record");
+                rec.setForeground(model.recording() ? BAD : TEXT);
+            });
+            actions.add(rec);
+            actions.add(button("Save frame", "The frame with the shader as a PNG in the project's .studio/screenshots", model::saveFrame));
+            bar.add(actions, BorderLayout.EAST);
             root.add(bar, BorderLayout.NORTH);
             view = new JComponent() {
                 @Override protected void paintComponent(Graphics g0) { paintResult((Graphics2D) g0, getWidth(), getHeight()); }

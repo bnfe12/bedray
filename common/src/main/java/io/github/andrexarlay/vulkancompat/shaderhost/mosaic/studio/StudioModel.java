@@ -1052,6 +1052,7 @@ final class StudioModel {
             liveAfter = ImageIO.read(after.toFile());
             Path before = dir.resolve("before.png");
             liveBefore = Files.exists(before) ? ImageIO.read(before.toFile()) : null;
+            if (recordDir != null) recordFrame();
             int step = doc.undoSteps().size();
             if (shots.isEmpty() || shots.get(shots.size() - 1).step() != step) {
                 List<String> names = doc.undoSteps();
@@ -1064,6 +1065,144 @@ final class StudioModel {
             fire();
         } catch (Exception ignored) {
             // the game may be writing the file right now; the next poll reads it
+        }
+    }
+
+    // ------------------------------------------------------------------ recording the result
+
+    /** What a recording keeps: the frame with the shader, without it, or both side by side. */
+    enum RecordWhat { AFTER, BEFORE, SIDE }
+
+    Path recordDir;
+    RecordWhat recordWhat = RecordWhat.AFTER;
+    int recordFrames;
+    long recordStart;
+
+    boolean recording() { return recordDir != null; }
+
+    /** Starts saving every game frame; asks the game for faster, larger frames while it runs. */
+    void startRecording(RecordWhat what) {
+        Path dir = linkDir();
+        if (dir == null) {
+            say("Save the graph into a shader pack first: the game sends its frames next to it", StudioUi.MUTED);
+            return;
+        }
+        try {
+            recordWhat = what;
+            recordDir = dir.resolve("recordings").resolve(java.time.LocalDateTime.now().withNano(0).toString().replace(':', '-'));
+            Files.createDirectories(recordDir);
+            recordFrames = 0;
+            recordStart = System.currentTimeMillis();
+            capture(66, 960);
+            say("Recording the game's frames... (Result > Stop)", StudioUi.BAD);
+        } catch (Exception e) {
+            recordDir = null;
+            say("Could not start recording: " + e.getMessage(), StudioUi.BAD);
+        }
+    }
+
+    private void recordFrame() {
+        try {
+            BufferedImage img = switch (recordWhat) {
+                case BEFORE -> liveBefore;
+                case SIDE -> {
+                    if (liveBefore == null) yield liveAfter;
+                    BufferedImage s = new BufferedImage(liveBefore.getWidth() + liveAfter.getWidth(), Math.max(liveBefore.getHeight(), liveAfter.getHeight()),
+                        BufferedImage.TYPE_INT_RGB);
+                    var g = s.createGraphics();
+                    g.drawImage(liveBefore, 0, 0, null);
+                    g.drawImage(liveAfter, liveBefore.getWidth(), 0, null);
+                    g.dispose();
+                    yield s;
+                }
+                default -> liveAfter;
+            };
+            if (img == null) return;
+            ImageIO.write(img, "png", recordDir.resolve(String.format("frame_%05d.png", ++recordFrames)).toFile());
+        } catch (Exception ignored) {
+            // a dropped frame
+        }
+    }
+
+    /** Stops recording: writes an animated GIF (and an MP4 when ffmpeg is installed) next to the frames. */
+    void stopRecording() {
+        if (recordDir == null) return;
+        Path dir = recordDir;
+        int frames = recordFrames;
+        long ms = Math.max(1, System.currentTimeMillis() - recordStart);
+        recordDir = null;
+        capture(250, 480);
+        if (frames == 0) {
+            say("No frames arrived from the game while recording", StudioUi.MUTED);
+            return;
+        }
+        int fps = (int) Math.max(1, Math.min(30, Math.round(frames * 1000.0 / ms)));
+        say("Saving " + frames + " frames...", StudioUi.MUTED);
+        slangWorker.execute(() -> {
+            String result;
+            try {
+                GifWriter.write(dir, frames, 1000 / fps, dir.resolve("recording.gif"));
+                result = "Recorded " + frames + " frames (" + fps + " fps): " + dir.resolve("recording.gif");
+                java.util.Optional<Path> ffmpeg = which("ffmpeg");
+                if (ffmpeg.isPresent()) {
+                    Process p = new ProcessBuilder(ffmpeg.get().toString(), "-y", "-loglevel", "error", "-framerate", String.valueOf(fps), "-i",
+                        dir.resolve("frame_%05d.png").toString(), "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-pix_fmt", "yuv420p",
+                        dir.resolve("recording.mp4").toString()).redirectErrorStream(true).start();
+                    p.getInputStream().readAllBytes();
+                    if (p.waitFor() == 0) result += " + recording.mp4";
+                }
+            } catch (Exception e) {
+                result = "Frames are in " + dir + " (GIF failed: " + e.getMessage() + ")";
+            }
+            String r = result;
+            javax.swing.SwingUtilities.invokeLater(() -> say(r, StudioUi.OK));
+        });
+    }
+
+    /** Saves the frame on screen (with the shader) as a PNG in the project. */
+    void saveFrame() {
+        Path dir = linkDir();
+        if (dir == null || liveAfter == null) {
+            say("No frame from the game yet", StudioUi.MUTED);
+            return;
+        }
+        try {
+            Path shots = dir.resolve("screenshots");
+            Files.createDirectories(shots);
+            Path f = shots.resolve(java.time.LocalDateTime.now().withNano(0).toString().replace(':', '-') + ".png");
+            ImageIO.write(liveAfter, "png", f.toFile());
+            say("Saved " + f, StudioUi.OK);
+        } catch (Exception e) {
+            say("Could not save the frame: " + e.getMessage(), StudioUi.BAD);
+        }
+    }
+
+    static java.util.Optional<Path> which(String tool) {
+        String path = System.getenv("PATH");
+        if (path == null) return java.util.Optional.empty();
+        for (String dir : path.split(java.io.File.pathSeparator))
+            for (String n : new String[] {tool, tool + ".exe"}) {
+                Path p = Path.of(dir, n);
+                if (Files.isRegularFile(p)) return java.util.Optional.of(p);
+            }
+        return java.util.Optional.empty();
+    }
+
+    /** Asks the game for result frames every {@code ms} at up to {@code width} pixels. */
+    private void capture(int ms, int width) {
+        Path dir = linkDir();
+        if (dir == null) return;
+        try {
+            Path f = dir.resolve("control.json");
+            com.google.gson.JsonObject o = Files.exists(f)
+                ? com.google.gson.JsonParser.parseString(Files.readString(f, StandardCharsets.UTF_8)).getAsJsonObject() : new com.google.gson.JsonObject();
+            o.addProperty("captureMs", ms);
+            o.addProperty("captureWidth", width);
+            Path tmp = dir.resolve("control.json.tmp");
+            Files.writeString(tmp, o.toString(), StandardCharsets.UTF_8);
+            Files.move(tmp, f, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (Exception ignored) {
+            // the game keeps its default rate
         }
     }
 

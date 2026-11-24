@@ -544,6 +544,7 @@ final class CustomRtExecutor implements AutoCloseable {
      */
     private void recordCapture(VkCommandBuffer cmd, MemoryStack stack) {
         captureRequested = false;
+        if (capBefore != null && capW != Math.min(StudioLink.MAX_WIDTH, width)) destroyCapture(); // the studio changed the size
         if (capBefore == null) {
             capW = Math.min(StudioLink.MAX_WIDTH, width);
             capH = Math.max(1, Math.round(capW * (height / (float) width)));
