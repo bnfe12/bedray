@@ -192,7 +192,7 @@ public final class CustomRtStage {
                 state = State.COMPILED;
                 detail = "compiled " + c.spirv().remaining() + " B SPIR-V, local size " + ls[0] + "x" + ls[1] + "x" + ls[2]
                     + ", bindings " + bindingNames(c.module().bindings())
-                    + (entry.endsWith(".json") ? ", mosaic graph" : "")
+                    + (entry.endsWith(".json") ? ", mosaic graph via " + lastMosaicCompiler : "")
                     + resourceSummary(resources)
                     + "; waiting for a hardware RT frame";
                 LOGGER.info("[VKB-CUSTOMRT] pack=\"{}\" {}", pack, detail);
@@ -280,12 +280,63 @@ public final class CustomRtStage {
             MosaicGraph graph = MosaicGraph.parse(packReader.read(entry));
             String glsl = mosaicGlsl(graph);
             lastCompiledMosaicGlsl = glsl;
+            VulkanGlslPackCompiler.Compiled slang = slangStage(graph, root, entries, src);
+            if (slang != null) return slang;
             IncludeExpander.Reader reader = e -> e.endsWith(MOSAIC_ENTRY) ? glsl : packReader.read(e);
             return VulkanGlslPackCompiler.compile(root, root + "bedray/" + MOSAIC_ENTRY, reader,
                 VulkanGlslPackCompiler.Kind.COMPUTE, Map.of("BEDRAY_CUSTOM_RT", "1", "BEDRAY_MOSAIC", "1"));
         }
         return VulkanGlslPackCompiler.compile(root, entry, packReader,
             VulkanGlslPackCompiler.Kind.COMPUTE, Map.of("BEDRAY_CUSTOM_RT", "1"));
+    }
+
+    /** How the last mosaic graph was turned into SPIR-V: "studio SPIR-V", "slangc in game" or "GLSL (shaderc)". */
+    private static String lastMosaicCompiler = "";
+
+    /**
+     * The Slang paths for a graph: SPIR-V the studio built for exactly this graph (sidecar hash of the generated Slang),
+     * else slangc in the game when it is installed and -Dbedray.mosaic.slang is not "off". Null falls back to GLSL.
+     */
+    private static VulkanGlslPackCompiler.Compiled slangStage(MosaicGraph graph, String root, Set<String> entries, PackSource src) {
+        String mode = System.getProperty("bedray.mosaic.slang", "auto");
+        if (mode.equals("off")) {
+            lastMosaicCompiler = "GLSL (shaderc)";
+            return null;
+        }
+        io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicCodegen.Options options =
+            new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicCodegen.Options(debugPreview, debugNan, true);
+        MosaicCodegen.Generated gen = MosaicCodegen.generate(graph, options, true);
+        String hash = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sourceHash(gen.source());
+        String spv = root + "bedray/" + io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT;
+        String info = root + "bedray/" + io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT_INFO;
+        try {
+            if (entries.contains(spv) && entries.contains(info) && hash.equals(
+                io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sidecarHash(new String(src.read(info), StandardCharsets.UTF_8)))) {
+                lastMosaicCompiler = "studio SPIR-V";
+                return fromSpirv(spv, src.read(spv));
+            }
+        } catch (Exception e) {
+            LOGGER.warn("[VKB-CUSTOMRT] prebuilt {} unreadable, compiling: {}", spv, e.toString());
+        }
+        java.nio.file.Path slangc = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.locate(System.getProperty("bedray.slangc"));
+        if (slangc != null) {
+            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicShaderCheck.Result r =
+                io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.compile(gen, slangc);
+            if (r.ok()) {
+                lastMosaicCompiler = "slangc in game";
+                return fromSpirv(root + "bedray/mosaic.generated.slang", r.spirv());
+            }
+            LOGGER.warn("[VKB-CUSTOMRT] slangc refused the graph, using GLSL: {}", r.errors());
+        }
+        lastMosaicCompiler = "GLSL (shaderc)";
+        return null;
+    }
+
+    private static VulkanGlslPackCompiler.Compiled fromSpirv(String name, byte[] bytes) {
+        java.nio.ByteBuffer b = org.lwjgl.BufferUtils.createByteBuffer(bytes.length).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        b.put(bytes).flip();
+        SpirvReflection.Module m = SpirvReflection.reflect(b.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN));
+        return new VulkanGlslPackCompiler.Compiled(name, VulkanGlslPackCompiler.Kind.COMPUTE, b, m, false);
     }
 
     /** Called once per frame after the world producer, before the Iris post stage. Never throws. */

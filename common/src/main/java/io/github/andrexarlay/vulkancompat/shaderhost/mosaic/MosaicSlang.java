@@ -122,6 +122,39 @@ public final class MosaicSlang {
         return out;
     }
 
+    // ---------------------------------------------------------------- prebuilt SPIR-V next to mosaic.json
+
+    /** Files the studio writes next to mosaic.json: the SPIR-V and a sidecar naming the graph it was built from. */
+    public static final String PREBUILT = "mosaic.spv", PREBUILT_INFO = "mosaic.spv.json";
+
+    /** Options the prebuilt SPIR-V is generated with (no debug view); the game hashes the same source to trust it. */
+    public static final MosaicCodegen.Options PREBUILT_OPTIONS = new MosaicCodegen.Options(null, false, true);
+
+    /** The hash a sidecar must carry for this graph, or null when the graph does not generate. */
+    public static String expectedHash(MosaicGraph graph, MosaicCodegen.Options options) {
+        return sourceHash(MosaicCodegen.generate(graph, options, true).source());
+    }
+
+    /** Reads the hash out of a sidecar; null when it is not a Mosaic Slang sidecar. */
+    public static String sidecarHash(String sidecar) {
+        try {
+            com.google.gson.JsonObject o = com.google.gson.JsonParser.parseString(sidecar).getAsJsonObject();
+            return o.has("slangSha256") ? o.get("slangSha256").getAsString() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public static String sidecar(String hash, Result how) {
+        com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+        o.addProperty("slangSha256", hash);
+        o.addProperty("compiler", how.compiler());
+        o.addProperty("bytes", how.bytes());
+        return o.toString();
+    }
+
+    public record Result(String compiler, int bytes) {}
+
     /** Hash that ties a prebuilt SPIR-V to the graph it came from (the generated Slang source). */
     public static String sourceHash(String source) {
         try {

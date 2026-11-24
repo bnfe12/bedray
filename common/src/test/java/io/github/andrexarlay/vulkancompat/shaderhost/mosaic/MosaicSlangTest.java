@@ -83,6 +83,20 @@ class MosaicSlangTest {
     }
 
     @Test
+    void prebuiltSidecarTrustsOnlyTheSameGraph() {
+        MosaicGraph a = MosaicGraph.parse(MosaicTemplates.all().get(0).json());
+        String hash = MosaicSlang.expectedHash(a, MosaicSlang.PREBUILT_OPTIONS);
+        String side = MosaicSlang.sidecar(hash, new MosaicSlang.Result("test", 4));
+        assertEquals(hash, MosaicSlang.sidecarHash(side));
+        MosaicGraph b = MosaicGraph.parse(MosaicTemplates.all().get(1).json());
+        assertNotEquals(hash, MosaicSlang.expectedHash(b, MosaicSlang.PREBUILT_OPTIONS));
+        // the debug view changes the source, so the game never runs a stale prebuilt while previewing a node
+        assertNotEquals(hash, MosaicSlang.expectedHash(a, new MosaicCodegen.Options(null, true, true)));
+        assertNull(MosaicSlang.sidecarHash("{}"));
+        assertNull(MosaicSlang.sidecarHash("not json"));
+    }
+
+    @Test
     void slangErrorsLandOnTheNodeCodeLine() {
         MosaicFunction bad = MosaicFunction.parseSignature("vec4 broken(vec4 color, float k = 1)", "vec4 c = color;\nc.rgb *= kk;\nreturn c;");
         MosaicCodegen.Generated g = MosaicCodegen.generate(MosaicGraph.parse(MosaicCompileTest.effectGraph(bad)), MosaicCodegen.Options.DEFAULT, true);

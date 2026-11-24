@@ -127,6 +127,8 @@ public final class StudioSettings {
     public java.util.Map<String, java.util.List<String>> keys = new java.util.LinkedHashMap<>();
     /** Command that starts Minecraft with Bedray (for example a Prism Launcher --launch call); empty = ask. */
     public String gameCommand = "";
+    /** slangc to use; empty finds it (BEDRAY_SLANGC, PATH, ~/.bedray/slang, SLANG_DIR). */
+    public String slangcPath = "";
     /** Palette libraries the user switched off (categories: Effects, Rendering, Shading, My nodes...). */
     public java.util.Set<String> hiddenLibraries = new java.util.LinkedHashSet<>();
     /** Palette / add-menu groups the user collapsed. */

@@ -287,6 +287,16 @@ final class SettingsWindow extends Dock.StudioWindow {
 
     private void compiler(Form f) {
         f.row("Slang compiles", combo(StudioSettings.SlangCompiler.values(), draft.slangCompiler, v -> draft.slangCompiler = v));
+        JTextField slangc = field(draft.slangcPath == null ? "" : draft.slangcPath);
+        slangc.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            void sync() { draft.slangcPath = slangc.getText().trim(); }
+            @Override public void insertUpdate(javax.swing.event.DocumentEvent e) { sync(); }
+            @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { sync(); }
+            @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { sync(); }
+        });
+        slangc.setToolTipText("Empty: found automatically. Now: " + java.util.Objects.toString(
+            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.locate(draft.slangcPath), "not found"));
+        f.row("slangc path", slangc);
         f.wide(wrapped("Studio: the studio compiles Slang node code and hands the game ready SPIR-V; the mod stays small and "
             + "live editing works for everyone using the studio.<br><br>In game: the optional Slang compiler add-on (about 30 MB "
             + "on Windows, separate builds for Linux and macOS) compiles inside Minecraft, so graphs can change without the studio."

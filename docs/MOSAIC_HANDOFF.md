@@ -89,11 +89,15 @@ compile cache in `<pack>/shaders/bedray/.studio/`), `Icons`, `StudioUi`, `Studio
    menu). Active only when `.studio/` exists. **Verify on the RTX PC**: image orientation, HDR values clip at 1 (a
    tonemap before the blit may be wanted), cost of the capture, world-color formats without blit support.
    Still to add: scene / camera / time commands, before-only capture when the stage is off.
-2. **Mosaic on Slang.** Generate Slang only (mirror exists; function bodies and the effect library are GLSL today and
-   must be written in Slang), compile in Studio with slangc (bundle it with Studio), ship SPIR-V + reflection next to
-   mosaic.json; teach `CustomRtStage` to load prebuilt SPIR-V. Then the in-game compiler add-on via Java FFM on
-   slang.dll. Archive the GLSL emitter afterwards. Keep `MosaicShaderCheck` semantics (error -> node mapping via
-   `Span`; slangc reports `file(line)`).
+2. **Mosaic on Slang - implemented (compile-verified, slangc tested; not yet run on a GPU).** `MosaicSlang` translates
+   GLSL node code to Slang (functions may carry their own Slang body; rtReflections does), compiles with slangc and maps
+   errors to nodes. Studio (Settings > Compiler = Studio) writes `mosaic.spv` + `mosaic.spv.json` (sha256 of the
+   generated Slang, `PREBUILT_OPTIONS`) next to mosaic.json on every save, cached in `.studio/cache/<sha>.slang.spv`.
+   The game (`CustomRtStage.slangStage`): prebuilt SPIR-V when the hash matches -> slangc in game when installed
+   (`MosaicSlang.locate`: -Dbedray.slangc, BEDRAY_SLANGC, PATH, ~/.bedray/slang, SLANG_DIR) -> GLSL/shaderc fallback;
+   `-Dbedray.mosaic.slang=off` forces GLSL. **Verify on GPU**: matrix layout (`-matrix-layout-column-major` +
+   `mul(M, v)` must match GLSL `M * v`), the 320 B frame UBO layout, image orientation. Still open: the packaged
+   slangc add-on download (~/.bedray/slang), deleting the GLSL emitter once the Slang path is proven (keep shaderc for Iris).
 3. **Renderer passes as nodes** (the "everything through nodes" goal). Each Slang module under
    `common/src/main/resources/shaders/slang` becomes a node folder: `node.json` (ports: images/buffers/params,
    reservoirs, history) + the module. Needs a **data-driven native frame graph** (today the C++ core records passes in a

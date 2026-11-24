@@ -407,7 +407,7 @@ final class StudioApp {
                 : "compile error: " + model.compile.errors().get(0).where());
             statusMid.setForeground(model.compile.ok() ? OK : BAD);
         }
-        statusRight.setText("game: " + model.gameStatus + "    F1 keys");
+        statusRight.setText((model.slangStatus.isEmpty() ? "" : model.slangStatus + "    ") + "game: " + model.gameStatus + "    F1 keys");
         String t = "Mosaic Studio - " + (model.doc.file == null ? "untitled" : model.doc.file.getFileName() + "  (" + model.doc.file.getParent() + ")")
             + (model.doc.dirty ? "  *" : "");
         if (main != null && !main.titleLabel.getText().equals(t)) main.titleLabel.setText(t);
