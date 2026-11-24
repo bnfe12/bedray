@@ -37,11 +37,15 @@ public final class VulkanRtxKeyBinds {
     public static final KeyMapping KEY_TOGGLE_DEBUG_OVERLAY =
         new KeyMapping("key.bedray.toggle_debug_overlay", InputConstants.KEY_K, CATEGORY);
 
+    public static final KeyMapping KEY_MOSAIC_EDITOR =
+        new KeyMapping("key.bedray.mosaic_editor", InputConstants.KEY_J, CATEGORY);
+
     public static final KeyMapping[] ALL_KEYS = new KeyMapping[] {
         KEY_TOGGLE_RT,
         KEY_CYCLE_MODE,
         KEY_CYCLE_DENOISER,
-        KEY_TOGGLE_DEBUG_OVERLAY
+        KEY_TOGGLE_DEBUG_OVERLAY,
+        KEY_MOSAIC_EDITOR
     };
 
     private static RtMode lastActiveRtMode = RtMode.PATH_TRACED;
@@ -79,6 +83,16 @@ public final class VulkanRtxKeyBinds {
         while (KEY_TOGGLE_DEBUG_OVERLAY.consumeClick()) {
             toggleDebugOverlay();
         }
+        while (KEY_MOSAIC_EDITOR.consumeClick()) {
+            openMosaicEditor();
+        }
+    }
+
+    /** Opens the Mosaic node editor over the game; its documents live in the active folder pack (or a new one). */
+    private static void openMosaicEditor() {
+        var screen = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicEditorScreen.open(null,
+            io.github.andrexarlay.vulkancompat.shaderhost.customrt.CustomRtStage::editableMosaicPath);
+        Minecraft.getInstance().gui.setScreen(screen);
     }
 
     public static void toggleRayTracing() {

@@ -1,0 +1,47 @@
+#version 460
+// Custom RT stage using the extended contract (docs/CUSTOM_RT_SHADERS.md): push constants from rt.push plus
+// user resources from the pack files, restyling the path-traced world image. Proves the host can build the
+// pipeline for a shader whose parameters and data come entirely from files a node editor can write.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT bedrayScene;
+
+layout(std140, set = 0, binding = 1) uniform BedrayFrame {
+    mat4 projection;         // GL convention (z in [-w, w]), no view bobbing
+    mat4 projectionInverse;
+    mat4 modelView;          // camera-relative: bobbing * view rotation, no world translation
+    mat4 modelViewInverse;
+    vec4 cameraPosition;     // xyz: world position of the camera (float); the scene TLAS is relative to it
+    vec4 viewSize;           // width, height, 1/width, 1/height
+    vec4 timing;             // frameTimeCounter (s, wraps at 3600), frameTime (s), frameCounter, 0
+    vec4 depthInfo;          // near, far, depthAvailable (1/0), 0
+} frame;
+
+layout(set = 0, binding = 2) uniform sampler2D bedraySceneColor;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D bedrayOutput;
+
+layout(push_constant) uniform Push {
+    vec4 tint;               // rgb tint, a = stylization strength
+} push;
+
+layout(std430, set = 0, binding = 5) buffer MosaicParams {
+    vec4 data[];             // [0] = vignette, [1] = lut mix, [2..] reserved for the editor
+} params;
+
+layout(set = 0, binding = 6) uniform sampler2D mosaicLut;
+
+void main() {
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(frame.viewSize.xy);
+    if (any(greaterThanEqual(texel, size))) return;
+    vec2 uv = (vec2(texel) + 0.5) / frame.viewSize.xy;
+
+    vec4 color = texture(bedraySceneColor, uv);
+
+    float vignette = params.data[0].x * (0.25 + dot(uv - 0.5, uv - 0.5) * 2.0);
+    float lut = texture(mosaicLut, uv).r;
+    vec3 stylized = color.rgb * push.tint.rgb * (1.0 - vignette)
+                  + lut * push.tint.rgb * params.data[1].x;
+
+    imageStore(bedrayOutput, texel, vec4(stylized, color.a));
+}

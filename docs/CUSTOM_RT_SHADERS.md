@@ -20,13 +20,15 @@ Activation (session only):
 
 The pack must contain `shaders/bedray/rt.comp`. `#include` works inside the pack's `shaders/` folder with Iris
 semantics (pack-root confined). The entry is Vulkan GLSL 460, compiled for Vulkan 1.2 / SPIR-V 1.4, with
-`BEDRAY_CUSTOM_RT` defined to `1`. Restart after editing the shader.
+`BEDRAY_CUSTOM_RT` defined to `1`. Shader edits hot-reload in **folder** packs (see below); zip packs need a restart.
 
 The stage runs only in frames where hardware RT (`rt_mode` rays or path) replaced the world image, because only then
 does a scene TLAS exist. Temporal upscaling and frame generation must be off: their history would not contain the
 stage's output. Every refusal is shown in F3 (`[CUSTOM-RT]`, diag section) and in the log (`[VKB-CUSTOMRT]`).
 
 ### Bindings (set 0 only)
+
+Fixed contract bindings:
 
 | Binding | Declaration | Content |
 |---|---|---|
@@ -36,9 +38,112 @@ stage's output. Every refusal is shown in F3 (`[CUSTOM-RT]`, diag section) and i
 | 3 | `layout(rgba16f) uniform writeonly image2D` | Output. Blitted back over the whole world color after the dispatch; write every pixel |
 | 4 | `uniform sampler2D` | RT primary-ray distance in blocks (R32F, `1e6` = no hit) when `depthInfo.z == 1`; otherwise the slot holds the color copy and must not be read |
 
-Any other set, binding, descriptor array or a push-constant block is refused at startup with the reason. A shader may
-leave out bindings it does not use, but it must write binding 3. Device features beyond ray query (for example
-`Int64`, 8/16-bit storage, descriptor indexing) are refused: the stage only relies on the hardware RT device group.
+## Extended contract: user resources (Mosaic-friendly)
+
+Bindings **5..31 of set 0** may declare single descriptors the pack itself provides:
+
+| Shader declaration | Pack file |
+|---|---|
+| `set = 0, binding = N` uniform or storage buffer block | `shaders/bedray/buffer<N>.bin` (raw bytes; uniform cap 65536 B, single buffer cap 8 MiB, 16 MiB total) |
+| `set = 0, binding = N` `sampler2D` or `texture2D` | `shaders/bedray/texture<N>.png` (RGBA8, nearest/clamp, one mip; 2048x2048 cap) |
+
+A push-constant block is also allowed:
+
+| Shader declaration | Pack file |
+|---|---|
+| `layout(push_constant) uniform Push { … };` | `shaders/bedray/rt.push` (raw bytes, zero-filled to the device's `maxPushConstantsSize` and pushed every dispatch; the block must fit the device limit, at least 128 B everywhere) |
+
+Rules and limits:
+
+* Every extra binding **needs its file**; a missing file, a kind without a producer (storage images, standalone
+  samplers, texel buffers, input attachments), an array binding or a different set is refused at startup with the
+  reason in F3 and the log.
+* **Folder packs live-update**: when `shaders/bedray/buffer<N>.bin` or `rt.push` changes on disk, the new bytes are
+  re-read and reach the **next dispatch** — no game restart. A file that **grew beyond its creation size** needs a
+  restart (the GPU buffer is not reallocated). Zip packs load their bytes once at startup.
+* Textures are static for the session. A shader that **writes** a storage buffer keeps its writes between edits:
+  new bytes are uploaded only after the file changed, not every frame.
+* The fixed bindings (0..4), the output requirement and the device-feature refusal (ray query only) are unchanged.
+
+Any other set, binding, descriptor array or an extra device feature is still refused at startup with the reason.
+
+## Live parameter editing (Mosaic SDK path)
+
+The extended contract exists so a node editor can drive the shader without touching the SPIR-V: the editor writes
+parameter bytes into `rt.push` (per-frame small parameters: strength, bias, control flags) and slabs of state into
+`buffer<N>.bin` (content that survives between edits, e.g. a light list). Each changed file is picked up on the next
+hardware-RT frame.
+
+**Shader source hot reload (folder packs):** the host polls the pack's shader sources (`*.comp`, `*.glsl`, ray stages)
+every 0.5 s. When `rt.comp` or any of its includes changed, the same compile + contract check as the startup runs —
+on success the stage's pipeline and user resources are rebuilt between frames (a hash-free `reload #N` lands in F3
+and the log); on failure the **previous stage keeps rendering** and the reason is shown, so a typo never kills the
+session. This works after a failed startup too: fix the file and it compiles in-game. Device features beyond ray
+query (for example `Int64`, 8/16-bit storage, descriptor indexing) are refused at every reload: the stage only
+relies on the hardware RT device group. Hot reload rebuilds user resources from their files, so buffers may grow to
+the caps without a restart.
+
+## Mosaic node graphs (`mosaic.json`)
+
+A pack may ship `shaders/bedray/mosaic.json` — a validated node graph instead of hand-written GLSL. When the file is
+present it **wins over `rt.comp`**: the host parses the graph, expands it into a synthetic
+`bedray/mosaic.generated.comp` and compiles that through the same shaderc path, validation, resource binding and hot
+reload as a hand-written stage (editing `mosaic.json` on disk hot-reloads like a source edit, and a save whose graph
+generates the same shader as the running one, such as an editor save that only moved nodes, keeps the stage without
+recompiling; graph errors keep the
+previous stage rendering with the reason in F3).
+
+| Graph node | Kind | Ports (all optional unless noted) | Meaning |
+|---|---|---|---|
+| `mosaic.uv` | vec2 | — | Pixel UV, half-texel centered |
+| `mosaic.texel` | vec2 | — | Pixel texel as floats |
+| `mosaic.size` | vec2 | — | Render target size |
+| `mosaic.time` | float | — | `frameTimeCounter` seconds (wraps at 3600) |
+| `mosaic.frame` | float | — | Frame counter |
+| `mosaic.eye` | vec3 | — | Camera position in TLAS space |
+| `mosaic.sceneColor` | vec4 | `uv` | Bedray world color sample |
+| `mosaic.sceneDepth` | float | `uv` | RT primary-ray distance (1e6 = no hit) |
+| `mosaic.trace` | float (`t`) | `origin`, `direction`, `tMax` | Ray query against the scene TLAS; named outputs below |
+| `mosaic.shadow` | float | `direction`, `origin` | 1.0 when a ray toward the direction is **not** blocked, else 0.0 |
+| `mosaic.sceneColor`…`mosaic.lut` | vec4 | `uv` | `mosaic.lut` = `bedrayLut` (`texture6.png`) |
+| `mosaic.buffer` | vec4 | — | `bedrayParams[index]` (SSBO binding 5, `buffer5.bin`) |
+| `mosaic.push` | vec4 | — | push slot `index` (0..3), bytes from `rt.push` |
+| `mosaic.const` | 1..4 comps | — | Constant from `value: [..]` |
+| `mosaic.swizzle` | by `mask` | `a` | Component swizzle (`mask`: `xyzw`/`rgba`, repeats allowed) |
+| `mosaic.add` `sub` `mul` `div` | widest | `a`, `b` | Component-wise; float broadcasts, vectors must match |
+| `mosaic.min` `max` | kind of `a` | `a`, `b` | Both operands must be the same kind |
+| `mosaic.step` | widest | `a`, `b` | GLSL `step` (scalar edge allowed) |
+| `mosaic.mix` | kind of `a` | `a`, `b`, `t` | `t` is float |
+| `mosaic.clamp` | kind of `a` | `a`, `lo`, `hi` | `lo`/`hi` float |
+| `mosaic.gt` `lt` | float | `a`, `b` | 1.0/0.0 comparison, float operands |
+| `mosaic.dot` | float | `a`, `b` | Two vectors of the same kind |
+| `mosaic.cross` `reflect` | vec3 | `a`, `b` | vec3 only |
+| `mosaic.neg` `floor` `fract` `sqrt` `exp` `abs` `saturate` `normalize` `length` | pass-through | `a` | Any numeric kind in, same kind out |
+| `mosaic.lum` | float | `a` | Luma (`dot(v, vec3(0.2126, 0.7152, 0.0722))`), vec3 in |
+| `mosaic.output` | — | `color` (required) | Single output; float → grey, vec3 → alpha 1 |
+
+`mosaic.trace` named outputs: bare id is the hit distance `t` (-1 = miss), `.pos` (vec3) the hit position,
+`.hit` (float) 1/0 hit mask, `.inst`/`.prim` (float) instance-custom/primitive indices. Trace defaults reconstruct the
+camera ray (`origin` = eye, `direction` = view ray through the pixel); the shadow node defaults to a fixed sky
+direction. The generated shader references only the bindings the graph uses: 0 TLAS, 1 `BedrayFrame` UBO, 2 scene
+color, 3 rgba16f output, 4 depth, 5 user SSBO, 6 user LUT; the push block is declared with exactly
+`maxPushIndex + 1` vec4 slots, so `rt.push` must hold at least `16 × (maxPushIndex + 1)` bytes.
+
+Ports that are not arithmetic operands (`uv`, `origin`, `direction`, `t`, `lo`, `hi`, `tMax`) take exactly their
+declared kind: a float is not promoted into a vector there. `step` with a vector edge needs a vector of the same kind
+as `b`. Named trace outputs keep their own kind everywhere (`ray.pos` is a vec3 operand).
+
+All kind mismatches, unknown types/ports, cycles, multiple outputs and out-of-range indices are refused at parse with
+the node id (`MosaicGraphTest`). The in-game editor for these graphs is described in
+[MOSAIC_EDITOR.md](MOSAIC_EDITOR.md). The emitter and the showcase graph compile to SPIR-V through the real shaderc path
+(verified in this repo's harness); the example has not been run on a GPU.
+
+The same graph has a Slang mirror emitter (`MosaicCodegen.slang`): `[shader("compute")]`, combined samplers
+(`Sampler2D`), `mul()` matrix ops and Slang `RayQuery` — the canonical AOT target of the renderer. Both emitters were
+verified end to end on the showcase graph and a stress graph (all six bindings + trace/shadow named outputs):
+GLSL through shaderc, Slang through `slangc 2026.20 -target spirv -profile cs_6_5 -emit-spirv-directly` (5164 B and
+6444 B SPIR-V, no errors). The runtime path still compiles the GLSL mirror; the Slang output ships as the canonical
+source for the AOT build.
 
 ### `BedrayFrame` (std140, 320 bytes)
 
@@ -67,6 +172,11 @@ The world target keeps GL orientation: texel row 0 is the bottom of the screen. 
 opaque hit (from binding 4 when present, otherwise with a ray query) and darkens pixels whose ray toward a fixed sky
 direction is blocked. Its SPIR-V compiled to 4356 bytes through the startup path and passes the contract check
 (`CustomRtContractTest`). It has not been run on a GPU.
+
+[`examples/custom-rt-mosaic`](../examples/custom-rt-mosaic/README.md) demonstrates the extended contract: push
+constants from `rt.push`, a user parameter buffer (`buffer5.bin`) and a static LUT texture (`texture6.png`), all
+edit-live on a folder pack — both as hand-written `rt.comp` and as the equivalent `mosaic.json` node graph (which
+takes precedence when present). It passes the contract check (`CustomRtContractTest`); it has not been run on a GPU.
 
 ## Ray-tracing-pipeline packs (Dirt RT)
 

@@ -1,0 +1,22 @@
+{
+  "nodes": [
+    {"id": "color",       "type": "mosaic.sceneColor"},
+    {"id": "ray",         "type": "mosaic.trace"},
+    {"id": "lit",         "type": "mosaic.shadow"},
+    {"id": "zero",        "type": "mosaic.const",  "value": [0.0]},
+    {"id": "miss",        "type": "mosaic.lt",     "inputs": {"a": "ray", "b": "zero"}},
+    {"id": "sky",         "type": "mosaic.const",  "value": [0.10, 0.14, 0.24, 0.0]},
+    {"id": "gain",        "type": "mosaic.const",  "value": [0.8]},
+    {"id": "scaledMiss",  "type": "mosaic.mul",    "inputs": {"a": "miss", "b": "gain"}},
+    {"id": "glow",        "type": "mosaic.mul",    "inputs": {"a": "sky", "b": "scaledMiss"}},
+    {"id": "floor",       "type": "mosaic.const",  "value": [0.55]},
+    {"id": "one",         "type": "mosaic.const",  "value": [1.0]},
+    {"id": "shade",       "type": "mosaic.mix",    "inputs": {"a": "floor", "b": "one", "t": "lit"}},
+    {"id": "tint",        "type": "mosaic.push",   "index": 0},
+    {"id": "strength",    "type": "mosaic.swizzle","mask": "w", "inputs": {"a": "tint"}},
+    {"id": "shaded",      "type": "mosaic.mul",    "inputs": {"a": "color", "b": "shade"}},
+    {"id": "tinted",      "type": "mosaic.mul",    "inputs": {"a": "shaded", "b": "strength"}},
+    {"id": "final",       "type": "mosaic.add",    "inputs": {"a": "tinted", "b": "glow"}},
+    {"id": "out",         "type": "mosaic.output", "inputs": {"color": "final"}}
+  ]
+}
