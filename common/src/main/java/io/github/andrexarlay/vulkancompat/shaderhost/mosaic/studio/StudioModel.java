@@ -898,6 +898,7 @@ final class StudioModel {
     void loadTemplate(MosaicTemplates.Template t) { replace(t.json(), null, "Template " + t.name()); }
 
     void replace(String json, Path file, String label) {
+        compile = null; // the compile result belonged to the previous document
         edit(label, () -> {
             doc.nodes.clear();
             doc.functions.clear();

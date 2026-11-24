@@ -53,6 +53,7 @@ final class Icons {
             case LIBRARY -> new Color(0x3E8FB0);
             case MATERIAL -> new Color(0xB86A3A);
             case BROWSER -> new Color(0x5A7AC8);
+            case PREVIEW -> new Color(0x3AA0A0);
         };
     }
 
@@ -146,6 +147,10 @@ final class Icons {
                 g.drawRoundRect((int) a, (int) a + 3, (int) (b - a) - 2, (int) (b - a) - 3, 3, 3);
                 g.draw(new java.awt.geom.Line2D.Float(a + 2, b - 3, m, m + 1));
                 g.draw(new java.awt.geom.Line2D.Float(m, m + 1, b - 4, b - 3));
+            }
+            case PREVIEW -> { // an eye
+                g.drawOval((int) a, (int) (m - (b - a) / 4), (int) (b - a), (int) ((b - a) / 2));
+                g.fill(new java.awt.geom.Ellipse2D.Float(m - 2.5f, m - 2.5f, 5, 5));
             }
             case BROWSER -> { // a grid of cards
                 float h = (b - a) / 2f - 1;

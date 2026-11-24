@@ -42,7 +42,8 @@ final class Panels {
         ADDONS("Add-ons", "Game", "Node libraries and the game's add-ons"),
         LIBRARY("Library", "Data", "Textures from Minecraft, resource packs and the project; drag or double-click"),
         MATERIAL("Material", "Main", "The material on a lit block and each baked map"),
-        BROWSER("Shader browser", "Data", "Shader packs of the game: Mosaic graphs and Iris packs, import / export");
+        BROWSER("Shader browser", "Data", "Shader packs of the game: Mosaic graphs and Iris packs, import / export"),
+        PREVIEW("Preview", "Main", "The shader run by the studio on the GPU over a game frame, a test scene or a picture");
 
         final String label, group, help;
 
@@ -76,6 +77,7 @@ final class Panels {
                 case LIBRARY -> new MaterialPanels.LibraryPanel(m);
                 case MATERIAL -> new MaterialPanels.MaterialPanel(m);
                 case BROWSER -> new ShaderBrowser(m);
+                case PREVIEW -> new PreviewPanel(m);
             };
         }
     }

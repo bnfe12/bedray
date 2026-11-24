@@ -292,7 +292,8 @@ final class Dock {
                "b": {"split": "side", "ratio": 0.68,
                  "a": {"split": "stack", "ratio": 0.74, "a": {"panel": "GRAPH"},
                         "b": {"split": "side", "ratio": 0.6, "a": {"panel": "PROBLEMS"}, "b": {"panel": "HISTORY"}}},
-                 "b": {"split": "stack", "ratio": 0.42, "a": {"panel": "RESULT"}, "b": {"panel": "INSPECTOR"}}}}}]}""";
+                 "b": {"split": "stack", "ratio": 0.6, "a": {"split": "stack", "ratio": 0.5, "a": {"panel": "PREVIEW"}, "b": {"panel": "RESULT"}},
+                        "b": {"panel": "INSPECTOR"}}}}}]}""";
     }
 
     /** Materials: library on the left, graph in the middle, the lit block and properties on the right. */
