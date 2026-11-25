@@ -140,7 +140,14 @@ compile cache in `<pack>/shaders/bedray/.studio/`), `Icons`, `StudioUi`, `Studio
 
 ## Wishlist from the owner (2026-11-24) - not done yet, in rough priority
 
-1. **Node editor strong enough for a Complementary-class shader**: multi-pass graphs (named buffers / passes, previous
+1. **(Started)** Multi-pass graphs exist: Buffer (`mosaic.pass`, name + scale 1/2/4/8), Read buffer (`mosaic.bufferIn`, any
+   uv), Previous frame (`mosaic.history`), Rain / Thunder / Temperature / Sky / Fog colour (binding 16 `BedrayWorldInfo`);
+   `MosaicPasses.plan` orders passes and emits a standalone graph per pass (bindings 19 history, 20+ buffers); the
+   studio compiles every pass and the GPU preview runs the chain with history. **Missing: the game host**
+   (`CustomRtStage` refuses multi-pass graphs with a clear message): per-pass pipelines and images in
+   `CustomRtExecutor`, a history copy, and filling binding 16 from the client level (rain, thunder, biome temperature,
+   sky / fog colour). Still wanted on top: depth-aware passes, mip chains, loops / kernels.
+   Original wish: **Node editor strong enough for a Complementary-class shader**: multi-pass graphs (named buffers / passes, previous
    frame for temporal effects, mip / blur / bloom chains, shadow-like passes), weather / time / biome inputs, loops or
    kernel nodes. Ties into "renderer passes as nodes" (item 3 above).
 2. **Agent tooling**: a console tool so an AI agent can do everything (list/add/connect/set/delete nodes, materials,

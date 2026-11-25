@@ -28,7 +28,8 @@ public final class MosaicCatalog {
         MATH("Math", 0xFF4B8A4B),
         VECTOR("Vector", 0xFFA67C34),
         LOGIC("Compare", 0xFF9A4D7A),
-        MATERIAL("Material", 0xFFB86A3A);
+        MATERIAL("Material", 0xFFB86A3A),
+        PASSES("Passes", 0xFF3A8FA0);
 
         public final String label;
         public final int color;
@@ -47,6 +48,14 @@ public final class MosaicCatalog {
 
     private static final List<Entry> ALL = List.of(
         e("mosaic.output", "Output", Category.OUTPUT, "Final pixel color. float -> grey, vec3 -> opaque, vec4 as is."),
+        e("mosaic.pass", "Buffer (pass)", Category.PASSES, "Writes its input into a named buffer as its own pass, at full, 1/2, 1/4 or 1/8 size (blur, bloom)."),
+        e("mosaic.bufferIn", "Read buffer", Category.PASSES, "Reads a buffer written by a Buffer node, at any uv (offsets for blur kernels)."),
+        e("mosaic.history", "Previous frame", Category.PASSES, "The last final frame at uv: temporal smoothing, trails, motion effects."),
+        e("mosaic.rain", "Rain", Category.SCENE, "Rain strength 0..1 of the world."),
+        e("mosaic.thunder", "Thunder", Category.SCENE, "Thunderstorm strength 0..1."),
+        e("mosaic.temperature", "Temperature", Category.SCENE, "Biome temperature at the camera (cold < 0.15 < warm)."),
+        e("mosaic.skyColor", "Sky color", Category.SCENE, "The game's sky colour this frame."),
+        e("mosaic.fogColor", "Fog color", Category.SCENE, "The game's fog colour this frame."),
         e("mat.output", "Material Output", Category.MATERIAL, "The texture's surface: baked into the albedo and LabPBR _s / _n maps."),
         e("mat.bsdf", "Principled BSDF", Category.MATERIAL, "Base colour, roughness, metallic, specular, emission, height (bump), normal strength, AO."),
         e("mat.texture", "Block Texture", Category.MATERIAL, "The texture this material belongs to, per pixel (or at uv)."),

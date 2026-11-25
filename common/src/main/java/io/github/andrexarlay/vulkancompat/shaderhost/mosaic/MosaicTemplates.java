@@ -20,6 +20,9 @@ public final class MosaicTemplates {
 
     private static final List<Template> ALL = new ArrayList<>();
 
+    /** Three passes: bright -> blur -> final; the classic bloom chain built from Buffer / Read buffer nodes. */
+    static final String BLOOM = "{\"nodes\":[{\"id\":\"c\",\"type\":\"mosaic.sceneColor\"},{\"id\":\"s\",\"type\":\"mosaic.math\",\"mask\":\"subtract\",\"inputs\":{\"a\":\"c\"},\"defaults\":{\"b\":[0.72]}},{\"id\":\"m\",\"type\":\"mosaic.math\",\"mask\":\"maximum\",\"inputs\":{\"a\":\"s\"},\"defaults\":{\"b\":[0]}},{\"id\":\"k\",\"type\":\"mosaic.math\",\"mask\":\"multiply\",\"inputs\":{\"a\":\"m\"},\"defaults\":{\"b\":[3]}},{\"id\":\"p1\",\"type\":\"mosaic.pass\",\"mask\":\"bright\",\"index\":4,\"inputs\":{\"color\":\"k\"}},{\"id\":\"uv\",\"type\":\"mosaic.uv\"},{\"id\":\"o1\",\"type\":\"mosaic.const\",\"value\":[0.012,0]},{\"id\":\"o2\",\"type\":\"mosaic.const\",\"value\":[0,0.02]},{\"id\":\"u1\",\"type\":\"mosaic.add\",\"inputs\":{\"a\":\"uv\",\"b\":\"o1\"}},{\"id\":\"u2\",\"type\":\"mosaic.sub\",\"inputs\":{\"a\":\"uv\",\"b\":\"o1\"}},{\"id\":\"u3\",\"type\":\"mosaic.add\",\"inputs\":{\"a\":\"uv\",\"b\":\"o2\"}},{\"id\":\"u4\",\"type\":\"mosaic.sub\",\"inputs\":{\"a\":\"uv\",\"b\":\"o2\"}},{\"id\":\"r0\",\"type\":\"mosaic.bufferIn\",\"mask\":\"bright\"},{\"id\":\"r1\",\"type\":\"mosaic.bufferIn\",\"mask\":\"bright\",\"inputs\":{\"uv\":\"u1\"}},{\"id\":\"r2\",\"type\":\"mosaic.bufferIn\",\"mask\":\"bright\",\"inputs\":{\"uv\":\"u2\"}},{\"id\":\"r3\",\"type\":\"mosaic.bufferIn\",\"mask\":\"bright\",\"inputs\":{\"uv\":\"u3\"}},{\"id\":\"r4\",\"type\":\"mosaic.bufferIn\",\"mask\":\"bright\",\"inputs\":{\"uv\":\"u4\"}},{\"id\":\"a1\",\"type\":\"mosaic.add\",\"inputs\":{\"a\":\"r1\",\"b\":\"r2\"}},{\"id\":\"a2\",\"type\":\"mosaic.add\",\"inputs\":{\"a\":\"r3\",\"b\":\"r4\"}},{\"id\":\"a3\",\"type\":\"mosaic.add\",\"inputs\":{\"a\":\"a1\",\"b\":\"a2\"}},{\"id\":\"a4\",\"type\":\"mosaic.add\",\"inputs\":{\"a\":\"a3\",\"b\":\"r0\"}},{\"id\":\"avg\",\"type\":\"mosaic.math\",\"mask\":\"multiply\",\"inputs\":{\"a\":\"a4\"},\"defaults\":{\"b\":[0.2]}},{\"id\":\"p2\",\"type\":\"mosaic.pass\",\"mask\":\"blur\",\"index\":2,\"inputs\":{\"color\":\"avg\"}},{\"id\":\"g\",\"type\":\"mosaic.bufferIn\",\"mask\":\"blur\"},{\"id\":\"sum\",\"type\":\"mosaic.add\",\"inputs\":{\"a\":\"c\",\"b\":\"g\"}},{\"id\":\"out\",\"type\":\"mosaic.output\",\"inputs\":{\"color\":\"sum\"}}]}";
+
     static {
         ALL.add(new Template("Pass-through", "Start", "The world image unchanged: the smallest valid graph.", chain()));
         ALL.add(new Template("Cinematic", "Post effects", "Color grade, vignette and film grain.",
@@ -29,6 +32,8 @@ public final class MosaicTemplates {
         ALL.add(new Template("Comic", "Post effects", "Black outlines and flat color bands.",
             chain("posterize", "depthOutline")));
         ALL.add(new Template("Dreamy glow", "Post effects", "Soft bloom with a warm grade.", chain("glow", "colorGrade")));
+        ALL.add(new Template("Bloom (multi-pass)", "Passes", "Bright parts at 1/4 size, blurred at 1/2 in its own pass, added back:"
+            + " Buffer and Read buffer nodes.", BLOOM));
         ALL.add(new Template("Realistic water", "World", "Water absorbs light by depth, caustics under it, sparkle on"
             + " top and a full underwater look.", chain("waterColor", "caustics", "waterSparkle", "underwater")));
         ALL.add(new Template("Caves and torches", "World", "Dark caves, warm torch light, glowing leaves.",

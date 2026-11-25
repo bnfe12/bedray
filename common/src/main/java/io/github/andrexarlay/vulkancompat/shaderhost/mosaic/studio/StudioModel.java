@@ -72,6 +72,14 @@ final class StudioModel {
         linkPoll = new Timer(250, e -> pollGame());
         linkPoll.start();
         analyze();
+        layoutIfUnplaced();
+    }
+
+    /** A graph written without positions (an agent, a hand-made file) is laid out once so it can be read. */
+    void layoutIfUnplaced() {
+        if (doc.nodes.size() < 2 || !doc.nodes.stream().allMatch(n -> n.x == doc.nodes.get(0).x && n.y == doc.nodes.get(0).y)) return;
+        MosaicArrange.arrange(doc.nodes, StudioUi.settings.nodeWidth, n -> 60 + 18 * Math.max(1, n.inputs.size()),
+            n -> MosaicGraph.portsOf(n.type, analysis.functions()).stream().map(MosaicGraph.Port::name).toList());
     }
 
     void listen(Runnable r) { listeners.add(r); }
@@ -97,7 +105,18 @@ final class StudioModel {
         } else {
             baked = null;
             bakeError = null;
-            generated = analysis.ok() ? MosaicCodegen.generate(g, MosaicCodegen.Options.DEFAULT, false) : null;
+            plan = null;
+            planError = null;
+            if (g != null && g.multiPass()) {
+                try {
+                    plan = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.plan(g);
+                    MosaicGraph last = MosaicGraph.analyze(plan.last().json()).graph();
+                    generated = last == null ? null : MosaicCodegen.generate(last, MosaicCodegen.Options.DEFAULT, false); // shown in Code
+                } catch (IllegalArgumentException e) {
+                    planError = e.getMessage();
+                    generated = null;
+                }
+            } else generated = analysis.ok() ? MosaicCodegen.generate(g, MosaicCodegen.Options.DEFAULT, false) : null;
         }
     }
 
@@ -511,13 +530,56 @@ final class StudioModel {
         compileNow();
     }
 
+    /** Multi-pass graphs (Buffer nodes): the pass plan, and after a compile the SPIR-V of every pass for the preview. */
+    io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.Plan plan;
+    String planError;
+    volatile List<GpuPreview.PassRun> passRuns;
+
     void compileNow() {
         if (generated == null) {
-            say("Nothing to compile: " + analysis.firstError(), StudioUi.BAD);
+            say("Nothing to compile: " + (planError != null ? planError : analysis.firstError()), StudioUi.BAD);
             return;
         }
         MosaicCodegen.Generated g = generated;
         if (worker != null) worker.cancel(true);
+        var pl = plan;
+        if (pl != null) { // every pass compiles on its own; no cache (it is keyed by one source)
+            compiling = true;
+            fire();
+            worker = new SwingWorker<>() {
+                List<GpuPreview.PassRun> runs = new ArrayList<>();
+
+                @Override protected MosaicShaderCheck.Result doInBackground() {
+                    MosaicShaderCheck.Result last = null;
+                    for (var p : pl.passes()) {
+                        MosaicGraph pg = MosaicGraph.analyze(p.json()).graph();
+                        if (pg == null) return new MosaicShaderCheck.Result(false, 0, 0,
+                            List.of(new MosaicShaderCheck.Error(0, "pass " + p.name() + " is not a valid graph", null, null, 0)), "");
+                        MosaicShaderCheck.Result r = MosaicShaderCheck.compile(MosaicCodegen.generate(pg, MosaicCodegen.Options.DEFAULT, false));
+                        if (!r.ok()) return r;
+                        runs.add(new GpuPreview.PassRun(r.spirv(), p.scale(), p.name() == null ? -1 : pl.bindings().get(p.name())));
+                        last = r;
+                    }
+                    return last;
+                }
+
+                @Override protected void done() {
+                    if (isCancelled()) return;
+                    compiling = false;
+                    try {
+                        compile = get();
+                    } catch (Exception e) {
+                        return;
+                    }
+                    passRuns = compile.ok() ? List.copyOf(runs) : null;
+                    if (compile.ok() && live && doc.dirty && doc.file != null) save(false);
+                    fire();
+                }
+            };
+            worker.execute();
+            return;
+        }
+        passRuns = null;
         MosaicShaderCheck.Result hit = ProjectStore.cached(doc, g.source());
         if (hit != null) {
             compile = hit;
@@ -560,6 +622,8 @@ final class StudioModel {
             for (MosaicShaderCheck.Error e : compile.errors())
                 out.add(new MosaicGraph.Problem(MosaicGraph.Severity.ERROR, e.node() != null ? e.node() : nodeOfFunction(e.function()),
                     null, "compiler (" + e.where() + "): " + e.message(), e.function() != null ? MosaicGraph.Fix.EDIT_CODE : MosaicGraph.Fix.NONE));
+        if (planError != null)
+            out.add(new MosaicGraph.Problem(MosaicGraph.Severity.ERROR, null, null, "passes: " + planError, MosaicGraph.Fix.NONE));
         if (bakeError != null && materialDoc())
             out.add(new MosaicGraph.Problem(MosaicGraph.Severity.WARNING, null, null, "material: " + bakeError, MosaicGraph.Fix.NONE));
         if (baked != null)
@@ -929,6 +993,7 @@ final class StudioModel {
         try {
             String json = Files.exists(p) ? Files.readString(p, StandardCharsets.UTF_8) : "{\"nodes\": []}";
             replace(json, p, "Open " + p.getFileName());
+            layoutIfUnplaced();
             doc.dirty = false;
             stampFile();
             fire();

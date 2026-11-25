@@ -151,7 +151,8 @@ public final class MosaicCodegen {
     }
 
     /** Which bindings and helpers the emitted code needs. */
-    private record Needs(boolean ray, boolean scene, boolean depth, boolean world, boolean buffer, boolean lut, int maxPush, boolean noise) {}
+    private record Needs(boolean ray, boolean scene, boolean depth, boolean world, boolean buffer, boolean lut, int maxPush, boolean noise,
+                         java.util.Set<Integer> buffers, boolean history, boolean worldInfo) {}
 
     private static final String[] NOISE_HELPERS = {"mosaicNoise(", "mosaicNoiseColor(", "mosaicVoronoi(", "mosaicHash31(", "mosaicHash33(",
         "mosaicChecker(", "mosaicWave(", "mosaicGradient(", "mosaicFbm(", "mosaicGradNoise("};
@@ -169,7 +170,8 @@ public final class MosaicCodegen {
     }
 
     private static Needs needs(MosaicGraph g, Plan p) {
-        boolean ray = false, scene = false, depth = false, world = false, buffer = false, lut = false, noise = false;
+        boolean ray = false, scene = false, depth = false, world = false, buffer = false, lut = false, noise = false, history = false, info = false;
+        java.util.Set<Integer> buffers = new java.util.TreeSet<>();
         int push = -1;
         for (Node n : p.emit) {
             if (p.folded.containsKey(n.id())) continue;
@@ -183,6 +185,9 @@ public final class MosaicCodegen {
                 case "mosaic.buffer" -> buffer = true;
                 case "mosaic.lut" -> lut = true;
                 case "mosaic.push" -> push = Math.max(push, n.index());
+                case "mosaic.bufferIn" -> buffers.add(n.index());
+                case "mosaic.history" -> history = true;
+                case "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor", "mosaic.fogColor" -> info = true;
                 case "mosaic.noise", "mosaic.voronoi", "mosaic.whiteNoise", "mosaic.checker", "mosaic.wave", "mosaic.gradient" -> noise = true;
                 default -> { }
             }
@@ -199,7 +204,7 @@ public final class MosaicCodegen {
             depth |= view;
             noise |= mentions(body, NOISE_HELPERS);
         }
-        return new Needs(ray, scene, depth, world, buffer, lut, push, noise);
+        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info);
     }
 
     /** Header of a stats comment so authors see what the optimizer did. */
@@ -243,12 +248,14 @@ public final class MosaicCodegen {
                     : "\nvoid main() {\n");
         if (slang) {
             out.a("    int2 m_texel = int2(tid.xy);\n");
-            out.a("    if (m_texel.x >= int(frame.viewSize.x) || m_texel.y >= int(frame.viewSize.y)) return;\n");
-            out.a("    float2 m_uv = (float2(m_texel) + 0.5) * frame.viewSize.zw;\n");
+            out.a("    uint m_w, m_h;\n    bedrayOutput.GetDimensions(m_w, m_h);\n");
+            out.a("    if (m_texel.x >= int(m_w) || m_texel.y >= int(m_h)) return;\n");
+            out.a("    float2 m_uv = (float2(m_texel) + 0.5) / float2(m_w, m_h);\n");
         } else {
             out.a("    ivec2 m_texel = ivec2(gl_GlobalInvocationID.xy);\n");
-            out.a("    if (m_texel.x >= int(frame.viewSize.x) || m_texel.y >= int(frame.viewSize.y)) return;\n");
-            out.a("    vec2 m_uv = (vec2(m_texel) + 0.5) * frame.viewSize.zw;\n");
+            out.a("    ivec2 m_size = imageSize(bedrayOutput);\n");
+            out.a("    if (m_texel.x >= m_size.x || m_texel.y >= m_size.y) return;\n");
+            out.a("    vec2 m_uv = (vec2(m_texel) + 0.5) / vec2(m_size);\n");
         }
         for (Node n : p.emit) {
             int first = out.line;
@@ -317,6 +324,10 @@ public final class MosaicCodegen {
         if (nd.depth()) o.a("layout(set = 0, binding = 4) uniform sampler2D bedrayDepth; // RT primary-ray distance, 1e6 = no hit\n");
         if (nd.buffer()) o.a("\nlayout(std430, set = 0, binding = 5) readonly buffer BedrayUserBuffer { vec4 bedrayParams[]; };\n");
         if (nd.lut()) o.a("\nlayout(set = 0, binding = 6) uniform sampler2D bedrayLut; // user LUT texture\n");
+        for (int b : nd.buffers()) o.a("layout(set = 0, binding = " + b + ") uniform sampler2D bedrayBuf" + b + "; // a Buffer pass\n");
+        if (nd.history()) o.a("layout(set = 0, binding = 19) uniform sampler2D bedrayHistory; // the previous final frame\n");
+        if (nd.worldInfo()) o.a("layout(std140, set = 0, binding = 16) uniform BedrayWorldInfo { vec4 weather; vec4 skyColor; vec4 fogColor; vec4 extra; } worldInfo;"
+            + " // weather: rain, thunder, temperature, 0\n");
         if (nd.maxPush() >= 0)
             o.a("\nlayout(push_constant) uniform BedrayPush { vec4 p[" + (nd.maxPush() + 1) + "]; } bedrayPush; // rt.push bytes\n");
         o.a("""
@@ -823,6 +834,13 @@ public final class MosaicCodegen {
             case "mosaic.texel" -> (sl ? "float2" : "vec2") + "(m_texel)";
             case "mosaic.size" -> "frame.viewSize.xy";
             case "mosaic.time" -> "frame.timing.x";
+            case "mosaic.bufferIn" -> sl ? "bedrayBuf" + n.index() + ".SampleLevel(" + uv + ", 0.0)" : "texture(bedrayBuf" + n.index() + ", " + uv + ")";
+            case "mosaic.history" -> sl ? "bedrayHistory.SampleLevel(" + uv + ", 0.0)" : "texture(bedrayHistory, " + uv + ")";
+            case "mosaic.rain" -> "worldInfo.weather.x";
+            case "mosaic.thunder" -> "worldInfo.weather.y";
+            case "mosaic.temperature" -> "worldInfo.weather.z";
+            case "mosaic.skyColor" -> "worldInfo.skyColor.xyz";
+            case "mosaic.fogColor" -> "worldInfo.fogColor.xyz";
             case "mosaic.frame" -> "frame.timing.z";
             case "mosaic.eye" -> "mosaicEye()";
             case "mosaic.sceneColor" -> sl ? "bedraySceneColor.SampleLevel(" + uv + ", 0.0)" : "texture(bedraySceneColor, " + uv + ")";
@@ -1067,6 +1085,10 @@ public final class MosaicCodegen {
         if (nd.depth()) o.a("[[vk::binding(4, 0)]] Sampler2D bedrayDepth; // RT primary-ray distance, 1e6 = no hit\n");
         if (nd.buffer()) o.a("[[vk::binding(5, 0)]] StructuredBuffer<float4> bedrayParams;\n");
         if (nd.lut()) o.a("[[vk::binding(6, 0)]] Sampler2D bedrayLut;\n");
+        for (int b : nd.buffers()) o.a("[[vk::binding(" + b + ", 0)]] Sampler2D bedrayBuf" + b + ";\n");
+        if (nd.history()) o.a("[[vk::binding(19, 0)]] Sampler2D bedrayHistory;\n");
+        if (nd.worldInfo()) o.a("struct BedrayWorldInfo { float4 weather; float4 skyColor; float4 fogColor; float4 extra; };\n"
+            + "[[vk::binding(16, 0)]] ConstantBuffer<BedrayWorldInfo> worldInfo;\n");
         if (nd.maxPush() >= 0)
             o.a("\nstruct BedrayPush { float4 p[" + (nd.maxPush() + 1) + "]; };\n[[vk::push_constant]] ConstantBuffer<BedrayPush> bedrayPush;\n");
         o.a("""

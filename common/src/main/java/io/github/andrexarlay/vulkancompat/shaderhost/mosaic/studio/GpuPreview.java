@@ -33,7 +33,6 @@ final class GpuPreview implements AutoCloseable {
     private final VkCommandBuffer cmd;
     final String deviceName;
 
-    private Prepared prepared;
 
     private GpuPreview(VkInstance instance, VkPhysicalDevice physical, VkDevice device, int family, String name) {
         this.instance = instance;
@@ -117,27 +116,45 @@ final class GpuPreview implements AutoCloseable {
 
     private record Img(long image, long memory, long view, int w, int h, int format) {}
 
+    /** One compute pass of a chain: SPIR-V, size divisor, the buffer binding it writes (-1 for the final image). */
+    record PassRun(byte[] spirv, int scale, int binding) {}
+
     private final class Prepared {
-        int spirvHash, w, h;
-        long module, setLayout, pipelineLayout, pipeline, pool, set, sampler;
-        Buf ubo, upload, readback;
-        Img input, output, depth, one;
+        long module, setLayout, pipelineLayout, pipeline, pool, set;
+        Img output;
         final List<Buf> buffers = new ArrayList<>();
         boolean push;
 
         void destroy() {
-            vkDeviceWaitIdle(device);
             if (pipeline != 0) vkDestroyPipeline(device, pipeline, null);
             if (pipelineLayout != 0) vkDestroyPipelineLayout(device, pipelineLayout, null);
             if (pool != 0) vkDestroyDescriptorPool(device, pool, null);
             if (setLayout != 0) vkDestroyDescriptorSetLayout(device, setLayout, null);
             if (module != 0) vkDestroyShaderModule(device, module, null);
-            if (sampler != 0) vkDestroySampler(device, sampler, null);
-            for (Buf b : new Buf[] {ubo, upload, readback}) free(b);
             for (Buf b : buffers) free(b);
-            for (Img i : new Img[] {input, output, depth, one}) free(i);
+            free(output);
         }
     }
+
+    /** Everything one chain of passes needs at one size; rebuilt when the shaders or the size change. */
+    private final class Chain {
+        int key, w, h;
+        long sampler;
+        Buf ubo, upload, readback;
+        Img input, depth, one, history;
+        final List<Prepared> passes = new ArrayList<>();
+        boolean historyFresh = true;
+
+        void destroy() {
+            vkDeviceWaitIdle(device);
+            for (Prepared p : passes) p.destroy();
+            if (sampler != 0) vkDestroySampler(device, sampler, null);
+            for (Buf b : new Buf[] {ubo, upload, readback}) free(b);
+            for (Img i : new Img[] {input, depth, one, history}) free(i);
+        }
+    }
+
+    private Chain chain;
 
     private int memoryType(int bits, int flags) {
         try (MemoryStack s = MemoryStack.stackPush()) {
@@ -209,46 +226,74 @@ final class GpuPreview implements AutoCloseable {
     /** Extra inputs of a run: the pack's rt.push bytes, buffer5.bin and texture6.png, when there are any. */
     record Extras(byte[] push, byte[] buffer5, BufferedImage lut) {}
 
-    /**
-     * Runs {@code spirv} over {@code input} and returns the output (clamped to 0..1 for display). Throws when the shader
-     * needs something the studio cannot give (ray tracing).
-     */
+    /** A single-pass graph. */
     synchronized BufferedImage run(byte[] spirv, BufferedImage input, float time, int frame, Extras extras) {
+        return runChain(List.of(new PassRun(spirv, 1, -1)), input, time, frame, extras);
+    }
+
+    /**
+     * Runs the passes in order over {@code input} and returns the final image (clamped to 0..1 for display). Buffer passes
+     * write their own rgba16f image at 1/scale size, later passes sample it at its binding; the final image is kept as
+     * the previous frame (binding 19) of the next run. Throws when a shader needs the game's scene (ray tracing).
+     */
+    synchronized BufferedImage runChain(List<PassRun> runs, BufferedImage input, float time, int frame, Extras extras) {
         int w = input.getWidth(), h = input.getHeight();
-        int hash = Arrays.hashCode(spirv);
-        if (prepared == null || prepared.spirvHash != hash || prepared.w != w || prepared.h != h) {
-            if (prepared != null) prepared.destroy();
-            prepared = null;
-            prepared = prepare(spirv, hash, w, h, extras);
+        int key = java.util.Objects.hash(w, h, runs.stream().map(r -> Arrays.hashCode(r.spirv()) * 31 + r.scale() * 7 + r.binding()).toList());
+        if (chain == null || chain.key != key) {
+            if (chain != null) chain.destroy();
+            chain = null;
+            chain = build(runs, key, w, h, extras);
         }
-        Prepared p = prepared;
-        writeFrame(p.ubo.mapped(), w, h, time, frame);
+        Chain c = chain;
+        writeFrame(c.ubo.mapped(), w, h, time, frame);
         int[] px = input.getRGB(0, 0, w, h, null, 0, w);
         for (int y = 0; y < h; y++) // bottom-up like the game's world target (GL origin)
             for (int x = 0; x < w; x++) {
-                int c = px[(h - 1 - y) * w + x];
-                MemoryUtil.memPutInt(p.upload.mapped() + ((long) y * w + x) * 4, (c & 0xFF00FF00) | (c >> 16 & 0xFF) | (c & 0xFF) << 16);
+                int col = px[(h - 1 - y) * w + x];
+                MemoryUtil.memPutInt(c.upload.mapped() + ((long) y * w + x) * 4, (col & 0xFF00FF00) | (col >> 16 & 0xFF) | (col & 0xFF) << 16);
             }
         try (MemoryStack s = MemoryStack.stackPush()) {
             vkResetCommandBuffer(cmd, 0);
             vkBeginCommandBuffer(cmd, VkCommandBufferBeginInfo.calloc(s).sType$Default().flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
-            barrier(s, p.input.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            copyIn(s, p.upload, p.input);
-            barrier(s, p.input.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            barrier(s, p.output.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipelineLayout, 0, s.longs(p.set), null);
-            if (p.push) {
-                ByteBuffer pb = s.calloc(128);
-                if (extras != null && extras.push() != null) pb.put(0, extras.push(), 0, Math.min(128, extras.push().length));
-                vkCmdPushConstants(cmd, p.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pb);
+            barrier(s, c.input.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            copyIn(s, c.upload, c.input);
+            barrier(s, c.input.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            if (c.historyFresh) {
+                barrier(s, c.history.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                VkClearColorValue zero = VkClearColorValue.calloc(s);
+                VkImageSubresourceRange.Buffer range = VkImageSubresourceRange.calloc(1, s);
+                range.get(0).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
+                vkCmdClearColorImage(cmd, c.history.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, zero, range);
+                barrier(s, c.history.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                c.historyFresh = false;
             }
-            vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
-            barrier(s, p.output.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            for (int i = 0; i < c.passes.size(); i++) {
+                Prepared p = c.passes.get(i);
+                barrier(s, p.output.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipelineLayout, 0, s.longs(p.set), null);
+                if (p.push) {
+                    ByteBuffer pb = s.calloc(128);
+                    if (extras != null && extras.push() != null) pb.put(0, extras.push(), 0, Math.min(128, extras.push().length));
+                    vkCmdPushConstants(cmd, p.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pb);
+                }
+                vkCmdDispatch(cmd, (p.output.w() + 7) / 8, (p.output.h() + 7) / 8, 1);
+                boolean last = i == c.passes.size() - 1;
+                barrier(s, p.output.image(), VK_IMAGE_LAYOUT_GENERAL, last ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            }
+            Img fin = c.passes.get(c.passes.size() - 1).output;
             VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, s);
             region.get(0).imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
             region.get(0).imageExtent().set(w, h, 1);
-            vkCmdCopyImageToBuffer(cmd, p.output.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, p.readback.handle(), region);
+            vkCmdCopyImageToBuffer(cmd, fin.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, c.readback.handle(), region);
+            // the final image becomes the previous frame of the next run
+            barrier(s, c.history.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkImageCopy.Buffer ic = VkImageCopy.calloc(1, s);
+            ic.get(0).srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            ic.get(0).dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            ic.get(0).extent().set(w, h, 1);
+            vkCmdCopyImage(cmd, fin.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, c.history.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, ic);
+            barrier(s, c.history.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             vkEndCommandBuffer(cmd);
             vkResetFences(device, fence);
             check(vkQueueSubmit(queue, VkSubmitInfo.calloc(s).sType$Default().pCommandBuffers(s.pointers(cmd)), fence), "submit");
@@ -257,7 +302,7 @@ final class GpuPreview implements AutoCloseable {
         BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
         int[] row = new int[w];
         for (int y = 0; y < h; y++) {
-            long base = p.readback.mapped() + (long) (h - 1 - y) * w * 8;
+            long base = c.readback.mapped() + (long) (h - 1 - y) * w * 8;
             for (int x = 0; x < w; x++) {
                 long o = base + x * 8L;
                 int r = c8(Float.float16ToFloat(MemoryUtil.memGetShort(o))), g = c8(Float.float16ToFloat(MemoryUtil.memGetShort(o + 2))),
@@ -307,7 +352,50 @@ final class GpuPreview implements AutoCloseable {
         free(staging);
     }
 
-    private Prepared prepare(byte[] spirv, int hash, int w, int h, Extras extras) {
+    private Chain build(List<PassRun> runs, int key, int w, int h, Extras extras) {
+        Chain c = new Chain();
+        c.key = key;
+        c.w = w;
+        c.h = h;
+        try (MemoryStack s = MemoryStack.stackPush()) {
+            LongBuffer lp = s.mallocLong(1);
+            c.ubo = buffer(320, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            c.upload = buffer((long) w * h * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+            c.readback = buffer((long) w * h * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+            c.input = image(w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            c.history = image(w, h, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            c.depth = image(1, 1, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            fill(c.depth, new int[] {Float.floatToIntBits(1.0e6f)}, 4); // "the ray hit nothing": sky everywhere
+            BufferedImage lut = extras == null ? null : extras.lut();
+            c.one = lut == null ? image(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+                : image(lut.getWidth(), lut.getHeight(), VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            if (lut == null) fill(c.one, new int[] {0xFFFFFFFF}, 4);
+            else {
+                int[] px = lut.getRGB(0, 0, lut.getWidth(), lut.getHeight(), null, 0, lut.getWidth());
+                for (int i = 0; i < px.length; i++) px[i] = (px[i] & 0xFF00FF00) | (px[i] >> 16 & 0xFF) | (px[i] & 0xFF) << 16;
+                fill(c.one, px, 4);
+            }
+            check(vkCreateSampler(device, VkSamplerCreateInfo.calloc(s).sType$Default().magFilter(VK_FILTER_LINEAR).minFilter(VK_FILTER_LINEAR)
+                .addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).addressModeV(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                .addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).maxLod(0), null, lp), "sampler");
+            c.sampler = lp.get(0);
+        }
+        // outputs first, so every pass can bind the buffers of the passes before it
+        java.util.Map<Integer, Img> buffers = new java.util.HashMap<>();
+        for (PassRun r : runs) {
+            Prepared p = new Prepared();
+            boolean last = r.binding() < 0;
+            int pw = last ? w : Math.max(1, w / r.scale()), ph = last ? h : Math.max(1, h / r.scale());
+            p.output = image(pw, ph, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
+                | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+            if (!last) buffers.put(r.binding(), p.output);
+            c.passes.add(p);
+        }
+        for (int i = 0; i < runs.size(); i++) preparePass(c, c.passes.get(i), runs.get(i).spirv(), buffers, extras);
+        return c;
+    }
+
+    private void preparePass(Chain c, Prepared p, byte[] spirv, java.util.Map<Integer, Img> buffers, Extras extras) {
         ByteBuffer code = MemoryUtil.memAlloc(spirv.length).order(ByteOrder.LITTLE_ENDIAN);
         code.put(spirv).flip();
         SpirvReflection.Module module = SpirvReflection.reflect(code.duplicate().order(ByteOrder.LITTLE_ENDIAN));
@@ -316,37 +404,12 @@ final class GpuPreview implements AutoCloseable {
                 MemoryUtil.memFree(code);
                 throw new UnsupportedOperationException("this graph traces rays: its preview needs the game's scene (see Result)");
             }
-        Prepared p = new Prepared();
-        p.spirvHash = hash;
-        p.w = w;
-        p.h = h;
         p.push = module.pushConstants();
         try (MemoryStack s = MemoryStack.stackPush()) {
             LongBuffer lp = s.mallocLong(1);
             check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(code), null, lp), "shader module");
             p.module = lp.get(0);
             MemoryUtil.memFree(code);
-            p.ubo = buffer(320, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
-            p.upload = buffer((long) w * h * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-            p.readback = buffer((long) w * h * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-            p.input = image(w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-            p.output = image(w, h, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-            p.depth = image(1, 1, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-            fill(p.depth, new int[] {Float.floatToIntBits(1.0e6f)}, 4); // "the ray hit nothing": sky everywhere
-            BufferedImage lut = extras == null ? null : extras.lut();
-            p.one = lut == null ? image(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-                : image(lut.getWidth(), lut.getHeight(), VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-            if (lut == null) fill(p.one, new int[] {0xFFFFFFFF}, 4);
-            else {
-                int[] px = lut.getRGB(0, 0, lut.getWidth(), lut.getHeight(), null, 0, lut.getWidth());
-                for (int i = 0; i < px.length; i++) px[i] = (px[i] & 0xFF00FF00) | (px[i] >> 16 & 0xFF) | (px[i] & 0xFF) << 16;
-                fill(p.one, px, 4);
-            }
-            check(vkCreateSampler(device, VkSamplerCreateInfo.calloc(s).sType$Default().magFilter(VK_FILTER_LINEAR).minFilter(VK_FILTER_LINEAR)
-                .addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).addressModeV(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                .addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).maxLod(0), null, lp), "sampler");
-            p.sampler = lp.get(0);
-
             List<SpirvReflection.Binding> binds = module.bindings().stream().filter(b -> b.set() == 0).toList();
             VkDescriptorSetLayoutBinding.Buffer lb = VkDescriptorSetLayoutBinding.calloc(binds.size(), s);
             int ub = 0, sb = 0, cis = 0, si = 0;
@@ -390,7 +453,7 @@ final class GpuPreview implements AutoCloseable {
                 wr.get(0).sType$Default().dstSet(p.set).dstBinding(b.binding()).descriptorCount(1).descriptorType(vkType(b.kind()));
                 switch (vkType(b.kind())) {
                     case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER -> {
-                        Buf buf = b.binding() == 1 ? p.ubo : extraBuffer(p, b, extras);
+                        Buf buf = b.binding() == 1 ? c.ubo : extraBuffer(p, b, extras);
                         VkDescriptorBufferInfo.Buffer bi = VkDescriptorBufferInfo.calloc(1, s);
                         bi.get(0).buffer(buf.handle()).offset(0).range(buf.size());
                         wr.get(0).pBufferInfo(bi);
@@ -401,16 +464,16 @@ final class GpuPreview implements AutoCloseable {
                         wr.get(0).pImageInfo(ii);
                     }
                     default -> {
-                        Img img = b.binding() == 2 ? p.input : b.binding() == 4 ? p.depth : p.one;
+                        Img img = b.binding() == 2 ? c.input : b.binding() == 4 ? c.depth : b.binding() == 19 ? c.history
+                            : buffers.getOrDefault(b.binding(), c.one);
                         VkDescriptorImageInfo.Buffer ii = VkDescriptorImageInfo.calloc(1, s);
-                        ii.get(0).sampler(p.sampler).imageView(img.view()).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                        ii.get(0).sampler(c.sampler).imageView(img.view()).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                         wr.get(0).pImageInfo(ii);
                     }
                 }
                 vkUpdateDescriptorSets(device, wr, null);
             }
         }
-        return p;
     }
 
     /** User buffer (binding 5: buffer5.bin) and the world volume (15: empty world, sky light everywhere), else zeros. */
@@ -423,6 +486,10 @@ final class GpuPreview implements AutoCloseable {
             MemoryUtil.memPutInt(buf.mapped() + 36, 32);
             MemoryUtil.memPutInt(buf.mapped() + 40, 48);
             for (int i = 0; i < cells; i++) MemoryUtil.memPutShort(buf.mapped() + 48 + i * 2L, (short) (15 << 12)); // air, full sky light
+        } else if (b.binding() == 16) { // weather and sky: a clear day
+            buf = buffer(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            float[] v = {0f, 0f, 0.8f, 0f, 0.47f, 0.65f, 1f, 1f, 0.75f, 0.85f, 1f, 1f, 0f, 0f, 0f, 0f};
+            for (int i = 0; i < v.length; i++) MemoryUtil.memPutFloat(buf.mapped() + i * 4L, v[i]);
         } else {
             byte[] data = b.binding() == 5 && extras != null ? extras.buffer5() : null;
             buf = buffer(Math.max(65536, data == null ? 0 : data.length), b.kind() == SpirvReflection.DescriptorKind.UNIFORM_BUFFER
@@ -458,8 +525,8 @@ final class GpuPreview implements AutoCloseable {
     }
 
     @Override public synchronized void close() {
-        if (prepared != null) prepared.destroy();
-        prepared = null;
+        if (chain != null) chain.destroy();
+        chain = null;
         vkDestroyFence(device, fence, null);
         vkDestroyCommandPool(device, commandPool, null);
         vkDestroyDevice(device, null);

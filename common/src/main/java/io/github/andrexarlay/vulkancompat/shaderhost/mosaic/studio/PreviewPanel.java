@@ -190,7 +190,8 @@ final class PreviewPanel extends Panels.Listening {
                     Thread.sleep(250);
                     continue;
                 }
-                Object key = java.util.List.of(System.identityHashCode(c), System.identityHashCode(input), s);
+                var runs = model.passRuns;
+                Object key = java.util.List.of(System.identityHashCode(c), System.identityHashCode(input), s, System.identityHashCode(runs));
                 if (!playing && key.equals(lastKey)) {
                     Thread.sleep(120);
                     continue;
@@ -213,7 +214,8 @@ final class PreviewPanel extends Panels.Listening {
                 long t0 = System.nanoTime();
                 BufferedImage out;
                 try {
-                    out = gpu.run(c.spirv(), input, (System.nanoTime() - start) / 1e9f, frame++, extras());
+                    float t = (System.nanoTime() - start) / 1e9f;
+                    out = runs != null ? gpu.runChain(runs, input, t, frame++, extras()) : gpu.run(c.spirv(), input, t, frame++, extras());
                 } catch (UnsupportedOperationException e) {
                     show(null, e.getMessage());
                     Thread.sleep(500);
@@ -221,7 +223,9 @@ final class PreviewPanel extends Panels.Listening {
                 }
                 long ms = (System.nanoTime() - t0) / 1_000_000;
                 show(out, null);
-                SwingUtilities.invokeLater(() -> info.setText(gpu.deviceName + "   -   " + out.getWidth() + "x" + out.getHeight() + "   -   " + ms + " ms"));
+                int passes = runs == null ? 1 : runs.size();
+                SwingUtilities.invokeLater(() -> info.setText(gpu.deviceName + "   -   " + out.getWidth() + "x" + out.getHeight() + "   -   "
+                    + (passes > 1 ? passes + " passes, " : "") + ms + " ms"));
                 Thread.sleep(Math.max(15, 50 - ms));
             } catch (InterruptedException e) {
                 return;

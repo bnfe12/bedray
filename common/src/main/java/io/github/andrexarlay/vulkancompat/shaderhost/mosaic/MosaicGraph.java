@@ -137,6 +137,9 @@ public final class MosaicGraph {
         "mosaic.math", "mosaic.mixColor", "mosaic.mapRange", "mosaic.colorRamp", "mosaic.reroute",
         // procedural textures
         "mosaic.noise", "mosaic.voronoi", "mosaic.whiteNoise", "mosaic.checker", "mosaic.wave", "mosaic.gradient",
+        // multi-pass: write a named buffer, read it (any uv), the previous frame; weather and sky (binding 16)
+        "mosaic.pass", "mosaic.bufferIn", "mosaic.history", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
+        "mosaic.fogColor",
         // output
         "mosaic.output",
         // material graphs (baked on the CPU into LabPBR textures, see MosaicMaterial)
@@ -144,6 +147,9 @@ public final class MosaicGraph {
 
     /** The output node of a shader graph ({@code mosaic.output}) or of a material graph ({@code mat.output}). */
     public static boolean isOutput(String type) { return type.equals("mosaic.output") || type.equals("mat.output"); }
+
+    /** Whether the graph has Buffer nodes (it runs as several passes, see MosaicPasses). */
+    public boolean multiPass() { return uses("mosaic.pass"); }
 
     /** Node types a material graph may use: CPU-evaluable, no scene or ray inputs. */
     public static final Set<String> MATERIAL_SAFE = Set.of("mosaic.uv", "mosaic.texel", "mosaic.size", "mosaic.const", "mosaic.swizzle",
@@ -164,6 +170,9 @@ public final class MosaicGraph {
             new Port("origin", Kind.V3, false), new Port("direction", Kind.V3, false), new Port("tMax", Kind.F, false)));
         m.put("mosaic.shadow", List.of(new Port("direction", Kind.V3, false), new Port("origin", Kind.V3, false)));
         m.put("mosaic.output", List.of(new Port("color", Kind.V4, true)));
+        m.put("mosaic.pass", List.of(new Port("color", Kind.V4, true)));
+        m.put("mosaic.bufferIn", List.of(new Port("uv", Kind.V2, false)));
+        m.put("mosaic.history", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.texture", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.image", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.bsdf", List.of(new Port("baseColor", Kind.V4, false), new Port("roughness", Kind.F, false),
@@ -422,6 +431,18 @@ public final class MosaicGraph {
             Set<String> reachable = new LinkedHashSet<>();
             if (outputId != null || nodes.values().stream().anyMatch(n -> isOutput(n.type())))
                 for (Node n : nodes.values()) if (isOutput(n.type())) upstream(n.id(), reachable);
+            // a Buffer node is live when something live reads its buffer (and so on, through every pass)
+            for (boolean grew = true; grew; ) {
+                grew = false;
+                for (Node r : List.copyOf(nodes.values()))
+                    if (r.type().equals("mosaic.bufferIn") && reachable.contains(r.id()))
+                        for (Node p : nodes.values())
+                            if (p.type().equals("mosaic.pass") && java.util.Objects.equals(p.mask(), r.mask()) && !reachable.contains(p.id())) {
+                                upstream(p.id(), reachable);
+                                grew = true;
+                            }
+            }
+            checkPasses();
             warnings(reachable);
             boolean hasErrors = problems.stream().anyMatch(p -> p.severity() == Severity.ERROR);
             MosaicGraph g = hasErrors || outputId == null ? null
@@ -433,6 +454,38 @@ public final class MosaicGraph {
             Cost cost = cost(reachable.isEmpty() ? nodes.keySet() : reachable);
             return new Analysis(g, List.copyOf(problems), Collections.unmodifiableMap(new LinkedHashMap<>(kinds)),
                 Collections.unmodifiableMap(new LinkedHashMap<>(functions)), Collections.unmodifiableSet(reachable), cost);
+        }
+
+        /** Buffer names: one word, written once, read only by name that exists, never read inside their own pass. */
+        void checkPasses() {
+            Map<String, String> written = new LinkedHashMap<>();
+            for (Node n : nodes.values()) {
+                if (!n.type().equals("mosaic.pass")) continue;
+                if (n.mask() == null || !n.mask().matches("[A-Za-z]\\w{0,23}")) {
+                    error(n.id(), null, "node " + n.id() + ": a buffer needs a name (one word, e.g. bloom)", Fix.CHANGE_PARAM);
+                    continue;
+                }
+                if (written.containsKey(n.mask()))
+                    error(n.id(), null, "buffer " + n.mask() + " is written by " + written.get(n.mask()) + " and " + n.id() + ": one writer per buffer",
+                        Fix.CHANGE_PARAM);
+                written.putIfAbsent(n.mask(), n.id());
+                if (n.index() != 0 && n.index() != 1 && n.index() != 2 && n.index() != 4 && n.index() != 8)
+                    error(n.id(), null, "node " + n.id() + ": scale is 1, 2, 4 or 8 (a fraction of the screen)", Fix.CHANGE_PARAM);
+            }
+            for (Node n : nodes.values()) {
+                if (!n.type().equals("mosaic.bufferIn")) continue;
+                if (n.index() >= MosaicPasses.FIRST_BUFFER_BINDING) continue; // a pass graph: already bound by the planner
+                if (n.mask() == null || !written.containsKey(n.mask())) {
+                    error(n.id(), null, "node " + n.id() + " reads buffer " + n.mask() + ", which no Buffer node writes"
+                        + (written.isEmpty() ? "" : " (buffers: " + written.keySet() + ")"), Fix.CHANGE_PARAM);
+                    continue;
+                }
+                Set<String> own = new LinkedHashSet<>();
+                upstream(written.get(n.mask()), own);
+                if (own.contains(n.id()))
+                    error(n.id(), null, "buffer " + n.mask() + " is read while it is being written: use Previous frame for feedback",
+                        Fix.CHANGE_PARAM);
+            }
         }
 
         void upstream(String id, Set<String> into) {
@@ -726,7 +779,9 @@ public final class MosaicGraph {
                 case "mosaic.const" -> n.value() == null ? null : Kind.ofSize(n.value().length);
                 case "mosaic.vec" -> Kind.ofSize(n.index());
                 case "mosaic.swizzle" -> swizzleKind(n, visiting);
-                case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf" -> Kind.V4;
+                case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf", "mosaic.pass", "mosaic.bufferIn", "mosaic.history" -> Kind.V4;
+                case "mosaic.rain", "mosaic.thunder", "mosaic.temperature" -> Kind.F;
+                case "mosaic.skyColor", "mosaic.fogColor" -> Kind.V3;
                 case "mosaic.gt", "mosaic.lt", "mosaic.dot", "mosaic.length", "mosaic.lum" -> Kind.F;
                 case "mosaic.cross", "mosaic.reflect" -> Kind.V3;
                 case "mosaic.math" -> {
@@ -824,7 +879,7 @@ public final class MosaicGraph {
             }
             if (s == null) return; // unknown upstream: its own problem is already reported
             Kind want = acceptedKind(n.type(), port, functions);
-            if (isOutput(n.type())) {
+            if (isOutput(n.type()) || n.type().equals("mosaic.pass")) {
                 // float, vec2, vec3 and vec4 all widen to the stored color
             } else if (want != null && s != want) {
                 error(n.id(), port, "node " + n.id() + ": port " + port + " takes " + label(want) + ", found "

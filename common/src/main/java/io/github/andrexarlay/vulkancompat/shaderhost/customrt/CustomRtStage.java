@@ -278,6 +278,9 @@ public final class CustomRtStage {
         };
         if (entry.endsWith(".json")) {
             MosaicGraph graph = MosaicGraph.parse(packReader.read(entry));
+            if (graph.multiPass())
+                throw new IllegalArgumentException("this graph has Buffer nodes (several passes): Mosaic Studio's Preview runs it;"
+                    + " the game's multi-pass host comes in a later build");
             String glsl = mosaicGlsl(graph);
             lastCompiledMosaicGlsl = glsl;
             VulkanGlslPackCompiler.Compiled slang = slangStage(graph, root, entries, src);

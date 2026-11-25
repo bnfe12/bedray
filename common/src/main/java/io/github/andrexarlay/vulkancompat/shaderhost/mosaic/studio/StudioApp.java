@@ -138,7 +138,7 @@ final class StudioApp {
             s.start();
         }
         if (shot != null) {
-            Timer t = new Timer(3500, e -> {
+            Timer t = new Timer(Integer.getInteger("mosaic.selfshot.delay", 3500), e -> {
                 try {
                     if (settingsWindow != null && settingsWindow.isShowing()) {
                         java.awt.image.BufferedImage si = settingsWindow.snapshot();
