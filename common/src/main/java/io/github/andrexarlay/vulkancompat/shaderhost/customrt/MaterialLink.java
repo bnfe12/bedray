@@ -34,6 +34,7 @@ final class MaterialLink {
             Path dir = mc.gameDirectory.toPath().resolve("bedray-studio");
             exportModels(mc, dir);
             renderer(mc, dir);
+            enforcePriority(mc, dir);
             Path f = dir.resolve("materials.json");
             if (!Files.exists(f)) return;
             long stamp = Files.getLastModifiedTime(f).toMillis();
@@ -55,6 +56,78 @@ final class MaterialLink {
 
     private static long rendererStamp = -1;
     private static boolean stateWritten;
+    /** Studio's renderer numbers while its graph is live and marked priority: they win over the game's menu. */
+    private static volatile JsonObject prioritySettings;
+    private static long priorityCheck;
+
+    /** Keys of VulkanRtxConfig itself (render mode, voxels, upscalers) next to RtSettings' registry. */
+    private static final java.util.Set<String> CONFIG_KEYS = java.util.Set.of("renderer", "voxel_distance_auto", "voxel_distance_chunks",
+        "voxel_memory_budget_mib", "voxel_quality_profile", "path_quality_profile", "voxel_diffuse_bounce", "voxel_translucent_optics",
+        "upscaler_backend", "xess_mode", "dlss_sr_preset", "dlss_mode", "fsr_mode", "fsr_version", "fsr_sharpness", "fsr1_mode",
+        "fsr1_sharpness", "nis_sharpness", "quality_preset", "custom_scale", "rt_mode", "experimental_rays");
+
+    static boolean applySetting(String key, String value) {
+        if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.applyKeyValue(key, value)) return true;
+        if (!CONFIG_KEYS.contains(key)) return false;
+        io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.applyKeyValue(key, value);
+        return true;
+    }
+
+    /** The values the game runs with now (bedray.toml keys). */
+    static java.util.Map<String, String> currentValues() {
+        java.util.Map<String, String> out = new java.util.HashMap<>();
+        try {
+            java.io.StringWriter w = new java.io.StringWriter();
+            io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.writeAll(w);
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.write(w);
+            for (String line : w.toString().split("\\R")) {
+                int eq = line.indexOf('=');
+                if (eq <= 0 || line.trim().startsWith("#") || line.trim().startsWith("[")) continue;
+                String v = line.substring(eq + 1).trim();
+                int hash = v.indexOf(" #");
+                if (hash > 0) v = v.substring(0, hash).trim();
+                if (v.startsWith("\"") && v.endsWith("\"") && v.length() >= 2) v = v.substring(1, v.length() - 1);
+                out.put(line.substring(0, eq).trim(), v);
+            }
+        } catch (Exception ignored) {
+            // no snapshot: nothing to compare
+        }
+        return out;
+    }
+
+    static boolean same(String a, String b) {
+        if (a.equalsIgnoreCase(b)) return true;
+        try {
+            return Math.abs(Double.parseDouble(a) - Double.parseDouble(b)) < 1e-4;
+        } catch (NumberFormatException e) {
+            return a.replace('-', '_').equalsIgnoreCase(b.replace('-', '_'));
+        }
+    }
+
+    /** Puts Studio's priority numbers back where the menu (or anything else) changed them. */
+    private static void enforcePriority(Minecraft mc, Path dir) {
+        JsonObject p = prioritySettings;
+        long now = System.currentTimeMillis();
+        if (p == null || now - priorityCheck < 2000) return;
+        priorityCheck = now;
+        mc.execute(() -> {
+            java.util.Map<String, String> cur = currentValues();
+            int n = 0;
+            for (var e : p.entrySet()) {
+                String want = e.getValue().getAsString(), have = cur.get(e.getKey());
+                if (have == null || same(have, want)) continue;
+                if (applySetting(e.getKey(), want)) n++;
+            }
+            if (n == 0) return;
+            try {
+                writeState(dir);
+                Files.writeString(dir.resolve("renderer-status.txt"), "Studio priority: put back " + n + " setting(s) the game changed ("
+                    + java.time.LocalTime.now().withNano(0) + ")");
+            } catch (Exception ignored) {
+                // status only
+            }
+        });
+    }
 
     /**
      * The Renderer workspace: {@code renderer.json} ({@code settings}: bedray.toml key/value pairs, {@code save}) is applied
@@ -78,11 +151,12 @@ final class MaterialLink {
             JsonObject o = JsonParser.parseString(Files.readString(f, StandardCharsets.UTF_8)).getAsJsonObject();
             JsonObject settings = o.has("settings") ? o.getAsJsonObject("settings") : new JsonObject();
             boolean save = o.has("save") && o.get("save").getAsBoolean();
+            prioritySettings = o.has("priority") && o.get("priority").getAsBoolean() ? settings : null;
             mc.execute(() -> {
                 int n = 0;
                 StringBuilder unknown = new StringBuilder();
                 for (var e : settings.entrySet()) {
-                    if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.applyKeyValue(e.getKey(), e.getValue().getAsString())) n++;
+                    if (applySetting(e.getKey(), e.getValue().getAsString())) n++;
                     else unknown.append(' ').append(e.getKey());
                 }
                 if (save) io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.save();
