@@ -745,6 +745,61 @@ final class InspectorPanel extends Panels.Listening {
         }));
     }
 
+    /** Buffer (pass): its name, read by Read buffer / Blur nodes, and its size as a fraction of the screen. */
+    private void bufferEditor(MosaicDocument.ENode n) {
+        content.add(section("Buffer name"));
+        JTextField f = field(n.mask == null ? "" : n.mask);
+        f.setToolTipText("One word (letters, digits, _), e.g. bloom; Enter applies. Read buffer and Blur nodes pick it by this name.");
+        f.addActionListener(ev -> {
+            String name = f.getText().trim();
+            if (!name.matches("[A-Za-z]\\w{0,23}")) {
+                f.setForeground(BAD);
+                return;
+            }
+            String old = n.mask;
+            model.edit("Buffer " + n.id + " named " + name, () -> {
+                n.mask = name;
+                // readers of the old name follow the rename
+                if (old != null) for (MosaicDocument.ENode r : model.doc.nodes)
+                    if (MosaicGraph.readsBuffer(r.type) && old.equals(r.mask)) r.mask = name;
+            });
+        });
+        content.add(f);
+        content.add(section("Size"));
+        java.util.List<String> sizes = java.util.List.of("full", "1/2", "1/4", "1/8");
+        int[] scale = {1, 2, 4, 8};
+        JComboBox<String> box = new JComboBox<>(sizes.toArray(new String[0]));
+        int cur = Math.max(0, java.util.Arrays.stream(scale).boxed().toList().indexOf(Math.max(1, n.index)));
+        box.setSelectedIndex(cur);
+        box.addActionListener(ev -> {
+            int s = scale[box.getSelectedIndex()];
+            model.edit("Size of " + n.id + ": " + box.getSelectedItem(), () -> n.index = s);
+        });
+        box.setAlignmentX(0);
+        box.setMaximumSize(new Dimension(Integer.MAX_VALUE, box.getPreferredSize().height));
+        content.add(box);
+        content.add(text("Smaller buffers are cheaper and blur wider: chain 1/2, 1/4, 1/8 for bloom.", FAINT));
+    }
+
+    /** Read buffer / Blur buffer / Kawase blur: which Buffer of this graph they read. */
+    private void bufferChoice(MosaicDocument.ENode n) {
+        content.add(section("Buffer"));
+        java.util.List<String> names = new java.util.ArrayList<>();
+        for (MosaicDocument.ENode w : model.doc.nodes)
+            if (w.type.equals("mosaic.pass") && w.mask != null && !names.contains(w.mask)) names.add(w.mask);
+        if (names.isEmpty()) {
+            content.add(text("No Buffer node in this graph yet: add Buffer (pass) and name it.", WARN));
+            return;
+        }
+        if (n.mask != null && !names.contains(n.mask)) names.add(0, n.mask);
+        JComboBox<String> box = new JComboBox<>(names.toArray(new String[0]));
+        box.setSelectedItem(n.mask == null ? names.get(0) : n.mask);
+        box.addActionListener(ev -> model.edit("Buffer of " + n.id + ": " + box.getSelectedItem(), () -> n.mask = (String) box.getSelectedItem()));
+        box.setAlignmentX(0);
+        box.setMaximumSize(new Dimension(Integer.MAX_VALUE, box.getPreferredSize().height));
+        content.add(box);
+    }
+
     private void params(MosaicDocument.ENode n) {
         switch (n.type) {
             case "mosaic.math" -> {
@@ -767,6 +822,8 @@ final class InspectorPanel extends Panels.Listening {
             case "mat.image" -> imageEditor(n);
             case "mat.texture" -> textureInfo();
             case "mosaic.gradient" -> modeCombo(n, "Type", MosaicGraph.GRADIENT_MODES, "linear");
+            case "mosaic.pass" -> bufferEditor(n);
+            case "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase" -> bufferChoice(n);
             case "mosaic.wave" -> modeCombo(n, "Type", MosaicGraph.WAVE_MODES, "bands");
             default -> { }
         }

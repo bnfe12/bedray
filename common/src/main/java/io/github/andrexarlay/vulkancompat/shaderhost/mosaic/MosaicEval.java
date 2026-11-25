@@ -34,6 +34,7 @@ public final class MosaicEval {
             case "mosaic.clamp.hi", "mosaic.mapRange.fromMax", "mosaic.mapRange.toMax", "mosaic.mapRange.value",
                  "mosaic.voronoi.randomness" -> new double[] {1.0};
             case "mosaic.mixColor.a", "mosaic.mixColor.b" -> new double[] {0.5, 0.5, 0.5, 1.0};
+            case "mosaic.blur.radius", "mosaic.kawase.radius" -> new double[] {1.0};
             case "mosaic.noise.scale", "mosaic.voronoi.scale", "mosaic.checker.scale", "mosaic.wave.scale" -> new double[] {5.0};
             case "mosaic.noise.detail", "mosaic.wave.detail" -> new double[] {2.0};
             case "mosaic.checker.color1" -> new double[] {0.8, 0.8, 0.8, 1.0};

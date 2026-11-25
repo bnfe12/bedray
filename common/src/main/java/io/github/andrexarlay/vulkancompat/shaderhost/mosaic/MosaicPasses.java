@@ -47,7 +47,7 @@ public final class MosaicPasses {
         Map<String, Set<String>> reads = new LinkedHashMap<>();
         for (Map.Entry<String, Set<String>> e : upstream.entrySet()) {
             Set<String> r = new TreeSet<>();
-            for (String id : e.getValue()) if (g.node(id).type().equals("mosaic.bufferIn")) r.add(g.node(id).mask());
+            for (String id : e.getValue()) if (MosaicGraph.readsBuffer(g.node(id).type())) r.add(g.node(id).mask());
             reads.put(e.getKey(), r);
         }
         List<String> order = new ArrayList<>();
@@ -99,7 +99,7 @@ public final class MosaicPasses {
             j.addProperty("type", n.type());
             if (!n.inputs().isEmpty()) j.add("inputs", GSON.toJsonTree(n.inputs()));
             if (n.value() != null) j.add("value", GSON.toJsonTree(n.value()));
-            int index = n.type().equals("mosaic.bufferIn") ? bindings.getOrDefault(n.mask(), 0) : n.index();
+            int index = MosaicGraph.readsBuffer(n.type()) ? bindings.getOrDefault(n.mask(), 0) : n.index();
             if (index != 0) j.addProperty("index", index);
             if (n.mask() != null) j.addProperty("mask", n.mask());
             if (!n.defaults().isEmpty()) j.add("defaults", GSON.toJsonTree(n.defaults()));

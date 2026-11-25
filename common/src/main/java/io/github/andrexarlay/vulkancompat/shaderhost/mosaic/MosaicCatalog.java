@@ -75,6 +75,8 @@ public final class MosaicCatalog {
         e("bedray.output", "Bedray frame", Category.RENDERER, "The frame Bedray shows: every stage wired into it is on, the rest are off."),
         e("mosaic.pass", "Buffer (pass)", Category.PASSES, "Writes its input into a named buffer as its own pass, at full, 1/2, 1/4 or 1/8 size (blur, bloom)."),
         e("mosaic.bufferIn", "Read buffer", Category.PASSES, "Reads a buffer written by a Buffer node, at any uv (offsets for blur kernels)."),
+        e("mosaic.blur", "Blur buffer", Category.PASSES, "Reads a buffer softened by a 3x3 Gaussian (9 bilinear taps); radius in the buffer's pixels. Chain Buffer nodes at 1/2, 1/4, 1/8 for wide blurs."),
+        e("mosaic.kawase", "Kawase blur", Category.PASSES, "Reads a buffer with one Kawase step (4 diagonal taps); radius grows per pass (0, 1, 2, 3...): the cheap wide blur behind bloom chains."),
         e("mosaic.history", "Previous frame", Category.PASSES, "The last final frame at uv: temporal smoothing, trails, motion effects."),
         e("mosaic.rain", "Rain", Category.SCENE, "Rain strength 0..1 of the world."),
         e("mosaic.thunder", "Thunder", Category.SCENE, "Thunderstorm strength 0..1."),

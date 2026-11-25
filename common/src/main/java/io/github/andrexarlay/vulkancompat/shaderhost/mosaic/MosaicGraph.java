@@ -144,7 +144,7 @@ public final class MosaicGraph {
         // procedural textures
         "mosaic.noise", "mosaic.voronoi", "mosaic.whiteNoise", "mosaic.checker", "mosaic.wave", "mosaic.gradient",
         // multi-pass: write a named buffer, read it (any uv), the previous frame; weather and sky (binding 16)
-        "mosaic.pass", "mosaic.bufferIn", "mosaic.history", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
+        "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
         "mosaic.fogColor",
         // Bedray's renderer as nodes (MosaicRenderer): stages of the real pipeline and the frame they produce
         "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.voxels", "bedray.raster", "bedray.upscaler", "bedray.output", "bedray.stageMap", "user.post", "user.hdr", "user.sky",
@@ -172,6 +172,11 @@ public final class MosaicGraph {
 
     /** A renderer graph (output {@code bedray.output}): Bedray's own stages and settings, never compiled into a shader. */
     public boolean isRenderer() { return node(outputId) != null && node(outputId).type().equals(MosaicRenderer.OUTPUT); }
+
+    /** Node types that read a Buffer pass by its name (mask): Read buffer, Blur buffer, Kawase blur. */
+    public static boolean readsBuffer(String type) {
+        return type.equals("mosaic.bufferIn") || type.equals("mosaic.blur") || type.equals("mosaic.kawase");
+    }
 
     /** Whether the graph has Buffer nodes (it runs as several passes, see MosaicPasses). */
     public boolean multiPass() { return uses("mosaic.pass"); }
@@ -202,6 +207,8 @@ public final class MosaicGraph {
         m.put(MosaicRenderer.OUTPUT, List.of(new Port("frame", Kind.V4, true)));
         m.put("mosaic.pass", List.of(new Port("color", Kind.V4, true)));
         m.put("mosaic.bufferIn", List.of(new Port("uv", Kind.V2, false)));
+        m.put("mosaic.blur", List.of(new Port("uv", Kind.V2, false), new Port("radius", Kind.F, false)));
+        m.put("mosaic.kawase", List.of(new Port("uv", Kind.V2, false), new Port("radius", Kind.F, false)));
         m.put("mosaic.history", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.texture", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.image", List.of(new Port("uv", Kind.V2, false)));
@@ -518,7 +525,7 @@ public final class MosaicGraph {
             for (boolean grew = true; grew; ) {
                 grew = false;
                 for (Node r : List.copyOf(nodes.values()))
-                    if (r.type().equals("mosaic.bufferIn") && reachable.contains(r.id()))
+                    if (readsBuffer(r.type()) && reachable.contains(r.id()))
                         for (Node p : nodes.values())
                             if (p.type().equals("mosaic.pass") && java.util.Objects.equals(p.mask(), r.mask()) && !reachable.contains(p.id())) {
                                 upstream(p.id(), reachable);
@@ -593,7 +600,7 @@ public final class MosaicGraph {
                     error(n.id(), null, "node " + n.id() + ": scale is 1, 2, 4 or 8 (a fraction of the screen)", Fix.CHANGE_PARAM);
             }
             for (Node n : nodes.values()) {
-                if (!n.type().equals("mosaic.bufferIn")) continue;
+                if (!readsBuffer(n.type())) continue;
                 if (n.index() >= MosaicPasses.FIRST_BUFFER_BINDING) continue; // a pass graph: already bound by the planner
                 if (n.mask() == null || !written.containsKey(n.mask())) {
                     error(n.id(), null, "node " + n.id() + " reads buffer " + n.mask() + ", which no Buffer node writes"
@@ -905,7 +912,7 @@ public final class MosaicGraph {
                 case "mosaic.const" -> n.value() == null ? null : Kind.ofSize(n.value().length);
                 case "mosaic.vec" -> Kind.ofSize(n.index());
                 case "mosaic.swizzle" -> swizzleKind(n, visiting);
-                case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf", "mosaic.pass", "mosaic.bufferIn", "mosaic.history" -> Kind.V4;
+                case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf", "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history" -> Kind.V4;
                 case "mosaic.rain", "mosaic.thunder", "mosaic.temperature" -> Kind.F;
                 case "bedray.output", "slang.module", "slang.pack", "bedray.stageMap" -> Kind.V4;
                 case "mosaic.skyColor", "mosaic.fogColor" -> Kind.V3;
