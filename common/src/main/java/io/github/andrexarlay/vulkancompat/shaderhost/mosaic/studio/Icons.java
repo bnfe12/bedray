@@ -54,6 +54,8 @@ final class Icons {
             case MATERIAL -> new Color(0xB86A3A);
             case BROWSER -> new Color(0x5A7AC8);
             case PREVIEW -> new Color(0x3AA0A0);
+            case CONFIG -> new Color(0x8A9CF0);
+            case GUIDE -> new Color(0xD0A04A);
         };
     }
 

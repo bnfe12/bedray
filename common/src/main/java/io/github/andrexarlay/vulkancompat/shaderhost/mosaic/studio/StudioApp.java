@@ -149,6 +149,12 @@ final class StudioApp {
             m.setRepeats(false);
             m.start();
         }
+        String shotPanel = System.getProperty("mosaic.selfshot.panel"); // e.g. GUIDE: verification aid
+        if (shot != null && shotPanel != null) {
+            Timer pT = new Timer(1500, e -> popOut(Panels.Type.valueOf(shotPanel)));
+            pT.setRepeats(false);
+            pT.start();
+        }
         String shotStage = System.getProperty("mosaic.selfshot.stage"); // e.g. bedray.sky: verification aid
         if (shot != null && shotStage != null) {
             Timer stT = new Timer(1200, e -> openStageTab(shotStage));
@@ -349,6 +355,8 @@ final class StudioApp {
         bar.add(w);
 
         JMenu h = menu("Help");
+        h.add(item("Guide", () -> popOut(Panels.Type.GUIDE)));
+        h.add(item("Config (all public numbers)", () -> popOut(Panels.Type.CONFIG)));
         h.add(item("All keys", StudioKeys.Action.HELP));
         h.add(item("Game link", () -> popOut(Panels.Type.GAME)));
         bar.add(h);

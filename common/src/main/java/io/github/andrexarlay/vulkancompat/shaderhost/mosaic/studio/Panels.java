@@ -43,7 +43,9 @@ final class Panels {
         LIBRARY("Library", "Data", "Textures from Minecraft, resource packs and the project; drag or double-click"),
         MATERIAL("Material", "Main", "The material on a lit block and each baked map"),
         BROWSER("Shader browser", "Data", "Shader packs of the game: Mosaic graphs and Iris packs, import / export"),
-        PREVIEW("Preview", "Main", "The shader run by the studio on the GPU over a game frame, a test scene or a picture");
+        PREVIEW("Preview", "Main", "The shader run by the studio on the GPU over a game frame, a test scene or a picture"),
+        CONFIG("Config", "Game", "Every public number of the renderer graph in one place: edit, copy, save, send with priority"),
+        GUIDE("Guide", "Diagnostics", "How the editor works, from the first node to a Bedray pass rewritten in nodes");
 
         final String label, group, help;
 
@@ -78,12 +80,14 @@ final class Panels {
                 case MATERIAL -> new MaterialPanels.MaterialPanel(m);
                 case BROWSER -> new ShaderBrowser(m);
                 case PREVIEW -> new PreviewPanel(m);
+                case CONFIG -> new ConfigPanel(m);
+                case GUIDE -> new GuidePanel(m);
             };
         }
     }
 
     /** Base: listens to the model while alive. */
-    abstract static class Listening implements Panel {
+    abstract static class Listening implements Panel { // package: ConfigPanel extends it
         final StudioModel model;
         private final Runnable listener = this::refresh;
 
