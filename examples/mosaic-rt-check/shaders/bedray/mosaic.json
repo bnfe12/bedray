@@ -1,0 +1,263 @@
+{
+ "functions": [
+  {
+   "name": "pathTraceGI",
+   "label": "Path-traced GI",
+   "category": "Rendering",
+   "help": "Bounces light through the world volume (voxel paths with sun, sky and torches) and adds it to the image. Noisy: more samples cost more.",
+   "signature": "vec4 pathTraceGI(vec4 color, vec2 uv, float samples = 2, float bounces = 2, float strength = 1, float maxDistance = 32)",
+   "glsl": "float t0 = mosaicDepth(uv);\nif (t0 >= 1.0e5) return color;\nvec3 n0 = mosaicNormal(uv);\nvec3 p0 = mosaicHitPos(uv) + n0 * 0.02;\nuint seed = uint(uv.x * frame.viewSize.x) * 1973u + uint(uv.y * frame.viewSize.y) * 9277u + uint(frame.timing.z) * 26699u;\nvec3 L = mosaicSunDir(), irradiance = vec3(0.0);\nint ns = int(clamp(samples, 1.0, 16.0)), nb = int(clamp(bounces, 1.0, 4.0));\nfor (int s = 0; s < ns; s++) {\n    vec3 pos = p0, nrm = n0, throughput = vec3(1.0);\n    for (int b = 0; b < nb; b++) {\n        seed = seed * 747796405u + 2891336453u;\n        float r1 = float((seed >> 8) & 0xFFFFFFu) / 16777216.0;\n        seed = seed * 747796405u + 2891336453u;\n        float r2 = float((seed >> 8) & 0xFFFFFFu) / 16777216.0;\n        vec3 tg = normalize(abs(nrm.y) < 0.99 ? cross(nrm, vec3(0.0, 1.0, 0.0)) : cross(nrm, vec3(1.0, 0.0, 0.0)));\n        vec3 bt = cross(nrm, tg);\n        float phi = 6.2831853 * r1, cr = sqrt(r2);\n        vec3 dir = normalize(tg * cos(phi) * cr + bt * sin(phi) * cr + nrm * sqrt(1.0 - r2));\n        vec3 hn, sn;\n        float hm, sm;\n        float tt = mosaicVoxelTrace(pos, dir, maxDistance, hn, hm);\n        if (tt < 0.0) { irradiance += throughput * mosaicSky(dir); break; }\n        vec3 hp = pos + dir * tt;\n        vec3 alb = mosaicAlbedo(hm);\n        float lamp = mosaicBlockLightAt(hp + hn * 0.5), sky = mosaicSkyLightAt(hp + hn * 0.5);\n        float ndl = max(dot(hn, L), 0.0);\n        float vis = ndl > 0.0 && mosaicVoxelTrace(hp + hn * 0.01, L, 48.0, sn, sm) < 0.0 ? 1.0 : 0.0;\n        vec3 emit = (hm == 2.0 || hm == 13.0) ? alb * 2.0 : vec3(0.0);\n        irradiance += throughput * alb * (vec3(1.0, 0.95, 0.85) * ndl * vis * sky + vec3(1.0, 0.7, 0.4) * lamp * lamp) + throughput * emit;\n        throughput *= alb;\n        pos = hp + hn * 0.01;\n        nrm = hn;\n    }\n}\nirradiance /= float(ns);\nreturn vec4(color.rgb + color.rgb * irradiance * strength, color.a);"
+  },
+  {
+   "name": "rtAmbientOcclusion",
+   "label": "RT ambient occlusion",
+   "category": "Rendering",
+   "help": "Hardware rays around each surface darken corners and crevices.",
+   "signature": "vec4 rtAmbientOcclusion(vec4 color, vec2 uv, float radius = 1.5, float samples = 4, float strength = 0.8)",
+   "glsl": "if (mosaicDepth(uv) >= 1.0e5) return color;\nvec3 n = mosaicNormal(uv), p = mosaicHitPos(uv) + n * 0.02;\nvec3 tg = normalize(abs(n.y) < 0.99 ? cross(n, vec3(0.0, 1.0, 0.0)) : cross(n, vec3(1.0, 0.0, 0.0)));\nvec3 bt = cross(n, tg);\nint ns = int(clamp(samples, 1.0, 16.0));\nfloat occluded = 0.0, angle = fract(sin(dot(uv * frame.viewSize.xy, vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;\nfor (int i = 0; i < ns; i++) {\n    float a = angle + float(i) * 2.399963, r = sqrt((float(i) + 0.5) / float(ns));\n    vec3 dir = normalize(tg * cos(a) * r + bt * sin(a) * r + n * sqrt(1.0 - r * r));\n    if (mosaicTrace(p, dir, radius) >= 0.0) occluded += 1.0;\n}\nreturn vec4(color.rgb * (1.0 - strength * occluded / float(ns)), color.a);"
+  },
+  {
+   "name": "rtReflections",
+   "label": "RT reflections",
+   "category": "Rendering",
+   "help": "Hardware-traced mirror reflections on one material class (1 water by default; -1 = every surface).",
+   "signature": "vec4 rtReflections(vec4 color, vec2 uv, float amount = 0.35, float material = 1)",
+   "glsl": "float m = mosaicHitMaterial(uv);\nif (mosaicDepth(uv) >= 1.0e5 || (material >= 0.0 && m != floor(material + 0.5))) return color;\nvec3 n = mosaicNormal(uv), v = mosaicViewDir(uv);\nvec3 r = reflect(v, n), p = mosaicHitPos(uv) + n * 0.02;\nfloat t = mosaicTrace(p, r, 128.0);\nvec3 refl = mosaicSky(r);\nif (t >= 0.0) {\n    vec4 clip = frame.projection * (frame.modelView * vec4(p + r * t, 1.0));\n    vec2 suv = clip.xy / clip.w * 0.5 + 0.5;\n    refl = (clip.w > 0.0 && all(greaterThanEqual(suv, vec2(0.0))) && all(lessThanEqual(suv, vec2(1.0))))\n        ? mosaicScene(suv).rgb : color.rgb * 0.5;\n}\nfloat fres = 0.02 + 0.98 * pow(1.0 - max(dot(-v, n), 0.0), 5.0);\nreturn vec4(mix(color.rgb, refl, clamp(amount + fres, 0.0, 1.0) * amount * 2.0), color.a);",
+   "slang": "float m = mosaicHitMaterial(uv);\nif (mosaicDepth(uv) >= 1.0e5 || (material >= 0.0 && m != floor(material + 0.5))) return color;\nfloat3 n = mosaicNormal(uv), v = mosaicViewDir(uv);\nfloat3 r = reflect(v, n), p = mosaicHitPos(uv) + n * 0.02;\nfloat t = mosaicTrace(p, r, 128.0);\nfloat3 refl = mosaicSky(r);\nif (t >= 0.0) {\n    float4 clip = mul(frame.projection, mul(frame.modelView, float4(p + r * t, 1.0)));\n    float2 suv = clip.xy / clip.w * 0.5 + 0.5;\n    refl = (clip.w > 0.0 && all(suv >= 0.0) && all(suv <= 1.0)) ? mosaicScene(suv).rgb : color.rgb * 0.5;\n}\nfloat fres = 0.02 + 0.98 * pow(1.0 - max(dot(-v, n), 0.0), 5.0);\nreturn float4(lerp(color.rgb, refl, clamp(amount + fres, 0.0, 1.0) * amount * 2.0), color.a);"
+  }
+ ],
+ "nodes": [
+  {
+   "id": "color",
+   "type": "mosaic.sceneColor",
+   "x": 0,
+   "y": 0
+  },
+  {
+   "id": "uv",
+   "type": "mosaic.uv",
+   "x": 0,
+   "y": 70
+  },
+  {
+   "id": "pathTraceGI",
+   "type": "fn.pathTraceGI",
+   "x": 190,
+   "y": 0,
+   "inputs": {
+    "color": "color",
+    "uv": "uv"
+   }
+  },
+  {
+   "id": "rtAmbientOcclusion",
+   "type": "fn.rtAmbientOcclusion",
+   "x": 370,
+   "y": 0,
+   "inputs": {
+    "color": "pathTraceGI",
+    "uv": "uv"
+   }
+  },
+  {
+   "id": "rtReflections",
+   "type": "fn.rtReflections",
+   "x": 550,
+   "y": 0,
+   "inputs": {
+    "color": "rtAmbientOcclusion",
+    "uv": "uv"
+   }
+  },
+  {
+   "id": "b_cut",
+   "type": "mosaic.math",
+   "mask": "subtract",
+   "inputs": {
+    "a": "rtReflections"
+   },
+   "defaults": {
+    "b": [
+     0.8
+    ]
+   },
+   "x": 180,
+   "y": 400
+  },
+  {
+   "id": "b_pos",
+   "type": "mosaic.math",
+   "mask": "maximum",
+   "inputs": {
+    "a": "b_cut"
+   },
+   "defaults": {
+    "b": [
+     0
+    ]
+   },
+   "x": 360,
+   "y": 400
+  },
+  {
+   "id": "b_half",
+   "type": "mosaic.pass",
+   "mask": "half",
+   "index": 2,
+   "inputs": {
+    "color": "b_pos"
+   },
+   "x": 540,
+   "y": 400
+  },
+  {
+   "id": "b_k1",
+   "type": "mosaic.kawase",
+   "mask": "half",
+   "defaults": {
+    "radius": [
+     1
+    ]
+   },
+   "x": 0,
+   "y": 560
+  },
+  {
+   "id": "b_quarter",
+   "type": "mosaic.pass",
+   "mask": "quarter",
+   "index": 4,
+   "inputs": {
+    "color": "b_k1"
+   },
+   "x": 180,
+   "y": 560
+  },
+  {
+   "id": "b_k2",
+   "type": "mosaic.kawase",
+   "mask": "quarter",
+   "defaults": {
+    "radius": [
+     2
+    ]
+   },
+   "x": 360,
+   "y": 560
+  },
+  {
+   "id": "b_eighth",
+   "type": "mosaic.pass",
+   "mask": "eighth",
+   "index": 8,
+   "inputs": {
+    "color": "b_k2"
+   },
+   "x": 540,
+   "y": 560
+  },
+  {
+   "id": "b_b1",
+   "type": "mosaic.blur",
+   "mask": "half",
+   "x": 0,
+   "y": 720
+  },
+  {
+   "id": "b_b2",
+   "type": "mosaic.blur",
+   "mask": "quarter",
+   "x": 0,
+   "y": 800
+  },
+  {
+   "id": "b_b3",
+   "type": "mosaic.blur",
+   "mask": "eighth",
+   "defaults": {
+    "radius": [
+     1.5
+    ]
+   },
+   "x": 0,
+   "y": 880
+  },
+  {
+   "id": "b_s1",
+   "type": "mosaic.add",
+   "inputs": {
+    "a": "b_b1",
+    "b": "b_b2"
+   },
+   "x": 180,
+   "y": 760
+  },
+  {
+   "id": "b_s2",
+   "type": "mosaic.add",
+   "inputs": {
+    "a": "b_s1",
+    "b": "b_b3"
+   },
+   "x": 360,
+   "y": 800
+  },
+  {
+   "id": "b_glow",
+   "type": "mosaic.math",
+   "mask": "multiply",
+   "inputs": {
+    "a": "b_s2"
+   },
+   "defaults": {
+    "b": [
+     0.45
+    ]
+   },
+   "x": 540,
+   "y": 800
+  },
+  {
+   "id": "b_sum",
+   "type": "mosaic.add",
+   "inputs": {
+    "a": "rtReflections",
+    "b": "b_glow"
+   },
+   "x": 720,
+   "y": 600
+  },
+  {
+   "id": "comp",
+   "type": "mosaic.pass",
+   "mask": "comp",
+   "index": 1,
+   "inputs": {
+    "color": "b_sum"
+   },
+   "x": 900,
+   "y": 600
+  },
+  {
+   "id": "taa",
+   "type": "mosaic.taa",
+   "mask": "comp",
+   "defaults": {
+    "blend": [
+     0.9
+    ]
+   },
+   "x": 1080,
+   "y": 600
+  },
+  {
+   "id": "out",
+   "type": "mosaic.output",
+   "inputs": {
+    "color": "taa"
+   },
+   "x": 1260,
+   "y": 600
+  }
+ ]
+}

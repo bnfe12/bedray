@@ -143,6 +143,28 @@ class CustomRtChainTest {
     }
 
     @Test
+    void rtCheckExampleTracesTheSceneThroughTheChain() throws Exception {
+        Path pack = null;
+        for (Path p : List.of(Path.of("..", "examples", "mosaic-rt-check"), Path.of("examples", "mosaic-rt-check")))
+            if (Files.isDirectory(p)) pack = p;
+        assertNotNull(pack, "examples/mosaic-rt-check");
+        String previous = System.getProperty("bedray.mosaic.slang");
+        System.setProperty("bedray.mosaic.slang", "off");
+        try (PackSource src = PackSource.open(pack, ScanLimits.defaults())) {
+            VulkanGlslPackCompiler.Compiled last = CustomRtStage.compileStage(src, CustomRtStage.MOSAIC);
+            assertNull(CustomRtStage.validate(last));
+            for (CustomRtExecutor.ChainPass p : CustomRtStage.pendingChain) assertNull(CustomRtStage.validate(p.compiled()));
+            SpirvReflection.Module union = CustomRtStage.unionModule(last, CustomRtStage.pendingChain);
+            assertTrue(union.bindings().stream().anyMatch(b -> b.binding() == CustomRtStage.B_SCENE
+                && b.kind() == SpirvReflection.DescriptorKind.ACCELERATION_STRUCTURE), "traces the scene TLAS");
+            assertEquals(4, CustomRtStage.pendingChain.size());
+        } finally {
+            if (previous == null) System.clearProperty("bedray.mosaic.slang");
+            else System.setProperty("bedray.mosaic.slang", previous);
+        }
+    }
+
+    @Test
     void rasterDepthPassCompilesWithItsThreeBindings() throws Exception {
         java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler.compile(CustomRtExecutor.RASTER_DEPTH_GLSL,
             org.lwjgl.util.shaderc.Shaderc.shaderc_compute_shader, "raster-depth");
