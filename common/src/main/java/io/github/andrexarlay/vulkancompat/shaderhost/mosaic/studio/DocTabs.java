@@ -84,17 +84,26 @@ final class DocTabs extends JComponent {
         r.addActionListener(e -> app.switchWorkspace(StudioModel.Workspace.RENDERER));
         JMenuItem k = new JMenuItem("Bedray pack map (every Slang module)", StudioWidgets.glyph("frame", new Color(0x8A9CF0)));
         k.addActionListener(e -> app.openPackMapTab());
+        JMenuItem fn = new JMenuItem("Bedray function as nodes...", StudioWidgets.glyph("chip", new Color(0x3D6FB8)));
+        fn.addActionListener(e -> app.pickFunction(this, new java.awt.Point(Math.max(0, getWidth() - 420), getHeight())));
         p.add(s);
         p.add(m);
         p.add(r);
         p.add(k);
+        p.add(fn);
         return p;
     }
 
     String title(Tab t) {
         Path f = t == app.active ? app.model.doc.file : t.file;
-        if (t.kind == StudioModel.Workspace.RENDERER)
+        if (t.kind == StudioModel.Workspace.RENDERER) {
+            if (f != null && f.getParent() != null && f.getParent().equals(StudioModel.functionsDir())) {
+                String id = f.getFileName().toString().replace(".mosaic.json", "");
+                String name = id.replaceAll("\\(.*", "");
+                return "ƒ " + name.substring(name.lastIndexOf('_') + 1);
+            }
             return f != null && f.getFileName().toString().startsWith("bedray-pack") ? "Bedray pack (map)" : "Bedray renderer";
+        }
         if (f == null) return t.kind == StudioModel.Workspace.MATERIALS ? "New material" : "Untitled graph";
         String n = f.getFileName().toString();
         if (t.kind == StudioModel.Workspace.MATERIALS) return n.replace(".mosaic.json", "");

@@ -33,6 +33,8 @@ public final class MosaicDocument {
         public String label;
         /** Muted (M): passes its first input through; kept in mosaic.json so the game does the same. */
         public boolean muted;
+        /** A developer's note shown under the node (Bedray's own comments come in this way). */
+        public String note;
         /** Inline values of unwired inputs (Blender-style sliders / numbers); a wire overrides its port's value. */
         public final LinkedHashMap<String, double[]> defaults = new LinkedHashMap<>();
 
@@ -166,6 +168,8 @@ public final class MosaicDocument {
 
     /** Material paint layer: a base64 PNG drawn over the block texture (editor + bake; the game never reads it). */
     public String paint;
+    /** The Bedray pack function this graph is the body of ("light/sun/sunSolidAngle"), or null. */
+    public String bedrayFunction;
 
     static String readPaint(String json) {
         try {
@@ -266,6 +270,9 @@ public final class MosaicDocument {
             d.functions.addAll(readFunctions(text));
             d.frames.addAll(readFrames(text));
             d.paint = readPaint(text);
+            JsonElement root = JsonParser.parseString(text);
+            if (root.isJsonObject() && root.getAsJsonObject().has("function") && root.getAsJsonObject().get("function").isJsonPrimitive())
+                d.bedrayFunction = root.getAsJsonObject().get("function").getAsString();
         } catch (RuntimeException e) {
             throw new java.io.IOException("mosaic.json: " + e.getMessage());
         }
@@ -315,6 +322,7 @@ public final class MosaicDocument {
             if (o.has("mask")) n.mask = o.get("mask").getAsString();
             if (o.has("label") && o.get("label").isJsonPrimitive()) n.label = o.get("label").getAsString();
             if (o.has("muted") && o.get("muted").isJsonPrimitive()) n.muted = o.get("muted").getAsBoolean();
+            if (o.has("note") && o.get("note").isJsonPrimitive()) n.note = o.get("note").getAsString();
             if (o.has("defaults") && o.get("defaults").isJsonObject())
                 for (var e : o.getAsJsonObject("defaults").entrySet()) {
                     if (!e.getValue().isJsonArray()) continue;
@@ -361,6 +369,7 @@ public final class MosaicDocument {
             }
             if (n.label != null && !n.label.isBlank()) o.addProperty("label", n.label);
             if (n.muted) o.addProperty("muted", true);
+            if (n.note != null && !n.note.isBlank()) o.addProperty("note", n.note);
             if (!n.defaults.isEmpty()) {
                 JsonObject defs = new JsonObject();
                 for (var e : n.defaults.entrySet()) {
@@ -381,6 +390,7 @@ public final class MosaicDocument {
             root.add("frames", fr);
         }
         if (paint != null && !paint.isEmpty()) root.addProperty("paint", paint);
+        if (bedrayFunction != null) root.addProperty("function", bedrayFunction);
         return GSON.toJson(root);
     }
 
@@ -640,6 +650,8 @@ public final class MosaicDocument {
         frames.clear();
         frames.addAll(readFrames(state));
         paint = readPaint(state);
+        JsonElement st = JsonParser.parseString(state);
+        bedrayFunction = st.isJsonObject() && st.getAsJsonObject().has("function") ? st.getAsJsonObject().get("function").getAsString() : null;
         dirty = true;
         return true;
     }

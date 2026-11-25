@@ -219,12 +219,13 @@ final class StudioUi {
             case V2 -> new Color(0x6FD2A0);
             case V3 -> new Color(0xE0B45C);
             case V4 -> new Color(0xB48CF0);
+            case S -> new Color(0x4FC3C8);
         };
     }
 
     static String kindName(MosaicGraph.Kind k) {
         if (k == null) return "any";
-        return switch (k) { case F -> "float"; case V2 -> "vec2"; case V3 -> "vec3"; case V4 -> "vec4"; };
+        return switch (k) { case F -> "float"; case V2 -> "vec2"; case V3 -> "vec3"; case V4 -> "vec4"; case S -> "Slang value"; };
     }
 
     static Color categoryColor(String c) {

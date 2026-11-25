@@ -139,7 +139,7 @@ final class Panels {
 
         @Override void refresh() {
             int hidden = settings.hiddenLibraries.hashCode();
-            int fs = model.doc.functions.size() * 2 + model.workspace.ordinal();
+            int fs = model.doc.functions.size() * 2 + model.workspace.ordinal() * 7 + (model.functionDoc() ? 1000 : 0);
             if (fs != functionsSeen || hidden != hiddenSeen) {
                 functionsSeen = fs;
                 hiddenSeen = hidden;

@@ -46,10 +46,39 @@ public final class SlangPassLibrary {
             && SlangPassLibrary.class.getResource(SPIRV_ROOT + name + ".spv") != null;
     }
 
-    /** Loads one pass; empty when it was not compiled into this jar. */
+    /**
+     * Passes Mosaic Studio rebuilt from graphs: {@code bedray-studio/passes/<name>.spv} and {@code .json} in the game
+     * folder (the working directory; {@code -Dbedray.studio.dir} points elsewhere, {@code -Dbedray.studioPasses=false}
+     * turns them off). A broken one is skipped with a warning and the built-in pass runs.
+     */
+    public static Optional<SlangPass> studioOverride(String name) {
+        if ("false".equalsIgnoreCase(System.getProperty("bedray.studioPasses"))) return Optional.empty();
+        java.nio.file.Path dir = java.nio.file.Path.of(System.getProperty("bedray.studio.dir", "bedray-studio")).resolve("passes");
+        java.nio.file.Path spv = dir.resolve(name + ".spv"), json = dir.resolve(name + ".json");
+        if (!java.nio.file.Files.isRegularFile(spv) || !java.nio.file.Files.isRegularFile(json)) return Optional.empty();
+        try {
+            JsonElement parsed = JsonParser.parseString(java.nio.file.Files.readString(json, StandardCharsets.UTF_8));
+            SlangPassManifest manifest = SlangPassManifest.parse(parsed.getAsJsonObject(), name);
+            SlangPass pass = new SlangPass(manifest, java.nio.file.Files.readAllBytes(spv));
+            if (STUDIO_LOGGED.add(name)) org.slf4j.LoggerFactory.getLogger("Bedray").info("[slang] {} comes from Mosaic Studio ({})", name, spv);
+            return Optional.of(pass);
+        } catch (RuntimeException | IOException e) {
+            if (STUDIO_LOGGED.add(name)) org.slf4j.LoggerFactory.getLogger("Bedray").warn("[slang] Studio pass {} is unusable, using the built-in one: {}",
+                name, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    private static final java.util.Set<String> STUDIO_LOGGED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** Loads one pass (Mosaic Studio's rebuilt one first); empty when it was not compiled into this jar. */
     public static Optional<SlangPass> load(String name) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("pass name must not be blank");
+        }
+        Optional<SlangPass> studio = studioOverride(name);
+        if (studio.isPresent()) {
+            return studio;
         }
         if (!available(name)) {
             return Optional.empty();

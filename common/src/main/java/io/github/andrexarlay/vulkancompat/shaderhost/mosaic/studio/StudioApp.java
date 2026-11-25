@@ -54,6 +54,7 @@ final class StudioApp {
             }
         });
         kfm.addKeyEventDispatcher(this::dispatch);
+        model.openFunction = this::openFunctionTab;
         model.listen(this::updateStatus);
         initTabs();
         try {
@@ -146,6 +147,22 @@ final class StudioApp {
             });
             m.setRepeats(false);
             m.start();
+        }
+        String shotFunction = System.getProperty("mosaic.selfshot.function"); // e.g. light/sun/sunSolidAngle: verification aid
+        if (shot != null && shotFunction != null) {
+            Timer fnT = new Timer(1200, e -> {
+                openFunctionTab(shotFunction);
+                String sel = System.getProperty("mosaic.selfshot.select");
+                MosaicDocument.ENode n = sel == null ? null : model.doc.byId(sel);
+                if (n != null) model.select(n);
+                if (Boolean.getBoolean("mosaic.selfshot.apply")) {
+                    model.doc.dirty = true;
+                    model.save(false);
+                    model.applyFunctions();
+                }
+            });
+            fnT.setRepeats(false);
+            fnT.start();
         }
         if (shot != null && Boolean.getBoolean("mosaic.selfshot.settings")) {
             Timer s = new Timer(1000, e -> {
@@ -571,6 +588,44 @@ final class StudioApp {
         if (tabStrip != null) tabStrip.repaint();
     }
 
+    /** A function of Bedray's pack as nodes, in its own tab (or the tab that has it). */
+    void openFunctionTab(String id) {
+        Path file = StudioModel.functionFile(id);
+        for (DocTabs.Tab t : tabs) {
+            Path f = t == active ? model.doc.file : t.file;
+            if (file.equals(f)) {
+                activate(t);
+                return;
+            }
+        }
+        DocTabs.Tab t = new DocTabs.Tab(StudioModel.Workspace.RENDERER, null);
+        tabs.add(t);
+        activate(t);
+        if (!model.openFunctionGraph(id)) return;
+        t.file = model.doc.file;
+        if (tabStrip != null) tabStrip.repaint();
+        Timer fit = new Timer(350, e -> {
+            GraphPanel g = main == null ? null : findGraph(main.root);
+            if (g != null) g.fit();
+        });
+        fit.setRepeats(false);
+        fit.start();
+    }
+
+    /** Pick any function of the pack (searchable) and open it as nodes. */
+    void pickFunction(Component owner, Point at) {
+        var lib = model.bedrayLibrary();
+        if (lib == null) {
+            model.say("Bedray's Slang sources were not found: choose the game instance with the Bedray mod (Library)", StudioUi.BAD);
+            return;
+        }
+        java.util.List<io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangLib.Function> fns = lib.functions().values().stream()
+            .filter(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangLib.Function::isNode).toList();
+        GraphPanel.pick(owner, at, "Open a Bedray function as nodes (" + fns.size() + ")", fns,
+            f -> f.label() + "   " + f.module() + (java.nio.file.Files.exists(StudioModel.functionFile(f.id())) ? "   (edited)" : ""),
+            f -> openFunctionTab(f.id()));
+    }
+
     /** The map of Bedray's Slang pack in its own tab (rebuilt from the sources each time). */
     void openPackMapTab() {
         DocTabs.Tab t = new DocTabs.Tab(StudioModel.Workspace.RENDERER, null);
@@ -737,6 +792,17 @@ final class StudioApp {
             statusLeft.setForeground(model.messageColor);
             if (model.messageColor == OK || model.messageColor == BAD) StudioWidgets.toast(main, model.message, model.messageColor);
             model.message = "";
+        } else if (model.functionDoc()) {
+            long blocks = model.doc.nodes.stream().filter(n -> n.type.equals(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.CODE)).count();
+            String head = "Bedray function " + model.doc.bedrayFunction + "   " + model.doc.nodes.size() + " nodes"
+                + (blocks > 0 ? ", " + blocks + " Slang block(s)" : "") + (model.doc.dirty ? "   - unsaved" : "");
+            if (!a.ok()) {
+                statusLeft.setText(head + "   -   " + a.errors().size() + " error(s): " + a.firstError());
+                statusLeft.setForeground(BAD);
+            } else {
+                statusLeft.setText(head + (model.functionStatus.isEmpty() ? "" : "   -   " + model.functionStatus));
+                statusLeft.setForeground(Boolean.FALSE.equals(model.functionOk) ? BAD : OK);
+            }
         } else if (a.ok() && model.packDoc()) {
             long passes = model.packModules.values().stream().filter(m -> m.entry()).count();
             long covered = model.packModules.keySet().stream().filter(p -> io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPack.stageOf(p) != null).count();

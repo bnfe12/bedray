@@ -99,7 +99,17 @@ final class StudioModel {
     private void analyze() {
         analysis = doc.analyze();
         MosaicGraph g = analysis.graph();
-        if (g != null && g.isPackMap() || doc.nodes.stream().anyMatch(n -> n.type.startsWith("slang."))) {
+        functionCode = null;
+        if (doc.bedrayFunction != null) {
+            generated = null;
+            baked = null;
+            rendererSettings = null;
+            if (g != null && g.isFunctionGraph() && analysis.ok()) {
+                String name = doc.bedrayFunction.substring(doc.bedrayFunction.lastIndexOf('/') + 1).replaceAll("\\(.*", "");
+                if (name.contains(".")) name = name.substring(name.lastIndexOf('.') + 1);
+                functionCode = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.function(g, name);
+            }
+        } else if (g != null && g.isPackMap() || doc.nodes.stream().anyMatch(n -> n.type.startsWith("slang."))) {
             generated = null;
             baked = null;
             rendererSettings = null; // a map is a view: it never sends settings
@@ -163,6 +173,152 @@ final class StudioModel {
     String packOrigin = "";
 
     boolean packDoc() { return doc.nodes.stream().anyMatch(n -> n.type.equals("slang.pack")); }
+
+    // ================================================================== Bedray's functions as graphs
+
+    /** Opens a pack function ("light/sun/sunSolidAngle") in a tab of its own; set by the app. */
+    java.util.function.Consumer<String> openFunction;
+    private boolean libraryReady;
+    /** The open function graph written back as Slang (null when it is not one or has errors). */
+    io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.Code functionCode;
+    volatile String functionStatus = "";
+    volatile Boolean functionOk;
+    private SwingWorker<?, ?> functionWorker;
+
+    boolean functionDoc() { return doc.bedrayFunction != null; }
+
+    /** Bedray's pack as a node library: read once from the checkout or the Bedray jar of the game instance. */
+    io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangLib.Library bedrayLibrary() {
+        if (libraryReady) return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.library();
+        libraryReady = true;
+        StudioLibrary.SlangPack sp = StudioLibrary.bedraySlang(this);
+        if (sp.sources().isEmpty()) return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.library();
+        Path root;
+        if (sp.origin().startsWith("checkout ")) root = Path.of(sp.origin().substring("checkout ".length()));
+        else {
+            root = StudioSettings.file().resolveSibling("studio").resolve("pack").resolve("slang");
+            try {
+                for (var e : sp.sources().entrySet()) {
+                    Path f = root.resolve(e.getKey());
+                    Files.createDirectories(f.getParent());
+                    Files.writeString(f, e.getValue(), StandardCharsets.UTF_8);
+                }
+            } catch (Exception e) {
+                say("Could not unpack Bedray's Slang pack: " + e.getMessage(), StudioUi.BAD);
+            }
+        }
+        io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.install(
+            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangLib.parse(sp.sources()), root);
+        return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.library();
+    }
+
+    /** Where edited pack functions live: one graph file per function. */
+    static Path functionsDir() { return StudioSettings.file().resolveSibling("studio").resolve("functions"); }
+
+    static Path functionFile(String id) { return functionsDir().resolve(id.replaceAll("[^A-Za-z0-9_.()-]+", "_") + ".mosaic.json"); }
+
+    /** Opens a function of the pack as nodes (decompiled the first time; your edited graph after that). */
+    boolean openFunctionGraph(String id) {
+        var lib = bedrayLibrary();
+        var f = lib == null ? null : lib.functions().get(id);
+        if (f == null) {
+            say("No function " + id + " in this Bedray pack", StudioUi.BAD);
+            return false;
+        }
+        Path file = functionFile(id);
+        try {
+            if (!Files.exists(file)) {
+                Files.createDirectories(file.getParent());
+                Files.writeString(file, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangDecompile.decompile(f, lib).json(), StandardCharsets.UTF_8);
+            }
+        } catch (Exception e) {
+            say("Could not open " + id + ": " + e.getMessage(), StudioUi.BAD);
+            return false;
+        }
+        workspace = Workspace.RENDERER;
+        open(file);
+        long blocks = doc.nodes.stream().filter(n -> n.type.equals(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.CODE)).count();
+        say(f.label() + " (" + f.module() + "): " + doc.nodes.size() + " nodes" + (blocks == 0 ? ", all of it nodes" : ", " + blocks
+            + " Slang block(s) for its if / for code") + ". Edit it, then Apply to Bedray.", StudioUi.MUTED);
+        return true;
+    }
+
+    /** Throws away your edits of the open function: back to Bedray's own body. */
+    void resetFunction() {
+        String id = doc.bedrayFunction;
+        if (id == null) return;
+        try {
+            Files.deleteIfExists(functionFile(id));
+        } catch (Exception ignored) {
+            // reopened below anyway
+        }
+        openFunctionGraph(id);
+    }
+
+    /** The module source with every edited function graph of that module in place of Bedray's body. */
+    String overriddenModule(String module) {
+        var lib = bedrayLibrary();
+        String src = lib.sources().get(module + ".slang");
+        if (src == null) return null;
+        java.util.Map<io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangLib.Function,
+            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.Code> codes = new java.util.LinkedHashMap<>();
+        for (var f : lib.ofModule(module)) {
+            if (!f.isNode()) continue;
+            Path file = functionFile(f.id());
+            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph g;
+            if (doc.bedrayFunction != null && doc.bedrayFunction.equals(f.id())) g = analysis.graph();
+            else if (Files.exists(file)) {
+                try {
+                    g = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph.analyze(Files.readString(file, StandardCharsets.UTF_8)).graph();
+                } catch (Exception e) {
+                    g = null;
+                }
+            } else continue;
+            if (g == null) continue;
+            codes.put(f, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.function(g, f.name()));
+        }
+        return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.overrideAll(src, module, codes);
+    }
+
+    /** slangc checks the open function inside its module (the whole pack copy, so callers of it are checked too). */
+    void checkFunction() {
+        var lib = bedrayLibrary();
+        var f = doc.bedrayFunction == null || lib == null ? null : lib.functions().get(doc.bedrayFunction);
+        if (f == null || functionCode == null) return;
+        String module = overriddenModule(f.module());
+        Path slangc = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.locate(StudioUi.settings.slangcPath);
+        if (functionWorker != null) functionWorker.cancel(true);
+        functionOk = null;
+        functionStatus = "Checking " + f.label() + " with slangc...";
+        fire();
+        functionWorker = new SwingWorker<io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.Check, Void>() {
+            @Override protected io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.Check doInBackground() {
+                return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.checkModules(java.util.Map.of(f.module(), module), slangc,
+                    io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.packRoot());
+            }
+
+            @Override protected void done() {
+                if (isCancelled()) return;
+                try {
+                    var c = get();
+                    functionOk = c.ok();
+                    functionStatus = c.ok() ? f.label() + " compiles with Bedray's pack (slangc)"
+                        : "slangc: " + c.log().lines().filter(l -> l.contains("error")).findFirst().orElse(c.log().lines().findFirst().orElse("failed"));
+                } catch (Exception e) {
+                    functionOk = false;
+                    functionStatus = "slangc: " + e.getMessage();
+                }
+                fire();
+            }
+        };
+        functionWorker.execute();
+    }
+
+    /** Writes every edited function into the game (bedray-studio/slang) and rebuilds the passes that use them. */
+    void applyFunctions() {
+        if (doc.dirty && doc.file != null) save(false);
+        StudioPack.apply(this);
+    }
 
     /** Builds the map of Bedray's whole Slang pack (every module, import and pass) and opens it. */
     void openPackMap() {
@@ -634,6 +790,11 @@ final class StudioModel {
     private void settled() {
         if (activeGraph != null) activeGraph.finishGlide();
         ProjectStore.save(this, activeGraph);
+        if (functionDoc()) {
+            if (doc.dirty && doc.file != null) save(false);
+            checkFunction();
+            return;
+        }
         if (rendererSettings != null && rendererDoc()) {
             if (live && doc.file != null) {
                 save(false);
@@ -841,6 +1002,7 @@ final class StudioModel {
 
     List<Item> items() {
         List<Item> items = new ArrayList<>();
+        if (functionDoc()) return functionItems();
         boolean materials = workspace == Workspace.MATERIALS, renderer = workspace == Workspace.RENDERER;
         for (MosaicCatalog.Entry e : MosaicCatalog.all()) {
             boolean stage = e.category() == MosaicCatalog.Category.RENDERER;
@@ -858,6 +1020,55 @@ final class StudioModel {
         return items;
     }
 
+    private List<Item> cachedFunctionItems;
+
+    /** In a Bedray function graph: every function, struct and constant of the pack, the body pieces and the math. */
+    List<Item> functionItems() {
+        if (cachedFunctionItems != null) return cachedFunctionItems;
+        List<Item> items = new ArrayList<>();
+        var lib = bedrayLibrary();
+        Color fnColor = new Color(0x3D6FB8), structColor = new Color(0x2F8A8E), constColor = new Color(0x5A6170), body = new Color(0x7A5AB8);
+        String[][] pieces = {
+            {io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.PARAM, "Parameter", "A parameter of the function (type and name in the inspector)."},
+            {io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.OUT, "Out parameter", "An out parameter: what the function hands back besides its result."},
+            {io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.LET, "Variable", "A named local value (type and name in the inspector)."},
+            {io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.LITERAL, "Value", "A Slang literal or expression: 1.0, 2u, float3(0, 1, 0), PI."},
+            {io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.OP, "Operator", "+ - * / % < > == && || ?: and the others (pick it in the inspector)."},
+            {io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.CALL, "Call", "Any Slang function: normalize, dot, lerp, float3(...), a texture's .SampleLevel."},
+            {io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.MEMBER, "Field / swizzle", ".xyz, .position, .color.rgb of a value."},
+            {io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.SET, "Set field", "A copy of a struct with one field replaced."},
+            {io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.CODE, "Slang block", "Hand-written Slang with the ports you declare (for loops and branches)."}};
+        for (String[] p : pieces) items.add(new Item(p[0], p[1], "Function body", body, p[2], null));
+        if (lib != null) {
+            for (var f : lib.functions().values()) {
+                if (!f.isNode()) continue;
+                String folder = f.module().contains("/") ? f.module().substring(0, f.module().indexOf('/')) : "pack";
+                String sig = f.returnType() + " " + f.label() + "(" + String.join(", ", f.params().stream()
+                    .map(p -> (p.direction().equals("in") ? "" : p.direction() + " ") + p.type() + " " + p.name()).toList()) + ")";
+                items.add(new Item(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.FN + f.id(), f.label() + "   " + f.module(),
+                    "Bedray: " + folder, fnColor, sig + (f.comment() == null ? "" : "\n" + f.comment()), null));
+            }
+            for (var s : lib.structs().values()) {
+                if (s.isInterface()) continue;
+                items.add(new Item(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.MAKE + s.module() + "/" + s.name(), "Make " + s.name(),
+                    "Bedray structs", structColor, s.fields().size() + " fields" + (s.comment() == null ? "" : ": " + s.comment()), null));
+                items.add(new Item(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.BREAK + s.module() + "/" + s.name(), "Break " + s.name(),
+                    "Bedray structs", structColor, "Its fields as outputs.", null));
+            }
+            for (var c : lib.constants().values())
+                items.add(new Item(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.CONST + c.module() + "/" + c.name(), c.name(),
+                    "Bedray constants", constColor, c.type() + " = " + c.value() + (c.comment() == null ? "" : "\n" + c.comment()), null));
+        }
+        for (String t : List.of("mosaic.add", "mosaic.sub", "mosaic.mul", "mosaic.div", "mosaic.min", "mosaic.max", "mosaic.mix", "mosaic.clamp",
+            "mosaic.dot", "mosaic.cross", "mosaic.normalize", "mosaic.length", "mosaic.abs", "mosaic.floor", "mosaic.fract", "mosaic.sqrt",
+            "mosaic.saturate", "mosaic.const", "mosaic.vec", "mosaic.swizzle", "mosaic.reroute")) {
+            MosaicCatalog.Entry e = MosaicCatalog.of(t);
+            items.add(new Item(t, e.label(), "Math", new Color(e.category().color, true), e.help(), null));
+        }
+        cachedFunctionItems = items;
+        return items;
+    }
+
     /** Adds an item at a world point (null: in view); an effect added without a point chains in before the output. */
     MosaicDocument.ENode add(Item it, Point world, Point fallback) {
         MosaicDocument.ENode[] made = new MosaicDocument.ENode[1];
@@ -868,6 +1079,18 @@ final class StudioModel {
             if (it.type().equals("mosaic.const")) n.value = new double[] {1.0};
             if (it.type().equals("mosaic.swizzle")) n.mask = "xyz";
             if (it.type().equals("mosaic.vec")) n.index = 3;
+            switch (it.type()) {
+                case io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.PARAM -> n.mask = "float3 value";
+                case io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.OUT -> n.mask = "float3 result";
+                case io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.LET -> n.mask = "float3 value";
+                case io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.LITERAL -> n.mask = "1.0";
+                case io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.OP -> n.mask = "*";
+                case io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.CALL -> { n.mask = "normalize"; n.index = 1; }
+                case io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.MEMBER -> n.mask = ".xyz";
+                case io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.SET -> n.mask = ".x";
+                case io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.CODE -> n.mask = "//@ in float3 a; inout float3 b; ret void\nb = b + a;";
+                default -> { }
+            }
             if (it.function() != null && world == null) chainBeforeOutput(n, it.function());
             made[0] = n;
         });
@@ -1102,6 +1325,7 @@ final class StudioModel {
                 doc.functions.addAll(loaded.functions);
                 doc.frames.addAll(loaded.frames);
                 doc.paint = loaded.paint;
+                doc.bedrayFunction = loaded.bedrayFunction;
             } catch (Exception e) {
                 say("Could not read the graph: " + e.getMessage(), StudioUi.BAD);
             }
@@ -1160,7 +1384,7 @@ final class StudioModel {
     private void shipSpirv() {
         if (StudioUi.settings.slangCompiler != StudioSettings.SlangCompiler.STUDIO || doc.file == null) return;
         MosaicGraph g = analysis.graph();
-        if (g == null || g.isMaterial() || g.isRenderer()) return;
+        if (g == null || g.isMaterial() || g.isRenderer() || g.isPackMap() || g.isFunctionGraph() || doc.bedrayFunction != null) return;
         Path bedray = doc.file.getParent();
         Path cacheDir = bedray.resolve(".studio").resolve("cache");
         slangWorker.execute(() -> {

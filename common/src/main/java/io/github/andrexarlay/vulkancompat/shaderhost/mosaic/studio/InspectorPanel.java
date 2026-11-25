@@ -128,6 +128,10 @@ final class InspectorPanel extends Panels.Listening {
             content.add(action("Remove frame (keeps nodes)", StudioKeys.Action.UNGROUP, model::ungroup));
             return;
         }
+        if (n == null && model.functionDoc()) {
+            functionPanel();
+            return;
+        }
         if (n == null) {
             content.add(title("Graph"));
             content.add(text(model.doc.nodes.size() + " nodes, " + model.doc.functions.size() + " node functions, "
@@ -152,6 +156,10 @@ final class InspectorPanel extends Panels.Listening {
         }
         if (n.type.equals("slang.module")) {
             moduleInfo(n);
+            return;
+        }
+        if (io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.handles(n.type)) {
+            bedrayNode(n);
             return;
         }
         for (MosaicGraph.Problem p : model.analysis.of(n.id))
@@ -410,6 +418,202 @@ final class InspectorPanel extends Panels.Listening {
     }
 
     /** A module of the pack map: what it is, what it declares, who controls it, its source. */
+    // ------------------------------------------------------------------ Bedray function graphs
+
+    /** The open function: what it is, whether slangc takes it, and applying it to Bedray. */
+    private void functionPanel() {
+        var lib = model.bedrayLibrary();
+        var f = lib == null ? null : lib.functions().get(model.doc.bedrayFunction);
+        content.add(title(f == null ? model.doc.bedrayFunction : f.label()));
+        if (f == null) {
+            content.add(text("This function is not in the Bedray pack Studio found.", BAD));
+            return;
+        }
+        content.add(text(f.module() + ".slang" + (f.owner() != null ? "   method of " + f.owner() + (f.mutating() ? " (mutating)" : "") : ""), MUTED));
+        content.add(Box.createVerticalStrut(4));
+        content.add(code(signature(f)));
+        if (f.comment() != null) {
+            content.add(section("Developer's note"));
+            content.add(text(f.comment(), TEXT));
+        }
+        content.add(section("Slang"));
+        Boolean ok = model.functionOk;
+        content.add(text(model.functionStatus.isEmpty() ? "Edit the graph: slangc checks it inside its module after every change."
+            : model.functionStatus, ok == null ? MUTED : ok ? OK : BAD));
+        long blocks = model.doc.nodes.stream().filter(x -> x.type.equals(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.CODE)).count();
+        content.add(text(model.doc.nodes.size() + " nodes" + (blocks == 0 ? ", the whole body as nodes." : ", " + blocks
+            + " Slang block(s): loops and branches stay code you can edit (select one)."), FAINT));
+        if (!f.calls().isEmpty()) {
+            content.add(section("Calls"));
+            content.add(text(String.join(", ", f.calls()), MUTED));
+        }
+        content.add(Box.createVerticalStrut(8));
+        content.add(button("Apply to Bedray", "Writes your edited functions into the game's bedray-studio/slang and rebuilds the passes that use them",
+            model::applyFunctions));
+        content.add(button("Show the Slang this graph writes", "The function body generated from the nodes", () -> showText(
+            model.functionCode == null ? "The graph has errors: " + model.analysis.firstError() : model.functionCode.helpers() + signature(f) + " {\n"
+                + model.functionCode.body() + "}", f.label() + " (from the graph)")));
+        content.add(button("Show Bedray's source", "The original function in its module", () -> showText(
+            lib.sources().getOrDefault(f.module() + ".slang", "").substring(f.start(), f.end()), f.label() + " (Bedray)")));
+        content.add(button("Remove Studio passes from the game", "Bedray runs its own passes again (your function graphs stay)",
+            () -> StudioPack.clear(model)));
+        content.add(button("Reset to Bedray's", "Throws away your edits of this function", () -> {
+            if (JOptionPane.showConfirmDialog(content, "Throw away your edits of " + f.label() + "?", "Reset", JOptionPane.OK_CANCEL_OPTION)
+                == JOptionPane.OK_OPTION) model.resetFunction();
+        }));
+    }
+
+    static String signature(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangLib.Function f) {
+        return f.returnType() + " " + f.label() + "(" + String.join(", ", f.params().stream()
+            .map(p -> (p.direction().equals("in") ? "" : p.direction() + " ") + p.type() + " " + p.name()).toList()) + ")";
+    }
+
+    private JComponent code(String s) {
+        JTextArea a = new JTextArea(s);
+        a.setFont(MONO);
+        a.setEditable(false);
+        a.setLineWrap(true);
+        a.setWrapStyleWord(true);
+        a.setBackground(CODE_BG);
+        a.setForeground(TEXT);
+        a.setBorder(new EmptyBorder(4, 6, 4, 6));
+        a.setAlignmentX(0);
+        return a;
+    }
+
+    private void showText(String s, String title) {
+        JTextArea area = new JTextArea(s, 30, 100);
+        area.setFont(MONO);
+        area.setEditable(false);
+        area.setBackground(CODE_BG);
+        area.setForeground(TEXT);
+        area.setCaretPosition(0);
+        JOptionPane.showMessageDialog(content, scroll(area), title, JOptionPane.PLAIN_MESSAGE);
+    }
+
+    /** A node of a function graph: a pack call, a struct, a constant, a variable, an operator, a call, a code block. */
+    private void bedrayNode(MosaicDocument.ENode n) {
+        String t = n.type;
+        var G = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.class;
+        for (MosaicGraph.Problem p : model.analysis.of(n.id))
+            content.add(text(p.message(), p.severity() == MosaicGraph.Severity.ERROR ? BAD : WARN));
+        if (n.note != null && !n.note.isBlank()) {
+            content.add(section("Developer's note"));
+            content.add(text(n.note, TEXT));
+        }
+        var f = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.function(t);
+        if (f != null) {
+            content.add(text(f.module() + ".slang", MUTED));
+            content.add(code(signature(f)));
+            if (f.comment() != null) content.add(text(f.comment(), TEXT));
+            content.add(Box.createVerticalStrut(6));
+            content.add(button("Open as nodes", "Its body in a tab of its own (double-click the node does the same)",
+                () -> { if (model.openFunction != null) model.openFunction.accept(f.id()); }));
+        } else if (t.equals(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.CODE)) {
+            var sig = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.codeSignature(n.mask);
+            content.add(section("Ports"));
+            StringBuilder ports = new StringBuilder();
+            for (String[] p : sig.params()) ports.append(p[0]).append(' ').append(p[1]).append(' ').append(p[2]).append("; ");
+            ports.append("ret ").append(sig.ret());
+            JTextField head = field(ports.toString());
+            head.setToolTipText("in / inout ports and the return type, separated by ';'. Enter applies.");
+            content.add(head);
+            content.add(section("Slang"));
+            JTextArea body = new JTextArea(sig.body(), Math.min(24, Math.max(6, (int) sig.body().lines().count() + 1)), 40);
+            body.setFont(MONO);
+            body.setBackground(CODE_BG);
+            body.setForeground(TEXT);
+            body.setCaretColor(TEXT);
+            body.setTabSize(4);
+            JScrollPane sp = scroll(body);
+            sp.setAlignmentX(0);
+            sp.setMaximumSize(new Dimension(Integer.MAX_VALUE, 420));
+            content.add(sp);
+            Runnable apply = () -> {
+                String mask = "//@ " + head.getText().trim() + "\n" + body.getText();
+                if (!mask.equals(n.mask)) model.edit("Edit Slang block", () -> n.mask = mask);
+            };
+            head.addActionListener(e -> apply.run());
+            content.add(button("Apply the block", "Takes the ports and the code (Ctrl+Enter in the code does the same)", apply));
+            body.getInputMap().put(KeyStroke.getKeyStroke("ctrl ENTER"), "applyBlock");
+            body.getActionMap().put("applyBlock", new AbstractAction() {
+                @Override public void actionPerformed(java.awt.event.ActionEvent e) { apply.run(); }
+            });
+            content.add(text("The block runs as written; its in ports are read, its inout ports come back changed. A block that"
+                + " returns ends the function with its value.", FAINT));
+        } else if (t.startsWith(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.CONST)) {
+            var c = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.constant(t);
+            if (c != null) {
+                content.add(code(c.type() + " " + c.name() + " = " + c.value()));
+                content.add(text(c.module() + ".slang" + (c.comment() == null ? "" : "   " + c.comment()), MUTED));
+            }
+        } else if (t.startsWith(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.MAKE)
+            || t.startsWith(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.BREAK)) {
+            var s = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.struct(t);
+            if (s != null) {
+                if (s.comment() != null) content.add(text(s.comment(), TEXT));
+                content.add(section("Fields"));
+                StringBuilder sb = new StringBuilder();
+                for (var fl : s.fields()) sb.append(fl.type()).append(' ').append(fl.name()).append('\n');
+                content.add(code(sb.toString().strip()));
+            }
+        } else {
+            String what = switch (t) {
+                case "slang.param" -> "Type and name of the parameter, e.g. float3 direction";
+                case "slang.out" -> "Type and name of the out parameter, e.g. float3 weight";
+                case "slang.let" -> "Type and name of the variable, e.g. float3 color (auto: Slang infers it)";
+                case "slang.result" -> "The return type (void: no value)";
+                case "slang.literal" -> "A Slang value or expression: 1.0, 2u, float3(0, 1, 0), PI, gFrame.time";
+                case "slang.op" -> "The operator: + - * / % < > <= >= == != && || & | ^ << >> ?: [] (unary: -u !u ~u)";
+                case "slang.call" -> "The function: normalize, lerp, float3; .Name calls a method of the self input; (float) casts";
+                case "slang.member" -> "The field or swizzle, with its dot: .xyz, .position";
+                case "slang.set" -> "The field to replace, with its dot: .position";
+                default -> "Slang";
+            };
+            content.add(section("Slang"));
+            JTextField m = field(n.mask == null ? "" : n.mask);
+            m.setFont(MONO);
+            m.setToolTipText(what + ". Enter applies.");
+            m.addActionListener(e -> {
+                String v = m.getText().trim();
+                if (!v.equals(n.mask)) model.edit("Edit " + v, () -> n.mask = v);
+            });
+            content.add(m);
+            content.add(text(what, FAINT));
+            if (t.equals("slang.call")) {
+                content.add(section("Arguments"));
+                JSpinner args = new JSpinner(new SpinnerNumberModel(Math.max(0, n.index), 0, 12, 1));
+                args.setMaximumSize(new Dimension(90, 28));
+                args.setAlignmentX(0);
+                args.addChangeListener(e -> {
+                    int v = (Integer) args.getValue();
+                    if (v != n.index) model.edit("Arguments " + v, () -> n.index = v);
+                });
+                content.add(args);
+            }
+        }
+        content.add(section("Label"));
+        JTextField label = field(n.label == null ? "" : n.label);
+        label.addActionListener(ev -> model.rename(label.getText()));
+        content.add(label);
+        content.add(section("Note"));
+        JTextArea note = new JTextArea(n.note == null ? "" : n.note, 3, 30);
+        note.setLineWrap(true);
+        note.setWrapStyleWord(true);
+        note.setFont(UI);
+        note.setBackground(CODE_BG);
+        note.setForeground(TEXT);
+        note.setCaretColor(TEXT);
+        JScrollPane nsp = scroll(note);
+        nsp.setAlignmentX(0);
+        nsp.setMaximumSize(new Dimension(Integer.MAX_VALUE, 90));
+        content.add(nsp);
+        content.add(button("Save note", "Your comment on this node, shown under it", () -> {
+            String v = note.getText().strip();
+            model.edit("Note", () -> n.note = v.isEmpty() ? null : v);
+        }));
+    }
+
     private void moduleInfo(MosaicDocument.ENode n) {
         var m = model.packModules.get(n.mask);
         String stage = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPack.stageOf(n.mask);

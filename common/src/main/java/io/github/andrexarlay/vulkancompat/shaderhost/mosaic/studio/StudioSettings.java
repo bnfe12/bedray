@@ -138,6 +138,8 @@ public final class StudioSettings {
     public WindowButtons windowButtons = WindowButtons.AUTO;
     /** slangc to use; empty finds it (BEDRAY_SLANGC, PATH, ~/.bedray/slang, SLANG_DIR). */
     public String slangcPath = "";
+    /** Developer notes under nodes (Bedray's own comments on its functions, your notes). */
+    public boolean showNotes = true;
     /** Palette libraries the user switched off (categories: Effects, Rendering, Shading, My nodes...). */
     public java.util.Set<String> hiddenLibraries = new java.util.LinkedHashSet<>();
     /** Palette / add-menu groups the user collapsed. */

@@ -1,5 +1,7 @@
 package io.github.andrexarlay.vulkancompat.shaderhost.mosaic.studio;
 
+import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph;
+
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicCatalog;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicDocument;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicFunction;
@@ -82,7 +84,12 @@ final class GraphPanel extends JComponent {
                 if (e.getClickCount() != 2 || !SwingUtilities.isLeftMouseButton(e)) return;
                 MosaicDocument.Frame f = frameTitleAt(e.getPoint());
                 MosaicDocument.ENode n = nodeAt(e.getPoint());
-                if (n != null && toWorld(e.getPoint()).y < n.y + HEAD) renameDialog();
+                if (n != null && (n.type.startsWith(MosaicSlangGraph.FN) || n.type.equals(MosaicSlangGraph.CODE)) && model.openFunction != null
+                    && toWorld(e.getPoint()).y >= n.y + HEAD) {
+                    // into a Bedray function: its body as nodes in a tab of its own (a code block: its Slang in the inspector)
+                    if (n.type.startsWith(MosaicSlangGraph.FN)) model.openFunction.accept(n.type.substring(MosaicSlangGraph.FN.length()));
+                    else model.say("A code block: edit its Slang in the inspector", StudioUi.MUTED);
+                } else if (n != null && toWorld(e.getPoint()).y < n.y + HEAD) renameDialog();
                 else if (n == null && f != null) {
                     model.selectedFrame = f;
                     renameDialog();
@@ -167,6 +174,10 @@ final class GraphPanel extends JComponent {
         if (n.type.equals("slang.module")) return List.of("imports");
         if (n.type.equals("slang.pack")) return List.of("passes");
         List<String> out = new ArrayList<>();
+        if (MosaicSlangGraph.handles(n.type)) {
+            for (MosaicSlangGraph.SPort p : MosaicSlangGraph.inputs(n.type, n.mask, n.index)) out.add(p.name());
+            return out;
+        }
         for (MosaicGraph.Port p : MosaicGraph.portsOf(n.type, model.functions())) out.add(p.name());
         return out;
     }
@@ -174,6 +185,10 @@ final class GraphPanel extends JComponent {
     static List<String> outputs(MosaicDocument.ENode n) {
         List<String> out = new ArrayList<>();
         if (n.type.equals("mosaic.output") || n.type.equals("slang.pack") || n.type.equals("bedray.output")) return out;
+        if (MosaicSlangGraph.handles(n.type)) {
+            for (MosaicSlangGraph.SPort p : MosaicSlangGraph.outputs(n.type, n.mask)) out.add(p.name());
+            return out;
+        }
         out.add("");
         out.addAll(MosaicGraph.namedOutputs(n.type));
         return out;
@@ -184,6 +199,10 @@ final class GraphPanel extends JComponent {
     Point outSocket(MosaicDocument.ENode n, int row) { return new Point(n.x + W(), n.y + HEAD + row * ROW + ROW / 2 + 2); }
 
     MosaicGraph.Kind outKind(MosaicDocument.ENode n, String out) {
+        if (MosaicSlangGraph.handles(n.type)) {
+            MosaicSlangGraph.SPort p = MosaicSlangGraph.output(n.type, n.mask, out);
+            if (p != null) return p.kind();
+        }
         if (!out.isEmpty()) return MosaicGraph.outputKind(n.type, out);
         return model.analysis == null ? null : model.analysis.kinds().get(n.id);
     }
@@ -200,6 +219,7 @@ final class GraphPanel extends JComponent {
             MosaicDocument.FDef d = model.doc.function(MosaicFunction.nameOf(n.type));
             return d != null && d.label != null ? d.label : MosaicFunction.nameOf(n.type);
         }
+        if (MosaicSlangGraph.handles(n.type)) return MosaicSlangGraph.label(n.type, n.mask);
         return MosaicCatalog.of(n.type).label();
     }
 
@@ -211,7 +231,24 @@ final class GraphPanel extends JComponent {
             MosaicDocument.FDef d = model.doc.function(MosaicFunction.nameOf(n.type));
             return categoryColor(d == null ? null : d.category);
         }
+        if (MosaicSlangGraph.handles(n.type)) return bedrayColor(n);
         return new Color(MosaicCatalog.of(n.type).category().color, true);
+    }
+
+    /** Bedray function graphs: pack calls blue, structs teal, constants and literals grey, variables green, code amber, ends violet. */
+    static Color bedrayColor(MosaicDocument.ENode n) {
+        String t = n.type;
+        if (t.startsWith(MosaicSlangGraph.FN)) return new Color(0x3D6FB8);
+        if (t.startsWith(MosaicSlangGraph.MAKE) || t.startsWith(MosaicSlangGraph.BREAK) || t.equals(MosaicSlangGraph.SET)
+            || t.equals(MosaicSlangGraph.MEMBER)) return new Color(0x2F8A8E);
+        if (t.startsWith(MosaicSlangGraph.CONST) || t.equals(MosaicSlangGraph.LITERAL)) return new Color(0x5A6170);
+        return switch (t) {
+            case MosaicSlangGraph.LET -> new Color(0x3F8F5A);
+            case MosaicSlangGraph.CODE -> new Color(0xB07A2A);
+            case MosaicSlangGraph.PARAM, MosaicSlangGraph.RESULT, MosaicSlangGraph.OUT -> new Color(0x7A5AB8);
+            case MosaicSlangGraph.OP -> new Color(0x4C5A78);
+            default -> new Color(0x4A6A9A);
+        };
     }
 
     String paramText(MosaicDocument.ENode n) {
@@ -228,7 +265,24 @@ final class GraphPanel extends JComponent {
             case "mosaic.colorRamp" -> (n.value == null ? 2 : n.value.length / 5) + " stops, " + (n.mask == null ? "linear" : n.mask);
             case "mosaic.gradient" -> n.mask == null ? "linear" : n.mask;
             case "mosaic.wave" -> n.mask == null ? "bands" : n.mask;
-            default -> "";
+            case MosaicSlangGraph.LET, MosaicSlangGraph.PARAM, MosaicSlangGraph.OUT -> n.mask == null ? "" : n.mask.substring(0, Math.max(0, n.mask.lastIndexOf(' ')));
+            case MosaicSlangGraph.RESULT -> n.mask == null ? "" : "returns " + n.mask;
+            case MosaicSlangGraph.CODE -> {
+                String body = MosaicSlangGraph.codeSignature(n.mask).body().strip();
+                String first = body.isEmpty() ? "" : body.lines().findFirst().orElse("");
+                yield (first.length() > 34 ? first.substring(0, 33) + "..." : first) + "   (" + body.lines().count() + " lines)";
+            }
+            default -> {
+                if (n.type.startsWith(MosaicSlangGraph.FN)) {
+                    var f = MosaicSlangGraph.function(n.type);
+                    yield f == null ? "missing in this Bedray" : f.module() + (f.isVoid() ? "" : "  -> " + f.returnType());
+                }
+                if (n.type.startsWith(MosaicSlangGraph.CONST)) {
+                    var c = MosaicSlangGraph.constant(n.type);
+                    yield c == null ? "" : "= " + c.value();
+                }
+                yield "";
+            }
         };
     }
 
@@ -1278,9 +1332,10 @@ final class GraphPanel extends JComponent {
             Point s = inSocket(n, k);
             String portName = ins.get(k);
             String ref = n.inputs.get(portName);
-            MosaicGraph.Kind kind = ref != null ? refKind(ref) : MosaicGraph.acceptedKind(n.type, portName, fns);
+            MosaicSlangGraph.SPort sp = MosaicSlangGraph.handles(n.type) ? MosaicSlangGraph.input(n.type, n.mask, portName) : null;
+            MosaicGraph.Kind kind = ref != null ? refKind(ref) : sp != null ? sp.kind() : MosaicGraph.acceptedKind(n.type, portName, fns);
             socket(g, s, kindColor(kind), ref != null);
-            boolean required = MosaicGraph.portsOf(n.type, fns).stream().anyMatch(p -> p.name().equals(portName) && p.required());
+            boolean required = sp != null ? sp.required() : MosaicGraph.portsOf(n.type, fns).stream().anyMatch(p -> p.name().equals(portName) && p.required());
             g.setColor(ref == null && required && !n.defaults.containsKey(portName) ? WARN : MUTED);
             String shown = portName;
             if (ref == null && n.defaults.containsKey(portName)) shown += "  " + InspectorPanel.numbers(n.defaults.get(portName));
@@ -1302,8 +1357,38 @@ final class GraphPanel extends JComponent {
         if (n.label != null && !n.label.isBlank()) {
             g.setColor(MUTED);
             g.setFont(UI_S);
-            String type = MosaicFunction.isFunctionType(n.type) ? MosaicFunction.nameOf(n.type) : MosaicCatalog.of(n.type).label();
-            g.drawString(clip(g, type, w), n.x + 2, n.y - 4);
+            String type = MosaicFunction.isFunctionType(n.type) ? MosaicFunction.nameOf(n.type)
+                : MosaicSlangGraph.handles(n.type) ? MosaicSlangGraph.label(n.type, n.mask) : MosaicCatalog.of(n.type).label();
+            if (!type.equals(n.label)) g.drawString(clip(g, type, w), n.x + 2, n.y - 4);
+        }
+        if (n.note != null && !n.note.isBlank() && settings.showNotes && zoom > 0.3) note(g, n, w, h);
+    }
+
+    /** A developer's note under its node: up to four wrapped lines, the rest in the tooltip and the inspector. */
+    private void note(Graphics2D g, MosaicDocument.ENode n, int w, int h) {
+        g.setFont(UI_S.deriveFont(java.awt.Font.ITALIC));
+        FontMetrics fm = g.getFontMetrics();
+        int width = Math.max(w + 40, 220);
+        List<String> lines = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        for (String word : n.note.trim().split("\\s+")) {
+            if (cur.length() > 0 && fm.stringWidth(cur + " " + word) > width) {
+                lines.add(cur.toString());
+                cur.setLength(0);
+                if (lines.size() == 4) break;
+            }
+            if (cur.length() > 0) cur.append(' ');
+            cur.append(word);
+        }
+        if (lines.size() < 4 && cur.length() > 0) lines.add(cur.toString());
+        else if (lines.size() == 4) lines.set(3, clip(g, lines.get(3) + " " + cur, width));
+        int y = n.y + h + 6;
+        g.setColor(new Color(0xE8D9A8));
+        g.fillRect(n.x, y, 2, lines.size() * (fm.getHeight() - 1) + 2);
+        g.setColor(new Color(0xCFC7AE));
+        for (String l : lines) {
+            y += fm.getHeight() - 1;
+            g.drawString(l, n.x + 7, y);
         }
     }
 
