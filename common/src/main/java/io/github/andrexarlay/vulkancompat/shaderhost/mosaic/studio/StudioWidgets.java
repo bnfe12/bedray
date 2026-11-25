@@ -739,6 +739,15 @@ final class StudioWidgets {
                         g.drawRoundRect(1, 4, 8, 9, 2, 2);
                         g.drawPolyline(new int[] {5, 5, 13, 13, 10}, new int[] {4, 1, 1, 10, 10}, 5);
                     }
+                    case "chip" -> { // a processor: the renderer
+                        g.drawRoundRect(3, 3, 8, 8, 2, 2);
+                        for (int k = 4; k <= 10; k += 3) {
+                            g.drawLine(k, 0, k, 2);
+                            g.drawLine(k, 12, k, 14);
+                            g.drawLine(0, k, 2, k);
+                            g.drawLine(12, k, 14, k);
+                        }
+                    }
                     case "brush" -> {
                         g.drawLine(12, 2, 6, 8);
                         g.fillOval(1, 8, 6, 5);

@@ -102,6 +102,10 @@ final class StudioModel {
         if (g != null && g.isMaterial()) {
             generated = null;
             bake(g);
+        } else if (g != null && g.isRenderer() || workspace == Workspace.RENDERER) {
+            generated = null;
+            baked = null;
+            rendererSettings = g == null ? null : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.settings(g);
         } else {
             baked = null;
             bakeError = null;
@@ -120,10 +124,85 @@ final class StudioModel {
         }
     }
 
+    // ================================================================== Bedray renderer graphs
+
+    /** The bedray.toml pairs the open renderer graph stands for (null when it has errors or is not a renderer graph). */
+    java.util.Map<String, String> rendererSettings;
+    volatile String rendererStatus = "", rendererGameStatus = "";
+
+    boolean rendererDoc() { return analysis.graph() != null ? analysis.graph().isRenderer() : workspace == Workspace.RENDERER; }
+
+    /** Where the renderer graph lives: next to the game's studio link, else in ~/.bedray/studio. */
+    Path rendererFile() {
+        Path g = StudioLibrary.gameDir(this);
+        return (g != null ? g.resolve("bedray-studio") : StudioSettings.file().resolveSibling("studio")).resolve("renderer.mosaic.json");
+    }
+
+    /** The game's current renderer values (written by the mod), or null. */
+    java.util.Map<String, String> rendererState() {
+        Path g = StudioLibrary.gameDir(this);
+        Path f = g == null ? null : g.resolve("bedray-studio/renderer-state.json");
+        if (f == null || !Files.exists(f)) return null;
+        try {
+            java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
+            for (var e : com.google.gson.JsonParser.parseString(Files.readString(f, StandardCharsets.UTF_8)).getAsJsonObject().entrySet())
+                out.put(e.getKey(), e.getValue().getAsString());
+            return out;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Opens (or creates, from the game's current values) the renderer graph. */
+    void openRenderer() {
+        try {
+            Path f = rendererFile();
+            if (!Files.exists(f)) {
+                Files.createDirectories(f.getParent());
+                Files.writeString(f, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.defaultGraph(rendererState()), StandardCharsets.UTF_8);
+            }
+            workspace = Workspace.RENDERER;
+            open(f);
+            say(rendererState() != null ? "Bedray renderer: the graph shows the values your game runs with" :
+                "Bedray renderer: default values (the game sends its own once it runs with the studio folder)", StudioUi.OK);
+        } catch (Exception e) {
+            say("Could not open the renderer graph: " + e.getMessage(), StudioUi.BAD);
+        }
+    }
+
+    /** Sends the graph's settings to the game, which applies them at once and saves bedray.toml. */
+    void writeRenderer() {
+        java.util.Map<String, String> s = rendererSettings;
+        Path g = StudioLibrary.gameDir(this);
+        if (s == null) return;
+        if (g == null) {
+            rendererStatus = "choose the game folder (Library or Settings) so Bedray receives the renderer graph";
+            fire();
+            return;
+        }
+        try {
+            Path dir = g.resolve("bedray-studio");
+            Files.createDirectories(dir);
+            com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+            o.addProperty("apply", System.currentTimeMillis());
+            o.addProperty("save", true);
+            com.google.gson.JsonObject set = new com.google.gson.JsonObject();
+            s.forEach(set::addProperty);
+            o.add("settings", set);
+            Path tmp = dir.resolve("renderer.json.tmp");
+            Files.writeString(tmp, o.toString(), StandardCharsets.UTF_8);
+            Files.move(tmp, dir.resolve("renderer.json"), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            rendererStatus = s.size() + " renderer settings sent to Bedray";
+        } catch (Exception e) {
+            rendererStatus = "could not send the renderer graph: " + e.getMessage();
+        }
+        fire();
+    }
+
     // ================================================================== workspaces and materials
 
     /** Shaders: the frame's shader graph. Materials: per-texture surfaces baked into a resource pack. */
-    enum Workspace { SHADERS, MATERIALS }
+    enum Workspace { SHADERS, MATERIALS, RENDERER }
 
     Workspace workspace = Workspace.SHADERS;
     /** The shader graph file while another workspace is open (game folder, switching back). */
@@ -519,6 +598,13 @@ final class StudioModel {
     private void settled() {
         if (activeGraph != null) activeGraph.finishGlide();
         ProjectStore.save(this, activeGraph);
+        if (rendererSettings != null && rendererDoc()) {
+            if (live && doc.file != null) {
+                save(false);
+                writeRenderer();
+            }
+            return;
+        }
         if (baked != null) {
             if (live && doc.file != null) {
                 save(false);
@@ -614,7 +700,9 @@ final class StudioModel {
         List<MosaicGraph.Problem> out = new ArrayList<>();
         if (doc.nodes.isEmpty()) {
             out.add(new MosaicGraph.Problem(MosaicGraph.Severity.HINT, null, null, workspace == Workspace.MATERIALS
-                ? "empty material: double-click a texture in the Library" : "empty graph: Space adds a node, Ctrl+N starts from a template",
+                ? "empty material: double-click a texture in the Library" : workspace == Workspace.RENDERER
+                ? "empty renderer graph: wire Scene to Bedray frame (or reopen the Renderer workspace for the default graph)"
+                : "empty graph: Space adds a node, Ctrl+N starts from a template",
                 MosaicGraph.Fix.NONE));
             return out;
         }
@@ -717,12 +805,14 @@ final class StudioModel {
 
     List<Item> items() {
         List<Item> items = new ArrayList<>();
-        boolean materials = workspace == Workspace.MATERIALS;
+        boolean materials = workspace == Workspace.MATERIALS, renderer = workspace == Workspace.RENDERER;
         for (MosaicCatalog.Entry e : MosaicCatalog.all()) {
+            boolean stage = e.category() == MosaicCatalog.Category.RENDERER;
+            if (renderer ? !stage : stage) continue;
             if (materials ? !MosaicGraph.MATERIAL_SAFE.contains(e.type()) : e.category() == MosaicCatalog.Category.MATERIAL) continue;
             items.add(new Item(e.type(), e.label(), e.category().label, new Color(e.category().color, true), e.help(), null));
         }
-        if (materials) return items; // effects and code nodes run on the GPU, materials bake on the CPU
+        if (materials || renderer) return items; // effects and code nodes run on the GPU, materials bake on the CPU
         for (MosaicFunction f : MosaicEffects.all())
             items.add(new Item(f.type(), f.label(), f.category(), StudioUi.categoryColor(f.category()), f.help(), f));
         for (MosaicDocument.FDef f : doc.functions)
@@ -1034,7 +1124,7 @@ final class StudioModel {
     private void shipSpirv() {
         if (StudioUi.settings.slangCompiler != StudioSettings.SlangCompiler.STUDIO || doc.file == null) return;
         MosaicGraph g = analysis.graph();
-        if (g == null || g.isMaterial()) return;
+        if (g == null || g.isMaterial() || g.isRenderer()) return;
         Path bedray = doc.file.getParent();
         Path cacheDir = bedray.resolve(".studio").resolve("cache");
         slangWorker.execute(() -> {
@@ -1132,6 +1222,19 @@ final class StudioModel {
 
     private void pollGame() {
         pollExternal();
+        if (workspace == Workspace.RENDERER) try {
+            Path g = StudioLibrary.gameDir(this);
+            Path st = g == null ? null : g.resolve("bedray-studio/renderer-status.txt");
+            if (st != null && Files.exists(st)) {
+                String s = Files.readString(st, StandardCharsets.UTF_8).trim();
+                if (!s.equals(rendererGameStatus)) {
+                    rendererGameStatus = s;
+                    fire();
+                }
+            }
+        } catch (Exception ignored) {
+            // being written
+        }
         Path game = workspace == Workspace.MATERIALS ? StudioLibrary.gameDir(this) : null;
         if (game != null) try {
             Path st = game.resolve("bedray-studio").resolve("materials-status.txt");

@@ -80,13 +80,17 @@ final class DocTabs extends JComponent {
         s.addActionListener(e -> app.newTab(StudioModel.Workspace.SHADERS));
         JMenuItem m = new JMenuItem("New material (pick a texture in the Library)", StudioWidgets.glyph("vanilla", new Color(0xD08A4A)));
         m.addActionListener(e -> app.newTab(StudioModel.Workspace.MATERIALS));
+        JMenuItem r = new JMenuItem("Bedray renderer graph", StudioWidgets.glyph("chip", new Color(0x8A9CF0)));
+        r.addActionListener(e -> app.switchWorkspace(StudioModel.Workspace.RENDERER));
         p.add(s);
         p.add(m);
+        p.add(r);
         return p;
     }
 
     String title(Tab t) {
         Path f = t == app.active ? app.model.doc.file : t.file;
+        if (t.kind == StudioModel.Workspace.RENDERER) return "Bedray renderer";
         if (f == null) return t.kind == StudioModel.Workspace.MATERIALS ? "New material" : "Untitled graph";
         String n = f.getFileName().toString();
         if (t.kind == StudioModel.Workspace.MATERIALS) return n.replace(".mosaic.json", "");
@@ -128,7 +132,8 @@ final class DocTabs extends JComponent {
                 g.setColor(StudioWidgets.mix(PANEL2, TEXT, 0.06));
                 g.fillRoundRect(r.x, r.y + 2, r.width, r.height + 8, 10, 10);
             }
-            Icon icon = StudioWidgets.glyph(t.kind == StudioModel.Workspace.MATERIALS ? "vanilla" : "shader",
+            Icon icon = t.kind == StudioModel.Workspace.RENDERER ? StudioWidgets.glyph("chip", new Color(0x8A9CF0))
+                : StudioWidgets.glyph(t.kind == StudioModel.Workspace.MATERIALS ? "vanilla" : "shader",
                 t.kind == StudioModel.Workspace.MATERIALS ? new Color(0xD08A4A) : new Color(0x5AA0E0));
             icon.paintIcon(this, g, r.x + 9, r.y + (r.height - 14) / 2);
             g.setColor(active ? TEXT : MUTED);

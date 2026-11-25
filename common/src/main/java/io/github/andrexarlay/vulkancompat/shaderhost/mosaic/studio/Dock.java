@@ -142,7 +142,18 @@ final class Dock {
         JSplitPane sp = new JSplitPane(sideBySide ? JSplitPane.HORIZONTAL_SPLIT : JSplitPane.VERTICAL_SPLIT, a, b);
         flatDivider(sp);
         sp.setResizeWeight(ratio);
-        SwingUtilities.invokeLater(() -> sp.setDividerLocation(ratio));
+        // the ratio needs a size: apply it when the pane first gets one (a tree put into a window that is already shown
+        // is laid out after this call; setting it earlier would pin the divider at the edge)
+        sp.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override public void componentResized(java.awt.event.ComponentEvent e) {
+                if (sp.getWidth() <= 0 || sp.getHeight() <= 0) return;
+                sp.removeComponentListener(this);
+                sp.setDividerLocation(ratio);
+            }
+        });
+        SwingUtilities.invokeLater(() -> {
+            if (sp.getWidth() > 0 && sp.getHeight() > 0) sp.setDividerLocation(ratio);
+        });
         return sp;
     }
 
@@ -305,6 +316,17 @@ final class Dock {
                  "a": {"split": "stack", "ratio": 0.74, "a": {"panel": "GRAPH"},
                         "b": {"split": "side", "ratio": 0.6, "a": {"panel": "PROBLEMS"}, "b": {"panel": "HISTORY"}}},
                  "b": {"split": "stack", "ratio": 0.55, "a": {"panel": "MATERIAL"}, "b": {"panel": "INSPECTOR"}}}}}]}""";
+    }
+
+    /** Renderer: stages on the left, the pipeline graph in the middle, the stage's settings on the right. */
+    static String defaultRendererLayout() {
+        return """
+            {"windows": [{"main": true, "tree":
+              {"split": "side", "ratio": 0.16, "a": {"panel": "PALETTE"},
+               "b": {"split": "side", "ratio": 0.62,
+                 "a": {"split": "stack", "ratio": 0.72, "a": {"panel": "GRAPH"},
+                        "b": {"split": "side", "ratio": 0.6, "a": {"panel": "PROBLEMS"}, "b": {"panel": "HISTORY"}}},
+                 "b": {"split": "stack", "ratio": 0.4, "a": {"panel": "RESULT"}, "b": {"panel": "INSPECTOR"}}}}}]}""";
     }
 
     static String saveAll(List<StudioWindow> windows) {

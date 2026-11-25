@@ -108,6 +108,23 @@ final class StudioApp {
         updateStatus();
         String shot = System.getProperty("mosaic.selfshot");
         String shotMaterial = System.getProperty("mosaic.selfshot.material"); // e.g. block/copper_block: verification aid
+        String shotWorkspace = System.getProperty("mosaic.selfshot.workspace"); // e.g. RENDERER: verification aid
+        if (shot != null && shotWorkspace != null) {
+            Timer w = new Timer(1200, e -> {
+                switchWorkspace(StudioModel.Workspace.valueOf(shotWorkspace));
+                String sel = System.getProperty("mosaic.selfshot.select");
+                MosaicDocument.ENode n = sel == null ? null : model.doc.byId(sel);
+                if (n != null) model.select(n);
+                if (model.rendererDoc()) model.writeRenderer();
+                if (Boolean.getBoolean("mosaic.selfshot.dump")) {
+                    Timer d = new Timer(1500, e2 -> System.out.println("LAYOUT " + Dock.saveAll(windows)));
+                    d.setRepeats(false);
+                    d.start();
+                }
+            });
+            w.setRepeats(false);
+            w.start();
+        }
         if (shot != null && shotMaterial != null) {
             Timer m = new Timer(1200, e -> {
                 StudioLibrary.vanillaJars().stream().findFirst().ifPresent(src ->
@@ -342,20 +359,28 @@ final class StudioApp {
     final StudioWidgets.Segmented<StudioModel.Workspace> workspaceTabs = new StudioWidgets.Segmented<StudioModel.Workspace>()
         .add(StudioModel.Workspace.SHADERS, "Shaders", StudioWidgets.glyph("shader", new Color(0x5AA0E0)), "Shader graphs: what the frame looks like")
         .add(StudioModel.Workspace.MATERIALS, "Materials", StudioWidgets.glyph("vanilla", new Color(0xD08A4A)),
-            "Materials: the surface of each block and item texture (PBR), baked into a resource pack");
+            "Materials: the surface of each block and item texture (PBR), baked into a resource pack")
+        .add(StudioModel.Workspace.RENDERER, "Renderer", StudioWidgets.glyph("chip", new Color(0x8A9CF0)),
+            "Bedray's renderer as nodes: path tracer, ReSTIR DI / PT, cascades, fog, denoiser, exposure - applied to the game live");
     private boolean switching, keepLayout;
 
     /** The layout of the open workspace, as saved (or its default). */
     String currentLayout() {
-        String l = model.workspace == StudioModel.Workspace.MATERIALS ? settings.materialLayout : settings.layout;
-        return l != null ? l : model.workspace == StudioModel.Workspace.MATERIALS ? Dock.defaultMaterialLayout() : Dock.defaultLayout();
+        return switch (model.workspace) {
+            case MATERIALS -> settings.materialLayout != null ? settings.materialLayout : Dock.defaultMaterialLayout();
+            case RENDERER -> settings.rendererLayout != null ? settings.rendererLayout : Dock.defaultRendererLayout();
+            default -> settings.layout != null ? settings.layout : Dock.defaultLayout();
+        };
     }
 
     /** Remembers the arrangement of the open workspace. */
     void storeLayout() {
         if (windows.isEmpty() || keepLayout) return;
-        if (model.workspace == StudioModel.Workspace.MATERIALS) settings.materialLayout = Dock.saveAll(windows);
-        else settings.layout = Dock.saveAll(windows);
+        switch (model.workspace) {
+            case MATERIALS -> settings.materialLayout = Dock.saveAll(windows);
+            case RENDERER -> settings.rendererLayout = Dock.saveAll(windows);
+            default -> settings.layout = Dock.saveAll(windows);
+        }
     }
 
     /** Per workspace while another one is open: its area tree, its pop-out windows, its file and undo history. */
@@ -404,7 +429,10 @@ final class StudioApp {
 
     private void loadTab(DocTabs.Tab t) {
         model.workspace = t.kind;
-        if (t.file != null && Files.exists(t.file)) {
+        if (t.kind == StudioModel.Workspace.RENDERER && (t.file == null || !Files.exists(t.file))) {
+            model.openRenderer();
+            t.file = model.doc.file;
+        } else if (t.file != null && Files.exists(t.file)) {
             if (t.kind == StudioModel.Workspace.MATERIALS) model.openMaterialFile(t.file);
             else model.open(t.file);
         } else {
@@ -498,6 +526,10 @@ final class StudioApp {
             return;
         }
         DocTabs.Tab t = tabs.stream().filter(x -> x.kind == ws).max(java.util.Comparator.comparingLong(x -> x.used)).orElse(null);
+        if (t == null && ws == StudioModel.Workspace.RENDERER) {
+            t = new DocTabs.Tab(ws, null);
+            tabs.add(t);
+        }
         if (t == null) {
             String last = ws == StudioModel.Workspace.MATERIALS ? settings.lastMaterial : settings.lastShader;
             Path f = last == null || last.isBlank() ? null : Path.of(last);
@@ -685,6 +717,10 @@ final class StudioApp {
             statusLeft.setForeground(model.messageColor);
             if (model.messageColor == OK || model.messageColor == BAD) StudioWidgets.toast(main, model.message, model.messageColor);
             model.message = "";
+        } else if (a.ok() && model.rendererDoc()) {
+            statusLeft.setText("Bedray renderer   " + model.doc.nodes.size() + " stages   -   " + (model.rendererSettings == null ? 0 : model.rendererSettings.size())
+                + " settings" + (model.doc.dirty ? "   - unsaved" : ""));
+            statusLeft.setForeground(OK);
         } else if (a.ok() && model.generated == null && model.materialDoc()) {
             var b = model.baked;
             statusLeft.setText("Material   " + model.doc.nodes.size() + " nodes" + (b == null ? "   - " + model.bakeError
@@ -705,6 +741,10 @@ final class StudioApp {
         if (model.compiling) {
             statusMid.setText("compiling...");
             statusMid.setForeground(MUTED);
+        } else if (model.workspace == StudioModel.Workspace.RENDERER) {
+            String s = model.rendererStatus + (model.rendererGameStatus.isEmpty() ? "" : "   |   game: " + model.rendererGameStatus);
+            statusMid.setText(s);
+            statusMid.setForeground(s.contains("could not") || s.contains("choose") ? WARN : OK);
         } else if (model.workspace == StudioModel.Workspace.MATERIALS || model.materialDoc()) {
             statusMid.setText(model.materialStatus);
             statusMid.setForeground(model.materialStatus.startsWith("Could not") ? BAD : OK);

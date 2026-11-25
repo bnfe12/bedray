@@ -169,6 +169,11 @@ final class PreviewPanel extends Panels.Listening {
                     case IMAGE -> picked;
                     default -> testScene();
                 };
+                if (model.rendererDoc()) {
+                    show(null, "Renderer graphs set up Bedray itself: they apply in the game (Result shows its frames)");
+                    Thread.sleep(400);
+                    continue;
+                }
                 if (model.materialDoc()) {
                     show(null, "Materials preview on the Material panel");
                     Thread.sleep(400);

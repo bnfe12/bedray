@@ -140,13 +140,20 @@ public final class MosaicGraph {
         // multi-pass: write a named buffer, read it (any uv), the previous frame; weather and sky (binding 16)
         "mosaic.pass", "mosaic.bufferIn", "mosaic.history", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
         "mosaic.fogColor",
+        // Bedray's renderer as nodes (MosaicRenderer): stages of the real pipeline and the frame they produce
+        "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.output",
         // output
         "mosaic.output",
         // material graphs (baked on the CPU into LabPBR textures, see MosaicMaterial)
         "mat.texture", "mat.image", "mat.bsdf", "mat.output")));
 
     /** The output node of a shader graph ({@code mosaic.output}) or of a material graph ({@code mat.output}). */
-    public static boolean isOutput(String type) { return type.equals("mosaic.output") || type.equals("mat.output"); }
+    public static boolean isOutput(String type) {
+        return type.equals("mosaic.output") || type.equals("mat.output") || type.equals(MosaicRenderer.OUTPUT);
+    }
+
+    /** A renderer graph (output {@code bedray.output}): Bedray's own stages and settings, never compiled into a shader. */
+    public boolean isRenderer() { return node(outputId) != null && node(outputId).type().equals(MosaicRenderer.OUTPUT); }
 
     /** Whether the graph has Buffer nodes (it runs as several passes, see MosaicPasses). */
     public boolean multiPass() { return uses("mosaic.pass"); }
@@ -170,6 +177,9 @@ public final class MosaicGraph {
             new Port("origin", Kind.V3, false), new Port("direction", Kind.V3, false), new Port("tMax", Kind.F, false)));
         m.put("mosaic.shadow", List.of(new Port("direction", Kind.V3, false), new Port("origin", Kind.V3, false)));
         m.put("mosaic.output", List.of(new Port("color", Kind.V4, true)));
+        for (MosaicRenderer.Stage s : MosaicRenderer.stages())
+            m.put(s.type(), s.rank() == 0 ? List.of() : List.of(new Port("frame", Kind.V4, s.rank() > 2)));
+        m.put(MosaicRenderer.OUTPUT, List.of(new Port("frame", Kind.V4, true)));
         m.put("mosaic.pass", List.of(new Port("color", Kind.V4, true)));
         m.put("mosaic.bufferIn", List.of(new Port("uv", Kind.V2, false)));
         m.put("mosaic.history", List.of(new Port("uv", Kind.V2, false)));
@@ -410,6 +420,14 @@ public final class MosaicGraph {
                         + " (" + outputs.get(i) + " is extra)", Fix.DELETE_NODE);
             }
             String outType = outputId == null ? null : nodes.get(outputId).type();
+            boolean renderer = MosaicRenderer.OUTPUT.equals(outType);
+            for (Node n : nodes.values()) {
+                if (renderer && !n.type().startsWith("bedray.") && !n.type().equals("mosaic.reroute"))
+                    error(n.id(), null, "node " + n.id() + " (" + n.type() + ") is a shader node: a renderer graph wires Bedray's stages", Fix.DELETE_NODE);
+                if (!renderer && outType != null && n.type().startsWith("bedray."))
+                    error(n.id(), null, "node " + n.id() + " is a Bedray renderer stage: it belongs to the Renderer workspace", Fix.DELETE_NODE);
+            }
+            if (renderer) checkRenderer();
             for (Node n : nodes.values()) {
                 if ("mat.output".equals(outType) && !MATERIAL_SAFE.contains(n.type()))
                     error(n.id(), null, "node " + n.id() + " (" + n.type() + ") reads the rendered scene and cannot be baked into a texture;"
@@ -454,6 +472,34 @@ public final class MosaicGraph {
             Cost cost = cost(reachable.isEmpty() ? nodes.keySet() : reachable);
             return new Analysis(g, List.copyOf(problems), Collections.unmodifiableMap(new LinkedHashMap<>(kinds)),
                 Collections.unmodifiableMap(new LinkedHashMap<>(functions)), Collections.unmodifiableSet(reachable), cost);
+        }
+
+        /** Renderer graphs: stages wired in pipeline order, and the stages a stage needs are upstream of it. */
+        void checkRenderer() {
+            for (Node n : nodes.values()) {
+                MosaicRenderer.Stage s = MosaicRenderer.stage(n.type());
+                if (s == null) continue;
+                for (String ref : n.inputs().values()) {
+                    Node src = nodes.get(split(ref)[0]);
+                    MosaicRenderer.Stage ss = src == null ? null : MosaicRenderer.stage(src.type());
+                    if (ss != null && ss.rank() >= s.rank())
+                        error(n.id(), "frame", ss.label() + " cannot feed " + s.label() + ": Bedray runs " + s.label() + " earlier in the frame"
+                            + " (order: scene, materials, sky, path tracer or ray effects, ReSTIR DI, ReSTIR PT, cascades, fog, denoiser,"
+                            + " exposure, post)", Fix.CONNECT);
+                }
+                if (!s.needs().isEmpty()) {
+                    Set<String> up = new LinkedHashSet<>();
+                    upstream(n.id(), up);
+                    for (String need : s.needs())
+                        if (up.stream().noneMatch(id -> nodes.get(id) != null && nodes.get(id).type().equals(need)))
+                            error(n.id(), null, s.label() + " needs " + MosaicRenderer.stage(need).label() + " before it", Fix.CONNECT);
+                }
+            }
+            boolean pt = nodes.values().stream().anyMatch(n -> n.type().equals("bedray.pathTracer"));
+            boolean rays = nodes.values().stream().anyMatch(n -> n.type().equals("bedray.rays"));
+            if (pt && rays)
+                warn(null, "Path tracer and Hybrid ray effects are two render modes: Bedray runs the one chosen in its mode setting,"
+                    + " the other's settings are kept for when you switch", Fix.NONE);
         }
 
         /** Buffer names: one word, written once, read only by name that exists, never read inside their own pass. */
@@ -598,8 +644,10 @@ public final class MosaicGraph {
             Map<String, double[]> defaults = new LinkedHashMap<>();
             if (o.has("defaults") && o.get("defaults").isJsonObject()) {
                 for (Map.Entry<String, JsonElement> e : o.getAsJsonObject("defaults").entrySet()) {
-                    if (ok && ports.stream().noneMatch(p -> p.name().equals(e.getKey()))) {
-                        error(id, e.getKey(), "node " + id + " (" + type + "): no port " + e.getKey() + " for an inline value", Fix.NONE);
+                    MosaicRenderer.Stage stage = MosaicRenderer.stage(type);
+                    if (stage != null ? stage.setting(e.getKey()) == null : ok && ports.stream().noneMatch(p -> p.name().equals(e.getKey()))) {
+                        error(id, e.getKey(), "node " + id + " (" + type + "): no " + (stage != null ? "setting " : "port ") + e.getKey()
+                            + (stage != null ? "" : " for an inline value"), Fix.NONE);
                         continue;
                     }
                     double[] v = numbers(e.getValue(), id);
@@ -781,7 +829,10 @@ public final class MosaicGraph {
                 case "mosaic.swizzle" -> swizzleKind(n, visiting);
                 case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf", "mosaic.pass", "mosaic.bufferIn", "mosaic.history" -> Kind.V4;
                 case "mosaic.rain", "mosaic.thunder", "mosaic.temperature" -> Kind.F;
+                case "bedray.output" -> Kind.V4;
                 case "mosaic.skyColor", "mosaic.fogColor" -> Kind.V3;
+                case "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt",
+                     "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post" -> Kind.V4;
                 case "mosaic.gt", "mosaic.lt", "mosaic.dot", "mosaic.length", "mosaic.lum" -> Kind.F;
                 case "mosaic.cross", "mosaic.reflect" -> Kind.V3;
                 case "mosaic.math" -> {

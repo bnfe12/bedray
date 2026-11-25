@@ -29,7 +29,8 @@ public final class MosaicCatalog {
         VECTOR("Vector", 0xFFA67C34),
         LOGIC("Compare", 0xFF9A4D7A),
         MATERIAL("Material", 0xFFB86A3A),
-        PASSES("Passes", 0xFF3A8FA0);
+        PASSES("Passes", 0xFF3A8FA0),
+        RENDERER("Bedray renderer", 0xFF5A6FD0);
 
         public final String label;
         public final int color;
@@ -48,6 +49,19 @@ public final class MosaicCatalog {
 
     private static final List<Entry> ALL = List.of(
         e("mosaic.output", "Output", Category.OUTPUT, "Final pixel color. float -> grey, vec3 -> opaque, vec4 as is."),
+        e("bedray.scene", "Scene", Category.RENDERER, "What the renderer sees: distance, lights, particles, weather, the hand."),
+        e("bedray.materials", "Materials", Category.RENDERER, "Surface options of every block: optical glass, automatic normals, self shadow, waving foliage, water."),
+        e("bedray.sky", "Sun and sky", Category.RENDERER, "Size and tilt of the sun, how much baked light fills the shadows."),
+        e("bedray.pathTracer", "Path tracer", Category.RENDERER, "The Slang path tracer: samples per pixel, bounces, distance, accumulation, caustics."),
+        e("bedray.restirDi", "ReSTIR DI", Category.RENDERER, "ReSTIR direct light: torch samples kept over frames (temporal) and shared with neighbours (spatial)."),
+        e("bedray.restirPt", "ReSTIR PT", Category.RENDERER, "ReSTIR path reuse: bounced light of the first diffuse bounce kept over frames and pooled with neighbours. About 0.6 GB at 1080p."),
+        e("bedray.radianceCascades", "Radiance Cascades", Category.RENDERER, "A radiance-cascade field as the diffuse continuation of the paths (experimental, applies after a restart)."),
+        e("bedray.rays", "Hybrid ray effects", Category.RENDERER, "The fast mode: ray traced shadows, reflections, AO, block light (with its own ReSTIR) and one-bounce GI on top of raster."),
+        e("bedray.fog", "Volumetric fog", Category.RENDERER, "Light shafts and fog: density, in-scattering, distance."),
+        e("bedray.denoiser", "Denoiser", Category.RENDERER, "NRD or DLSS Ray Reconstruction turns the noisy path tracer into a clean image."),
+        e("bedray.exposure", "Exposure and tone", Category.RENDERER, "Auto exposure, exposure in EV and the tone curve that maps light to the screen."),
+        e("bedray.post", "Post effects", Category.RENDERER, "Vibrant visuals, vignette and film grain of Bedray."),
+        e("bedray.output", "Bedray frame", Category.RENDERER, "The frame Bedray shows: every stage wired into it is on, the rest are off."),
         e("mosaic.pass", "Buffer (pass)", Category.PASSES, "Writes its input into a named buffer as its own pass, at full, 1/2, 1/4 or 1/8 size (blur, bloom)."),
         e("mosaic.bufferIn", "Read buffer", Category.PASSES, "Reads a buffer written by a Buffer node, at any uv (offsets for blur kernels)."),
         e("mosaic.history", "Previous frame", Category.PASSES, "The last final frame at uv: temporal smoothing, trails, motion effects."),

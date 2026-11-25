@@ -146,6 +146,8 @@ public final class StudioSettings {
     public String layout;
     /** Layout of the Materials workspace (the Shaders workspace uses {@link #layout}). */
     public String materialLayout;
+    /** Layout of the Renderer workspace. */
+    public String rendererLayout;
     /** Minecraft folder with Bedray (resourcepacks/ for materials); empty: found from the shader pack path. */
     public String gameDir = "";
     /** A client jar to take vanilla textures from; empty: found in launcher and build caches. */

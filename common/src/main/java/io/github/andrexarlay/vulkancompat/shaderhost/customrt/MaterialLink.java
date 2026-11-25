@@ -33,6 +33,7 @@ final class MaterialLink {
             if (mc == null || mc.gameDirectory == null) return;
             Path dir = mc.gameDirectory.toPath().resolve("bedray-studio");
             exportModels(mc, dir);
+            renderer(mc, dir);
             Path f = dir.resolve("materials.json");
             if (!Files.exists(f)) return;
             long stamp = Files.getLastModifiedTime(f).toMillis();
@@ -50,6 +51,71 @@ final class MaterialLink {
         } catch (Exception e) {
             // the studio may be writing the file; next check retries
         }
+    }
+
+    private static long rendererStamp = -1;
+    private static boolean stateWritten;
+
+    /**
+     * The Renderer workspace: {@code renderer.json} ({@code settings}: bedray.toml key/value pairs, {@code save}) is applied
+     * through RtSettings.applyKeyValue, saved to bedray.toml when asked; {@code renderer-state.json} tells the studio the
+     * values this game runs with (once a session and after every apply), so a renderer graph starts from them.
+     */
+    private static void renderer(Minecraft mc, Path dir) {
+        if (!Files.isDirectory(dir)) return;
+        try {
+            if (!stateWritten) {
+                stateWritten = true;
+                writeState(dir);
+            }
+            Path f = dir.resolve("renderer.json");
+            if (!Files.exists(f)) return;
+            long stamp = Files.getLastModifiedTime(f).toMillis();
+            if (stamp == rendererStamp) return;
+            boolean first = rendererStamp == -1;
+            rendererStamp = stamp;
+            if (first && stamp < System.currentTimeMillis() - 60_000) return; // an old request: the saved config already has it
+            JsonObject o = JsonParser.parseString(Files.readString(f, StandardCharsets.UTF_8)).getAsJsonObject();
+            JsonObject settings = o.has("settings") ? o.getAsJsonObject("settings") : new JsonObject();
+            boolean save = o.has("save") && o.get("save").getAsBoolean();
+            mc.execute(() -> {
+                int n = 0;
+                StringBuilder unknown = new StringBuilder();
+                for (var e : settings.entrySet()) {
+                    if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.applyKeyValue(e.getKey(), e.getValue().getAsString())) n++;
+                    else unknown.append(' ').append(e.getKey());
+                }
+                if (save) io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.save();
+                try {
+                    writeState(dir);
+                    Path tmp = dir.resolve("renderer-status.txt.tmp");
+                    Files.writeString(tmp, "applied " + n + " settings" + (save ? " and saved bedray.toml" : "")
+                        + (unknown.isEmpty() ? "" : "; not settings of this build:" + unknown) + " (" + java.time.LocalTime.now().withNano(0) + ")");
+                    Files.move(tmp, dir.resolve("renderer-status.txt"), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                } catch (Exception ignored) {
+                    // status is a courtesy
+                }
+            });
+        } catch (Exception ignored) {
+            // being written: the next check reads it
+        }
+    }
+
+    /** The renderer settings this game runs with, as bedray.toml pairs, for the studio. */
+    private static void writeState(Path dir) throws java.io.IOException {
+        java.io.StringWriter w = new java.io.StringWriter();
+        io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.write(w);
+        JsonObject state = new JsonObject();
+        for (String line : w.toString().split("\\R")) {
+            int eq = line.indexOf('=');
+            if (eq <= 0 || line.trim().startsWith("#") || line.trim().startsWith("[")) continue;
+            String v = line.substring(eq + 1).trim();
+            if (v.startsWith("\"") && v.endsWith("\"") && v.length() >= 2) v = v.substring(1, v.length() - 1);
+            state.addProperty(line.substring(0, eq).trim(), v);
+        }
+        Path tmp = dir.resolve("renderer-state.json.tmp");
+        Files.writeString(tmp, state.toString(), StandardCharsets.UTF_8);
+        Files.move(tmp, dir.resolve("renderer-state.json"), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
 
     private static volatile boolean exported;

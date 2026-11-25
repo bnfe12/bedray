@@ -138,6 +138,18 @@ compile cache in `<pack>/shaders/bedray/.studio/`), `Icons`, `StudioUi`, `Studio
   docs/MOSAIC_EDITOR.md (in-game), a new Studio doc.
 
 
+## Renderer workspace (2026-11-25): Bedray itself is configured through nodes
+
+The owner's rule: Bedray is developed through nodes from now on. `MosaicRenderer` turns every stage of the real renderer
+(Scene, Materials, Sun and sky, Path tracer, ReSTIR DI, ReSTIR PT, Radiance Cascades, Hybrid ray effects, Volumetric fog,
+Denoiser, Exposure and tone, Post effects -> Bedray frame) into node types `bedray.*` whose settings are generated from
+`RtSettings` (keys, ranges, defaults) and the language file (labels, help). Wired stages are on, left-out stages are
+switched off; the analyzer checks the pipeline order and needs (ReSTIR PT needs ReSTIR DI). The studio's Renderer
+workspace edits `<game>/bedray-studio/renderer.mosaic.json`, starts from the game's values (`renderer-state.json`,
+written by the mod from `RtSettings.write`) and Live sends `renderer.json`; the mod (`MaterialLink.renderer`) applies
+every pair with `RtSettings.applyKeyValue` and saves bedray.toml. **Next**: make stages swappable Slang modules (ReSTIR
+variants, denoisers), let Mosaic shader graphs plug in as stages, expose per-pass timings on the nodes.
+
 ## Wishlist from the owner (2026-11-24) - not done yet, in rough priority
 
 1. **(Started)** Multi-pass graphs exist: Buffer (`mosaic.pass`, name + scale 1/2/4/8), Read buffer (`mosaic.bufferIn`, any

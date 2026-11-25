@@ -5,6 +5,7 @@ import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicDocument;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicFunction;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicMaterial;
+import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer;
 import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld;
 
 import javax.swing.*;
@@ -145,6 +146,10 @@ final class InspectorPanel extends Panels.Listening {
         content.add(text(n.id + "   " + (fn ? "node code" : e.category().label) + (n.label != null ? "   (" + typeLabel + ")" : ""), MUTED));
         content.add(Box.createVerticalStrut(4));
         content.add(text(fn ? (def == null || def.help == null ? "" : def.help) : e.help(), MUTED));
+        if (MosaicRenderer.isStage(n.type)) {
+            stageEditor(n);
+            return;
+        }
         for (MosaicGraph.Problem p : model.analysis.of(n.id))
             content.add(text(p.message(), p.severity() == MosaicGraph.Severity.ERROR ? BAD : WARN));
         content.add(section("Label"));
@@ -335,6 +340,76 @@ final class InspectorPanel extends Panels.Listening {
         c.setMaximumSize(new Dimension(160, 160));
         c.setAlignmentX(0);
         return c;
+    }
+
+    /**
+     * A Bedray renderer stage: every setting of the real renderer, as a switch, a slider with its number or a list, with
+     * the text players see in Bedray's settings. A change is one undo step; Live sends it to the game at once.
+     */
+    private void stageEditor(MosaicDocument.ENode n) {
+        MosaicRenderer.Stage stage = MosaicRenderer.stage(n.type);
+        boolean wired = model.analysis.reachable().contains(n.id);
+        content.add(Box.createVerticalStrut(6));
+        content.add(text(wired ? "On: wired into the Bedray frame." : "Off: wire it into the Bedray frame to turn it on.", wired ? OK : WARN));
+        if (!stage.enableKeys().isEmpty())
+            content.add(text("Switch: " + String.join(", ", stage.enableKeys()) + " (follows the wire)", FAINT));
+        content.add(section("Settings"));
+        for (MosaicRenderer.Setting s : stage.settings()) {
+            if (stage.enableKeys().contains(s.key()) && s.type() == MosaicRenderer.Type.BOOL) continue; // the wire is the switch
+            double[] cur = n.defaults.get(s.key());
+            double value = cur != null && cur.length > 0 ? cur[0] : s.def();
+            JPanel row = new JPanel(new BorderLayout(10, 2));
+            row.setOpaque(false);
+            row.setAlignmentX(0);
+            row.setBorder(new EmptyBorder(6, 0, 2, 0));
+            JLabel name = label(s.label(), TEXT);
+            name.setToolTipText(s.key());
+            row.add(name, BorderLayout.CENTER);
+            JComponent control;
+            switch (s.type()) {
+                case BOOL -> control = new StudioWidgets.Toggle(value != 0, v -> set(n, s, v ? 1 : 0));
+                case CHOICE -> {
+                    JComboBox<String> box = new JComboBox<>(s.options().stream().map(o -> o.replace('_', ' ')).toArray(String[]::new));
+                    box.setSelectedIndex((int) Math.max(0, Math.min(s.options().size() - 1, Math.round(value))));
+                    box.addActionListener(ev -> set(n, s, box.getSelectedIndex()));
+                    control = box;
+                }
+                default -> {
+                    JPanel p = new JPanel(new BorderLayout(6, 0));
+                    p.setOpaque(false);
+                    JSlider slider = new JSlider(s.min(), s.max(), (int) Math.round(Math.max(s.min(), Math.min(s.max(), value))));
+                    JLabel num = label(Integer.toString(slider.getValue()), MUTED);
+                    num.setPreferredSize(new Dimension(38, 18));
+                    slider.addChangeListener(ev -> {
+                        num.setText(Integer.toString(slider.getValue()));
+                        if (!slider.getValueIsAdjusting()) set(n, s, slider.getValue());
+                    });
+                    slider.setPreferredSize(new Dimension(Math.max(110, width - 190), 22));
+                    p.add(slider, BorderLayout.CENTER);
+                    p.add(num, BorderLayout.EAST);
+                    control = p;
+                }
+            }
+            row.add(control, BorderLayout.EAST);
+            row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+            content.add(row);
+            if (s.help() != null) {
+                JLabel h = text(s.help(), FAINT);
+                h.setFont(UI_S);
+                h.setMaximumSize(new Dimension(Integer.MAX_VALUE, h.getPreferredSize().height));
+                content.add(h);
+            }
+        }
+        content.add(Box.createVerticalStrut(8));
+        content.add(button("Defaults of this stage", "Every setting of this stage back to Bedray's default", () ->
+            model.edit("Defaults of " + stage.label(), () -> stage.settings().forEach(s -> n.defaults.remove(s.key())))));
+    }
+
+    private void set(MosaicDocument.ENode n, MosaicRenderer.Setting s, double v) {
+        double[] cur = n.defaults.get(s.key());
+        if (cur != null && cur.length > 0 && cur[0] == v) return;
+        if (cur == null && v == s.def()) return;
+        model.edit(s.label() + " = " + s.format(v), () -> n.defaults.put(s.key(), new double[] {v}));
     }
 
     private void rampEditor(MosaicDocument.ENode n) {
