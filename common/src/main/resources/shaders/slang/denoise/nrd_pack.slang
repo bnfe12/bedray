@@ -147,7 +147,7 @@ NrdPackedSample nrdPackSample(NrdPackInput input, NrdPackPush pc) {
 }
 
 float3 nrdComposeColor(float3 diffuse, float3 specular, float3 albedo, float4 specularMaterial,
-        float4 direct, NrdPackPush pc) {
+        float4 direct, NrdPackPush pc, uint2 pixel) {
     float3 color;
     if (pc.denoiser == 2u) color = max(diffuse, float3(0.0));
     else if (direct.a > 0.5) color = max(direct.rgb, float3(0.0));
@@ -158,6 +158,7 @@ float3 nrdComposeColor(float3 diffuse, float3 specular, float3 albedo, float4 sp
             + denoiserSpecularFactor(specularMaterial.rgb, specularMaterial.a) * reflection + direct.rgb;
     }
     color *= max(pc.exposure, 0.0);
+    color = hdrStudio(color, (float2(pixel) + 0.5) / float2(pc.size), int2(pixel), 0u); // Mosaic Studio's HDR stage (identity unless applied)
     // Bits 2..4 carry the player's tone-curve ordinal (bit 0 = tone enable, bit 1 = split view); the compose pass
     // overwrites the path display image, so the chosen curve must be applied here too, not only in path_display.
     if ((pc.flags & 1u) != 0u) color = tonemapColorMode(color, (pc.flags >> 2u) & 7u);

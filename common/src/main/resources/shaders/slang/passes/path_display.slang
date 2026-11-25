@@ -230,6 +230,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     historyDepth[p] = nextDepth;
 
     float3 exposed = mean * max(pc.exposure, 0.0);
+    exposed = hdrStudio(exposed, (float2(p) + 0.5) / float2(size), p, frame.frame.x); // Mosaic Studio's HDR stage (identity unless applied)
     uint tmMode = (pc.flags >> PATH_DISPLAY_TONEMAPPER_SHIFT) & PATH_DISPLAY_TONEMAPPER_MASK;
     float3 display = (pc.flags & PATH_DISPLAY_FLAG_TONEMAP) != 0u ? tonemapColorMode(exposed, tmMode) : saturate(exposed);
     // Vibrant grade first, so the saturation/contrast lift acts on the tone-mapped colour before the corner falloff and

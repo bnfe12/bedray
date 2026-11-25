@@ -178,6 +178,9 @@ final class StudioModel {
 
     /** The function a "Your post stage" node is the graph of (post_cinema.slang: identity in Bedray's own build). */
     static final String POST_HOOK = "post_cinema/postStudio";
+    /** Your stages: node type -> the hook function of Bedray's pack its graph is ({@code user.*}). */
+    static final java.util.Map<String, String> USER_STAGES = java.util.Map.of("user.post", POST_HOOK, "user.hdr", "post_cinema/hdrStudio",
+        "user.sky", "light/frame_sky/skyStudio");
 
     /** Opens a pack function ("light/sun/sunSolidAngle") in a tab of its own; set by the app. */
     java.util.function.Consumer<String> openFunction;

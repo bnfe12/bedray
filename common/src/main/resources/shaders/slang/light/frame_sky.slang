@@ -6,16 +6,22 @@ __exported import "light/sky.slang";
 __exported import "contracts/sky_display.slang";
 import "light/sky_background.slang";
 
+// Mosaic Studio's sky stage: the hook a "Your sky look" node writes. The sky an eye or a glossy reflection sees in a
+// direction (lit: with the sun and moon discs); lighting keeps Bedray's light dome. Identity in Bedray's own build.
+float3 skyStudio(float3 direction, float3 radiance, bool lit) {
+    return radiance;
+}
+
 struct FrameSky : IEnvironmentSampler {
     SunMoonSky fallback;
     SkyDisplayState display;
 
     float3 radiance(float3 direction) {
-        return display.valid ? skyBackgroundRadiance(display, direction, true) : fallback.radiance(direction);
+        return skyStudio(direction, display.valid ? skyBackgroundRadiance(display, direction, true) : fallback.radiance(direction), true);
     }
     float3 viewRadiance(float3 direction) {
         // NEE already owns the discrete sun/moon at a glossy receiver.
-        return display.valid ? skyBackgroundRadiance(display, direction, false) : fallback.viewRadiance(direction);
+        return skyStudio(direction, display.valid ? skyBackgroundRadiance(display, direction, false) : fallback.viewRadiance(direction), false);
     }
     float3 skyRadiance(float3 direction) { return fallback.skyRadiance(direction); }
     SkySample sample(float3 normal, inout uint seed) { return fallback.sample(normal, seed); }

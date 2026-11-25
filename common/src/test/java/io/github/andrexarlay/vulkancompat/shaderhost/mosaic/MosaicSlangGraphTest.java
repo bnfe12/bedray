@@ -175,6 +175,8 @@ class MosaicSlangGraphTest {
         MosaicSlangLib.Library lib = lib();
         MosaicSlangLib.Function hook = lib.functions().get("post_cinema/postStudio");
         assertNotNull(hook, "Bedray's pack has the post hook");
+        assertNotNull(lib.functions().get("post_cinema/hdrStudio"), "and the HDR hook");
+        assertNotNull(lib.functions().get("light/frame_sky/skyStudio"), "and the sky hook");
         // a stage of your own: Bedray's vignette, stronger, then a warm tint
         String json = """
             {"function": "post_cinema/postStudio", "nodes": [

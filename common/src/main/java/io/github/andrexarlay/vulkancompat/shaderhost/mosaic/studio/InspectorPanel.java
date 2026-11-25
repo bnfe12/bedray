@@ -154,15 +154,19 @@ final class InspectorPanel extends Panels.Listening {
             stageEditor(n);
             return;
         }
-        if (n.type.equals("user.post")) {
-            boolean edited = java.nio.file.Files.exists(StudioModel.functionFile(StudioModel.POST_HOOK));
+        if (StudioModel.USER_STAGES.containsKey(n.type)) {
+            String hook = StudioModel.USER_STAGES.get(n.type);
+            boolean edited = java.nio.file.Files.exists(StudioModel.functionFile(hook));
             content.add(Box.createVerticalStrut(6));
-            content.add(text("Your own stage: name it with the label below. Its graph is Bedray's post hook (postStudio): the display colour,"
-                + " uv, pixel and frame in, your colour out. It runs in Bedray's frame after the tone curve and Bedray's looks"
-                + " (path tracer display, ray-effects tone mapping and the denoiser's compose).", MUTED));
+            content.add(text("Your own stage: name it with the label below. Its graph is the hook " + hook.substring(hook.lastIndexOf('/') + 1)
+                + " of Bedray's pack (identity in Bedray's own build): " + switch (n.type) {
+                    case "user.hdr" -> "scene-linear colour after exposure in, your colour out, before the tone curve.";
+                    case "user.sky" -> "the direction and Bedray's sky colour in, the sky an eye or a reflection sees out (lighting keeps Bedray's dome).";
+                    default -> "the display colour after the tone curve and Bedray's looks in, your colour out.";
+                } + " It runs in Bedray's frame once you Apply to Bedray.", MUTED));
             content.add(text(edited ? "Its graph is edited: Apply to Bedray sends it." : "Untouched: it passes the colour through.", edited ? OK : FAINT));
             content.add(button("Open its graph", "Build the stage from nodes (double-click the node does the same)", () -> {
-                if (model.openFunction != null) model.openFunction.accept(StudioModel.POST_HOOK);
+                if (model.openFunction != null) model.openFunction.accept(hook);
             }));
             content.add(button("Apply to Bedray", "Rebuilds the passes that run the hook with your graph", model::applyFunctions));
             content.add(section("Label"));

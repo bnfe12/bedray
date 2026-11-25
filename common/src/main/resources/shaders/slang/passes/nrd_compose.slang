@@ -17,7 +17,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // Its complete radiance includes sky: never index input guides on this output grid.
     if (pc.denoiser == 2u) {
         rtOutput[pixel] = float4(nrdPostCinema(nrdComposeColor(nrdOutDiffuse[pixel].rgb, float3(0.0), float3(0.0),
-            float4(0.0), float4(0.0), pc), pixel, pc), 1.0);
+            float4(0.0), float4(0.0), pc, pixel), pixel, pc), 1.0);
         return;
     }
     if (nrdIgnored(gbViewZ[pixel], pc)) return;
@@ -31,6 +31,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
         specularMaterial = gbSpecAlbedo[pixel];
         direct = gbDirect[pixel];
     }
-    float3 color = nrdPostCinema(nrdComposeColor(nrdOutDiffuse[pixel].rgb, specular, albedo, specularMaterial, direct, pc), pixel, pc);
+    float3 color = nrdPostCinema(nrdComposeColor(nrdOutDiffuse[pixel].rgb, specular, albedo, specularMaterial, direct, pc, pixel), pixel, pc);
     rtOutput[pixel] = float4(color, 1.0);
 }

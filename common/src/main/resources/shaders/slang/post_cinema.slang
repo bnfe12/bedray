@@ -34,3 +34,9 @@ float3 postVibrant(float3 color, float saturation, float contrast) {
 float3 postStudio(float3 color, float2 uv, int2 pixel, uint frameIndex) {
     return color;
 }
+
+// Mosaic Studio's HDR stage: the hook a "Your HDR stage" node writes. Scene-linear colour after exposure, before the
+// tone curve (grade, custom exposure, colour fog here). Bedray's own build returns the colour unchanged.
+float3 hdrStudio(float3 color, float2 uv, int2 pixel, uint frameIndex) {
+    return color;
+}

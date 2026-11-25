@@ -89,8 +89,8 @@ final class GraphPanel extends JComponent {
                     // into a Bedray function: its body as nodes in a tab of its own (a code block: its Slang in the inspector)
                     if (n.type.startsWith(MosaicSlangGraph.FN)) model.openFunction.accept(n.type.substring(MosaicSlangGraph.FN.length()));
                     else model.say("A code block: edit its Slang in the inspector", StudioUi.MUTED);
-                } else if (n != null && n.type.equals("user.post") && model.openFunction != null && toWorld(e.getPoint()).y >= n.y + HEAD) {
-                    model.openFunction.accept(StudioModel.POST_HOOK); // your stage: its graph
+                } else if (n != null && StudioModel.USER_STAGES.containsKey(n.type) && model.openFunction != null && toWorld(e.getPoint()).y >= n.y + HEAD) {
+                    model.openFunction.accept(StudioModel.USER_STAGES.get(n.type)); // your stage: its graph
                 } else if (n != null && io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.isStage(n.type) && model.openStage != null
                     && toWorld(e.getPoint()).y >= n.y + HEAD) {
                     model.openStage.accept(n.type); // into the stage: its parameters, modules and functions
@@ -227,7 +227,7 @@ final class GraphPanel extends JComponent {
         if (MosaicSlangGraph.handles(n.type)) return MosaicSlangGraph.label(n.type, n.mask);
         if (io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.isStage(n.type))
             return MosaicCatalog.of(n.type).label() + (model.stageEdited(n.type) ? "  (your version)" : "");
-        if (n.type.equals("user.post")) return "Your post stage";
+        if (n.type.startsWith("user.")) return MosaicCatalog.of(n.type).label();
         return MosaicCatalog.of(n.type).label();
     }
 

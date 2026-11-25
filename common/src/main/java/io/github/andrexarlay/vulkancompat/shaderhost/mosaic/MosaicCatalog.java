@@ -67,6 +67,8 @@ public final class MosaicCatalog {
         e("bedray.raster", "Raster (no ray tracing)", Category.RENDERER, "Minecraft's own lighting with Bedray's post: the mode when nothing traces rays."),
         e("bedray.upscaler", "Upscaler", Category.RENDERER, "Render at a lower resolution and upscale: built-in Bilinear, FSR 1 and NIS on every GPU, FSR 2/3/4, XeSS and DLSS with their libraries."),
         e("user.post", "Your post stage", Category.RENDERER, "A stage of your own, named as you like: double-click it and build its colour change from nodes (Bedray's functions included). It runs in Bedray's frame after the tone curve and Bedray's looks, once you Apply to Bedray."),
+        e("user.hdr", "Your HDR stage", Category.RENDERER, "A stage of your own on the scene-linear colour after exposure and before the tone curve: grading, your own exposure or colour fog, built from nodes. Runs in Bedray's frame once you Apply to Bedray."),
+        e("user.sky", "Your sky look", Category.RENDERER, "Your own look of the sky an eye or a glossy reflection sees (Bedray keeps its light dome for lighting), built from nodes over the direction and Bedray's sky colour."),
         e("bedray.stageMap", "Stage inside", Category.RENDERER, "The end of a stage's inside: its settings and the functions it is made of."),
         e("bedray.output", "Bedray frame", Category.RENDERER, "The frame Bedray shows: every stage wired into it is on, the rest are off."),
         e("mosaic.pass", "Buffer (pass)", Category.PASSES, "Writes its input into a named buffer as its own pass, at full, 1/2, 1/4 or 1/8 size (blur, bloom)."),
