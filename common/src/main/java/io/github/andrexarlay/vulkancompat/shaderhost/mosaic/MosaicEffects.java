@@ -43,7 +43,25 @@ public final class MosaicEffects {
             refl = (clip.w > 0.0 && all(suv >= 0.0) && all(suv <= 1.0)) ? mosaicScene(suv).rgb : color.rgb * 0.5;
         }
         float fres = 0.02 + 0.98 * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
-        return float4(lerp(color.rgb, refl, clamp(amount + fres, 0.0, 1.0) * amount * 2.0), color.a);"""); }
+        return float4(lerp(color.rgb, refl, clamp(amount + fres, 0.0, 1.0) * amount * 2.0), color.a);""", "godRays", """
+        float3 L = mosaicSunDir();
+        if (L.y <= 0.0) return color;
+        float4 clip = mul(frame.projection, mul(frame.modelView, float4(L, 0.0)));
+        if (clip.w <= 0.0) return color;
+        float2 sun = clip.xy / clip.w * 0.5 + 0.5;
+        int k = int(clamp(samples, 4.0, 64.0));
+        float2 step = (sun - uv) / float(k);
+        float2 q = uv;
+        float w = 1.0, sum = 0.0;
+        for (int i = 0; i < 64; i++) {
+            if (i >= k) break;
+            q += step;
+            if (mosaicDepth(clamp(q, 0.0, 1.0)) >= 1.0e5) sum += w;
+            w *= decay;
+        }
+        float edge = clamp(1.0 - length((sun - 0.5) * 1.2), 0.0, 1.0);
+        float3 light = float3(1.0, 0.86, 0.65) * sum / float(k) * strength * edge * clamp(L.y * 3.0, 0.0, 1.0);
+        return float4(color.rgb + light, color.a);"""); }
 
     static {
         add("vec4 vignette(vec4 color, vec2 uv, float strength = 0.6, float radius = 0.75)", "Vignette",
@@ -230,6 +248,50 @@ public final class MosaicEffects {
             }
             float k = darkness * clamp(mosaicHitSkyLight(uv), 0.0, 1.0);
             return vec4(color.rgb * mix(1.0 - k, 1.0, lit), color.a);""");
+        add("Rendering", "vec4 ssao(vec4 color, vec2 uv, float radius = 1.2, float strength = 1, float samples = 10)",
+            "Ambient occlusion (screen)", "Darkens corners and contact areas from the depth guide alone (ray tracing or"
+                + " raster depth): samples around each pixel's surface; radius in blocks.", """
+            float t = mosaicDepth(uv);
+            if (t >= 1.0e5) return color;
+            vec3 p = mosaicHitPos(uv), n = mosaicNormal(uv);
+            float n0 = fract(sin(dot(uv * frame.viewSize.xy, vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+            float occ = 0.0, count = 0.0;
+            int k = int(clamp(samples, 1.0, 32.0));
+            for (int i = 0; i < 32; i++) {
+                if (i >= k) break;
+                float a = n0 + float(i) * 2.3999632, r = (float(i) + 0.5) / float(k);
+                vec2 o = vec2(cos(a), sin(a)) * r * radius / max(t, 0.5);
+                vec2 su = uv + o * vec2(frame.viewSize.y / frame.viewSize.x, 1.0) * 0.6;
+                if (su.x < 0.0 || su.y < 0.0 || su.x > 1.0 || su.y > 1.0) continue;
+                vec3 d = mosaicHitPos(su) - p;
+                float l = length(d);
+                if (l < 1e-3) continue;
+                occ += max(dot(n, d / l) - 0.05, 0.0) * clamp(1.0 - l / (radius * 2.0), 0.0, 1.0);
+                count += 1.0;
+            }
+            float ao = 1.0 - clamp(occ / max(count, 1.0) * 2.0 * strength, 0.0, 0.85);
+            return vec4(color.rgb * ao, color.a);""");
+        add("Rendering", "vec4 godRays(vec4 color, vec2 uv, float strength = 0.5, float decay = 0.96, float samples = 32)",
+            "Light shafts (screen)", "Sun shafts streaming from the sun across the screen where the sky shows through"
+                + " leaves and edges; fades at night and when the sun is behind the camera.", """
+            vec3 L = mosaicSunDir();
+            if (L.y <= 0.0) return color;
+            vec4 clip = frame.projection * (frame.modelView * vec4(L, 0.0));
+            if (clip.w <= 0.0) return color;
+            vec2 sun = clip.xy / clip.w * 0.5 + 0.5;
+            int k = int(clamp(samples, 4.0, 64.0));
+            vec2 step = (sun - uv) / float(k);
+            vec2 q = uv;
+            float w = 1.0, sum = 0.0;
+            for (int i = 0; i < 64; i++) {
+                if (i >= k) break;
+                q += step;
+                if (mosaicDepth(clamp(q, 0.0, 1.0)) >= 1.0e5) sum += w;
+                w *= decay;
+            }
+            float edge = clamp(1.0 - length((sun - 0.5) * 1.2), 0.0, 1.0);
+            vec3 light = vec3(1.0, 0.86, 0.65) * sum / float(k) * strength * edge * clamp(L.y * 3.0, 0.0, 1.0);
+            return vec4(color.rgb + light, color.a);""");
         add("Rendering", "vec4 pathTraceGI(vec4 color, vec2 uv, float samples = 2, float bounces = 2, float strength = 1, float maxDistance = 32)",
             "Path-traced GI", "Bounces light through the world volume (voxel paths with sun, sky and torches) and adds"
                 + " it to the image. Noisy: more samples cost more.", """

@@ -80,6 +80,9 @@ public final class MosaicTemplates {
             + " covered areas.", chain("skyShadow")));
         ALL.add(new Template("Sun shadows (no RT)", "Rendering", "Sun and moon shadows traced through the world volume over"
             + " the game's own image, with a grade: shadows on any GPU.", chain("voxelSunShadow", "colorGrade")));
+        ALL.add(new Template("Shader pack look (no RT)", "Rendering", "Sun shadows through the world volume, ambient"
+            + " occlusion, light shafts, distance fog, a grade and a vignette over the game's image: the classic shader pack"
+            + " look on any GPU. Add the Bloom chain for glow.", chain("voxelSunShadow", "ssao", "godRays", "depthFog", "colorGrade", "vignette")));
         ALL.add(new Template("Voxel world", "Rendering", "Draws the world volume by itself: works with every renderer,"
             + " no ray tracing hardware needed.", chain("voxelRender")));
         ALL.add(new Template("Voxel path-traced GI", "Rendering", "Light bounces between blocks on top of the image.",
