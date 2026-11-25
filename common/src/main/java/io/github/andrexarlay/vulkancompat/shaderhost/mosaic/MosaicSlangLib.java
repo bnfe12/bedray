@@ -27,11 +27,18 @@ public final class MosaicSlangLib {
 
     /** A function: module path, owning struct (null for free functions), name, return type, parameters, callees, source. */
     public record Function(String module, String owner, String name, String returnType, List<Param> params, Set<String> calls,
-                           String comment, boolean generic, boolean mutating, boolean entry, String body) {
+                           String comment, boolean generic, boolean mutating, boolean entry, String body, int start, int bodyStart, int end,
+                           String overload) {
+        /** Parameter types, for telling overloads apart. */
+        public String signature() { return String.join(",", params.stream().map(Param::type).toList()); }
         public boolean isVoid() { return returnType.equals("void"); }
+
+        Function withOverload(String sig) {
+            return new Function(module, owner, name, returnType, params, calls, comment, generic, mutating, entry, body, start, bodyStart, end, sig);
+        }
         /** Offered as a node: not generic, not an entry point. */
         public boolean isNode() { return !generic && !entry; }
-        public String id() { return module + "/" + (owner == null ? "" : owner + ".") + name; }
+        public String id() { return module + "/" + (owner == null ? "" : owner + ".") + name + (overload == null ? "" : "(" + overload + ")"); }
         public String type() { return "bedray.fn:" + id(); }
         public String label() { return (owner == null ? "" : owner + ".") + name; }
     }
@@ -105,7 +112,16 @@ public final class MosaicSlangLib {
         "(?:\\[[^\\]]*\\]\\s*)*(?:(?:public|internal|private|static|inline|override|\\[mutating\\]|mutating|__generic|export)\\s+)*"
             + "([A-Za-z_][\\w.]*(?:<[^<>()]*>)?(?:\\[\\d*\\])?)\\s+([A-Za-z_]\\w*)\\s*(<[^<>()]*>)?\\s*\\(");
     private static final Pattern CONST = Pattern.compile("static\\s+const\\s+([A-Za-z_][\\w<>]*)\\s+([A-Z_a-z]\\w*)(\\[[^\\]]*\\])?\\s*=\\s*([^;]+);");
-    private static final Pattern STRUCT_HEAD = Pattern.compile("(?:public\\s+)?(struct|interface|enum)\\s+([A-Za-z_]\\w*)(?:\\s*<[^>]*>)?\\s*(?::\\s*([A-Za-z_][\\w, ]*))?\\s*\\{");
+    private static final Pattern STRUCT_HEAD = Pattern.compile("(?:public\\s+)?(struct|interface|enum)\\s+([A-Za-z_]\\w*)(\\s*<[^>]*>)?\\s*(?::\\s*([A-Za-z_][\\w, ]*))?\\s*\\{");
+    private static final Set<String> GENERIC_STRUCTS = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final Set<String> overloaded = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** Methods of generic structs (and of interfaces) are not nodes: they have no concrete self type. */
+    private static boolean generic(String owner, Map<String, Struct> structs, String module) {
+        if (owner == null) return false;
+        Struct s = structs.get(module + "/" + owner);
+        return GENERIC_STRUCTS.contains(module + "/" + owner) || s != null && s.isInterface();
+    }
     private static final Set<String> KEYWORDS = Set.of("if", "for", "while", "switch", "return", "else", "do", "case", "sizeof", "struct",
         "interface", "enum", "import", "module", "namespace", "typedef", "using");
 
@@ -124,6 +140,7 @@ public final class MosaicSlangLib {
         Map<String, Constant> consts = new TreeMap<>();
         Map<String, Enum> enums = new TreeMap<>();
         Map<String, String> bodies = new LinkedHashMap<>();
+        overloaded.clear();
         for (Map.Entry<String, String> e : sources.entrySet()) parseModule(moduleId(e.getKey()), e.getValue(), fns, structs, consts, enums, bodies);
         // calls: identifiers followed by "(" that name a known function (free functions by name, methods by name)
         Set<String> known = new LinkedHashSet<>();
@@ -135,7 +152,7 @@ public final class MosaicSlangLib {
             Matcher m = call.matcher(bodies.getOrDefault(f.id(), ""));
             while (m.find()) if (known.contains(m.group(1)) && !m.group(1).equals(f.name())) calls.add(m.group(1));
             out.put(f.id(), new Function(f.module(), f.owner(), f.name(), f.returnType(), f.params(), calls, f.comment(), f.generic(),
-                f.mutating(), f.entry(), f.body()));
+                f.mutating(), f.entry(), f.body(), f.start(), f.bodyStart(), f.end(), f.overload()));
         }
         return new Library(out, structs, consts, enums, sources);
     }
@@ -193,7 +210,8 @@ public final class MosaicSlangLib {
                             stmt.setLength(0);
                         } else stmt.append(c);
                     }
-                    structs.put(module + "/" + name, new Struct(module, name, sh.group(3) == null ? null : sh.group(3).trim(), fields,
+                    if (sh.group(3) != null) GENERIC_STRUCTS.add(module + "/" + name);
+                    structs.put(module + "/" + name, new Struct(module, name, sh.group(4) == null ? null : sh.group(4).trim(), fields,
                         kind.equals("interface"), docBefore(original, sh.start())));
                     if (kind.equals("struct")) walk(module, original, s, open + 1, close, name, fns, structs, enums, bodies);
                 }
@@ -218,7 +236,19 @@ public final class MosaicSlangLib {
                 List<Param> params = params(s.substring(paren + 1, closeParen));
                 if (params != null) {
                     Function f = new Function(module, owner, name, ret, params, Set.of(), docBefore(original, fh.start()), fh.group(3) != null,
-                        head.contains("mutating"), entry, original.substring(k, close + 1));
+                        head.contains("mutating"), entry || generic(owner, structs, module), original.substring(k, close + 1), fh.start(), k, close + 1,
+                        null);
+                    if (fns.containsKey(f.id()) || overloaded.contains(f.id())) {
+                        // overloads: every one of them is named by its parameter types
+                        Function first = fns.remove(f.id());
+                        if (first != null) {
+                            Function renamed = first.withOverload(first.signature());
+                            fns.put(renamed.id(), renamed);
+                            bodies.put(renamed.id(), bodies.remove(first.id()));
+                        }
+                        overloaded.add(f.id());
+                        f = f.withOverload(f.signature());
+                    }
                     fns.put(f.id(), f);
                     bodies.put(f.id(), s.substring(k, close + 1));
                 }

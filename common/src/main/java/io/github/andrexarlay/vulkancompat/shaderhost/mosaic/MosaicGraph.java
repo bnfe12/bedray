@@ -269,6 +269,15 @@ public final class MosaicGraph {
         return m == null ? List.of() : List.copyOf(m.keySet());
     }
 
+    /** Kind of a named output of a node (its mask matters for Bedray function-graph nodes). */
+    static Kind outputKindOf(Node n, String name) {
+        if (MosaicSlangGraph.handles(n.type())) {
+            MosaicSlangGraph.SPort p = MosaicSlangGraph.output(n.type(), n.mask(), name);
+            return p == null ? null : p.kind();
+        }
+        return outputKind(n.type(), name);
+    }
+
     /** Kind of a named output, or null when the type has no such output. */
     public static Kind outputKind(String type, String name) {
         if (MosaicSlangGraph.handles(type)) {
@@ -383,7 +392,7 @@ public final class MosaicGraph {
     /** Kind of an edge reference ("id" or "id.named"). */
     public Kind refKind(String ref) {
         String[] parts = split(ref);
-        return parts[1].isEmpty() ? kind(parts[0]) : outputKind(nodes.get(parts[0]).type(), parts[1]);
+        return parts[1].isEmpty() ? kind(parts[0]) : outputKindOf(nodes.get(parts[0]), parts[1]);
     }
 
     // ------------------------------------------------------------------ parse / analyze
@@ -658,7 +667,10 @@ public final class MosaicGraph {
                     Fix.DELETE_NODE);
                 ok = false;
             }
-            List<Port> ports = ok ? portsOf(type, functions) : List.of();
+            List<Port> ports = !ok ? List.of() : MosaicSlangGraph.handles(type)
+                ? MosaicSlangGraph.inputs(type, text(o, "mask"), o.has("index") && o.get("index").isJsonPrimitive() ? o.get("index").getAsInt() : 0)
+                    .stream().map(MosaicSlangGraph.SPort::port).toList()
+                : portsOf(type, functions);
             Map<String, String> inputs = new LinkedHashMap<>();
             if (o.has("inputs")) {
                 if (!o.get("inputs").isJsonObject()) {
@@ -841,7 +853,7 @@ public final class MosaicGraph {
             if (src == null) return null; // reported by checkPort
             Kind primary = kindOf(parts[0], visiting);
             if (parts[1].isEmpty()) return primary;
-            return outputKind(src.type(), parts[1]); // null (reported by checkPort) when the name does not exist
+            return outputKindOf(src, parts[1]); // null (reported by checkPort) when the name does not exist
         }
 
         static Kind widest(Kind a, Kind b) {
@@ -947,7 +959,7 @@ public final class MosaicGraph {
             String[] parts = split(ref);
             if (!parts[1].isEmpty()) {
                 Node src = nodes.get(parts[0]);
-                return src == null ? null : outputKind(src.type(), parts[1]);
+                return src == null ? null : outputKindOf(src, parts[1]);
             }
             return kinds.get(parts[0]);
         }
@@ -963,7 +975,7 @@ public final class MosaicGraph {
             if (parts[1].isEmpty()) {
                 s = kinds.get(parts[0]);
             } else {
-                s = outputKind(source.type(), parts[1]);
+                s = outputKindOf(source, parts[1]);
                 if (s == null) {
                     error(n.id(), port, "node " + n.id() + ": " + ref + " does not exist ("
                         + (namedOutputs(source.type()).isEmpty() ? source.type() + " has no named outputs" : "named outputs of "
@@ -979,7 +991,10 @@ public final class MosaicGraph {
                     : s.slang();
                 MosaicSlangGraph.SPort in = MosaicSlangGraph.handles(n.type()) ? MosaicSlangGraph.input(n.type(), n.mask(), port) : null;
                 String wantType = in == null ? null : in.slangType();
-                if (wantType == null) {
+                if (have.equals(MosaicSlangGraph.AUTO) || MosaicSlangGraph.AUTO.equals(wantType) || port.equals(MosaicSlangGraph.AFTER)
+                    || wantType != null && have.equals("void") && n.type().equals(MosaicSlangGraph.RESULT)) {
+                    // slangc checks values whose type is only known in Slang
+                } else if (wantType == null) {
                     error(n.id(), port, "node " + n.id() + ": port " + port + " takes a number, found a Slang " + have
                         + " (break it into fields first)", Fix.CONVERT);
                 } else if (!wantType.equals(have)) {
@@ -988,7 +1003,8 @@ public final class MosaicGraph {
                 return;
             }
             Kind want = slangIn != null ? slangIn.kind() : acceptedKind(n.type(), port, functions);
-            if (n.type().equals(MosaicSlangGraph.RESULT) || n.type().equals(MosaicSlangGraph.OUT)) {
+            if (slangIn != null) {
+                // Slang converts numbers itself (a float splats to float3, vectors truncate): the generator writes the cast
                 // a function graph converts numbers to the declared type (float -> float3 splats, vectors pad or cut)
             } else if (isOutput(n.type()) || n.type().equals("mosaic.pass")) {
                 // float, vec2, vec3 and vec4 all widen to the stored color

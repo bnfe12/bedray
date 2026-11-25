@@ -100,4 +100,53 @@ class MosaicSlangGraphTest {
         assertNotNull(a.firstError());
         assertTrue(a.firstError().contains("SurfaceHit"), a.firstError());
     }
+
+    @Test
+    void aFunctionOfThePackOpensAsNodes() {
+        MosaicSlangLib.Library lib = lib();
+        MosaicSlangLib.Function f = lib.functions().get("contracts/math/orientNormal");
+        assertNotNull(f);
+        MosaicSlangDecompile.Result r = MosaicSlangDecompile.decompile(f, lib);
+        assertTrue(r.whole(), r.json());
+        MosaicGraph.Analysis a = MosaicGraph.analyze(r.json());
+        assertNull(a.firstError(), String.valueOf(a.problems()));
+        String body = MosaicSlangGraph.function(a.graph(), f.name()).body();
+        assertTrue(body.contains("dot(normal, geometricNormal)"), body);
+        assertTrue(body.contains("?"), body);
+        // overloads are told apart by their parameter types
+        assertNotNull(lib.functions().get("contracts/math/safeNormalize(float3,float3)"));
+        assertNotNull(lib.functions().get("contracts/math/safeNormalize(float2,float2)"));
+    }
+
+    @Test
+    void controlFlowStaysEditableAsACodeNodeAndCommentsBecomeNotes() {
+        MosaicSlangLib.Library lib = lib();
+        MosaicSlangLib.Function f = lib.functions().get("light/sun/SunMoonSampler.sample");
+        MosaicSlangDecompile.Result r = MosaicSlangDecompile.decompile(f, lib);
+        assertTrue(r.codeBlocks() > 0, "an if / for stays a code node");
+        assertNull(MosaicGraph.analyze(r.json()).firstError());
+        long withNotes = lib.ofModule("restir/restir_di").stream().filter(MosaicSlangLib.Function::isNode)
+            .filter(fn -> MosaicSlangDecompile.decompile(fn, lib).json().contains("\"note\"")).count();
+        assertTrue(withNotes > 0, "the developer's comments ride along as notes");
+    }
+
+    @Test
+    void wholeModulesRoundTripThroughNodesAndCompile() {
+        MosaicSlangLib.Library lib = lib();
+        Path slangc = MosaicSlang.locate(null);
+        assumeTrue(slangc != null, "no slangc");
+        for (String module : java.util.List.of("shading/microfacet", "light/sun", "restir/restir_di")) {
+            java.util.Map<MosaicSlangLib.Function, MosaicSlangGraph.Code> codes = new java.util.LinkedHashMap<>();
+            for (MosaicSlangLib.Function f : lib.ofModule(module)) {
+                if (!f.isNode()) continue;
+                MosaicGraph.Analysis a = MosaicGraph.analyze(MosaicSlangDecompile.decompile(f, lib).json());
+                assertNull(a.firstError(), f.id() + ": " + a.problems());
+                codes.put(f, MosaicSlangGraph.function(a.graph(), f.name()));
+            }
+            String src = lib.sources().get(module + ".slang");
+            String rebuilt = MosaicSlangGraph.overrideAll(src, module, codes);
+            MosaicSlangGraph.Check check = MosaicSlangGraph.checkModules(java.util.Map.of(module, rebuilt), slangc, MosaicSlangGraph.packRoot());
+            assertTrue(check.ok(), module + ": " + check.log());
+        }
+    }
 }

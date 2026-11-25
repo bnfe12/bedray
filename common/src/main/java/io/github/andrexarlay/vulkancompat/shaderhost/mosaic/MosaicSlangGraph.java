@@ -29,6 +29,12 @@ public final class MosaicSlangGraph {
 
     public static final String FN = "bedray.fn:", MAKE = "bedray.make:", BREAK = "bedray.break:", CONST = "bedray.const:";
     public static final String PARAM = "slang.param", RESULT = "slang.result", OUT = "slang.out";
+    /** Pieces of a function body (see {@link MosaicSlangDecompile}). */
+    public static final String LITERAL = "slang.literal", OP = "slang.op", CALL = "slang.call", DO = "slang.do", MEMBER = "slang.member",
+        SET = "slang.set", LET = "slang.let", CODE = "slang.code";
+    static final Set<String> BODY = Set.of(PARAM, RESULT, OUT, LITERAL, OP, CALL, DO, MEMBER, SET, LET, CODE);
+    /** A port that takes or gives any Slang value (slangc checks it). */
+    public static final String AUTO = "auto";
     /** The ordering token of a void call: wire it into another call's {@code after} to keep side effects in order. */
     public static final String THEN = "then", AFTER = "after", SELF = "self";
 
@@ -85,8 +91,7 @@ public final class MosaicSlangGraph {
     }
 
     public static boolean handles(String type) {
-        return type.startsWith(FN) || type.startsWith(MAKE) || type.startsWith(BREAK) || type.startsWith(CONST)
-            || type.equals(PARAM) || type.equals(RESULT) || type.equals(OUT);
+        return type.startsWith(FN) || type.startsWith(MAKE) || type.startsWith(BREAK) || type.startsWith(CONST) || BODY.contains(type);
     }
 
     /** A function of the library, or null. */
@@ -109,7 +114,7 @@ public final class MosaicSlangGraph {
 
     /** Is the type a real thing of the library (or a function-graph interface node)? */
     public static boolean isKnown(String type) {
-        if (type.equals(PARAM) || type.equals(RESULT) || type.equals(OUT)) return true;
+        if (BODY.contains(type)) return true;
         MosaicSlangLib.Function f = function(type);
         if (f != null) return f.isNode();
         return struct(type) != null || constant(type) != null;
@@ -144,18 +149,48 @@ public final class MosaicSlangGraph {
     }
 
     /** Input ports of a library type ({@code mask} is only read by the function-graph nodes). */
-    public static List<SPort> inputs(String type, String mask) {
+    public static List<SPort> inputs(String type, String mask) { return inputs(type, mask, 8); }
+
+    public static List<SPort> inputs(String type, String mask, int index) {
         List<SPort> out = new ArrayList<>();
         switch (type) {
             case PARAM -> { return out; }
             case RESULT -> {
                 String t = mask == null || mask.isBlank() ? "float4" : mask.trim();
-                out.add(new SPort("value", t, kind(t), true));
+                out.add(new SPort("value", t, kind(t), !t.equals("void")));
                 return out;
             }
-            case OUT -> {
+            case OUT, LET -> {
                 String t = typedName(mask, "float")[0];
-                out.add(new SPort("value", t, kind(t), true));
+                out.add(new SPort("value", t, kind(t), type.equals(OUT)));
+                return out;
+            }
+            case LITERAL -> { return out; }
+            case OP -> {
+                String op = mask == null ? "+" : mask;
+                out.add(new SPort("a", AUTO, MosaicGraph.Kind.S, true));
+                if (!(op.length() == 2 && op.endsWith("u"))) out.add(new SPort("b", AUTO, MosaicGraph.Kind.S, true));
+                if (op.equals("?:")) out.add(new SPort("c", AUTO, MosaicGraph.Kind.S, true));
+                return out;
+            }
+            case MEMBER -> {
+                out.add(new SPort("a", AUTO, MosaicGraph.Kind.S, true));
+                return out;
+            }
+            case SET -> {
+                out.add(new SPort("a", AUTO, MosaicGraph.Kind.S, true));
+                out.add(new SPort("value", AUTO, MosaicGraph.Kind.S, true));
+                return out;
+            }
+            case CALL, DO -> {
+                if (mask != null && mask.startsWith(".")) out.add(new SPort(SELF, AUTO, MosaicGraph.Kind.S, true));
+                for (int i = 0; i < Math.max(0, index); i++) out.add(new SPort("a" + i, AUTO, MosaicGraph.Kind.S, false));
+                if (type.equals(DO)) out.add(new SPort(AFTER, "void", MosaicGraph.Kind.S, false));
+                return out;
+            }
+            case CODE -> {
+                for (String[] p : codeSignature(mask).params()) out.add(new SPort(p[2], p[1], kind(p[1]), false));
+                out.add(new SPort(AFTER, "void", MosaicGraph.Kind.S, false));
                 return out;
             }
             default -> { }
@@ -185,6 +220,25 @@ public final class MosaicSlangGraph {
                 return out;
             }
             case RESULT, OUT -> { return out; }
+            case LET -> {
+                String t = typedName(mask, "float")[0];
+                out.add(new SPort("", t, kind(t), false));
+                return out;
+            }
+            case LITERAL, OP, CALL, MEMBER, SET -> {
+                out.add(new SPort("", AUTO, MosaicGraph.Kind.S, false));
+                return out;
+            }
+            case DO -> {
+                out.add(new SPort("", "void", MosaicGraph.Kind.S, false));
+                return out;
+            }
+            case CODE -> {
+                CodeSig sig = codeSignature(mask);
+                out.add(new SPort("", sig.ret(), kind(sig.ret()), false));
+                for (String[] p : sig.params()) if (p[0].equals("inout")) out.add(new SPort(p[2], p[1], kind(p[1]), false));
+                return out;
+            }
             default -> { }
         }
         MosaicSlangLib.Function f = function(type);
@@ -216,8 +270,31 @@ public final class MosaicSlangGraph {
     }
 
     public static SPort input(String type, String mask, String name) {
+        if ((type.equals(CALL) || type.equals(DO)) && (name.matches("a\\d+") || name.equals(SELF) || name.equals(AFTER)))
+            return new SPort(name, name.equals(AFTER) ? "void" : AUTO, MosaicGraph.Kind.S, false);
         for (SPort p : inputs(type, mask)) if (p.name().equals(name)) return p;
         return null;
+    }
+
+    /** The interface of a code block: "//@ in float3 V; inout uint seed; ret float3" on its first line. */
+    public record CodeSig(List<String[]> params, String ret, String body) {}
+
+    public static CodeSig codeSignature(String mask) {
+        List<String[]> params = new ArrayList<>();
+        String ret = "void", body = mask == null ? "" : mask;
+        if (mask != null && mask.startsWith("//@")) {
+            int nl = mask.indexOf('\n');
+            String head = (nl < 0 ? mask : mask.substring(0, nl)).substring(3);
+            body = nl < 0 ? "" : mask.substring(nl + 1);
+            for (String part : head.split(";")) {
+                String p = part.trim();
+                if (p.isEmpty()) continue;
+                if (p.startsWith("ret ")) { ret = p.substring(4).trim(); continue; }
+                String[] w = p.split("\\s+");
+                if (w.length >= 3) params.add(new String[] {w[0], String.join(" ", java.util.Arrays.copyOfRange(w, 1, w.length - 1)), w[w.length - 1]});
+            }
+        }
+        return new CodeSig(params, ret, body);
     }
 
     /** Short label for menus and node heads. */
@@ -232,6 +309,13 @@ public final class MosaicSlangGraph {
             case PARAM -> "Parameter " + typedName(mask, "float")[1];
             case RESULT -> "Return";
             case OUT -> "Out " + typedName(mask, "float")[1];
+            case LET -> typedName(mask, "float")[1];
+            case LITERAL -> mask == null ? "literal" : mask;
+            case OP -> "op " + (mask == null ? "" : mask.replaceAll("u$", ""));
+            case CALL, DO -> mask == null ? "call" : mask;
+            case MEMBER -> mask == null ? "member" : mask;
+            case SET -> "set " + (mask == null ? "" : mask);
+            case CODE -> "Slang block";
             default -> type;
         };
     }
@@ -249,7 +333,7 @@ public final class MosaicSlangGraph {
     // ------------------------------------------------------------------ codegen
 
     /** A function written by a graph: its Slang text and the modules it needs. */
-    public record Code(String text, Set<String> imports, List<String> problems) {}
+    public record Code(String text, Set<String> imports, List<String> problems, String helpers, String body) {}
 
     /**
      * Writes the graph as a Slang function. Parameters come from {@code slang.param} nodes (in the order they appear),
@@ -257,6 +341,7 @@ public final class MosaicSlangGraph {
      */
     public static Code function(MosaicGraph g, String name) {
         Emitter e = new Emitter(g);
+        e.fnName = name;
         List<String> params = new ArrayList<>();
         String ret = "void";
         MosaicGraph.Node result = null;
@@ -285,14 +370,116 @@ public final class MosaicSlangGraph {
             String v = e.input(o, "value", tn[0]);
             e.body.append("    ").append(tn[1]).append(" = ").append(v).append(";\n");
         }
-        String retExpr = result == null ? null : e.input(result, "value", ret);
+        String retExpr = null;
+        if (result != null && ret.equals("void")) {
+            if (result.inputs().containsKey("value")) e.emit(MosaicGraph.split(result.inputs().get("value"))[0]);
+        } else if (result != null) retExpr = e.input(result, "value", ret);
         e.flushSideEffects();
-        StringBuilder sb = new StringBuilder();
+        StringBuilder body = new StringBuilder(e.body);
+        if (retExpr != null) body.append("    return ").append(retExpr).append(";\n");
+        StringBuilder sb = new StringBuilder(e.helpers);
         sb.append(ret).append(' ').append(name).append('(').append(String.join(", ", params)).append(") {\n");
-        sb.append(e.body);
-        if (retExpr != null) sb.append("    return ").append(retExpr).append(";\n");
+        sb.append(body);
         sb.append("}\n");
-        return new Code(sb.toString(), e.imports, e.problems);
+        return new Code(sb.toString(), e.imports, e.problems, e.helpers.toString(), body.toString());
+    }
+
+    /**
+     * The module source with one function's body replaced by a graph's (the signature, attributes and defaults stay
+     * the original's; code-block helpers go right above it, mutating or static like it). Missing imports are added.
+     */
+    public static String override(String moduleSource, MosaicSlangLib.Function f, Code code) {
+        String head = moduleSource.substring(f.start(), f.bodyStart());
+        String mods = (head.contains("[mutating]") ? "[mutating] " : "") + (head.matches("(?s).*\\bstatic\\s.*") ? "static " : "");
+        String indent = indentOf(moduleSource, f.start());
+        StringBuilder helpers = new StringBuilder();
+        if (!code.helpers().isBlank()) for (String line : code.helpers().split("\n", -1)) {
+            if (line.isEmpty()) { helpers.append('\n'); continue; }
+            boolean top = !Character.isWhitespace(line.charAt(0)) && !line.equals("}");
+            helpers.append(indent).append(top ? mods : "").append(line).append('\n');
+        }
+        StringBuilder body = new StringBuilder("{\n");
+        for (String line : code.body().split("\n")) if (!line.isEmpty()) body.append(indent).append(line).append('\n');
+        body.append(indent).append('}');
+        return moduleSource.substring(0, f.start()) + helpers.toString().stripLeading()
+            + (helpers.length() > 0 ? indent : "") + head + body + moduleSource.substring(f.end());
+    }
+
+    /** Several functions of one module at once (from the last to the first, so offsets hold), then the imports they need. */
+    public static String overrideAll(String moduleSource, String module, Map<MosaicSlangLib.Function, Code> codes) {
+        List<Map.Entry<MosaicSlangLib.Function, Code>> list = new ArrayList<>(codes.entrySet());
+        list.sort((a, b) -> Integer.compare(b.getKey().start(), a.getKey().start()));
+        String src = moduleSource;
+        Set<String> imports = new LinkedHashSet<>();
+        for (Map.Entry<MosaicSlangLib.Function, Code> e : list) {
+            src = override(src, e.getKey(), e.getValue());
+            imports.addAll(e.getValue().imports());
+        }
+        return withImports(src, module, imports);
+    }
+
+    static String indentOf(String s, int at) {
+        int ls = s.lastIndexOf('\n', at - 1) + 1;
+        int k = ls;
+        while (k < at && (s.charAt(k) == ' ' || s.charAt(k) == '\t')) k++;
+        return s.substring(ls, k);
+    }
+
+    /** Adds {@code import} lines for modules the text does not import yet (after its last import). */
+    public static String withImports(String src, String self, Set<String> modules) {
+        StringBuilder add = new StringBuilder();
+        for (String m : modules) {
+            if (m.equals(self)) continue;
+            if (src.contains("\"" + m + ".slang\"")) continue;
+            add.append(MosaicSlangLib.importOf(m)).append('\n');
+        }
+        if (add.length() == 0) return src;
+        java.util.regex.Matcher im = java.util.regex.Pattern.compile("(?m)^\\s*(__exported\\s+)?import\\s+[^;]+;\\s*$").matcher(src);
+        int at = -1;
+        while (im.find()) at = im.end();
+        if (at < 0) {
+            java.util.regex.Matcher mod = java.util.regex.Pattern.compile("(?m)^\\s*(public\\s+)?module\\s+\\w+\\s*;\\s*$").matcher(src);
+            at = mod.find() ? mod.end() : 0;
+        }
+        return src.substring(0, at) + "\n" + add + src.substring(at);
+    }
+
+    /** Compiles the pack with some modules replaced: a unit that imports each of them. */
+    public static Check checkModules(Map<String, String> replaced, Path slangc, Path packRoot) {
+        if (slangc == null) return new Check(false, "slangc not found (Settings > Compiler)", null);
+        Path dir = null;
+        try {
+            dir = Files.createTempDirectory("mosaic-pack");
+            Path parent = packRoot.toAbsolutePath().getParent();
+            Path copy = dir.resolve(packRoot.getFileName().toString());
+            try (var w = Files.walk(parent)) {
+                for (Path p : (Iterable<Path>) w::iterator) {
+                    Path t = dir.resolve(parent.relativize(p).toString());
+                    if (Files.isDirectory(p)) Files.createDirectories(t);
+                    else Files.copy(p, t);
+                }
+            }
+            StringBuilder unit = new StringBuilder("// Mosaic: the pack with graph-written functions\n");
+            for (Map.Entry<String, String> e : replaced.entrySet()) {
+                Files.writeString(copy.resolve(e.getKey() + ".slang"), e.getValue(), StandardCharsets.UTF_8);
+                unit.append(MosaicSlangLib.importOf(e.getKey())).append('\n');
+            }
+            unit.append("[shader(\"compute\")]\n[numthreads(1, 1, 1)]\nvoid mosaicCheck() {}\n");
+            return checkUnit(unit.toString(), slangc, copy, "mosaicCheck");
+        } catch (IOException e) {
+            return new Check(false, "copy of the pack: " + e.getMessage(), null);
+        } finally {
+            deleteTree(dir);
+        }
+    }
+
+    static void deleteTree(Path dir) {
+        if (dir == null) return;
+        try (var w = Files.walk(dir)) {
+            w.sorted(java.util.Comparator.reverseOrder()).forEach(f -> f.toFile().delete());
+        } catch (IOException ignored) {
+            // temp folder
+        }
     }
 
     /** A stand-alone compute shader that runs a function graph once (what {@link #check} compiles). */
@@ -308,7 +495,9 @@ public final class MosaicSlangGraph {
     public record Check(boolean ok, String log, byte[] spirv) {}
 
     /** Compiles a unit against the pack (-I the pack folder) with Bedray's own flags. */
-    public static Check check(String unit, Path slangc, Path packRoot) {
+    public static Check check(String unit, Path slangc, Path packRoot) { return checkUnit(unit, slangc, packRoot, "main"); }
+
+    static Check checkUnit(String unit, Path slangc, Path packRoot, String entry) {
         if (slangc == null) return new Check(false, "slangc not found (Settings > Compiler)", null);
         if (packRoot == null) return new Check(false, "Bedray's Slang pack was not found", null);
         Path dir = null;
@@ -316,7 +505,7 @@ public final class MosaicSlangGraph {
             dir = Files.createTempDirectory("mosaic-fn");
             Path src = dir.resolve("unit.slang"), spv = dir.resolve("unit.spv");
             Files.writeString(src, unit, StandardCharsets.UTF_8);
-            Process p = new ProcessBuilder(slangc.toString(), src.toString(), "-target", "spirv", "-profile", "cs_6_5", "-entry", "main",
+            Process p = new ProcessBuilder(slangc.toString(), src.toString(), "-target", "spirv", "-profile", "cs_6_5", "-entry", entry,
                 "-stage", "compute", "-matrix-layout-column-major", "-I", packRoot.toString(), "-o", spv.toString())
                 .redirectErrorStream(true).start();
             String log = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
@@ -348,6 +537,8 @@ public final class MosaicSlangGraph {
         final Set<String> done = new LinkedHashSet<>();
         final Set<String> imports = new LinkedHashSet<>();
         final List<String> problems = new ArrayList<>();
+        final StringBuilder helpers = new StringBuilder();
+        String fnName = "fn";
 
         Emitter(MosaicGraph g) { this.g = g; }
 
@@ -357,7 +548,7 @@ public final class MosaicSlangGraph {
         void flushSideEffects() {
             for (MosaicGraph.Node n : g.nodes()) {
                 MosaicSlangLib.Function f = function(n.type());
-                if (f != null && f.isVoid()) emit(n.id());
+                if (f != null && f.isVoid() || n.type().equals(DO) || n.type().equals(CODE)) emit(n.id());
             }
         }
 
@@ -387,7 +578,7 @@ public final class MosaicSlangGraph {
         }
 
         static String convert(String v, String have, String want) {
-            if (want == null || have.equals(want) || want.equals("void")) return v;
+            if (want == null || have.equals(want) || want.equals("void") || have.equals(AUTO) || want.equals(AUTO)) return v;
             MosaicGraph.Kind kh = kind(have), kw = kind(want);
             if (kh == MosaicGraph.Kind.S || kw == MosaicGraph.Kind.S) return v;
             if (kh == kw && !isFloatType(want)) return want + "(" + v + ")";
@@ -438,6 +629,10 @@ public final class MosaicSlangGraph {
                 return var(id) + "_" + port;
             }
             if (n.type().startsWith(BREAK)) return port.isEmpty() ? var(id) : var(id) + "." + port;
+            if (n.type().equals(LITERAL)) return n.mask();
+            if (n.type().equals(MEMBER)) return "(" + input(n, "a", null) + ")" + n.mask();
+            if (n.type().equals(DO)) return "0";
+            if (n.type().equals(CODE)) return port.isEmpty() ? var(id) : var(id) + "_" + port;
             if (n.type().startsWith(CONST)) return constant(n.type()).name();
             return var(id) + (port.isEmpty() ? "" : "_" + port);
         }
@@ -497,11 +692,84 @@ public final class MosaicSlangGraph {
                 imports.add(c.module());
                 return;
             }
-            if (t.equals(PARAM)) return;
+            if (t.equals(PARAM) || t.equals(LITERAL) || t.equals(MEMBER)) return;
+            if (n.inputs().containsKey(AFTER)) emit(MosaicGraph.split(n.inputs().get(AFTER))[0]);
+            switch (t) {
+                case LET -> {
+                    String[] tn = typedName(n.mask(), "float");
+                    String vt = tn[0].equals(AUTO) ? "var" : tn[0];
+                    String arr = "";
+                    if (vt.contains("[")) {
+                        arr = vt.substring(vt.indexOf('['));
+                        vt = vt.substring(0, vt.indexOf('['));
+                    }
+                    if (!n.inputs().containsKey("value") && n.defaultOf("value") == null) line(vt + " " + v + arr + ";");
+                    else line(vt + " " + v + arr + " = " + input(n, "value", tn[0].equals(AUTO) ? null : tn[0]) + ";");
+                    return;
+                }
+                case OP -> {
+                    String op = n.mask() == null ? "+" : n.mask();
+                    String a = input(n, "a", null);
+                    String expr;
+                    if (op.length() == 2 && op.endsWith("u")) expr = "(" + op.charAt(0) + a + ")";
+                    else if (op.equals("?:")) expr = "(" + a + " ? " + input(n, "b", null) + " : " + input(n, "c", null) + ")";
+                    else if (op.equals("[]")) expr = a + "[" + input(n, "b", null) + "]";
+                    else expr = "(" + a + " " + op + " " + input(n, "b", null) + ")";
+                    line("var " + v + " = " + expr + ";");
+                    return;
+                }
+                case CALL, DO -> {
+                    String callee = n.mask() == null ? "" : n.mask();
+                    List<String> args = new ArrayList<>();
+                    for (int i = 0; i < n.index(); i++) args.add(input(n, "a" + i, null));
+                    String call;
+                    if (callee.startsWith("(")) call = "(" + callee + "(" + String.join(", ", args) + "))";
+                    else if (callee.startsWith(".")) call = "(" + input(n, SELF, null) + ")" + callee + "(" + String.join(", ", args) + ")";
+                    else call = callee + "(" + String.join(", ", args) + ")";
+                    line(t.equals(DO) ? call + ";" : "var " + v + " = " + call + ";");
+                    return;
+                }
+                case SET -> {
+                    line("var " + v + " = " + input(n, "a", null) + ";");
+                    line(v + n.mask() + " = " + input(n, "value", null) + ";");
+                    return;
+                }
+                case CODE -> {
+                    CodeSig sig = codeSignature(n.mask());
+                    String helper = "mosaic_" + fnName + "_" + v;
+                    List<String> decl = new ArrayList<>(), args = new ArrayList<>();
+                    for (String[] p : sig.params()) {
+                        String pt = p[1], arr = "";
+                        if (pt.contains("[")) {
+                            arr = pt.substring(pt.indexOf('['));
+                            pt = pt.substring(0, pt.indexOf('['));
+                        }
+                        decl.add(p[0] + " " + pt + " " + p[2] + arr);
+                        boolean wired = n.inputs().containsKey(p[2]);
+                        if (p[0].equals("inout") || !wired) {
+                            // a variable the block fills (declared without a value, as in the original)
+                            line(pt + " " + v + "_" + p[2] + arr + (wired ? " = " + input(n, p[2], p[1]) : "") + ";");
+                            args.add(v + "_" + p[2]);
+                        } else args.add(input(n, p[2], p[1]));
+                    }
+                    helpers.append(sig.ret()).append(' ').append(helper).append('(').append(String.join(", ", decl)).append(") {\n")
+                        .append(indent(sig.body())).append("\n}\n\n");
+                    String call = helper + "(" + String.join(", ", args) + ")";
+                    line(sig.ret().equals("void") ? call + ";" : sig.ret() + " " + v + " = " + call + ";");
+                    return;
+                }
+                default -> { }
+            }
             line(g.kind(id).slang() + " " + v + " = " + mosaic(n) + ";");
         }
 
         void line(String s) { body.append("    ").append(s).append('\n'); }
+
+        static String indent(String s) {
+            StringBuilder sb = new StringBuilder();
+            for (String l : s.strip().split("\n", -1)) sb.append("    ").append(l.stripTrailing()).append('\n');
+            return sb.toString().stripTrailing();
+        }
 
         /** The everyday Mosaic nodes inside a function graph (all produce float4 internally, converted on use). */
         String mosaic(MosaicGraph.Node n) {
