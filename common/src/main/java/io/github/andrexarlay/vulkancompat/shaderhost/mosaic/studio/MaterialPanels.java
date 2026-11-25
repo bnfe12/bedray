@@ -279,9 +279,13 @@ final class MaterialPanels {
             .add(View.EMISSION, "Glow", null, "Emission")
             .add(View.HEIGHT, "Height", null, "Height (bump)");
         final JLabel status = label("", MUTED);
-        double lightYaw = -0.7, lightPitch = 0.9, modelYaw = 0;
+        double lightYaw = -0.7, lightPitch = 0.9, modelYaw = 0, zoom = 1;
         BlockModels.Model blockModel;
         final JComboBox<String> modelBox = new JComboBox<>();
+        /** Minecraft: the game's own flat face shading (what players see without shaders). Bedray PBR: the baked material lit by the sun. */
+        final StudioWidgets.Segmented<Boolean> light = new StudioWidgets.Segmented<Boolean>()
+            .add(true, "Minecraft", StudioWidgets.glyph("vanilla", new Color(0x7FB069)), "The vanilla look: Minecraft's own face shading")
+            .add(false, "Bedray PBR", StudioWidgets.glyph("shader", new Color(0x5AA0E0)), "The baked material (roughness, metal, normals) in sunlight");
         final StudioWidgets.Segmented<StudioModel.PaintTool> tools = new StudioWidgets.Segmented<StudioModel.PaintTool>()
             .add(StudioModel.PaintTool.NAVIGATE, "Turn", StudioWidgets.glyph("move", null), "Drag turns the block, Shift+drag moves the sun")
             .add(StudioModel.PaintTool.BRUSH, "Brush", StudioWidgets.glyph("brush", null), "Paint pixels on the UV view or straight on the block")
@@ -299,6 +303,7 @@ final class MaterialPanels {
             }
         };
         boolean seams = true;
+        JCheckBox seamBox;
         int[] pick;
         int pickSize, pickX, pickY;
         int uvX, uvY, uvSize, uvFrame;
@@ -347,7 +352,7 @@ final class MaterialPanels {
             size.setToolTipText("Brush size in texture pixels");
             size.addActionListener(e -> model.brushSize = size.getSelectedIndex() + 1);
             extra.add(size);
-            JCheckBox seamBox = new JCheckBox("Seams", seams);
+            seamBox = new JCheckBox("Seams", seams);
             seamBox.setToolTipText("Red lines where the model's faces (UV islands) meet");
             seamBox.addActionListener(e -> {
                 seams = seamBox.isSelected();
@@ -365,6 +370,12 @@ final class MaterialPanels {
             modelRow.setBorder(new EmptyBorder(5, 0, 0, 0));
             modelRow.add(label("Model", MUTED), BorderLayout.WEST);
             modelRow.add(modelBox, BorderLayout.CENTER);
+            light.setPreferredSize(new Dimension(230, 24));
+            light.onChange(v -> {
+                cacheVersion = -1;
+                root.repaint();
+            });
+            modelRow.add(light, BorderLayout.EAST);
             JPanel rows = new JPanel(new GridLayout(0, 1, 0, 0));
             rows.setOpaque(false);
             rows.add(modelRow);
@@ -406,6 +417,11 @@ final class MaterialPanels {
             };
             canvas.addMouseListener(drag);
             canvas.addMouseMotionListener(drag);
+            canvas.addMouseWheelListener(e -> {
+                zoom = Math.clamp(zoom * Math.pow(1.12, -e.getPreciseWheelRotation()), 0.3, 6);
+                cacheVersion = -1;
+                canvas.repaint();
+            });
             canvas.setToolTipText("Turn: drag turns the block, Shift+drag (or right drag) moves the sun. Paint tools paint on the UV view or the block.");
             root.add(canvas, BorderLayout.CENTER);
             status.setFont(UI_S);
@@ -441,6 +457,9 @@ final class MaterialPanels {
                 modelFor = key;
                 faceTextures.clear();
                 boolean entity = model.materialEntry.contains("/entity/");
+                seams = !entity;
+                if (seamBox != null) seamBox.setSelected(seams);
+                zoom = 1;
                 blockModel = entity ? null : BlockModels.forTexture(model.materialSource, model.materialEntry);
                 cacheVersion = -1;
                 StudioLibrary.Source src = model.materialSource;
@@ -448,6 +467,15 @@ final class MaterialPanels {
                 java.nio.file.Path game = StudioLibrary.gameDir(model);
                 MODELS.execute(() -> {
                     List<String> found = entity ? BlockModels.entityModelsFor(game, entry) : BlockModels.modelsUsing(src, entry);
+                    if (entity && found.isEmpty() && BlockModels.entityLayers(game).isEmpty()) {
+                        // no game export yet: build the models from the client jar, then fill the list again
+                        BlockModels.exportOffline(() -> SwingUtilities.invokeLater(() -> {
+                            modelFor = null;
+                            root.repaint();
+                        }));
+                        SwingUtilities.invokeLater(root::repaint);
+                        return;
+                    }
                     SwingUtilities.invokeLater(() -> {
                         fillingModels = true;
                         DefaultComboBoxModel<String> cm = new DefaultComboBoxModel<>();
@@ -474,7 +502,17 @@ final class MaterialPanels {
             }
             if (cache == null || cacheVersion != model.bakeVersion || cacheView != v || (v == View.LIT && (cacheW != w || cacheH != h))) {
                 int size = Math.max(32, Math.min(w, h) - 16);
-                cache = v == View.LIT ? (blockModel != null ? renderModel(blockModel, b, base, size) : lit(b, base, size)) : channel(b, base, v);
+                boolean entityTex = model.materialEntry != null && model.materialEntry.contains("/entity/");
+                boolean itemTex = model.materialEntry != null && model.materialEntry.contains("/textures/item/");
+                if (v == View.LIT && blockModel == null && entityTex) {
+                    paintWaiting(g, w, h);
+                    return;
+                }
+                if (v == View.LIT && blockModel == null && itemTex) {
+                    // items look like the inventory: the sprite face-on, Minecraft-flat or lit by the material
+                    cache = light.getSelectedItem() ? channel(b, base, View.ALBEDO) : itemLit(b, base);
+                } else
+                    cache = v == View.LIT ? (blockModel != null ? renderModel(blockModel, b, base, size) : lit(b, base, size)) : channel(b, base, v);
                 cacheVersion = model.bakeVersion;
                 cacheView = v;
                 cacheW = w;
@@ -482,7 +520,8 @@ final class MaterialPanels {
             }
             g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
             int frame = Math.min(cache.getWidth(), cache.getHeight());
-            if (v == View.LIT) {
+            boolean flatItem = v == View.LIT && blockModel == null && model.materialEntry != null && model.materialEntry.contains("/textures/item/");
+            if (v == View.LIT && !flatItem) {
                 pickX = (w - cache.getWidth()) / 2;
                 pickY = (h - cache.getHeight()) / 2;
                 g.drawImage(cache, pickX, pickY, null);
@@ -503,6 +542,27 @@ final class MaterialPanels {
             if (id.startsWith("entity:"))
                 return BlockModels.entity(StudioLibrary.gameDir(model), id.substring("entity:".length()), StudioLibrary.id(model.materialEntry));
             return BlockModels.load(model.materialSource, id, null);
+        }
+
+        /** An entity texture whose model is not here yet: say what is happening instead of showing a wrong cube. */
+        void paintWaiting(Graphics2D g, int w, int h) {
+            String state = BlockModels.offlineState();
+            String t = state.startsWith("working") ? "Building entity models from Minecraft (once, a few seconds)..."
+                : state.startsWith("failed") || state.startsWith("no ") ? "Entity models are not available: " + state
+                : "Looking for this entity's model...";
+            g.setFont(UI);
+            g.setColor(state.startsWith("failed") ? WARN : MUTED);
+            FontMetrics fm = g.getFontMetrics();
+            String fit = StudioWidgets.Segmented.fit(t, fm, w - 20);
+            g.drawString(fit, Math.max(10, (w - fm.stringWidth(fit)) / 2), h / 2);
+            if (state.startsWith("working")) SwingUtilities.invokeLater(() -> {
+                try {
+                    Thread.sleep(300);
+                } catch (InterruptedException ignored) {
+                    // repaint soon
+                }
+                root.repaint();
+            });
         }
 
         boolean painting(MouseEvent e) {
@@ -598,7 +658,18 @@ final class MaterialPanels {
             List<double[][]> edges = new ArrayList<>();
             double cy = Math.cos(modelYaw), sy = Math.sin(modelYaw);
             double lx = Math.cos(lightPitch) * Math.cos(lightYaw), ly = Math.sin(lightPitch), lz = Math.cos(lightPitch) * Math.sin(lightYaw);
-            double scale = size / 30.0, c30 = Math.cos(Math.toRadians(30)), s30 = 0.5;
+            double c30 = Math.cos(Math.toRadians(30)), s30 = 0.5;
+            // fit: project every corner at scale 1, then scale and centre the outline into the view (any model size)
+            double fx0 = 1e9, fy0 = 1e9, fx1 = -1e9, fy1 = -1e9;
+            for (BlockModels.Quad q : m.quads())
+                for (double[] c : q.p()) {
+                    double x = c[0] - 8, y = c[1] - 8, z = c[2] - 8, rx = x * cy - z * sy, rz = x * sy + z * cy;
+                    double px = (rx - rz) * c30, py = (rx + rz) * s30 - y;
+                    fx0 = Math.min(fx0, px); fx1 = Math.max(fx1, px); fy0 = Math.min(fy0, py); fy1 = Math.max(fy1, py);
+                }
+            double scale = 0.86 * size / Math.max(1e-6, Math.max(fx1 - fx0, fy1 - fy0)) * zoom;
+            offX = -(fx0 + fx1) / 2 * scale;
+            offY = -(fy0 + fy1) / 2 * scale;
             String id = StudioLibrary.id(model.materialEntry);
             for (BlockModels.Quad q : m.quads()) {
                 double[][] p = new double[4][];
@@ -624,6 +695,12 @@ final class MaterialPanels {
                     maxY = (int) Math.min(size - 1, Math.ceil(Math.max(Math.max(a[1], b1[1]), Math.max(b3[1], far[1]))));
                 double[] t = norm(e1), bt = norm(e3);
                 boolean mine = q.texture().equals(id);
+                boolean vanilla = light.getSelectedItem();
+                // Minecraft's own shading by face direction, from the model's (unturned) normal: up 1, down 0.5, N/S 0.8, E/W 0.6
+                double[] n0 = cross(sub(q.p()[3], q.p()[0]), sub(q.p()[1], q.p()[0]));
+                double n0l = Math.sqrt(dot(n0, n0));
+                double ax = Math.abs(n0[0]) / Math.max(1e-9, n0l), ay = n0[1] / Math.max(1e-9, n0l), az = Math.abs(n0[2]) / Math.max(1e-9, n0l);
+                double faceShade = Math.abs(ay) > 0.6 ? (ay > 0 ? 1.0 : 0.5) : az > ax ? 0.8 : 0.6;
                 if (front && mine) {
                     double[] p2 = proj(p[2], scale, c30, s30, size);
                     edges.add(new double[][] {a, b1, p2, b3});
@@ -640,15 +717,18 @@ final class MaterialPanels {
                         if (z <= depth[i]) continue;
                         double[] uv = BlockModels.uvAt(q, s, tt);
                         int argb;
-                        if (mine) argb = shade(b, base, uv[0] / 16, uv[1] / 16, n[0], n[1], n[2], t[0], t[1], t[2], bt[0], bt[1], bt[2], lx, ly, lz,
+                        if (vanilla) argb = vanillaShade(mine ? (b.albedo() != null ? new MosaicMaterial.Image(b.w(), b.h(), b.albedo()) : base) : other,
+                            uv[0] / 16, uv[1] / 16, faceShade);
+                        else if (mine) argb = shade(b, base, uv[0] / 16, uv[1] / 16, n[0], n[1], n[2], t[0], t[1], t[2], bt[0], bt[1], bt[2], lx, ly, lz,
                             Math.min(b.w(), b.h()));
                         else argb = plain(other, uv[0] / 16, uv[1] / 16, n, lx, ly, lz);
                         if (argb == 0) continue;
                         depth[i] = z;
                         img.setRGB(px, py, argb);
                         if (mine) {
-                            int fr = Math.min(b.w(), b.h());
-                            int tx = Math.min(fr - 1, Math.max(0, (int) (uv[0] / 16 * fr))), ty = Math.min(fr - 1, Math.max(0, (int) (uv[1] / 16 * fr)));
+                            boolean strip = b.h() > b.w() && b.h() % b.w() == 0;
+                            int tw = b.w(), th = strip ? b.w() : b.h();
+                            int tx = Math.min(tw - 1, Math.max(0, (int) (uv[0] / 16 * tw))), ty = Math.min(th - 1, Math.max(0, (int) (uv[1] / 16 * th)));
                             pk[i] = ty * b.w() + tx;
                         } else pk[i] = -1;
                     }
@@ -657,8 +737,8 @@ final class MaterialPanels {
             pickSize = size;
             if (seams && !edges.isEmpty()) {
                 Graphics2D g = StudioWidgets.smooth(img.getGraphics());
-                g.setColor(new Color(0xFF4040));
-                g.setStroke(new BasicStroke(1.4f));
+                g.setColor(new Color(255, 64, 64, 150));
+                g.setStroke(new BasicStroke(1f));
                 for (double[][] e : edges) {
                     java.awt.geom.Path2D.Double path = new java.awt.geom.Path2D.Double();
                     path.moveTo(e[0][0], e[0][1]);
@@ -681,6 +761,18 @@ final class MaterialPanels {
             });
         }
 
+        /** The vanilla look: the texel times the face's fixed shade, cut-out alpha. */
+        static int vanillaShade(MosaicMaterial.Image tex, double u, double v, double shade) {
+            if (tex == null) return 0xFF6A6A6A;
+            int frame = Math.min(tex.w(), tex.h());
+            int x = Math.min(tex.w() - 1, Math.max(0, (int) (u * tex.w()))), y = Math.min(frame - 1, Math.max(0, (int) (v * frame)));
+            if (tex.w() == tex.h() || tex.h() % tex.w() != 0) y = Math.min(tex.h() - 1, Math.max(0, (int) (v * tex.h())));
+            int c = tex.argb()[y * tex.w() + x];
+            if ((c >>> 24) < 26) return 0;
+            int r = (int) (((c >> 16) & 255) * shade), g = (int) (((c >> 8) & 255) * shade), b = (int) ((c & 255) * shade);
+            return 0xFF000000 | r << 16 | g << 8 | b;
+        }
+
         static int plain(MosaicMaterial.Image tex, double u, double v, double[] n, double lx, double ly, double lz) {
             if (tex == null) return 0xFF6A6A6A;
             int frame = Math.min(tex.w(), tex.h());
@@ -692,8 +784,10 @@ final class MaterialPanels {
             return 0xFF000000 | r << 16 | g << 8 | bl;
         }
 
-        static double[] proj(double[] p, double scale, double c30, double s30, int size) {
-            return new double[] {size / 2.0 + (p[0] - p[2]) * c30 * scale, size / 2.0 + ((p[0] + p[2]) * s30 - p[1]) * scale};
+        double offX, offY;
+
+        double[] proj(double[] p, double scale, double c30, double s30, int size) {
+            return new double[] {size / 2.0 + offX + (p[0] - p[2]) * c30 * scale, size / 2.0 + offY + ((p[0] + p[2]) * s30 - p[1]) * scale};
         }
 
         static double[] sub(double[] a, double[] b) { return new double[] {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
@@ -704,6 +798,17 @@ final class MaterialPanels {
         static double[] norm(double[] a) {
             double l = Math.sqrt(dot(a, a));
             return l < 1e-12 ? a : new double[] {a[0] / l, a[1] / l, a[2] / l};
+        }
+
+        /** The item sprite face-on, lit by the sun with its baked normal, roughness and metal (Bedray PBR). */
+        BufferedImage itemLit(MosaicMaterial.Baked b, MosaicMaterial.Image base) {
+            int frame = Math.min(b.w(), b.h());
+            int[] out = new int[b.w() * b.h()];
+            double lx = Math.cos(lightPitch) * Math.cos(lightYaw), ly = Math.sin(lightPitch), lz = Math.cos(lightPitch) * Math.sin(lightYaw);
+            for (int y = 0; y < b.h(); y++)
+                for (int x = 0; x < b.w(); x++)
+                    out[y * b.w() + x] = shade(b, base, (x + 0.5) / b.w(), (y + 0.5) / frame, 0, 0, 1, 1, 0, 0, 0, -1, 0, lx, ly, lz, frame);
+            return StudioLibrary.fromArgb(b.w(), b.h(), out);
         }
 
         static BufferedImage channel(MosaicMaterial.Baked b, MosaicMaterial.Image base, View v) {
@@ -770,7 +875,9 @@ final class MaterialPanels {
         /** Face normal n, tangent t (u direction), bitangent bt (v direction, image rows). */
         static int shade(MosaicMaterial.Baked b, MosaicMaterial.Image base, double u, double v, double nx, double ny, double nz,
                          double tx, double ty, double tz, double bx, double by, double bz, double lx, double ly, double lz, int frame) {
-            int x = Math.min(frame - 1, (int) (u * frame)), y = Math.min(frame - 1, (int) (v * frame));
+            // animation strips (h = n * w) use the first frame; other textures (entities: 64x32, 128x64...) map u, v to the whole image
+            boolean strip = b.h() > b.w() && b.h() % b.w() == 0;
+            int x = Math.min(b.w() - 1, Math.max(0, (int) (u * (strip ? frame : b.w())))), y = Math.min((strip ? frame : b.h()) - 1, Math.max(0, (int) (v * (strip ? frame : b.h()))));
             int i = y * b.w() + x;
             int albedo = b.albedo() != null ? b.albedo()[i] : base.argb()[i];
             if ((albedo >>> 24) < 128) return 0;

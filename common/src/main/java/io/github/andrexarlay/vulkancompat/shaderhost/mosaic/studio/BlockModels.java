@@ -238,8 +238,9 @@ final class BlockModels {
 
     /** The entity model export of the game folder: layer id -> flat x,y,z,u,v floats (4 per quad). */
     static synchronized Map<String, double[]> entityLayers(Path gameDir) {
-        if (gameDir == null) return Map.of();
-        Path f = gameDir.resolve("bedray-studio/models/entities.json");
+        Path f = gameDir == null ? null : gameDir.resolve("bedray-studio/models/entities.json");
+        if (f == null || !java.nio.file.Files.exists(f)) f = offlineFile(); // made by the studio from the client jar
+        if (f == null) return Map.of();
         try {
             if (!java.nio.file.Files.exists(f)) return Map.of();
             long m = java.nio.file.Files.getLastModifiedTime(f).toMillis();
@@ -262,33 +263,113 @@ final class BlockModels {
         return entityLayers;
     }
 
+    /** An item drawn like in the inventory: the sprite on one upright face (both sides). */
+    static Model sprite(String textureId) {
+        double[][] p = {{0, 16, 8}, {16, 16, 8}, {16, 0, 8}, {0, 0, 8}};
+        return new Model("item sprite", List.of(new Quad(p, 0, 0, 16, 16, 0, textureId, "south")));
+    }
+
+    // ------------------------------------------------------------------ entity models without the game
+
+    private static volatile String offlineState = "";
+
+    static String offlineState() { return offlineState; }
+
+    /** The studio's own export from the newest client jar (26.3 first), or null when not made yet. */
+    static Path offlineFile() {
+        List<StudioLibrary.Source> jars = StudioLibrary.vanillaJars();
+        if (jars.isEmpty()) return null;
+        String v = jars.get(0).label().replaceAll("^Minecraft ([0-9.]+).*$", "$1");
+        Path f = StudioSettings.file().resolveSibling("studio").resolve("models").resolve("entities-" + v + ".json");
+        return java.nio.file.Files.exists(f) ? f : null;
+    }
+
+    /**
+     * Builds the entity models from the client jar in a separate Java process (the jar and its libraries are not on the
+     * studio's class path): runs the mod's EntityModelExport against vanilla layer definitions. Calls {@code done} when
+     * finished (on any thread). Returns false when it cannot start (no client jar).
+     */
+    static synchronized boolean exportOffline(Runnable done) {
+        if (offlineState.startsWith("working")) return true;
+        List<StudioLibrary.Source> jars = StudioLibrary.vanillaJars();
+        if (jars.isEmpty()) {
+            offlineState = "no Minecraft client jar found (Library > game instance)";
+            return false;
+        }
+        StudioLibrary.Source jar = jars.get(0);
+        String v = jar.label().replaceAll("^Minecraft ([0-9.]+).*$", "$1");
+        Path out = StudioSettings.file().resolveSibling("studio").resolve("models").resolve("entities-" + v + ".json");
+        offlineState = "working: building entity models from Minecraft " + v + "...";
+        Thread t = new Thread(() -> {
+            try {
+                java.nio.file.Files.createDirectories(out.getParent());
+                List<String> cp = new ArrayList<>();
+                cp.add(jar.path().toString());
+                for (Path p : StudioLibrary.libraryJars(jar.path())) cp.add(p.toString());
+                cp.add(System.getProperty("java.class.path")); // the exporter class itself
+                // a manifest-only "pathing" jar: any path (non-Latin letters, any length) works on every OS
+                Path pathing = java.nio.file.Files.createTempFile("mosaic-export", ".jar");
+                java.util.jar.Manifest mf = new java.util.jar.Manifest();
+                mf.getMainAttributes().put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.0");
+                StringBuilder urls = new StringBuilder();
+                for (String entry : cp)
+                    for (String part : entry.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+                        if (part.isBlank()) continue;
+                        Path pp = Path.of(part).toAbsolutePath();
+                        String uri = pp.toUri().toASCIIString();
+                        if (java.nio.file.Files.isDirectory(pp) && !uri.endsWith("/")) uri += "/";
+                        urls.append(uri).append(' ');
+                    }
+                mf.getMainAttributes().put(java.util.jar.Attributes.Name.CLASS_PATH, urls.toString().trim());
+                try (var jo = new java.util.jar.JarOutputStream(java.nio.file.Files.newOutputStream(pathing), mf)) {
+                    // the manifest is all it holds
+                }
+                Process p = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-Xmx512m",
+                    "-cp", pathing.toString(), "io.github.andrexarlay.vulkancompat.shaderhost.customrt.EntityModelExport", out.toString())
+                    .redirectErrorStream(true).start();
+                String log = new String(p.getInputStream().readAllBytes());
+                boolean ok = p.waitFor() == 0 && java.nio.file.Files.exists(out);
+                java.nio.file.Files.deleteIfExists(pathing);
+                offlineState = ok ? "ready: " + log.trim() : "failed: " + log.lines().filter(l -> l.contains("Exception") || l.contains("Error"))
+                    .findFirst().orElse(log.length() > 200 ? log.substring(0, 200) : log);
+            } catch (Exception e) {
+                offlineState = "failed: " + e.getMessage();
+            }
+            done.run();
+        }, "mosaic-entity-models");
+        t.setDaemon(true);
+        t.start();
+        return true;
+    }
+
     /** Entity layers that probably use this texture (entity/cow/cow.png -> minecraft:cow#main), best first. */
     static List<String> entityModelsFor(Path gameDir, String textureEntry) {
         Map<String, double[]> layers = entityLayers(gameDir);
         String id = StudioLibrary.id(textureEntry);
-        String path = id.substring(id.indexOf(':') + 1).replace("entity/", "");
-        String[] words = path.split("[/_]");
-        String last = path.substring(path.lastIndexOf('/') + 1);
+        String path = id.substring(id.indexOf(':') + 1).replace("entity/", "");     // axolotl/axolotl_blue_baby
+        String last = path.substring(path.lastIndexOf('/') + 1);                    // axolotl_blue_baby
+        // the creature: the texture's folder (entity/axolotl/...), else the first word of the file name
+        String creature = path.contains("/") ? path.substring(0, path.indexOf('/')) : last.split("_")[0];
+        java.util.Set<String> want = new java.util.HashSet<>(java.util.Arrays.asList(last.split("_")));
         List<String> out = new ArrayList<>();
         for (String l : layers.keySet()) {
-            String model = l.contains(":") ? l.substring(l.indexOf(':') + 1) : l;
-            model = model.contains("#") ? model.substring(0, model.indexOf('#')) : model;
-            boolean hit = model.equals(last) || model.equals(path.replace('/', '_'));
-            for (String w : words) if (w.length() > 2 && model.contains(w)) hit = true;
-            if (hit) out.add("entity:" + l);
+            String model = name(l);
+            if (model.contains(creature) || model.equals(last)) out.add("entity:" + l);
         }
-        // best first: the layer whose name shares the most words with the texture (cow_cold -> cold_cow), main layers, short names
-        java.util.Set<String> want = new java.util.HashSet<>();
-        for (String w : last.split("_")) if (w.length() > 2) want.add(w);
         out.sort(java.util.Comparator.comparingInt((String l) -> {
-            String m = l.substring(l.indexOf(':', 7) + 1);
-            m = m.contains("#") ? m.substring(0, m.indexOf('#')) : m;
+            String m = name(l.substring("entity:".length()));
             int shared = 0;
             for (String w : m.split("_")) if (want.contains(w)) shared++;
             int extra = m.split("_").length - shared;
-            return m.equals(last) ? -100 : -shared * 10 + extra * 3;
+            return m.equals(last) ? -100 : -shared * 10 + extra * 4;
         }).thenComparing(l -> !l.endsWith("#main")).thenComparingInt(String::length));
         return out;
+    }
+
+    /** "minecraft:axolotl_baby#main" -> "axolotl_baby". */
+    private static String name(String layer) {
+        String m = layer.contains(":") ? layer.substring(layer.indexOf(':') + 1) : layer;
+        return m.contains("#") ? m.substring(0, m.indexOf('#')) : m;
     }
 
     /** An exported entity layer as a model fitted into the 0..16 preview box, every quad textured with {@code textureId}. */

@@ -90,6 +90,12 @@ public final class EntityModelExport {
         return new int[] {64, 32};
     }
 
+    /** Mosaic Studio runs this with the client jar and its libraries: the vanilla layers, no game needed. */
+    public static void main(String[] args) throws Exception {
+        int n = export(net.minecraft.client.model.geom.LayerDefinitions.createRoots(), Path.of(args[0]));
+        System.out.println("exported " + n + " layers");
+    }
+
     /** The layers of a running game: every root the entity model set knows (vanilla and mods), else the vanilla list. */
     @SuppressWarnings("unchecked")
     public static Map<ModelLayerLocation, LayerDefinition> gameRoots(Object entityModelSet) {

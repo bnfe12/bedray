@@ -162,6 +162,48 @@ final class StudioLibrary {
         return out;
     }
 
+    // ------------------------------------------------------------------ libraries of a client jar (for offline model export)
+
+    /** Library folders of launchers (maven layout) and a Bedray checkout's libs/ next to a dev jar. */
+    static List<Path> libraryRoots(Path clientJar) {
+        List<Path> roots = new ArrayList<>();
+        for (Path r : launcherRoots("PrismLauncher", "PrismLauncher", "PrismLauncher")) roots.add(r.resolve("libraries"));
+        for (Path r : launcherRoots("MultiMC", "MultiMC", "multimc")) roots.add(r.resolve("libraries"));
+        for (Path r : launcherRoots(".minecraft", "minecraft", "../../.minecraft")) roots.add(r.resolve("libraries"));
+        roots.add(home().resolve(".minecraft/libraries"));
+        roots.add(home().resolve("curseforge/minecraft/Install/libraries"));
+        for (Path r : launcherRoots("ModrinthApp", "ModrinthApp", "ModrinthApp")) roots.add(r.resolve("meta/libraries"));
+        roots.add(home().resolve(".gradle/caches/modules-2/files-2.1"));
+        if (clientJar != null && clientJar.getParent() != null) roots.add(clientJar.getParent());
+        return roots;
+    }
+
+    /** Newest jar of every library artifact found (natives and LWJGL left out: model building needs neither). */
+    static List<Path> libraryJars(Path clientJar) {
+        Map<String, Path> best = new LinkedHashMap<>();
+        Map<String, Long> bestVersion = new LinkedHashMap<>();
+        Pattern artifact = Pattern.compile("^([A-Za-z][A-Za-z0-9_.-]*?)-(\\d[\\w.+-]*)\\.jar$");
+        for (Path root : libraryRoots(clientJar)) {
+            if (!Files.isDirectory(root)) continue;
+            try (Stream<Path> w = Files.walk(root, 9)) {
+                for (Path p : (Iterable<Path>) w.filter(f -> f.toString().endsWith(".jar"))::iterator) {
+                    String n = p.getFileName().toString();
+                    if (n.contains("natives") || n.startsWith("lwjgl") || n.startsWith("minecraft-") || n.contains("-sources")) continue;
+                    Matcher m = artifact.matcher(n);
+                    if (!m.matches()) continue;
+                    long v = versionKey(m.group(2));
+                    if (v > bestVersion.getOrDefault(m.group(1), -1L)) {
+                        bestVersion.put(m.group(1), v);
+                        best.put(m.group(1), p);
+                    }
+                }
+            } catch (Exception ignored) {
+                // unreadable folder
+            }
+        }
+        return new ArrayList<>(best.values());
+    }
+
     // ------------------------------------------------------------------ launcher instances
 
     private static final Map<String, List<Instance>> INSTANCES = new ConcurrentHashMap<>();
