@@ -131,11 +131,16 @@ final class CustomRtExecutor implements AutoCloseable {
             ivec2 p = ivec2(gl_GlobalInvocationID.xy);
             ivec2 s = imageSize(rayDistance);
             if (p.x >= s.x || p.y >= s.y) return;
-            float window = texelFetch(hardwareDepth, p, 0).r * depthMap.m.x + depthMap.m.y;
-            if (window >= 0.999999) { imageStore(rayDistance, p, vec4(1.0e6)); return; }
+            // 1 - GL window depth, formed without cancellation: for a reverse-Z map (scale -1, bias 1) it is the stored
+            // value itself, whose precision far away is what reverse Z is for (1 - window would band into stripes)
+            float u = (1.0 - depthMap.m.y) - texelFetch(hardwareDepth, p, 0).r * depthMap.m.x;
+            if (u <= 1.0e-7) { imageStore(rayDistance, p, vec4(1.0e6)); return; }
+            float n = frame.depthInfo.x, f = frame.depthInfo.y;
+            float z = n * f / (n + u * (f - n));             // linear view depth of a GL [near, far] projection
             vec2 ndc = (vec2(p) + 0.5) / vec2(s) * 2.0 - 1.0;
-            vec4 view = frame.projectionInverse * vec4(ndc, window * 2.0 - 1.0, 1.0);
-            imageStore(rayDistance, p, vec4(length(view.xyz / view.w)));
+            vec4 far4 = frame.projectionInverse * vec4(ndc, 1.0, 1.0);
+            vec3 ray = far4.xyz / far4.w;
+            imageStore(rayDistance, p, vec4(z * length(ray / -ray.z)));
         }
         """;
     private final boolean usesDepth;

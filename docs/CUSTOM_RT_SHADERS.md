@@ -145,6 +145,26 @@ GLSL through shaderc, Slang through `slangc 2026.20 -target spirv -profile cs_6_
 6444 B SPIR-V, no errors). The runtime path still compiles the GLSL mirror; the Slang output ships as the canonical
 source for the AOT build.
 
+### Host-produced bindings of Mosaic graphs
+
+When the stage comes from `shaders/bedray/mosaic.json`, these set-0 bindings are filled by the host and **never read
+from pack files** (a hand-written `rt.comp` keeps the pack-file meaning of 16..31):
+
+| Binding | Declaration | Content |
+|---|---|---|
+| 4 | `uniform sampler2D` | Also on **raster** frames: the game's depth buffer turned into the same ray distance (blocks, `1e6` = sky) by a host pass, so `depthInfo.z == 1` whenever the renderer has a depth buffer |
+| 15 | `readonly buffer` | World volume around the camera (`MosaicWorld`) |
+| 16 | `layout(std140) uniform BedrayWorldInfo { vec4 weather; vec4 skyColor; vec4 fogColor; vec4 extra; }` | `weather` = rain 0..1, thunder 0..1, biome base temperature at the camera, 0; sky and fog colour of the frame (rgb); `extra` reserved (0) |
+| 17 | `layout(std140) uniform BedrayPrevFrame { mat4 projection; mat4 modelView; vec4 cameraPosition; }` | The previous frame's `BedrayFrame.projection`, `modelView` and `cameraPosition` (144 B); on the first frame equal to the current one |
+| 19 | `uniform sampler2D` | Previous final image of the stage (rgba16f, bilinear, clamp); black on the first frame |
+| 20 + i | `uniform sampler2D` | Buffer pass `i` of a multi-pass graph (buffer names sorted), rgba16f at 1/1, 1/2, 1/4 or 1/8 of the frame, bilinear, clamp |
+
+**Multi-pass graphs.** Each `mosaic.pass` (Buffer) node becomes its own compute dispatch writing binding 3 of its
+pass into its buffer image; passes run in dependency order before the final image, every pass on the same descriptor
+set layout (the union of all passes' bindings; one binding used with two kinds is refused). Read buffer, Blur buffer
+and Kawase blur nodes sample a buffer at binding 20 + i. Studio-built SPIR-V (`mosaic.spv`) covers single-pass graphs;
+multi-pass graphs are compiled in the game (slangc when installed, else GLSL through shaderc).
+
 ### `BedrayFrame` (std140, 320 bytes)
 
 | Offset | Member | Meaning |

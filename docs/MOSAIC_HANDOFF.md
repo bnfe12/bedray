@@ -237,3 +237,20 @@ nodes; Bedray's own parts are called Bedray, yours are yours; a config of public
 Next, in order: run Apply in the real game on the RTX PC (pipeline reload of Studio passes without a restart); more
 user stage hooks (before tone mapping, sky, material decode) the same way as postStudio; turn the remaining code blocks
 (loops) into loop nodes; per-pass timings on nodes; HDRI in the game's sky; auto-unwrap / paint layers; Iris export.
+
+## Shader-pack level (2026-11-25, afternoon)
+
+What a Complementary-class pack needs, now in Mosaic (all in the game, see VERIFICATION_LOG 2026-11-25):
+multi-pass host (`CustomRtExecutor` chain), raster depth as ray distance (host pass `RASTER_DEPTH_GLSL`, precision-safe
+`1 - window` form), Blur buffer / Kawase blur (`mosaic.blur`, `mosaic.kawase`, read a Buffer by name like Read buffer),
+Reproject (`mosaic.reproject`, BedrayPrevFrame binding 17), effects `voxelSunShadow` / `sunVisibility` / `ssao` / `godRays`,
+templates Bloom chain (mip), Temporal smoothing, Shader pack look (no RT), Studio inspector for buffer names and sizes,
+Shader browser "Export as Iris pack". Build here: javac harness (see top) or `gradlew :fabric:combinedJar -x test
+-Pneoforge_libs_dir=<stub jars> -Pslangc=C:/Temp/bedray-slang-2026.20/bin/slangc.exe` with
+BEDRAY_LAUNCHER_LIBRARIES = Freesm libraries (NeoForge jars are not installed on this PC; empty stubs pass configuration).
+In-game check: Freesm instance Mosaic-Bedray-26.3, JvmArgs `-Dvkbridge.autotest=iris -Dbedray.customrt=<pack>`, shots in
+`<instance>/minecraft/autotest/iris/`.
+
+Still open: a real shadow map pass (sun-view raster) instead of the voxel volume (casters beyond 24 blocks are missed),
+neighbourhood clamp for temporal smoothing (ghosting on fast motion), studio-built SPIR-V for multi-pass graphs, loops as
+nodes (loops live in function code today), hardware-RT run of Mosaic on the RTX PC.

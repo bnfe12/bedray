@@ -4549,3 +4549,21 @@ owner branch's tip) into this branch, rebuild the combined jar, deploy jar only
 
 L0-L2 only. No in-game per-version launch was performed; settings-menu
 visibility in the owner's instance remains unverified (accepted as-is).
+
+## 2026-11-25 — Mosaic in the game: multi-pass host, raster depth, new nodes (L1-L4)
+
+Branch `mosaic-studio`. First run of a Mosaic graph inside Minecraft. Machine: Intel UHD Graphics (no ray tracing),
+Fabric 26.3 dev instance, fabric combinedJar built from this branch (`:fabric:combinedJar`, natives of the instance).
+
+* L1-L2: Mosaic and custom RT packages compile with javac against the 26.3 client and pass 80/80 Mosaic and 12/12
+  custom RT tests (shaderc and slangc 2026.20 compiles of every effect, template and pass). The four
+  `CustomRtContractTest` failures that predated this work are fixed (example `rt.comp` lacked
+  `GL_EXT_ray_query`; three shaders never used the bindings they checked).
+* L3-L4: `-Dvkbridge.autotest=iris -Dbedray.customrt=mosaic-test`, pack = "Shader pack look (no RT)" (voxel sun shadows,
+  screen AO, light shafts, fog, grade, vignette) + "Bloom chain (mip)" + Reproject / Previous frame blend:
+  F3 `[CUSTOM-RT] state=ACTIVE ... raster depth as ray distance, 4 passes (binding 21 1/2, binding 22 1/4,
+  binding 20 1/8, final)`, scenario `result=PASS`, 13-20 FPS at 1366x768 on the iGPU; four shots (morning, noon, sunset,
+  night) show shadows, AO, shafts, fog and glow.
+* Found and fixed in the game: the first raster depth conversion went through GL window depth and lost precision far
+  away (diagonal banding on every face); it now forms 1 - window depth without cancellation.
+* Not verified: hardware RT renderer with Mosaic (no RT GPU here), Studio UI by hand, Apply of Bedray function graphs.

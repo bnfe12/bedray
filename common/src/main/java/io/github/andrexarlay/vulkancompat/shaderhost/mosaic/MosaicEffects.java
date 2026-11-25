@@ -240,21 +240,27 @@ public final class MosaicEffects {
             vec3 n = mosaicNormal(uv), n2;
             float m2;
             vec3 L = mosaicSunDir();
+            // the moon casts softer shadows; both fade out near the horizon instead of flipping sides at once
+            float strength = L.y > 0.0 ? smoothstep(0.0, 0.15, L.y) : 0.35 * smoothstep(0.0, 0.15, -L.y);
             if (L.y < 0.0) L = -L;
             float lit = 0.0;
             if (dot(n, L) > 0.0) {
-                vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * 0.02;
-                lit = mosaicVoxelTrace(p, L, maxDistance, n2, m2) < 0.0 ? 1.0 : 0.0;
+                vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * (0.03 + t * 0.004);
+                float h = mosaicVoxelTrace(p, L, maxDistance, n2, m2);
+                lit = (h < 0.0 || h < 0.35) ? 1.0 : 0.0;
             }
-            float k = darkness * clamp(mosaicHitSkyLight(uv), 0.0, 1.0);
+            float k = darkness * strength * clamp(mosaicHitSkyLight(uv), 0.0, 1.0);
             return vec4(color.rgb * mix(1.0 - k, 1.0, lit), color.a);""");
-        add("Rendering", "vec4 ssao(vec4 color, vec2 uv, float radius = 1.2, float strength = 1, float samples = 10)",
+        add("Rendering", "vec4 ssao(vec4 color, vec2 uv, float radius = 1.2, float strength = 0.7, float samples = 10)",
             "Ambient occlusion (screen)", "Darkens corners and contact areas from the depth guide alone (ray tracing or"
                 + " raster depth): samples around each pixel's surface; radius in blocks.", """
             float t = mosaicDepth(uv);
             if (t >= 1.0e5) return color;
             vec3 p = mosaicHitPos(uv), n = mosaicNormal(uv);
-            float n0 = fract(sin(dot(uv * frame.viewSize.xy, vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+            // the pattern turns every frame: with Temporal smoothing after it the noise averages away
+            // interleaved gradient noise, shifted every frame: an even pattern Temporal smoothing resolves cleanly
+            vec2 px = uv * frame.viewSize.xy + vec2(5.588238, 5.588238) * mod(frame.timing.z, 64.0);
+            float n0 = fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715)))) * 6.2831853;
             float occ = 0.0, count = 0.0;
             int k = int(clamp(samples, 1.0, 32.0));
             for (int i = 0; i < 32; i++) {
@@ -271,7 +277,7 @@ public final class MosaicEffects {
             }
             float ao = 1.0 - clamp(occ / max(count, 1.0) * 2.0 * strength, 0.0, 0.85);
             return vec4(color.rgb * ao, color.a);""");
-        add("Rendering", "vec4 godRays(vec4 color, vec2 uv, float strength = 0.5, float decay = 0.96, float samples = 32)",
+        add("Rendering", "vec4 godRays(vec4 color, vec2 uv, float strength = 0.3, float decay = 0.96, float samples = 32)",
             "Light shafts (screen)", "Sun shafts streaming from the sun across the screen where the sky shows through"
                 + " leaves and edges; fades at night and when the sun is behind the camera.", """
             vec3 L = mosaicSunDir();
@@ -392,8 +398,11 @@ public final class MosaicEffects {
             vec3 L = mosaicSunDir();
             if (L.y < 0.0) L = -L;
             if (dot(n, L) <= 0.0) return 0.0;
-            vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * 0.02;
-            return mosaicVoxelTrace(p, L, maxDistance, n2, m2) < 0.0 ? 1.0 : 0.0;""");
+            // positions rebuilt from depth drift with distance: the start moves off the surface by more far away, and a
+            // hit right at the start is the pixel's own block, not a caster
+            vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * (0.03 + t * 0.004);
+            float h = mosaicVoxelTrace(p, L, maxDistance, n2, m2);
+            return (h < 0.0 || h < 0.35) ? 1.0 : 0.0;""");
         add("Shading", "float voxelDistance(vec3 origin, vec3 dir, float maxDistance = 96)", "Voxel distance",
             "Distance along a ray to the first solid block of the world volume (-1 = none).", """
             vec3 n;

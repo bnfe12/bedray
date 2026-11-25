@@ -15,6 +15,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph;
+import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicIrisExport;
+
 import java.util.Locale;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -85,6 +88,8 @@ final class ShaderBrowser extends Panels.Listening {
         buttons.add(button("New Mosaic pack...", "A new shader pack with a Mosaic graph from a template", this::newPack));
         buttons.add(button("Import zip...", "Copy shader pack zips (Iris or Mosaic) into the game's shaderpacks", this::importZip));
         buttons.add(button("Export zip...", "The selected pack as a zip to share or publish", this::exportZip));
+        buttons.add(button("Export as Iris pack", "The selected Mosaic graph as an Iris shader pack zip (one composite pass) next to it in"
+            + " shaderpacks: screen-space graphs only, nodes Iris has nothing for are named", this::exportIris));
         buttons.add(button("Folder", "Show the shaderpacks folder", () -> {
             Path d = dir();
             try {
@@ -293,6 +298,40 @@ final class ShaderBrowser extends Panels.Listening {
             model.say("Exported " + out, OK);
         } catch (Exception e) {
             model.say("Export failed: " + e.getMessage(), BAD);
+        }
+    }
+
+    /** A Mosaic pack folder as an Iris pack zip in shaderpacks ({@link MosaicIrisExport}): refused nodes are listed by name. */
+    void exportIris() {
+        Pack p = grid.getSelectedValue();
+        if (p == null || p.kind() != Kind.MOSAIC || !Files.isDirectory(p.path())) {
+            model.say("Select a Mosaic pack folder to export for Iris", MUTED);
+            return;
+        }
+        try {
+            String json = Files.readString(p.path().resolve("shaders/bedray/mosaic.json"));
+            MosaicGraph.Analysis a = MosaicGraph.analyze(json);
+            if (a.firstError() != null) {
+                model.say("Fix the graph first: " + a.firstError(), BAD);
+                return;
+            }
+            MosaicIrisExport.Result r = MosaicIrisExport.export(a.graph(), p.name());
+            if (!r.ok()) {
+                model.say("Iris cannot run this graph: " + String.join("; ", r.problems()), BAD);
+                return;
+            }
+            Path out = p.path().resolveSibling(p.name() + " (Iris).zip");
+            try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(out))) {
+                for (var e : new java.util.TreeMap<>(r.files()).entrySet()) {
+                    zip.putNextEntry(new ZipEntry(e.getKey()));
+                    zip.write(e.getValue().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    zip.closeEntry();
+                }
+            }
+            model.say("Exported " + out.getFileName() + " for Iris", OK);
+            reload();
+        } catch (Exception e) {
+            model.say("Iris export failed: " + e.getMessage(), BAD);
         }
     }
 

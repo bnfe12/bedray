@@ -8,8 +8,9 @@ Mosaic Studio is the node editor of Bedray: a desktop app for shaders and materi
 the game. The **mod** part lives inside Bedray (it runs the shaders and loads the materials). The **app** runs next
 to Minecraft, or without it.
 
-> Status: in development on the `mosaic-studio` branch. The studio and its tests run; the in-game parts (result
-> frames, Slang SPIR-V loading, material reload) are compile-verified and still need a run on an RTX PC.
+> Status: in development on the `mosaic-studio` branch. Mosaic graphs run in the game (2026-11-25: multi-pass bloom,
+> temporal smoothing, voxel sun shadows and screen AO on raster, checked by the autotest on an integrated GPU). Still to
+> check on an RTX PC: the ray-traced renderer with Mosaic, result frames, material reload.
 
 ## What it does
 
@@ -19,7 +20,8 @@ to Minecraft, or without it.
 | **Materials** | A Principled BSDF graph per block, item or entity texture, baked into LabPBR `_s` / `_n` maps and the albedo of a resource pack that the game reloads by itself. |
 | **Texturing** | The real block model in the preview (fences, stairs, plants...), UV layout with seams, pixel painting (brush, eraser, fill, picker) on the UV view or straight on the model. |
 | **Library** | Textures of Minecraft (26.3 first), resource packs and mods of every game instance found in the official launcher, Prism / MultiMC, CurseForge, Modrinth, ATLauncher and GDLauncher. |
-| **Shader browser** | Every shader pack of the game folder (Mosaic graphs and Iris packs) with its last frame; open a graph in a tab, choose an Iris pack for the game, new pack from a template, import / export zips. |
+| **Shader browser** | Every shader pack of the game folder (Mosaic graphs and Iris packs) with its last frame; open a graph in a tab, choose an Iris pack for the game, new pack from a template, import / export zips, export a screen-space graph as an Iris pack. |
+| **Shader pack building blocks** | Buffer passes at 1/2..1/8 with Blur / Kawase reads (bloom mip chains), Reproject + Previous frame (temporal smoothing, motion blur), weather and sky inputs, voxel sun shadows, screen AO and light shafts that also work on raster (the game's depth becomes the ray distance). Templates: "Bloom chain (mip)", "Temporal smoothing", "Shader pack look (no RT)". |
 | **Result** | The frame of the running game before and after the shader, side by side, split, or against an earlier step; record GIF / MP4, save frames. |
 | **Workflow** | Document tabs, Blender-like areas you can split, pop out and dock back, rebindable keys (also on the Russian layout), themes including OLED black, named undo history per tab. |
 
