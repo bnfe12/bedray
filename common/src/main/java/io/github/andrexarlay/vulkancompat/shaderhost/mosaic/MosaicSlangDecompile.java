@@ -317,6 +317,7 @@ public final class MosaicSlangDecompile {
                 pendingNote = s.note();
                 if (resultRef != null) throw new Unsupported("code after return");
                 if (guards && guard(s.text())) continue;
+                if (wordAt(s.text().trim(), 0).equals("if") && !containsReturn(s.text()) && selectIf(s.text())) continue;
                 if (isControl(s.text())) {
                     if (!guardList.isEmpty()) throw new Unsupported("a block after an early return");
                     if (containsReturn(s.text())) {
@@ -414,6 +415,140 @@ public final class MosaicSlangDecompile {
                 }
             }
             return out.length() == 0 ? "" : out.toString();
+        }
+
+        // ------------------------------------------------------------ if / else as selections
+
+        static final Set<String> SAFE_CALLS = Set.of("abs", "min", "max", "clamp", "saturate", "lerp", "mix", "dot", "cross", "normalize",
+            "length", "sqrt", "rsqrt", "pow", "exp", "exp2", "log", "log2", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "floor",
+            "ceil", "frac", "fract", "fmod", "step", "smoothstep", "sign", "any", "all", "select", "distance", "reflect", "refract",
+            "isnan", "isinf", "isfinite", "asuint", "asfloat", "asint", "round", "trunc", "mad", "fma", "rcp", "degrees", "radians",
+            "countbits", "firstbithigh", "firstbitlow", "reversebits", "f16tof32", "f32tof16", "faceforward", "transpose", "mul", "determinant");
+        final Map<String, Boolean> pure = new HashMap<>();
+
+        /** A pack function that only computes: no indexing, no method calls (resources), only safe calls inside. */
+        boolean pureFunction(String name, Set<String> seen) {
+            Boolean known = pure.get(name);
+            if (known != null) return known;
+            if (!seen.add(name)) return false;
+            boolean ok = false;
+            for (MosaicSlangLib.Function f : lib.functions().values()) {
+                if (f.owner() != null || !f.name().equals(name)) continue;
+                ok = safeText(MosaicSlangLib.stripComments(f.body()), seen);
+                if (!ok) break;
+            }
+            pure.put(name, ok);
+            return ok;
+        }
+
+        /** Text that only computes: every call is an intrinsic, a constructor or a pure pack function; no [] and no method calls. */
+        boolean safeText(String s, Set<String> seen) {
+            List<Tok> ts = tokens(s);
+            for (int i = 0; i < ts.size(); i++) {
+                Tok t = ts.get(i);
+                if (t.kind() == 'p' && t.text().equals("[")) return false;
+                if (t.kind() == 'i' && (t.text().equals("return") || CONTROL.contains(t.text()) || OUT_BUILTINS.contains(t.text()))) return false;
+                if (t.kind() == 'i' && i + 1 < ts.size() && ts.get(i + 1).text().equals("(")) {
+                    if (i > 0 && ts.get(i - 1).text().equals(".")) return false;
+                    String n = t.text();
+                    if (!SAFE_CALLS.contains(n) && !isType(n) && !pureFunction(n, seen)) return false;
+                }
+            }
+            return true;
+        }
+
+        /**
+         * "if (a) { x = ...; } else if (b) { ... } else { ... }" whose branches only compute: every branch runs as nodes,
+         * then each variable a branch changed becomes a choice (a ? then : else). False (nothing changed) when it is not one.
+         */
+        boolean selectIf(String text) {
+            String s = MosaicSlangLib.stripComments(text).trim();
+            List<String[]> arms = new ArrayList<>(); // {condition or null for else, body}
+            int i = 0;
+            try {
+                while (true) {
+                    i = skipSpace(s, i);
+                    if (!wordAt(s, i).equals("if")) return false;
+                    int open = skipSpace(s, i + 2), close = matching(s, open, '(', ')');
+                    String cond = s.substring(open + 1, close);
+                    int bodyStart = skipSpace(s, close + 1), bodyEnd = statementEnd(s, bodyStart);
+                    arms.add(new String[] {cond, s.substring(bodyStart, bodyEnd)});
+                    i = skipSpace(s, bodyEnd);
+                    if (i >= s.length()) break;
+                    if (!wordAt(s, i).equals("else")) return false;
+                    i = skipSpace(s, i + 4);
+                    if (wordAt(s, i).equals("if")) continue;
+                    int e = statementEnd(s, i);
+                    arms.add(new String[] {null, s.substring(i, e)});
+                    if (skipSpace(s, e) < s.length()) return false;
+                    break;
+                }
+            } catch (Unsupported e) {
+                return false;
+            }
+            for (String[] arm : arms) {
+                if (arm[0] != null && !safeText(arm[0], new java.util.HashSet<>())) return false;
+                String body = arm[1].trim();
+                if (body.startsWith("{")) body = body.substring(1, body.lastIndexOf('}'));
+                if (!safeText(body, new java.util.HashSet<>())) return false;
+                arm[1] = body;
+            }
+            int mark = nodes.size(), seqMark = seq;
+            Map<String, String> base = new LinkedHashMap<>(vars);
+            Map<String, String> typesMark = new HashMap<>(types), sharedMark = new HashMap<>(shared);
+            Map<String, Integer> letMark = new HashMap<>(letCount);
+            String effectMark = lastEffect;
+            int effects = effectCount;
+            try {
+                List<String> conds = new ArrayList<>();
+                List<Map<String, String>> results = new ArrayList<>();
+                for (String[] arm : arms) {
+                    vars.clear();
+                    vars.putAll(base);
+                    if (arm[0] != null) conds.add(expr(arm[0]));
+                    for (Stmt st : statements("{" + arm[1] + "}")) {
+                        if (isControl(st.text())) throw new Unsupported("a block inside a branch");
+                        statement(st.text());
+                    }
+                    if (effectCount != effects) throw new Unsupported("a branch with effects");
+                    Map<String, String> r = new LinkedHashMap<>();
+                    for (String v : base.keySet()) r.put(v, vars.get(v));
+                    results.add(r);
+                }
+                boolean hasElse = arms.get(arms.size() - 1)[0] == null;
+                vars.clear();
+                vars.putAll(base);
+                for (String v : base.keySet()) {
+                    String fallback = hasElse ? results.get(results.size() - 1).get(v) : base.get(v);
+                    boolean changed = false;
+                    for (Map<String, String> r : results) if (!java.util.Objects.equals(r.get(v), base.get(v))) changed = true;
+                    if (!changed) continue;
+                    if (fallback == null) fallback = valueOf(v);
+                    String value = fallback;
+                    for (int k = conds.size() - 1; k >= 0; k--) {
+                        String then = results.get(k).get(v);
+                        if (then == null) then = base.get(v) != null ? base.get(v) : valueOf(v);
+                        if (then.equals(value)) continue;
+                        value = add(MosaicSlangGraph.OP, "?:", 0, map("a", conds.get(k), "b", then, "c", value), k == 0 ? "if" : "else if");
+                    }
+                    let(v, value);
+                }
+                return true;
+            } catch (Unsupported e) {
+                while (nodes.size() > mark) deps.remove(nodes.remove(nodes.size() - 1).get("id").getAsString());
+                seq = seqMark;
+                vars.clear();
+                vars.putAll(base);
+                types.clear();
+                types.putAll(typesMark);
+                shared.clear();
+                shared.putAll(sharedMark);
+                letCount.clear();
+                letCount.putAll(letMark);
+                lastEffect = effectMark;
+                effectCount = effects;
+                return false;
+            }
         }
 
         static boolean isControl(String s) {
