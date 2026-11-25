@@ -1347,6 +1347,19 @@ final class StudioModel {
     }
 
     /** M: mutes the selection, or unmutes it when every selected node is muted already. */
+    /** Ctrl+H: every input of the selected nodes on the node, or only the used ones (Blender's hide unused sockets). */
+    void toggleExpand() {
+        List<MosaicDocument.ENode> group = ordered();
+        if (group.isEmpty()) {
+            say("Select nodes to show or hide their unused inputs", StudioUi.MUTED);
+            return;
+        }
+        boolean expand = group.stream().anyMatch(n -> !n.expanded);
+        edit((expand ? "Show all inputs of " : "Hide unused inputs of ") + (group.size() == 1 ? group.get(0).id : group.size() + " nodes"), () -> {
+            for (MosaicDocument.ENode n : group) n.expanded = expand;
+        });
+    }
+
     void toggleMute() {
         List<MosaicDocument.ENode> group = ordered().stream().filter(n -> !MosaicGraph.isOutput(n.type)).toList();
         if (group.isEmpty()) {

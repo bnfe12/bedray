@@ -126,16 +126,18 @@ public final class MosaicTemplates {
      */
     static String renderer(boolean gi) { return renderer(gi, false); }
 
-    /** {@code rt}: the hardware ray tracing pieces (Sun & moon light (RT), Diffuse GI (RT)) instead of the voxel ones. */
+    /**
+     * A renderer of your own, laid out in frames: G-buffer, surface (albedo, roughness), direct light (one shared sun shadow
+     * ray for diffuse and specular, block light, emission), indirect light (voxel or RT GI at 1/2 size, Accumulate, three
+     * Denoise steps; or sky ambient), and the shading chain (combine, water reflections, atmosphere, tone map, TAA).
+     * {@code rt}: the hardware ray tracing pieces (Sun & moon light (RT), Diffuse GI (RT)) instead of the voxel ones.
+     */
     static String renderer(boolean gi, boolean rt) {
         JsonObject root = new JsonObject();
-        JsonArray fns = new JsonArray(), nodes = new JsonArray();
-        java.util.function.BiConsumer<JsonObject, String[]> wire = (n, kv) -> {
-            JsonObject in = n.has("inputs") ? n.getAsJsonObject("inputs") : new JsonObject();
-            for (int i = 0; i + 1 < kv.length; i += 2) in.addProperty(kv[i], kv[i + 1]);
-            n.add("inputs", in);
-        };
+        JsonArray fns = new JsonArray(), nodes = new JsonArray(), frames = new JsonArray();
         java.util.Set<String> used = new java.util.LinkedHashSet<>();
+        java.util.Map<String, int[]> at = new java.util.LinkedHashMap<>();
+        final int CX = 240, RY = 150;
         java.util.function.Function<Object[], JsonObject> add = a -> {
             String id = (String) a[0], type = (String) a[1];
             if (type.startsWith("fn:")) {
@@ -143,34 +145,67 @@ public final class MosaicTemplates {
                 if (used.add(f.name())) fns.add(f.toJson());
                 type = f.type();
             }
-            JsonObject n = node(id, type, (Integer) a[2], (Integer) a[3]);
+            int x = (int) Math.round(((Number) a[2]).doubleValue() * CX), y = (int) Math.round(((Number) a[3]).doubleValue() * RY);
+            JsonObject n = node(id, type, x, y);
+            JsonObject in = new JsonObject();
+            for (int i = 4; i + 1 < a.length; i += 2) in.addProperty((String) a[i], (String) a[i + 1]);
+            if (in.size() > 0) n.add("inputs", in);
             nodes.add(n);
+            at.put(id, new int[] {x, y});
             return n;
         };
+        java.util.function.BiConsumer<String, Object[]> frame = (title, spec) -> {
+            int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE;
+            for (int i = 1; i < spec.length; i++) {
+                int[] p = at.get((String) spec[i]);
+                if (p == null) continue;
+                minX = Math.min(minX, p[0]);
+                minY = Math.min(minY, p[1]);
+                maxX = Math.max(maxX, p[0] + 180);
+                maxY = Math.max(maxY, p[1] + 120);
+            }
+            JsonObject f = new JsonObject();
+            f.addProperty("id", "f_" + title.replaceAll("\\W", "").toLowerCase(java.util.Locale.ROOT));
+            f.addProperty("title", title);
+            f.addProperty("x", minX - 20);
+            f.addProperty("y", minY - 40);
+            f.addProperty("w", maxX - minX + 40);
+            f.addProperty("h", maxY - minY + 60);
+            f.addProperty("color", (String) spec[0]);
+            frames.add(f);
+        };
+        // G-buffer
         add.apply(new Object[] {"uv", "mosaic.uv", 0, 0});
-        add.apply(new Object[] {"pos", "mosaic.position", 0, 90});
-        add.apply(new Object[] {"nrm", "mosaic.normal", 0, 180});
-        add.apply(new Object[] {"lamp", "mosaic.blockLight", 0, 360});
-        wire.accept(add.apply(new Object[] {"albedo", "fn:sceneAlbedo", 220, 0}), new String[] {"uv", "uv"});
-        wire.accept(add.apply(new Object[] {"sun", rt ? "fn:sunLightRT" : "fn:sunLight", 220, 110}), new String[] {"position", "pos", "normal", "nrm"});
-        wire.accept(add.apply(new Object[] {"torch", "fn:torchLight", 220, 360}), new String[] {"blockLight", "lamp"});
-        wire.accept(add.apply(new Object[] {"glow", "fn:selfGlow", 220, 450}), new String[] {"uv", "uv", "albedo", "albedo"});
-        wire.accept(add.apply(new Object[] {"l1", "mosaic.add", 460, 200}), new String[] {"a", "sun", "b", "torch"});
+        add.apply(new Object[] {"pos", "mosaic.position", 0, 1});
+        add.apply(new Object[] {"nrm", "mosaic.normal", 0, 2});
+        add.apply(new Object[] {"lamp", "mosaic.blockLight", 0, 3});
+        if (!gi) add.apply(new Object[] {"sky", "mosaic.skyLight", 0, 4});
+        // surface
+        add.apply(new Object[] {"albedo", "fn:sceneAlbedo", 1, 0, "uv", "uv"});
+        add.apply(new Object[] {"rough", "fn:materialRoughness", 1, 1, "uv", "uv"});
+        // direct light
+        if (rt) add.apply(new Object[] {"sun", "fn:sunLightRT", 2, 0, "position", "pos", "normal", "nrm"});
+        else {
+            add.apply(new Object[] {"shadow", "fn:sunShadow", 2, 0, "position", "pos", "normal", "nrm"});
+            add.apply(new Object[] {"sun", "fn:sunLight", 2, 1, "position", "pos", "normal", "nrm", "visibility", "shadow"});
+        }
+        if (rt) add.apply(new Object[] {"spec", "fn:sunSpecular", 2, 1, "position", "pos", "normal", "nrm", "roughness", "rough"});
+        else add.apply(new Object[] {"spec", "fn:sunSpecular", 2, 2, "position", "pos", "normal", "nrm", "roughness", "rough", "visibility", "shadow"});
+        add.apply(new Object[] {"torch", "fn:torchLight", 2, 3, "blockLight", "lamp"});
+        add.apply(new Object[] {"glow", "fn:selfGlow", 2, 4, "uv", "uv", "albedo", "albedo"});
+        // indirect light
         String indirect;
         if (gi) {
-            wire.accept(add.apply(new Object[] {"giRaw", rt ? "fn:diffuseGIRT" : "fn:diffuseGI", 220, 560}), new String[] {"position", "pos", "normal", "nrm"});
-            JsonObject acc = add.apply(new Object[] {"acc", "mosaic.accumulate", 460, 560});
+            add.apply(new Object[] {"giRaw", rt ? "fn:diffuseGIRT" : "fn:diffuseGI", 1, 5.6, "position", "pos", "normal", "nrm"});
+            JsonObject acc = add.apply(new Object[] {"acc", "mosaic.accumulate", 2, 5.6, "color", "giRaw"});
             acc.addProperty("mask", "gi");
-            wire.accept(acc, new String[] {"color", "giRaw"});
-            JsonObject p0 = add.apply(new Object[] {"giBuf", "mosaic.pass", 660, 560});
+            JsonObject p0 = add.apply(new Object[] {"giBuf", "mosaic.pass", 3, 5.6, "color", "acc"});
             p0.addProperty("mask", "gi");
             p0.addProperty("index", 2);
-            wire.accept(p0, new String[] {"color", "acc"});
             String prev = "gi";
             String[] steps = {"giA", "giB"};
-            int x = 860;
             for (int i = 0; i < 3; i++) {
-                JsonObject d = add.apply(new Object[] {"dn" + i, "mosaic.atrous", x, 560});
+                JsonObject d = add.apply(new Object[] {"dn" + i, "mosaic.atrous", 1 + i, 6.8});
                 d.addProperty("mask", prev);
                 JsonObject def = new JsonObject();
                 JsonArray s = new JsonArray();
@@ -178,36 +213,41 @@ public final class MosaicTemplates {
                 def.add("step", s);
                 d.add("defaults", def);
                 if (i == 2) break;
-                JsonObject p = add.apply(new Object[] {"buf" + i, "mosaic.pass", x + 190, 560});
+                JsonObject p = add.apply(new Object[] {"buf" + i, "mosaic.pass", 1 + i + 0.5, 7.8, "color", "dn" + i});
                 p.addProperty("mask", steps[i]);
                 p.addProperty("index", 2);
-                wire.accept(p, new String[] {"color", "dn" + i});
                 prev = steps[i];
-                x += 380;
             }
-            JsonObject sw = add.apply(new Object[] {"giRgb", "mosaic.swizzle", 1640, 420});
+            JsonObject sw = add.apply(new Object[] {"giRgb", "mosaic.swizzle", 4, 6.8, "a", "dn2"});
             sw.addProperty("mask", "xyz");
-            wire.accept(sw, new String[] {"a", "dn2"});
             indirect = "giRgb";
         } else {
-            add.apply(new Object[] {"sky", "mosaic.skyLight", 0, 270});
-            wire.accept(add.apply(new Object[] {"amb", "fn:skyAmbient", 220, 240}), new String[] {"normal", "nrm", "skyLight", "sky"});
+            add.apply(new Object[] {"amb", "fn:skyAmbient", 1, 3, "normal", "nrm", "skyLight", "sky"});
             indirect = "amb";
         }
-        wire.accept(add.apply(new Object[] {"light", "mosaic.add", 1800, 200}), new String[] {"a", "l1", "b", indirect});
-        wire.accept(add.apply(new Object[] {"shade", "fn:litSurface", 1980, 120}),
-            new String[] {"uv", "uv", "albedo", "albedo", "light", "light", "glow", "glow"});
-        wire.accept(add.apply(new Object[] {"tone", "fn:tonemap", 2180, 120}), new String[] {"color", "shade"});
-        JsonObject fb = add.apply(new Object[] {"frameBuf", "mosaic.pass", 2380, 120});
+        // shading chain
+        add.apply(new Object[] {"direct", "mosaic.add", 3, 0, "a", "sun", "b", "torch"});
+        add.apply(new Object[] {"light", "mosaic.add", 3, 1, "a", "direct", "b", indirect});
+        add.apply(new Object[] {"extra", "mosaic.add", 3, 2, "a", "glow", "b", "spec"});
+        add.apply(new Object[] {"shade", "fn:litSurface", 4, 0, "uv", "uv", "albedo", "albedo", "light", "light", "glow", "extra"});
+        add.apply(new Object[] {"water", "fn:reflectiveSurface", 4, 1.2, "color", "shade", "uv", "uv"});
+        add.apply(new Object[] {"air", "fn:atmosphere", 4, 2.4, "color", "water", "uv", "uv"});
+        add.apply(new Object[] {"tone", "fn:tonemap", 5, 0, "color", "air"});
+        JsonObject fb = add.apply(new Object[] {"frameBuf", "mosaic.pass", 5, 1.2, "color", "tone"});
         fb.addProperty("mask", "frame");
         fb.addProperty("index", 1);
-        wire.accept(fb, new String[] {"color", "tone"});
-        JsonObject taa = add.apply(new Object[] {"taa", "mosaic.taa", 2580, 120});
+        JsonObject taa = add.apply(new Object[] {"taa", "mosaic.taa", 5, 2.4});
         taa.addProperty("mask", "frame");
-        JsonObject out = add.apply(new Object[] {"out", "mosaic.output", 2780, 120});
-        wire.accept(out, new String[] {"color", "taa"});
+        add.apply(new Object[] {"out", "mosaic.output", 5, 3.6, "color", "taa"});
+        frame.accept("G-buffer", gi ? new Object[] {"#3A6EA5", "uv", "pos", "nrm", "lamp"} : new Object[] {"#3A6EA5", "uv", "pos", "nrm", "lamp", "sky"});
+        frame.accept("Surface", gi ? new Object[] {"#7A4FA8", "albedo", "rough"} : new Object[] {"#7A4FA8", "albedo", "rough", "amb"});
+        frame.accept("Direct light", new Object[] {"#B07A2E", "shadow", "sun", "spec", "torch", "glow"});
+        if (gi) frame.accept(rt ? "Indirect light (RT GI)" : "Indirect light (voxel GI)",
+            new Object[] {"#2F8F7C", "giRaw", "acc", "giBuf", "dn0", "buf0", "dn1", "buf1", "dn2", "giRgb"});
+        frame.accept("Shade and output", new Object[] {"#8A5CC8", "direct", "light", "extra", "shade", "water", "air", "tone", "frameBuf", "taa", "out"});
         root.add("functions", fns);
         root.add("nodes", nodes);
+        root.add("frames", frames);
         return root.toString();
     }
 
@@ -235,7 +275,15 @@ public final class MosaicTemplates {
         n.add("inputs", in);
         nodes.add(n);
         String last = "f";
-        if (f.output() != MosaicGraph.Kind.V4) {
+        if (f.output() == MosaicGraph.Kind.F) {
+            JsonObject v = node("sw", "mosaic.vec", 400, 0);
+            v.addProperty("index", 4);
+            JsonObject vi = new JsonObject();
+            vi.addProperty("x", "f");
+            v.add("inputs", vi);
+            nodes.add(v);
+            last = "sw";
+        } else if (f.output() != MosaicGraph.Kind.V4) {
             JsonObject sw = node("sw", "mosaic.swizzle", 400, 0);
             sw.addProperty("mask", f.output() == MosaicGraph.Kind.V3 ? "xyzx" : f.output() == MosaicGraph.Kind.V2 ? "xyxy" : "xxxx");
             JsonObject si = new JsonObject();

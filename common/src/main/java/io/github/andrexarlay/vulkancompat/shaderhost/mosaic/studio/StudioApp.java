@@ -1014,6 +1014,7 @@ final class StudioApp {
             case GROUP -> model.group(h);
             case UNGROUP -> model.ungroup();
             case MUTE -> model.toggleMute();
+            case EXPAND -> model.toggleExpand();
             case ARRANGE -> {
                 model.arrange(h);
                 if (g != null && model.selection.size() < 2) g.fit();

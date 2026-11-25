@@ -33,6 +33,8 @@ public final class MosaicDocument {
         public String label;
         /** Muted (M): passes its first input through; kept in mosaic.json so the game does the same. */
         public boolean muted;
+        /** Every input drawn on the node (Ctrl+H); otherwise a node with many inputs shows only the used ones. */
+        public boolean expanded;
         /** A developer's note shown under the node (Bedray's own comments come in this way). */
         public String note;
         /** Inline values of unwired inputs (Blender-style sliders / numbers); a wire overrides its port's value. */
@@ -341,6 +343,7 @@ public final class MosaicDocument {
             if (o.has("mask")) n.mask = o.get("mask").getAsString();
             if (o.has("label") && o.get("label").isJsonPrimitive()) n.label = o.get("label").getAsString();
             if (o.has("muted") && o.get("muted").isJsonPrimitive()) n.muted = o.get("muted").getAsBoolean();
+            if (o.has("expanded") && o.get("expanded").isJsonPrimitive()) n.expanded = o.get("expanded").getAsBoolean();
             if (o.has("note") && o.get("note").isJsonPrimitive()) n.note = o.get("note").getAsString();
             if (o.has("defaults") && o.get("defaults").isJsonObject())
                 for (var e : o.getAsJsonObject("defaults").entrySet()) {
@@ -388,6 +391,7 @@ public final class MosaicDocument {
             }
             if (n.label != null && !n.label.isBlank()) o.addProperty("label", n.label);
             if (n.muted) o.addProperty("muted", true);
+            if (n.expanded) o.addProperty("expanded", true);
             if (n.note != null && !n.note.isBlank()) o.addProperty("note", n.note);
             if (!n.defaults.isEmpty()) {
                 JsonObject defs = new JsonObject();

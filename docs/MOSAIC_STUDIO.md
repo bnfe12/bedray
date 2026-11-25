@@ -25,6 +25,11 @@ to Minecraft, or without it.
 | **Result** | The frame of the running game before and after the shader, side by side, split, or against an earlier step; record GIF / MP4, save frames. |
 | **Workflow** | Document tabs, Blender-like areas you can split, pop out and dock back, rebindable keys (also on the Russian layout), themes including OLED black, named undo history per tab. |
 
+## Big nodes stay small
+
+A node with more than six inputs shows only the required, wired and changed ones; the rest are edited in Properties
+("+N more" on the node). Ctrl+H (or the right-click menu) shows every input of the selected nodes, to wire one.
+
 ## Every number is yours
 
 Built-in nodes take every number that changes the picture as an input with a default (distances such as where far
@@ -66,8 +71,9 @@ The main workspace is the **Render graph**: the frame as nodes. Bedray's own ren
 GPU (voxel rays through the world volume, no ray tracing hardware needed):
 
 - G-buffer: Albedo (from the game image), Hit position, Surface normal, Sky light, Block light.
-- Lights (category *Render pipeline*): Sun & moon light with voxel and far shadows, Block light, Sky ambient, Emission,
-  Diffuse GI (voxel paths), Reflection (voxels).
+- Lights (category *Render pipeline*): Sun shadow (one shadow ray shared by diffuse and specular), Sun & moon light,
+  Sun specular (GGX), Roughness (by material), Block light, Sky ambient, Emission, Diffuse GI (voxel paths), Reflection
+  (voxels), Reflective surface (water), Atmosphere (aerial perspective toward the sky and the sun).
 - Passes: Buffer (1/1..1/8), **Accumulate** (temporal accumulation with reprojection and disocclusion reset),
   **Buffer (last frame)** (feedback), **Denoise (a-trous)** steps, Temporal AA.
 - Combine (shade), **Tone map** (ACES, Reinhard, Hable, exponential, clip).

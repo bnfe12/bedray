@@ -202,8 +202,20 @@ final class GraphPanel extends JComponent {
             for (MosaicSlangGraph.SPort p : MosaicSlangGraph.inputs(n.type, n.mask, n.index)) out.add(p.name());
             return out;
         }
-        for (MosaicGraph.Port p : MosaicGraph.portsOf(n.type, model.functions())) out.add(p.name());
+        List<MosaicGraph.Port> ports = MosaicGraph.portsOf(n.type, model.functions());
+        boolean compact = !n.expanded && ports.size() > COMPACT_FROM;
+        for (MosaicGraph.Port p : ports)
+            if (!compact || p.required() || n.inputs.containsKey(p.name()) || n.defaults.containsKey(p.name())) out.add(p.name());
         return out;
+    }
+
+    /** Nodes with more inputs than this show only the required, wired and changed ones until Ctrl+H expands them. */
+    static final int COMPACT_FROM = 6;
+
+    /** Inputs hidden on a compact node (edited in the inspector, shown with Ctrl+H). */
+    int hiddenInputs(MosaicDocument.ENode n) {
+        if (n.type.equals("slang.module") || n.type.equals("slang.pack") || MosaicSlangGraph.handles(n.type)) return 0;
+        return MosaicGraph.portsOf(n.type, model.functions()).size() - inputs(n).size();
     }
 
     static List<String> outputs(MosaicDocument.ENode n) {
@@ -280,6 +292,12 @@ final class GraphPanel extends JComponent {
     }
 
     String paramText(MosaicDocument.ENode n) {
+        String base = baseParamText(n);
+        int hidden = base.isEmpty() ? hiddenInputs(n) : 0;
+        return hidden > 0 ? "+" + hidden + " more (Ctrl+H)" : base;
+    }
+
+    private String baseParamText(MosaicDocument.ENode n) {
         return switch (n.type) {
             case "mosaic.const" -> InspectorPanel.numbers(n.value);
             case "mosaic.swizzle" -> n.mask == null ? "" : "." + n.mask;
@@ -1130,6 +1148,8 @@ final class GraphPanel extends JComponent {
         }
         item(m, "Rename / label...", k.humanFor(StudioKeys.Action.RENAME), this::renameDialog);
         item(m, n.muted ? "Unmute" : "Mute (pass the input through)", k.humanFor(StudioKeys.Action.MUTE), model::toggleMute);
+        if (hiddenInputs(n) > 0 || n.expanded)
+            item(m, n.expanded ? "Hide unused inputs" : "Show all inputs", k.humanFor(StudioKeys.Action.EXPAND), model::toggleExpand);
         item(m, model.gamePreview != null && model.gamePreview.equals(n.id) ? "Stop preview in game" : "Preview this node in game", "",
             () -> model.previewInGame(model.gamePreview != null && model.gamePreview.equals(n.id) ? null : n));
         item(m, "Wire output into...", k.humanFor(StudioKeys.Action.CONNECT_FROM), this::connectFrom);
@@ -1158,7 +1178,7 @@ final class GraphPanel extends JComponent {
     @Override protected void paintComponent(Graphics g0) {
         if (!fitted && getWidth() > 0) {
             fitted = true;
-            fit();
+            fitReadable();
         }
         Graphics2D g = (Graphics2D) g0.create();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);

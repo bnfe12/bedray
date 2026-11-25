@@ -431,18 +431,19 @@ public final class MosaicEffects {
             float lm = max(max(sky * day, lamp), minLight);
             lm = pow(lm, lightCurve) * (1.0 - ambientFloor) + ambientFloor;
             return clamp(c / lm, vec3(0.0), vec3(1.0)) * brightness;""");
-        add("Render pipeline", "vec3 sunLight(vec3 position, vec3 normal, float shadows = 1, float intensity = 2.2, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), float sunsetHeight = 0.35, vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float horizonFade = 0.08, float shadowDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35)",
+        add("Render pipeline", "vec3 sunLight(vec3 position, vec3 normal, float shadows = 1, float intensity = 2.2, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), float sunsetHeight = 0.35, vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float horizonFade = 0.08, float shadowDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35, float visibility = -1)",
             "Sun & moon light", "Direct light of the sun (the moon at night) on a surface: colours by day, at sunset (below sunsetHeight)"
                 + " and at night (moonColor x moonLevel), fading at the horizon; shadows through the world volume up to shadowDistance,"
                 + " then the height field from farShadowFrom to farShadowTo blocks; bias, biasPerBlock and selfHit keep surfaces from"
-                + " shadowing themselves. position and normal from the G-buffer nodes.", """
+                + " shadowing themselves; wire a Sun shadow node into visibility (0..1) to share one shadow ray with Sun specular."
+                + " position and normal from the G-buffer nodes.", """
             vec3 L = mosaicSunDir();
             float moon = L.y < 0.0 ? 1.0 : 0.0;
             if (L.y < 0.0) L = -L;
             float ndl = max(dot(normal, L), 0.0);
             if (ndl <= 0.0 || length(position) > 4000.0) return vec3(0.0);
-            float vis = 1.0;
-            if (shadows > 0.5) {
+            float vis = visibility >= 0.0 ? visibility : 1.0;
+            if (visibility < 0.0 && shadows > 0.5) {
                 vec3 n2;
                 float m2;
                 float d = length(position);
@@ -453,6 +454,62 @@ public final class MosaicEffects {
             vec3 col = mix(sunsetColor, sunColor, smoothstep(0.0, sunsetHeight, L.y));
             col = mix(col, moonColor * moonLevel, moon);
             return col * ndl * vis * intensity * smoothstep(0.0, horizonFade, L.y);""");
+        add("Render pipeline", "float sunShadow(vec3 position, vec3 normal, float shadowDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35)",
+            "Sun shadow", "1 where the sun (the moon at night) reaches a surface, 0 in shadow: through the world volume up to shadowDistance,"
+                + " then the height field from farShadowFrom to farShadowTo. Wire it into Sun & moon light and Sun specular (visibility)"
+                + " so both use one shadow ray.", """
+            vec3 L = mosaicSunDir();
+            if (L.y < 0.0) L = -L;
+            if (dot(normal, L) <= 0.0 || length(position) > 4000.0) return 0.0;
+            vec3 n2;
+            float m2;
+            float d = length(position);
+            vec3 p = position + normal * (bias + d * biasPerBlock);
+            float h = mosaicVoxelTrace(p, L, shadowDistance, n2, m2);
+            return h >= selfHit ? 0.0 : mosaicFarShadow(p, L, d > farShadowFrom ? 1.5 : farShadowFrom, farShadowTo);""");
+        add("Render pipeline", "float materialRoughness(vec2 uv, float defaultRoughness = 0.75, float water = 0.04, float ice = 0.12, float glass = 0.05, float metal = 0.35, float snow = 0.6, float leaves = 0.55, float stone = 0.8)",
+            "Roughness (by material)", "Surface roughness of what the pixel shows, per material class (0 mirror .. 1 matte): feeds Sun specular and reflections.", """
+            float m = mosaicHitMaterial(uv);
+            if (m == 1.0) return water;
+            if (m == 10.0) return ice;
+            if (m == 11.0) return glass;
+            if (m == 12.0) return metal;
+            if (m == 9.0) return snow;
+            if (m == 5.0) return leaves;
+            if (m == 3.0) return stone;
+            return defaultRoughness;""");
+        add("Render pipeline", "vec3 sunSpecular(vec3 position, vec3 normal, float roughness = 0.5, float visibility = 1, float f0 = 0.04, float intensity = 2.2, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), float sunsetHeight = 0.35, float horizonFade = 0.08, float maxHighlight = 16)",
+            "Sun specular", "The sun's highlight on a surface (GGX microfacets with Schlick Fresnel): sharp on water and glass, broad on stone;"
+                + " roughness from Roughness (by material), visibility from Sun shadow. Added to the light after the albedo (it is not tinted by it).", """
+            vec3 L = mosaicSunDir();
+            if (L.y <= 0.0 || length(position) > 4000.0) return vec3(0.0);
+            vec3 v = normalize(mosaicEye() - position);
+            vec3 h = normalize(v + L);
+            float a = max(roughness * roughness, 1e-3), a2 = a * a;
+            float nh = max(dot(normal, h), 0.0), nv = max(dot(normal, v), 1e-4), nl = max(dot(normal, L), 0.0);
+            if (nl <= 0.0) return vec3(0.0);
+            float dd = nh * nh * (a2 - 1.0) + 1.0;
+            float D = a2 / (3.14159265 * dd * dd);
+            float k = a * 0.5;
+            float G = nv / (nv * (1.0 - k) + k) * nl / (nl * (1.0 - k) + k);
+            float F = f0 + (1.0 - f0) * pow(1.0 - max(dot(h, v), 0.0), 5.0);
+            float spec = min(D * G * F / (4.0 * nv * nl + 1e-4) * nl, maxHighlight);
+            vec3 col = mix(sunsetColor, sunColor, smoothstep(0.0, sunsetHeight, L.y));
+            return col * spec * visibility * intensity * smoothstep(0.0, horizonFade, L.y);""");
+        add("Render pipeline", "vec4 atmosphere(vec4 color, vec2 uv, float density = 0.006, float start = 16, float heightFalloff = 0.03, float seaLevel = 63, vec3 tint = vec3(1.0), float sunScatter = 0.8, float scatterSharpness = 8, float skyAmount = 0, float maxFog = 1)",
+            "Atmosphere", "Aerial perspective in linear light: distant blocks fade into the colour of the sky toward them, thicker near sea level"
+                + " (heightFalloff per block above seaLevel) and glowing toward the sun (sunScatter, scatterSharpness). Put it before Tone map.", """
+            float t = mosaicDepth(uv);
+            vec3 d = mosaicViewDir(uv);
+            if (t >= 1.0e5 && skyAmount <= 0.0) return color;
+            float dist = t >= 1.0e5 ? 1000.0 : max(t - start, 0.0);
+            float h = mosaicEye().y + frame.cameraPosition.y + d.y * min(t, 1000.0) * 0.5 - seaLevel;
+            float thick = exp(-max(h, 0.0) * heightFalloff);
+            float f = clamp((1.0 - exp(-dist * density * thick)) * (t >= 1.0e5 ? skyAmount : 1.0), 0.0, maxFog);
+            vec3 L = mosaicSunDir();
+            vec3 haze = mosaicSky(normalize(vec3(d.x, max(d.y, 0.02), d.z))) * tint
+                + vec3(1.0, 0.85, 0.6) * pow(max(dot(d, L), 0.0), scatterSharpness) * sunScatter * clamp(L.y * 4.0, 0.0, 1.0);
+            return vec4(mix(color.rgb, haze, f), color.a);""");
         add("Render pipeline", "vec3 skyAmbient(vec3 normal, float skyLight = 1, float intensity = 0.6, float skyCurve = 2, float upBias = 1)", "Sky ambient",
             "Cheap light from the sky dome on a surface (no rays): the sky colour above the normal (upBias tilts it up), fading with"
                 + " the sky light level to the power skyCurve (0 in caves). Use it instead of Diffuse GI on slow GPUs.", """
