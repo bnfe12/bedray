@@ -105,6 +105,16 @@ public final class AgentCli {
           mosaic mute <graph.json> <id> [true|false]
           mosaic arrange <graph.json>
           mosaic bake <material.mosaic.json> <texture.png> <out-folder>   LabPBR _s / _n (+ colour)
+        Bedray's pack as nodes
+          mosaic pack functions [filter]             every function of the Slang pack (id, signature)
+          mosaic pack function <id>                  its body as a graph file (prints the path; edit it with add / connect / set)
+          mosaic pack check <id>                     slangc checks the function graph inside its module
+          mosaic pack stage <bedray.stage>           a stage's modules and functions
+          mosaic pack apply                          edited functions -> bedray-studio/slang + rebuilt passes for the game
+          mosaic pack clear                          Bedray runs its own passes again
+        Renderer config (public numbers, sent with priority)
+          mosaic config                              every value of the renderer graph
+          mosaic config set <key> <value>            change one (on the stage that owns it) and send the config
         Design
           mosaic set-setting <key> <value>           theme, accent, fontPercent, wires, nodeWidth, grid, ...
 
@@ -130,6 +140,12 @@ public final class AgentCli {
     private int dispatch(List<String> a) throws Exception {
         String cmd = a.get(0);
         switch (cmd) {
+            case "pack" -> {
+                return pack(a);
+            }
+            case "config" -> {
+                return config(a);
+            }
             case "types" -> {
                 need(Need.READ);
                 String f = a.size() > 1 ? a.get(1).toLowerCase(Locale.ROOT) : "";
@@ -340,6 +356,138 @@ public final class AgentCli {
             out.println(result);
             for (MosaicGraph.Problem pr : an.problems()) if (pr.severity() != MosaicGraph.Severity.HINT) out.println(pr.severity() + "  " + pr.message());
         }
+        return 0;
+    }
+
+    // ------------------------------------------------------------------ Bedray's pack as nodes
+
+    private io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangLib.Library library() {
+        var lib = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.library();
+        if (lib != null) return lib;
+        Path unpacked = StudioSettings.file().resolveSibling("studio").resolve("pack").resolve("slang");
+        if (Files.isDirectory(unpacked)) {
+            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.install(
+                io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.load(unpacked), unpacked);
+            return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.library();
+        }
+        throw new IllegalStateException("Bedray's Slang pack was not found: run from a Bedray checkout or open Studio once with the game instance");
+    }
+
+    private int pack(List<String> a) throws Exception {
+        String sub = a.size() > 1 ? a.get(1) : "";
+        var lib = library();
+        switch (sub) {
+            case "functions" -> {
+                need(Need.READ);
+                String f = a.size() > 2 ? a.get(2).toLowerCase(Locale.ROOT) : "";
+                List<Map<String, String>> rows = new ArrayList<>();
+                for (var fn : lib.functions().values()) {
+                    if (!fn.isNode() || !fn.id().toLowerCase(Locale.ROOT).contains(f)) continue;
+                    String sig = fn.returnType() + " " + fn.label() + "(" + String.join(", ", fn.params().stream()
+                        .map(p -> (p.direction().equals("in") ? "" : p.direction() + " ") + p.type() + " " + p.name()).toList()) + ")";
+                    rows.add(Map.of("id", fn.id(), "signature", sig));
+                }
+                if (json) out.println(GSON.toJson(rows));
+                else rows.forEach(r -> out.println(r.get("id") + "    " + r.get("signature")));
+                return 0;
+            }
+            case "function" -> {
+                need(Need.GRAPHS);
+                if (a.size() < 3) return usage();
+                var fn = lib.functions().get(a.get(2));
+                if (fn == null) throw new IllegalArgumentException("no function " + a.get(2) + " (mosaic pack functions)");
+                Path file = StudioModel.functionFile(fn.id());
+                if (!Files.exists(file)) {
+                    Files.createDirectories(file.getParent());
+                    Files.writeString(file, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangDecompile.decompile(fn, lib).json(), StandardCharsets.UTF_8);
+                }
+                say(file.toString());
+                return 0;
+            }
+            case "check" -> {
+                need(Need.COMPILE);
+                if (a.size() < 3) return usage();
+                var fn = lib.functions().get(a.get(2));
+                if (fn == null) throw new IllegalArgumentException("no function " + a.get(2));
+                String module = StudioPack.overridden(lib, fn.module(), null, null);
+                var c = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.checkModules(Map.of(fn.module(), module),
+                    MosaicSlang.locate(settings.slangcPath), io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.packRoot());
+                if (json) out.println(GSON.toJson(Map.of("ok", c.ok(), "log", c.log())));
+                else out.println(c.ok() ? fn.module() + " compiles with your function graphs" : c.log());
+                return c.ok() ? 0 : 1;
+            }
+            case "stage" -> {
+                need(Need.READ);
+                if (a.size() < 3) return usage();
+                List<String> mods = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicStageMap.modules(a.get(2), lib);
+                Map<String, List<String>> out2 = new java.util.LinkedHashMap<>();
+                for (String m : mods) out2.put(m, lib.ofModule(m).stream().map(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangLib.Function::id).toList());
+                if (json) out.println(GSON.toJson(out2));
+                else out2.forEach((m, fns) -> out.println(m + ": " + String.join(", ", fns)));
+                return 0;
+            }
+            case "apply" -> {
+                need(Need.COMPILE);
+                StudioPack.Built b = StudioPack.build(StudioPack.headless(settings));
+                if (json) out.println(GSON.toJson(Map.of("modules", b.modules(), "passes", b.passes(), "problems", b.problems(), "out", b.out().toString())));
+                else {
+                    out.println("modules: " + b.modules());
+                    out.println("passes rebuilt: " + b.passes());
+                    b.problems().forEach(p -> out.println("problem: " + p));
+                    out.println("written to " + b.out());
+                }
+                return b.problems().isEmpty() ? 0 : 1;
+            }
+            case "clear" -> {
+                need(Need.COMPILE);
+                Path out2 = StudioPack.headless(settings).out();
+                for (String s : List.of("passes", "slang")) StudioPack.MosaicSlangGraphAccess.deleteTree(out2.resolve(s));
+                say("removed Studio's passes from " + out2);
+                return 0;
+            }
+            default -> {
+                return usage();
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ renderer config
+
+    private Path rendererGraph() {
+        Path g = settings.gameDir == null || settings.gameDir.isBlank() ? null : Path.of(settings.gameDir);
+        return (g != null ? g.resolve("bedray-studio") : StudioSettings.file().resolveSibling("studio")).resolve("renderer.mosaic.json");
+    }
+
+    private int config(List<String> a) throws Exception {
+        Path f = rendererGraph();
+        if (!Files.exists(f)) throw new IllegalStateException("no renderer graph yet: open the Renderer workspace once (" + f + ")");
+        MosaicDocument d = MosaicDocument.load(f);
+        if (a.size() >= 4 && a.get(1).equals("set")) {
+            need(Need.GRAPHS);
+            String key = a.get(2), value = a.get(3);
+            var s = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.setting(key);
+            String stage = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.stageOfSetting(key);
+            if (s == null) throw new IllegalArgumentException("no setting " + key + " (mosaic config)");
+            MosaicDocument.ENode n = d.nodes.stream().filter(x -> x.type.equals(stage)).findFirst().orElse(null);
+            if (n == null) throw new IllegalStateException(key + " belongs to " + stage + ", which is not in the renderer graph");
+            n.defaults.put(key, new double[] {s.parse(value)});
+            d.save();
+        }
+        need(Need.READ);
+        MosaicGraph g = d.analyze().graph();
+        Map<String, String> values = g == null ? Map.of() : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.settings(g);
+        if (a.size() >= 4 && a.get(1).equals("set") && settings.gameDir != null && !settings.gameDir.isBlank()) {
+            JsonObject o = new JsonObject();
+            o.addProperty("apply", System.currentTimeMillis());
+            o.addProperty("save", true);
+            o.addProperty("priority", true);
+            JsonObject set = new JsonObject();
+            values.forEach(set::addProperty);
+            o.add("settings", set);
+            Files.writeString(Path.of(settings.gameDir).resolve("bedray-studio").resolve("renderer.json"), o.toString(), StandardCharsets.UTF_8);
+        }
+        if (json) out.println(GSON.toJson(values));
+        else values.forEach((k, v) -> out.println(k + " = " + v));
         return 0;
     }
 

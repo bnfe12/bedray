@@ -260,27 +260,7 @@ final class StudioModel {
 
     /** The module source with every edited function graph of that module in place of Bedray's body. */
     String overriddenModule(String module) {
-        var lib = bedrayLibrary();
-        String src = lib.sources().get(module + ".slang");
-        if (src == null) return null;
-        java.util.Map<io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangLib.Function,
-            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.Code> codes = new java.util.LinkedHashMap<>();
-        for (var f : lib.ofModule(module)) {
-            if (!f.isNode()) continue;
-            Path file = functionFile(f.id());
-            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph g;
-            if (doc.bedrayFunction != null && doc.bedrayFunction.equals(f.id())) g = analysis.graph();
-            else if (Files.exists(file)) {
-                try {
-                    g = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph.analyze(Files.readString(file, StandardCharsets.UTF_8)).graph();
-                } catch (Exception e) {
-                    g = null;
-                }
-            } else continue;
-            if (g == null) continue;
-            codes.put(f, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.function(g, f.name()));
-        }
-        return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.overrideAll(src, module, codes);
+        return StudioPack.overridden(bedrayLibrary(), module, doc.bedrayFunction, doc.bedrayFunction == null ? null : analysis.graph());
     }
 
     /** slangc checks the open function inside its module (the whole pack copy, so callers of it are checked too). */

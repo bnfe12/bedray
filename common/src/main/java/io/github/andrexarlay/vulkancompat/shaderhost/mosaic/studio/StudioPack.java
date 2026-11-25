@@ -75,10 +75,68 @@ final class StudioPack {
         m.say("Bedray runs its own passes again (Studio's were removed from " + out + ")", StudioUi.OK);
     }
 
-    static Built build(StudioModel m) {
-        MosaicSlangLib.Library lib = m.bedrayLibrary();
+    /** What a build needs: the pack, the module text with your function graphs, the game folder, Bedray's manifests. */
+    interface Source {
+        MosaicSlangLib.Library library();
+
+        String module(String module);
+
+        Path out();
+
+        JsonObject manifest(String pass);
+    }
+
+    static Source of(StudioModel m) {
+        return new Source() {
+            public MosaicSlangLib.Library library() { return m.bedrayLibrary(); }
+            public String module(String module) { return m.overriddenModule(module); }
+            public Path out() { return outDir(m); }
+            public JsonObject manifest(String pass) { return StudioPack.manifest(m, pass); }
+        };
+    }
+
+    /** Headless (the agent CLI): the pack of the checkout or ~/.bedray/studio/pack, the game folder of the settings. */
+    static Source headless(StudioSettings settings) {
+        MosaicSlangLib.Library lib = MosaicSlangGraph.library();
+        Path game = settings.gameDir == null || settings.gameDir.isBlank() ? null : Path.of(settings.gameDir);
+        return new Source() {
+            public MosaicSlangLib.Library library() { return lib; }
+            public String module(String module) { return overridden(lib, module, null, null); }
+            public Path out() { return game != null ? game.resolve("bedray-studio") : StudioSettings.file().resolveSibling("studio").resolve("game"); }
+            public JsonObject manifest(String pass) { return StudioPack.manifest(game, pass); }
+        };
+    }
+
+    /** A module with every edited function graph of it in place of Bedray's body (the open one from {@code current}). */
+    static String overridden(MosaicSlangLib.Library lib, String module, String currentId, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph current) {
+        if (lib == null) return null;
+        String src = lib.sources().get(module + ".slang");
+        if (src == null) return null;
+        Map<MosaicSlangLib.Function, MosaicSlangGraph.Code> codes = new LinkedHashMap<>();
+        for (MosaicSlangLib.Function f : lib.ofModule(module)) {
+            if (!f.isNode()) continue;
+            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph g = null;
+            if (f.id().equals(currentId)) g = current;
+            else {
+                Path file = StudioModel.functionFile(f.id());
+                if (!Files.exists(file)) continue;
+                try {
+                    g = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph.analyze(Files.readString(file, StandardCharsets.UTF_8)).graph();
+                } catch (Exception ignored) {
+                    // a broken graph is not applied
+                }
+            }
+            if (g != null) codes.put(f, MosaicSlangGraph.function(g, f.name()));
+        }
+        return MosaicSlangGraph.overrideAll(src, module, codes);
+    }
+
+    static Built build(StudioModel m) { return build(of(m)); }
+
+    static Built build(Source m) {
+        MosaicSlangLib.Library lib = m.library();
         List<String> problems = new ArrayList<>();
-        Path out = outDir(m);
+        Path out = m.out();
         if (lib == null) return new Built(List.of(), List.of(), List.of("Bedray's pack was not found"), out);
         // the modules with an edited function
         Set<String> modules = new TreeSet<>();
@@ -99,7 +157,7 @@ final class StudioPack {
         if (modules.isEmpty()) return new Built(List.of(), List.of(), List.of(), out);
         Map<String, String> replaced = new LinkedHashMap<>();
         for (String mod : modules) {
-            String src = m.overriddenModule(mod);
+            String src = m.module(mod);
             if (src != null) replaced.put(mod, src);
         }
         // passes whose imports reach a replaced module
@@ -147,7 +205,7 @@ final class StudioPack {
             Gson gson = new GsonBuilder().setPrettyPrinting().create();
             for (String pass : passes) {
                 String name = pass.substring("passes/".length()).replace('/', '.');
-                JsonObject manifest = manifest(m, name);
+                JsonObject manifest = m.manifest(name);
                 if (manifest == null) {
                     problems.add(name + ": Bedray's manifest of this pass was not found (build the mod or pick the instance)");
                     continue;
@@ -249,7 +307,9 @@ final class StudioPack {
     }
 
     /** Bedray's manifest of a pass: from a checkout's build, else from the Bedray jar of the instance. */
-    static JsonObject manifest(StudioModel m, String name) {
+    static JsonObject manifest(StudioModel m, String name) { return manifest(StudioLibrary.gameDir(m), name); }
+
+    static JsonObject manifest(Path g, String name) {
         for (Path p = Path.of(System.getProperty("user.dir")).toAbsolutePath(); p != null; p = p.getParent()) {
             Path f = p.resolve("common/build/resources/main/shaders/slang/manifest").resolve(name + ".json");
             if (Files.isRegularFile(f)) {
@@ -260,7 +320,6 @@ final class StudioPack {
                 }
             }
         }
-        Path g = StudioLibrary.gameDir(m);
         if (g == null || !Files.isDirectory(g.resolve("mods"))) return null;
         try (var s = Files.list(g.resolve("mods"))) {
             for (Path jar : (Iterable<Path>) s.filter(x -> x.getFileName().toString().toLowerCase(Locale.ROOT).startsWith("bedray")
