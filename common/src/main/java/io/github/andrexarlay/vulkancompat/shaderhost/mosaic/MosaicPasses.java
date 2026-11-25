@@ -49,7 +49,7 @@ public final class MosaicPasses {
         Map<String, Set<String>> reads = new LinkedHashMap<>();
         for (Map.Entry<String, Set<String>> e : upstream.entrySet()) {
             Set<String> r = new TreeSet<>();
-            for (String id : e.getValue()) if (MosaicGraph.readsBuffer(g.node(id).type())) r.add(g.node(id).mask());
+            for (String id : e.getValue()) if (MosaicGraph.readsBuffer(g.node(id).type()) && g.node(id).mask() != null) r.add(g.node(id).mask());
             reads.put(e.getKey(), r);
         }
         List<String> order = new ArrayList<>();
@@ -107,6 +107,7 @@ public final class MosaicPasses {
             if (!n.defaults().isEmpty()) j.add("defaults", GSON.toJsonTree(n.defaults()));
             nodes.add(j);
             if (MosaicFunction.isFunctionType(n.type())) fns.add(MosaicFunction.nameOf(n.type()));
+            if (n.type().equals("mosaic.repeat") && n.mask() != null && g.functions().containsKey(n.mask())) fns.add(n.mask());
         }
         JsonObject out = new JsonObject();
         out.addProperty("id", "m_pass_out");

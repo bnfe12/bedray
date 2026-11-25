@@ -781,12 +781,39 @@ final class InspectorPanel extends Panels.Listening {
         content.add(text("Smaller buffers are cheaper and blur wider: chain 1/2, 1/4, 1/8 for bloom.", FAINT));
     }
 
+    /** Repeat: which function of this graph is the loop body, and how many times it runs. */
+    private void repeatEditor(MosaicDocument.ENode n) {
+        content.add(section("Loop body"));
+        java.util.List<String> fns = new java.util.ArrayList<>(model.doc.functions.stream().map(f -> f.name).toList());
+        if (fns.isEmpty()) {
+            content.add(text("Add a function vec4 name(vec4 acc, float i) first (Functions), then pick it here.", WARN));
+        } else {
+            if (n.mask != null && !fns.contains(n.mask)) fns.add(0, n.mask);
+            JComboBox<String> box = new JComboBox<>(fns.toArray(new String[0]));
+            box.setSelectedItem(n.mask == null ? fns.get(0) : n.mask);
+            box.addActionListener(ev -> model.edit("Loop body of " + n.id + ": " + box.getSelectedItem(), () -> n.mask = (String) box.getSelectedItem()));
+            box.setAlignmentX(0);
+            box.setMaximumSize(new Dimension(Integer.MAX_VALUE, box.getPreferredSize().height));
+            content.add(box);
+        }
+        content.add(section("Times"));
+        JSpinner s = new JSpinner(new SpinnerNumberModel(Math.clamp(n.index, 1, 64), 1, 64, 1));
+        s.addChangeListener(ev -> model.edit("Repeat " + n.id + " x" + s.getValue(), () -> n.index = (Integer) s.getValue()));
+        s.setAlignmentX(0);
+        s.setMaximumSize(new Dimension(Integer.MAX_VALUE, s.getPreferredSize().height));
+        content.add(s);
+        content.add(text("Each run gets the last result as acc and its number as i (0, 1, 2...).", FAINT));
+    }
+
     /** Read buffer / Blur buffer / Kawase blur: which Buffer of this graph they read. */
     private void bufferChoice(MosaicDocument.ENode n) {
         content.add(section("Buffer"));
         java.util.List<String> names = new java.util.ArrayList<>();
         for (MosaicDocument.ENode w : model.doc.nodes)
             if (w.type.equals("mosaic.pass") && w.mask != null && !names.contains(w.mask)) names.add(w.mask);
+        String sceneChoice = "(scene colour)";
+        boolean taa = n.type.equals("mosaic.taa");
+        if (taa) names.add(0, sceneChoice);
         if (names.isEmpty()) {
             content.add(text("No Buffer node in this graph yet: add Buffer (pass) and name it.", WARN));
             return;
@@ -794,7 +821,10 @@ final class InspectorPanel extends Panels.Listening {
         if (n.mask != null && !names.contains(n.mask)) names.add(0, n.mask);
         JComboBox<String> box = new JComboBox<>(names.toArray(new String[0]));
         box.setSelectedItem(n.mask == null ? names.get(0) : n.mask);
-        box.addActionListener(ev -> model.edit("Buffer of " + n.id + ": " + box.getSelectedItem(), () -> n.mask = (String) box.getSelectedItem()));
+        box.addActionListener(ev -> model.edit("Buffer of " + n.id + ": " + box.getSelectedItem(), () -> {
+            String v = (String) box.getSelectedItem();
+            n.mask = taa && sceneChoice.equals(v) ? null : v;
+        }));
         box.setAlignmentX(0);
         box.setMaximumSize(new Dimension(Integer.MAX_VALUE, box.getPreferredSize().height));
         content.add(box);
@@ -823,7 +853,8 @@ final class InspectorPanel extends Panels.Listening {
             case "mat.texture" -> textureInfo();
             case "mosaic.gradient" -> modeCombo(n, "Type", MosaicGraph.GRADIENT_MODES, "linear");
             case "mosaic.pass" -> bufferEditor(n);
-            case "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase" -> bufferChoice(n);
+            case "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.taa" -> bufferChoice(n);
+            case "mosaic.repeat" -> repeatEditor(n);
             case "mosaic.wave" -> modeCombo(n, "Type", MosaicGraph.WAVE_MODES, "bands");
             default -> { }
         }

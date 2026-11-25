@@ -78,6 +78,8 @@ public final class MosaicCatalog {
         e("mosaic.blur", "Blur buffer", Category.PASSES, "Reads a buffer softened by a 3x3 Gaussian (9 bilinear taps); radius in the buffer's pixels. Chain Buffer nodes at 1/2, 1/4, 1/8 for wide blurs."),
         e("mosaic.kawase", "Kawase blur", Category.PASSES, "Reads a buffer with one Kawase step (4 diagonal taps); radius grows per pass (0, 1, 2, 3...): the cheap wide blur behind bloom chains."),
         e("mosaic.reproject", "Reproject", Category.PASSES, "Where this pixel's surface was on screen last frame (uv): read Previous frame there for temporal anti-aliasing, motion blur and stable trails while the camera moves."),
+        e("mosaic.repeat", "Repeat", Category.CONVERTER, "A loop as a node: runs one of your functions vec4 f(vec4 acc, float i) 1 to 64 times, each time on the last result (sums, marches, kernels, iterations)."),
+        e("mosaic.taa", "Temporal AA", Category.PASSES, "Blends the previous frame, reprojected and clamped to the 3x3 neighbourhood of this frame, into the scene colour (or a Buffer): smooth edges and calm noise without ghost trails."),
         e("mosaic.history", "Previous frame", Category.PASSES, "The last final frame at uv: temporal smoothing, trails, motion effects."),
         e("mosaic.rain", "Rain", Category.SCENE, "Rain strength 0..1 of the world."),
         e("mosaic.thunder", "Thunder", Category.SCENE, "Thunderstorm strength 0..1."),

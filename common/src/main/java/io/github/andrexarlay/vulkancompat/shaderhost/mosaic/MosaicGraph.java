@@ -144,7 +144,7 @@ public final class MosaicGraph {
         // procedural textures
         "mosaic.noise", "mosaic.voronoi", "mosaic.whiteNoise", "mosaic.checker", "mosaic.wave", "mosaic.gradient",
         // multi-pass: write a named buffer, read it (any uv), the previous frame; weather and sky (binding 16)
-        "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.reproject", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
+        "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.reproject", "mosaic.taa", "mosaic.repeat", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
         "mosaic.fogColor",
         // Bedray's renderer as nodes (MosaicRenderer): stages of the real pipeline and the frame they produce
         "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.voxels", "bedray.raster", "bedray.upscaler", "bedray.output", "bedray.stageMap", "user.post", "user.hdr", "user.sky",
@@ -175,7 +175,7 @@ public final class MosaicGraph {
 
     /** Node types that read a Buffer pass by its name (mask): Read buffer, Blur buffer, Kawase blur. */
     public static boolean readsBuffer(String type) {
-        return type.equals("mosaic.bufferIn") || type.equals("mosaic.blur") || type.equals("mosaic.kawase");
+        return type.equals("mosaic.bufferIn") || type.equals("mosaic.blur") || type.equals("mosaic.kawase") || type.equals("mosaic.taa");
     }
 
     /** Whether the graph has Buffer nodes (it runs as several passes, see MosaicPasses). */
@@ -211,6 +211,8 @@ public final class MosaicGraph {
         m.put("mosaic.kawase", List.of(new Port("uv", Kind.V2, false), new Port("radius", Kind.F, false)));
         m.put("mosaic.history", List.of(new Port("uv", Kind.V2, false)));
         m.put("mosaic.reproject", List.of(new Port("uv", Kind.V2, false)));
+        m.put("mosaic.repeat", List.of(new Port("init", Kind.V4, false), new Port("uv", Kind.V2, false)));
+        m.put("mosaic.taa", List.of(new Port("uv", Kind.V2, false), new Port("blend", Kind.F, false)));
         m.put("mat.texture", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.image", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.bsdf", List.of(new Port("baseColor", Kind.V4, false), new Port("roughness", Kind.F, false),
@@ -534,6 +536,7 @@ public final class MosaicGraph {
                             }
             }
             checkPasses();
+            checkRepeats();
             warnings(reachable);
             boolean hasErrors = problems.stream().anyMatch(p -> p.severity() == Severity.ERROR);
             MosaicGraph g = hasErrors || outputId == null ? null
@@ -585,6 +588,27 @@ public final class MosaicGraph {
         }
 
         /** Buffer names: one word, written once, read only by name that exists, never read inside their own pass. */
+        /** Repeat: a function vec4 f(vec4 acc, float i) of this file, folded 1..64 times. */
+        void checkRepeats() {
+            for (Node n : nodes.values()) {
+                if (!n.type().equals("mosaic.repeat")) continue;
+                MosaicFunction f = n.mask() == null ? null : functions.get(n.mask());
+                if (f == null) {
+                    error(n.id(), null, "node " + n.id() + ": Repeat needs a function of this graph to run (vec4 name(vec4 acc, float i[, vec2 uv]))",
+                        Fix.CHANGE_PARAM);
+                    continue;
+                }
+                List<MosaicFunction.Param> ps = f.params();
+                boolean shape = f.output() == Kind.V4 && (ps.size() == 2 || ps.size() == 3) && ps.get(0).kind() == Kind.V4
+                    && ps.get(1).kind() == Kind.F && (ps.size() == 2 || ps.get(2).kind() == Kind.V2);
+                if (!shape)
+                    error(n.id(), null, "node " + n.id() + ": function " + f.name() + " must look like vec4 " + f.name()
+                        + "(vec4 acc, float i) or vec4 " + f.name() + "(vec4 acc, float i, vec2 uv) to be repeated", Fix.CHANGE_PARAM);
+                if (n.index() < 1 || n.index() > 64)
+                    error(n.id(), null, "node " + n.id() + ": Repeat runs 1 to 64 times, found " + n.index(), Fix.CHANGE_PARAM);
+            }
+        }
+
         void checkPasses() {
             Map<String, String> written = new LinkedHashMap<>();
             for (Node n : nodes.values()) {
@@ -602,6 +626,7 @@ public final class MosaicGraph {
             }
             for (Node n : nodes.values()) {
                 if (!readsBuffer(n.type())) continue;
+                if (n.type().equals("mosaic.taa") && n.mask() == null) continue; // Temporal AA of the scene colour itself
                 if (n.index() >= MosaicPasses.FIRST_BUFFER_BINDING) continue; // a pass graph: already bound by the planner
                 if (n.mask() == null || !written.containsKey(n.mask())) {
                     error(n.id(), null, "node " + n.id() + " reads buffer " + n.mask() + ", which no Buffer node writes"
@@ -913,7 +938,7 @@ public final class MosaicGraph {
                 case "mosaic.const" -> n.value() == null ? null : Kind.ofSize(n.value().length);
                 case "mosaic.vec" -> Kind.ofSize(n.index());
                 case "mosaic.swizzle" -> swizzleKind(n, visiting);
-                case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf", "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history" -> Kind.V4;
+                case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf", "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.taa", "mosaic.repeat", "mosaic.history" -> Kind.V4;
                 case "mosaic.rain", "mosaic.thunder", "mosaic.temperature" -> Kind.F;
                 case "mosaic.reproject" -> Kind.V2;
                 case "bedray.output", "slang.module", "slang.pack", "bedray.stageMap" -> Kind.V4;

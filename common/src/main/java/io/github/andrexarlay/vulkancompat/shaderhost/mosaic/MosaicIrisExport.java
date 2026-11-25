@@ -28,7 +28,7 @@ public final class MosaicIrisExport {
             case "mosaic.trace", "mosaic.shadow", "mosaic.sceneDepth", "mosaic.position", "mosaic.worldPos", "mosaic.normal",
                  "mosaic.waterDepth", "mosaic.waterMask", "mosaic.lavaMask", "mosaic.underwater", "mosaic.hitMaterial",
                  "mosaic.materialMask", "mosaic.materialDepth", "mosaic.skyLight", "mosaic.blockLight", "mosaic.cameraMaterial",
-                 "mosaic.buffer", "mosaic.push", "mosaic.lut", "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.reproject", "mosaic.temperature" -> false;
+                 "mosaic.buffer", "mosaic.push", "mosaic.lut", "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.reproject", "mosaic.taa", "mosaic.repeat", "mosaic.temperature" -> false;
             default -> true;
         };
     }

@@ -49,11 +49,8 @@ public final class MosaicTemplates {
     /** Temporal smoothing: last frame read where this pixel's surface was (Reproject), blended in. */
     static final String TAA = """
 {"nodes":[
- {"id":"c","type":"mosaic.sceneColor","x":0,"y":0},
- {"id":"r","type":"mosaic.reproject","x":0,"y":120},
- {"id":"h","type":"mosaic.history","inputs":{"uv":"r"},"x":180,"y":120},
- {"id":"m","type":"mosaic.mix","inputs":{"a":"c","b":"h"},"defaults":{"t":[0.85]},"x":360,"y":40},
- {"id":"out","type":"mosaic.output","inputs":{"color":"m"},"x":540,"y":40}]}""";
+ {"id":"taa","type":"mosaic.taa","defaults":{"blend":[0.9]},"x":0,"y":0},
+ {"id":"out","type":"mosaic.output","inputs":{"color":"taa"},"x":220,"y":0}]}""";
 
     static {
         ALL.add(new Template("Pass-through", "Start", "The world image unchanged: the smallest valid graph.", chain()));

@@ -62,6 +62,41 @@ class MosaicBlurTest {
     }
 
     @Test
+    void temporalAaClampsHistoryToTheNeighbourhood() {
+        MosaicGraph g = MosaicGraph.analyze(MosaicTemplates.TAA).graph();
+        assertNotNull(g);
+        String src = MosaicCodegen.generate(g, MosaicCodegen.Options.DEFAULT, false).source();
+        assertTrue(src.contains("mosaicTaa(bedraySceneColor"), src);
+        assertTrue(src.contains("clamp(texture(bedrayHistory"), "history is clamped");
+        MosaicShaderCheck.Result r = MosaicShaderCheck.compile(MosaicCodegen.generate(g, MosaicCodegen.Options.DEFAULT, false));
+        assertTrue(r.ok(), String.valueOf(r.errors()));
+        java.nio.file.Path slangc = MosaicSlang.locate(System.getProperty("mosaic.slangc"));
+        if (slangc != null) {
+            MosaicShaderCheck.Result s = MosaicSlang.compile(MosaicCodegen.generate(g, MosaicCodegen.Options.DEFAULT, true), slangc);
+            assertTrue(s.ok(), String.valueOf(s.errors()));
+        }
+    }
+
+    /** A radial blur toward the screen centre written as a loop node: 16 runs of a one-line body. */
+    static final String REPEAT = """
+        {"functions": [{"signature": "vec4 radial(vec4 acc, float i, vec2 uv)",
+                        "glsl": "vec2 q = mix(vec2(0.5), uv, 1.0 - i * 0.004);\\nreturn acc + mosaicScene(q) / 16.0;"}],
+         "nodes": [{"id": "r", "type": "mosaic.repeat", "mask": "radial", "index": 16},
+                   {"id": "o", "type": "mosaic.output", "inputs": {"color": "r"}}]}""";
+
+    @Test
+    void repeatIsALoopNode() {
+        MosaicGraph.Analysis a = MosaicGraph.analyze(REPEAT);
+        assertNull(a.firstError(), String.valueOf(a.problems()));
+        MosaicCodegen.Generated gen = MosaicCodegen.generate(a.graph(), MosaicCodegen.Options.DEFAULT, false);
+        assertTrue(gen.source().contains("for (int i_r = 0; i_r < 16; i_r++) g_r = mosaic_fn_radial(g_r, float(i_r), m_uv);"), gen.source());
+        MosaicShaderCheck.Result r = MosaicShaderCheck.compile(gen);
+        assertTrue(r.ok(), String.valueOf(r.errors()));
+        MosaicGraph.Analysis bad = MosaicGraph.analyze(REPEAT.replace("\"index\": 16", "\"index\": 99"));
+        assertTrue(bad.problems().stream().anyMatch(p -> p.message().contains("1 to 64")), String.valueOf(bad.problems()));
+    }
+
+    @Test
     void blurOfAnUnwrittenBufferIsAnError() {
         MosaicGraph.Analysis a = MosaicGraph.analyze("{\"nodes\": [{\"id\": \"b\", \"type\": \"mosaic.kawase\", \"mask\": \"nope\"},"
             + "{\"id\": \"o\", \"type\": \"mosaic.output\", \"inputs\": {\"color\": \"b\"}}]}");
