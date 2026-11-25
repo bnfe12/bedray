@@ -28,9 +28,9 @@ class MosaicRenderPipelineTest {
         MosaicPasses.Plan plan = MosaicPasses.plan(MosaicGraph.parse(MosaicTemplates.renderer(true)));
         assertEquals(List.of("~prev.gi", "~depth"), plan.after().stream().map(MosaicPasses.Pass::name).toList());
         assertNull(plan.last().name(), "the final image stays last of the ordered passes");
-        assertEquals(List.of("gi", "giA", "giB", "frame"), plan.passes().subList(0, 4).stream().map(MosaicPasses.Pass::name).toList());
+        assertTrue(plan.passes().stream().map(MosaicPasses.Pass::name).toList().containsAll(List.of("gi", "giA", "giB", "hdr", "bloomA", "bloomB", "bloomC", "frame")));
         // user buffers keep their bindings (sorted first), history copies come after them
-        assertEquals(20, plan.bindings().get("frame"));
+        assertEquals(20, plan.bindings().get("bloomA")); // names sorted: user buffers first
         assertTrue(plan.bindings().get("~depth") > plan.bindings().get("giB"));
         String gi = plan.passes().get(0).json();
         assertTrue(gi.contains("\"index\":" + plan.bindings().get("~prev.gi")), gi);

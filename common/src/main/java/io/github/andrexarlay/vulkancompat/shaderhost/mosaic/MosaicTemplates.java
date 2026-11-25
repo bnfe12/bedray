@@ -191,7 +191,7 @@ public final class MosaicTemplates {
         }
         if (rt) add.apply(new Object[] {"spec", "fn:sunSpecular", 2, 1, "position", "pos", "normal", "nrm", "roughness", "rough"});
         else add.apply(new Object[] {"spec", "fn:sunSpecular", 2, 2, "position", "pos", "normal", "nrm", "roughness", "rough", "visibility", "shadow"});
-        add.apply(new Object[] {"torch", "fn:torchLight", 2, 3, "blockLight", "lamp"});
+        add.apply(new Object[] {"torch", "fn:torchLightShadowed", 2, 3, "position", "pos", "normal", "nrm", "blockLight", "lamp"});
         add.apply(new Object[] {"glow", "fn:selfGlow", 2, 4, "uv", "uv", "albedo", "albedo"});
         // indirect light
         String indirect;
@@ -231,20 +231,46 @@ public final class MosaicTemplates {
         add.apply(new Object[] {"extra", "mosaic.add", 3, 2, "a", "glow", "b", "spec"});
         add.apply(new Object[] {"shade", "fn:litSurface", 4, 0, "uv", "uv", "albedo", "albedo", "light", "light", "glow", "extra"});
         add.apply(new Object[] {"water", "fn:reflectiveSurface", 4, 1.2, "color", "shade", "uv", "uv"});
-        add.apply(new Object[] {"air", "fn:atmosphere", 4, 2.4, "color", "water", "uv", "uv"});
-        add.apply(new Object[] {"tone", "fn:tonemap", 5, 0, "color", "air"});
-        JsonObject fb = add.apply(new Object[] {"frameBuf", "mosaic.pass", 5, 1.2, "color", "tone"});
+        add.apply(new Object[] {"skyBg", "fn:skyBackground", 4, 2.4, "color", "water", "uv", "uv"});
+        add.apply(new Object[] {"air", "fn:atmosphere", 4, 3.6, "color", "skyBg", "uv", "uv"});
+        // HDR into a buffer, then a bloom chain at 1/2, 1/4 and 1/8 added back before the tone map
+        java.util.function.BiConsumer<JsonObject, Object[]> buf = (n, mi) -> {
+            n.addProperty("mask", (String) mi[0]);
+            if (mi.length > 1) n.addProperty("index", (Integer) mi[1]);
+        };
+        buf.accept(add.apply(new Object[] {"hdrBuf", "mosaic.pass", 5, 0, "color", "air"}), new Object[] {"hdr", 1});
+        buf.accept(add.apply(new Object[] {"hdrIn", "mosaic.bufferIn", 5, 1.2}), new Object[] {"hdr"});
+        add.apply(new Object[] {"bright", "fn:brightPass", 5, 2.4, "color", "hdrIn"});
+        buf.accept(add.apply(new Object[] {"bloomA", "mosaic.pass", 5, 3.6, "color", "bright"}), new Object[] {"bloomA", 2});
+        buf.accept(add.apply(new Object[] {"kA", "mosaic.kawase", 6, 0}), new Object[] {"bloomA"});
+        buf.accept(add.apply(new Object[] {"bloomB", "mosaic.pass", 6, 1.2, "color", "kA"}), new Object[] {"bloomB", 4});
+        JsonObject kB = add.apply(new Object[] {"kB", "mosaic.kawase", 6, 2.4});
+        buf.accept(kB, new Object[] {"bloomB"});
+        JsonObject kd = new JsonObject();
+        JsonArray kr = new JsonArray();
+        kr.add(2);
+        kd.add("radius", kr);
+        kB.add("defaults", kd);
+        buf.accept(add.apply(new Object[] {"bloomC", "mosaic.pass", 6, 3.6, "color", "kB"}), new Object[] {"bloomC", 8});
+        buf.accept(add.apply(new Object[] {"bA", "mosaic.blur", 7, 0}), new Object[] {"bloomA"});
+        buf.accept(add.apply(new Object[] {"bB", "mosaic.blur", 7, 1.2}), new Object[] {"bloomB"});
+        buf.accept(add.apply(new Object[] {"bC", "mosaic.blur", 7, 2.4}), new Object[] {"bloomC"});
+        add.apply(new Object[] {"bloom", "fn:bloomMix", 8, 0, "base", "hdrIn", "a", "bA", "b", "bB", "c", "bC"});
+        add.apply(new Object[] {"tone", "fn:tonemap", 8, 1.2, "color", "bloom"});
+        JsonObject fb = add.apply(new Object[] {"frameBuf", "mosaic.pass", 8, 2.4, "color", "tone"});
         fb.addProperty("mask", "frame");
         fb.addProperty("index", 1);
-        JsonObject taa = add.apply(new Object[] {"taa", "mosaic.taa", 5, 2.4});
+        JsonObject taa = add.apply(new Object[] {"taa", "mosaic.taa", 9, 0});
         taa.addProperty("mask", "frame");
-        add.apply(new Object[] {"out", "mosaic.output", 5, 3.6, "color", "taa"});
+        add.apply(new Object[] {"out", "mosaic.output", 9, 1.2, "color", "taa"});
         frame.accept("G-buffer", gi ? new Object[] {"#3A6EA5", "uv", "pos", "nrm", "lamp"} : new Object[] {"#3A6EA5", "uv", "pos", "nrm", "lamp", "sky"});
         frame.accept("Surface", gi ? new Object[] {"#7A4FA8", "albedo", "rough"} : new Object[] {"#7A4FA8", "albedo", "rough", "amb"});
         frame.accept("Direct light", new Object[] {"#B07A2E", "shadow", "sun", "spec", "torch", "glow"});
         if (gi) frame.accept(rt ? "Indirect light (RT GI)" : "Indirect light (voxel GI)",
             new Object[] {"#2F8F7C", "giRaw", "acc", "giBuf", "dn0", "buf0", "dn1", "buf1", "dn2", "giRgb"});
-        frame.accept("Shade and output", new Object[] {"#8A5CC8", "direct", "light", "extra", "shade", "water", "air", "tone", "frameBuf", "taa", "out"});
+        frame.accept("Shade, sky and atmosphere", new Object[] {"#8A5CC8", "direct", "light", "extra", "shade", "water", "skyBg", "air"});
+        frame.accept("HDR and bloom", new Object[] {"#C06A3A", "hdrBuf", "hdrIn", "bright", "bloomA", "kA", "bloomB", "kB", "bloomC", "bA", "bB", "bC"});
+        frame.accept("Tone map and output", new Object[] {"#4B8A4B", "bloom", "tone", "frameBuf", "taa", "out"});
         root.add("functions", fns);
         root.add("nodes", nodes);
         root.add("frames", frames);

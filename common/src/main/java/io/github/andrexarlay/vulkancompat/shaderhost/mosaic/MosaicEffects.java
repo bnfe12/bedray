@@ -510,6 +510,116 @@ public final class MosaicEffects {
             vec3 haze = mosaicSky(normalize(vec3(d.x, max(d.y, 0.02), d.z))) * tint
                 + vec3(1.0, 0.85, 0.6) * pow(max(dot(d, L), 0.0), scatterSharpness) * sunScatter * clamp(L.y * 4.0, 0.0, 1.0);
             return vec4(mix(color.rgb, haze, f), color.a);""");
+        add("Render pipeline", "vec3 proceduralSky(vec3 dir, vec3 zenithColor = vec3(0.22, 0.42, 0.85), vec3 horizonColor = vec3(0.68, 0.80, 0.96), float gradientPower = 0.6, vec3 sunsetColor = vec3(1.0, 0.45, 0.2), float sunsetHeight = 0.3, vec3 nightColor = vec3(0.01, 0.015, 0.04), float dayRise = 3, float dayOffset = 0.25, float groundDarkening = 0.4, vec3 sunColor = vec3(1.0, 0.92, 0.8), float sunSize = 0.0004, float sunBrightness = 20, float sunGlow = 0.6, float sunGlowSharpness = 32, vec3 moonColor = vec3(0.8, 0.85, 1.0), float moonSize = 0.0003, float starDensity = 0.002, float starScale = 400, float starBrightness = 0.8, float cloudCoverage = 0.45, float cloudHeight = 192, float cloudScale = 0.008, float cloudSoftness = 0.25, float cloudDetail = 4, float cloudOpacity = 0.9, vec3 cloudColor = vec3(1.0), vec3 cloudShadowColor = vec3(0.45, 0.5, 0.6), float cloudSelfShadow = 0.35, float nightCloudLevel = 0.05, vec2 windDirection = vec2(1.0, 0.3), float windSpeed = 0.01, float cloudChange = 0.02, float cloudFadeDistance = 6000)",
+            "Sky (procedural)", "A sky of your own in linear HDR for any direction: day gradient (zenith, horizon), sunset glow toward the sun,"
+                + " night, sun and moon discs, stars, and a cloud layer drifting with the wind (coverage, height, scale, softness, colours)."
+                + " Use it for reflections and GI misses; Sky background draws it behind the world.", """
+
+            vec3 L = mosaicSunDir();
+            float sunUp = L.y;
+            float day = clamp(sunUp * dayRise + dayOffset, 0.0, 1.0);
+            float sunset = (1.0 - smoothstep(0.0, sunsetHeight, abs(sunUp))) * step(-0.2, sunUp);
+            float up = clamp(dir.y, 0.0, 1.0);
+            vec3 dayCol = mix(horizonColor, zenithColor, pow(up, gradientPower));
+            vec3 setCol = mix(sunsetColor, zenithColor * 0.6, pow(up, gradientPower * 0.6));
+            float towardSun = pow(max(dot(normalize(vec3(dir.x, 0.0, dir.z) + 1e-4), normalize(vec3(L.x, 0.0, L.z) + 1e-4)), 0.0), 2.0);
+            vec3 c = mix(dayCol, setCol, sunset * (0.4 + 0.6 * towardSun)) * day + nightColor * (1.0 - day);
+            c *= mix(1.0, groundDarkening, clamp(-dir.y * 4.0, 0.0, 1.0));
+            // sun and moon discs
+            float sd = dot(dir, L), md = dot(dir, -L);
+            c += sunColor * (smoothstep(1.0 - sunSize, 1.0 - sunSize * 0.7, sd) * sunBrightness + pow(max(sd, 0.0), sunGlowSharpness) * sunGlow) * step(0.0, sunUp + 0.05);
+            c += moonColor * smoothstep(1.0 - moonSize, 1.0 - moonSize * 0.7, md) * (1.0 - day);
+            // stars: a fixed pattern of the sky, at night
+            vec3 sp = floor(dir * starScale);
+            float star = step(1.0 - starDensity, fract(sin(dot(sp, vec3(12.9898, 78.233, 37.719))) * 43758.5453));
+            c += vec3(star) * starBrightness * (1.0 - day) * step(0.0, dir.y);
+            // clouds: a noise layer on a plane cloudHeight above the world, drifting with the wind
+            if (cloudCoverage > 0.0 && dir.y > 0.01) {
+                float camY = mosaicEye().y + frame.cameraPosition.y;
+                float tc = (cloudHeight - camY) / dir.y;
+                if (tc > 0.0) {
+                    vec2 wp = (frame.cameraPosition.xz + mosaicEye().xz + dir.xz * tc) * cloudScale + windDirection * frame.timing.x * windSpeed;
+                    float n = mosaicNoise(vec3(wp, frame.timing.x * cloudChange), cloudDetail, 0.55, 0.0);
+                    float dens = smoothstep(1.0 - cloudCoverage, 1.0 - cloudCoverage + cloudSoftness, n);
+                    dens *= clamp(1.0 - tc / cloudFadeDistance, 0.0, 1.0);
+                    vec3 sunTint = mix(sunsetColor, vec3(1.0), smoothstep(0.0, sunsetHeight, sunUp));
+                    vec3 cloud = mix(cloudShadowColor, cloudColor * sunTint, clamp(day + 0.1, 0.0, 1.0) * (1.0 - n * cloudSelfShadow))
+                        * max(day, nightCloudLevel);
+                    c = mix(c, cloud, dens * cloudOpacity);
+                }
+            }
+            return c;""");
+        add("Render pipeline", "vec4 skyBackground(vec4 color, vec2 uv, vec3 zenithColor = vec3(0.22, 0.42, 0.85), vec3 horizonColor = vec3(0.68, 0.80, 0.96), float gradientPower = 0.6, vec3 sunsetColor = vec3(1.0, 0.45, 0.2), float sunsetHeight = 0.3, vec3 nightColor = vec3(0.01, 0.015, 0.04), float dayRise = 3, float dayOffset = 0.25, float groundDarkening = 0.4, vec3 sunColor = vec3(1.0, 0.92, 0.8), float sunSize = 0.0004, float sunBrightness = 20, float sunGlow = 0.6, float sunGlowSharpness = 32, vec3 moonColor = vec3(0.8, 0.85, 1.0), float moonSize = 0.0003, float starDensity = 0.002, float starScale = 400, float starBrightness = 0.8, float cloudCoverage = 0.45, float cloudHeight = 192, float cloudScale = 0.008, float cloudSoftness = 0.25, float cloudDetail = 4, float cloudOpacity = 0.9, vec3 cloudColor = vec3(1.0), vec3 cloudShadowColor = vec3(0.45, 0.5, 0.6), float cloudSelfShadow = 0.35, float nightCloudLevel = 0.05, vec2 windDirection = vec2(1.0, 0.3), float windSpeed = 0.01, float cloudChange = 0.02, float cloudFadeDistance = 6000)",
+            "Sky background", "Replaces the pixels that see the sky with the procedural sky (the same inputs as Sky (procedural));"
+                + " world pixels pass through. Put it after Combine, before Atmosphere and Tone map.", """
+            if (mosaicDepth(uv) < 1.0e5) return color;
+            vec3 dir = mosaicViewDir(uv);
+
+            vec3 L = mosaicSunDir();
+            float sunUp = L.y;
+            float day = clamp(sunUp * dayRise + dayOffset, 0.0, 1.0);
+            float sunset = (1.0 - smoothstep(0.0, sunsetHeight, abs(sunUp))) * step(-0.2, sunUp);
+            float up = clamp(dir.y, 0.0, 1.0);
+            vec3 dayCol = mix(horizonColor, zenithColor, pow(up, gradientPower));
+            vec3 setCol = mix(sunsetColor, zenithColor * 0.6, pow(up, gradientPower * 0.6));
+            float towardSun = pow(max(dot(normalize(vec3(dir.x, 0.0, dir.z) + 1e-4), normalize(vec3(L.x, 0.0, L.z) + 1e-4)), 0.0), 2.0);
+            vec3 c = mix(dayCol, setCol, sunset * (0.4 + 0.6 * towardSun)) * day + nightColor * (1.0 - day);
+            c *= mix(1.0, groundDarkening, clamp(-dir.y * 4.0, 0.0, 1.0));
+            // sun and moon discs
+            float sd = dot(dir, L), md = dot(dir, -L);
+            c += sunColor * (smoothstep(1.0 - sunSize, 1.0 - sunSize * 0.7, sd) * sunBrightness + pow(max(sd, 0.0), sunGlowSharpness) * sunGlow) * step(0.0, sunUp + 0.05);
+            c += moonColor * smoothstep(1.0 - moonSize, 1.0 - moonSize * 0.7, md) * (1.0 - day);
+            // stars: a fixed pattern of the sky, at night
+            vec3 sp = floor(dir * starScale);
+            float star = step(1.0 - starDensity, fract(sin(dot(sp, vec3(12.9898, 78.233, 37.719))) * 43758.5453));
+            c += vec3(star) * starBrightness * (1.0 - day) * step(0.0, dir.y);
+            // clouds: a noise layer on a plane cloudHeight above the world, drifting with the wind
+            if (cloudCoverage > 0.0 && dir.y > 0.01) {
+                float camY = mosaicEye().y + frame.cameraPosition.y;
+                float tc = (cloudHeight - camY) / dir.y;
+                if (tc > 0.0) {
+                    vec2 wp = (frame.cameraPosition.xz + mosaicEye().xz + dir.xz * tc) * cloudScale + windDirection * frame.timing.x * windSpeed;
+                    float n = mosaicNoise(vec3(wp, frame.timing.x * cloudChange), cloudDetail, 0.55, 0.0);
+                    float dens = smoothstep(1.0 - cloudCoverage, 1.0 - cloudCoverage + cloudSoftness, n);
+                    dens *= clamp(1.0 - tc / cloudFadeDistance, 0.0, 1.0);
+                    vec3 sunTint = mix(sunsetColor, vec3(1.0), smoothstep(0.0, sunsetHeight, sunUp));
+                    vec3 cloud = mix(cloudShadowColor, cloudColor * sunTint, clamp(day + 0.1, 0.0, 1.0) * (1.0 - n * cloudSelfShadow))
+                        * max(day, nightCloudLevel);
+                    c = mix(c, cloud, dens * cloudOpacity);
+                }
+            }
+            return vec4(c, color.a);""");
+        add("Render pipeline", "vec3 torchLightShadowed(vec3 position, vec3 normal, float blockLight, vec3 tint = vec3(1.0, 0.6, 0.3), float intensity = 2, float falloff = 2.5, float shadowStrength = 0.85, float wrap = 0.35, float probe = 0.6, float bias = 0.05, float blocksPerLevel = 15)",
+            "Block light (directional, shadowed)", "Torch, lamp and lava light with a direction and shadows: the light comes from where the"
+                + " block light level rises (its gradient in the world volume), is shaded by the angle to the surface (wrap softens it)"
+                + " and a ray toward the source darkens it by shadowStrength when a block is in between.", """
+            float b = clamp(blockLight, 0.0, 1.0);
+            if (b <= 0.0) return vec3(0.0);
+            vec3 p = position + normal * probe;
+            vec3 g = vec3(mosaicBlockLightAt(p + vec3(1.0, 0.0, 0.0)) - mosaicBlockLightAt(p - vec3(1.0, 0.0, 0.0)),
+                mosaicBlockLightAt(p + vec3(0.0, 1.0, 0.0)) - mosaicBlockLightAt(p - vec3(0.0, 1.0, 0.0)),
+                mosaicBlockLightAt(p + vec3(0.0, 0.0, 1.0)) - mosaicBlockLightAt(p - vec3(0.0, 0.0, 1.0)));
+            float level = pow(b, falloff) * intensity;
+            if (length(g) < 1e-4) return tint * level;
+            vec3 ld = normalize(g);
+            float dist = max((1.0 - b) * blocksPerLevel, 0.5);
+            vec3 n2;
+            float m2;
+            float h = mosaicVoxelTrace(position + normal * bias, ld, max(dist - 0.5, 0.1), n2, m2);
+            float vis = h >= 0.0 ? 1.0 - shadowStrength : 1.0;
+            float ndl = max((dot(normal, ld) + wrap) / (1.0 + wrap), 0.0);
+            return tint * level * ndl * vis;""");
+        add("Render pipeline", "vec4 brightPass(vec4 color, float threshold = 1.2, float knee = 0.6, float clampMax = 64)",
+            "Bright pass", "What glows: the part of HDR light above threshold with a soft knee, capped at clampMax (no fireflies);"
+                + " feed it into a Buffer at 1/2 for a bloom chain.", """
+            float l = max(max(color.r, color.g), color.b);
+            float soft = clamp(l - threshold + knee, 0.0, 2.0 * knee);
+            soft = soft * soft / (4.0 * knee + 1e-4);
+            float w = max(soft, l - threshold) / max(l, 1e-4);
+            return vec4(min(color.rgb * w, vec3(clampMax)), 1.0);""");
+        add("Render pipeline", "vec4 bloomMix(vec4 base, vec4 a, vec4 b, vec4 c, float strength = 0.06, float weightA = 1, float weightB = 1, float weightC = 1, vec3 tint = vec3(1.0))",
+            "Bloom mix", "Adds three bloom levels (1/2, 1/4, 1/8 buffers, blurred) to the HDR image, each with its weight, tinted.", """
+            return vec4(base.rgb + (a.rgb * weightA + b.rgb * weightB + c.rgb * weightC) * strength * tint, base.a);""");
         add("Render pipeline", "vec3 skyAmbient(vec3 normal, float skyLight = 1, float intensity = 0.6, float skyCurve = 2, float upBias = 1)", "Sky ambient",
             "Cheap light from the sky dome on a surface (no rays): the sky colour above the normal (upBias tilts it up), fading with"
                 + " the sky light level to the power skyCurve (0 in caves). Use it instead of Diffuse GI on slow GPUs.", """

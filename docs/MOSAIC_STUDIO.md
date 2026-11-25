@@ -73,7 +73,9 @@ GPU (voxel rays through the world volume, no ray tracing hardware needed):
 - G-buffer: Albedo (from the game image), Hit position, Surface normal, Sky light, Block light.
 - Lights (category *Render pipeline*): Sun shadow (one shadow ray shared by diffuse and specular), Sun & moon light,
   Sun specular (GGX), Roughness (by material), Block light, Sky ambient, Emission, Diffuse GI (voxel paths), Reflection
-  (voxels), Reflective surface (water), Atmosphere (aerial perspective toward the sky and the sun).
+  (voxels), Reflective surface (water), Atmosphere (aerial perspective toward the sky and the sun), Block light
+  (directional, shadowed: light from where the block light rises, with a shadow ray toward it), Sky (procedural) and
+  Sky background (gradient, sunset, sun / moon discs, stars, drifting cloud layer), Bright pass and Bloom mix.
 - Passes: Buffer (1/1..1/8), **Accumulate** (temporal accumulation with reprojection and disocclusion reset),
   **Buffer (last frame)** (feedback), **Denoise (a-trous)** steps, Temporal AA.
 - Combine (shade), **Tone map** (ACES, Reinhard, Hable, exponential, clip).
