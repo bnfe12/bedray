@@ -1127,7 +1127,7 @@ final class StudioModel {
         if (functionDoc()) return functionItems();
         boolean materials = workspace == Workspace.MATERIALS, renderer = workspace == Workspace.RENDERER;
         for (MosaicCatalog.Entry e : MosaicCatalog.all()) {
-            boolean stage = e.category() == MosaicCatalog.Category.RENDERER;
+            boolean stage = e.category() == MosaicCatalog.Category.RENDERER || e.category() == MosaicCatalog.Category.YOURS;
             if (renderer ? !stage : stage) continue;
             if (e.type().equals("bedray.stageMap")) continue; // written by Studio, not added by hand
             if (materials ? !MosaicGraph.MATERIAL_SAFE.contains(e.type()) : e.category() == MosaicCatalog.Category.MATERIAL) continue;

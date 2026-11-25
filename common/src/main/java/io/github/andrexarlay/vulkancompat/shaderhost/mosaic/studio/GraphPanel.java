@@ -172,7 +172,24 @@ final class GraphPanel extends JComponent {
 
     int height(MosaicDocument.ENode n) {
         int rows = Math.max(Math.max(inputs(n).size(), outputs(n).size()), 1);
-        return HEAD + rows * ROW + (paramText(n).isEmpty() ? 0 : ROW) + 8;
+        return HEAD + rows * ROW + (paramText(n).isEmpty() ? 0 : ROW) + 8 + codeLines(n).size() * CODE_LINE + (codeLines(n).isEmpty() ? 0 : 10);
+    }
+
+    static final int CODE_LINE = 12;
+
+    /** The first lines of a Slang block, shown on the node (the inspector edits all of it). */
+    static List<String> codeLines(MosaicDocument.ENode n) {
+        if (!n.type.equals(MosaicSlangGraph.CODE) || n.mask == null) return List.of();
+        List<String> out = new ArrayList<>();
+        for (String l : MosaicSlangGraph.codeSignature(n.mask).body().strip().split("\n")) {
+            if (l.isBlank()) continue;
+            if (out.size() == 7) {
+                out.add("...");
+                break;
+            }
+            out.add(l.replace("\t", "    ").stripTrailing());
+        }
+        return out;
     }
 
     List<String> inputs(MosaicDocument.ENode n) {
@@ -1383,10 +1400,26 @@ final class GraphPanel extends JComponent {
             g.setColor(MUTED);
             if (settings.portNames) g.drawString(l, s.x - 9 - g.getFontMetrics().stringWidth(l), s.y + 4);
         }
-        String param = paramText(n);
+        List<String> code = codeLines(n);
+        String param = code.isEmpty() ? paramText(n) : "";
         if (!param.isEmpty()) {
             g.setColor(TEXT);
             g.drawString(clip(g, param, w - 16), n.x + 8, n.y + h - 9);
+        }
+        if (!code.isEmpty() && zoom > 0.35) {
+            int top = n.y + h - code.size() * CODE_LINE - 10;
+            g.setColor(new Color(0x14171F));
+            g.fillRoundRect(n.x + 4, top, w - 8, code.size() * CODE_LINE + 6, 6, 6);
+            g.setFont(MONO.deriveFont(9.5f));
+            g.setColor(new Color(0xD8C38A));
+            int min = Integer.MAX_VALUE;
+            for (String l : code) if (!l.equals("...")) min = Math.min(min, l.length() - l.stripLeading().length());
+            for (int k = 0; k < code.size(); k++) {
+                String l = code.get(k);
+                if (!l.equals("...") && min != Integer.MAX_VALUE) l = l.substring(Math.min(min, l.length()));
+                g.drawString(clip(g, l, w - 16), n.x + 9, top + 11 + k * CODE_LINE);
+            }
+            g.setFont(UI_S);
         }
         if (n.label != null && !n.label.isBlank()) {
             g.setColor(MUTED);
