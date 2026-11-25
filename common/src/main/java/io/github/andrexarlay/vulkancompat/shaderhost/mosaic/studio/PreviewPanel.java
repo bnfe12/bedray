@@ -68,14 +68,30 @@ final class PreviewPanel extends Panels.Listening {
             if (v != null) worldView = v.at((float) (Math.floorMod(time.getValue() - 6000, 24000) / 24000.0));
             lastKey = null;
         });
-        JLabel tl = label("Time", FAINT);
-        right.add(tl);
-        right.add(time);
-        right.add(button("Reload world", "Load the world again (the game saves the place you stand on each time it opens Studio)", () -> {
+        JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        row2.setOpaque(false);
+        row2.setBorder(new EmptyBorder(4, 0, 0, 0));
+        row2.add(label("Time", FAINT));
+        row2.add(time);
+        JComboBox<String> size = new JComboBox<>(new String[] {"640 x 360", "960 x 540", "1280 x 720", "1920 x 1080"});
+        size.setToolTipText("Preview resolution: the world and every pass of the graph run at this size");
+        size.setSelectedItem(StudioUi.settings.previewWidth + " x " + StudioUi.settings.previewHeight);
+        size.addActionListener(e -> {
+            String[] wh = ((String) size.getSelectedItem()).split(" x ");
+            StudioUi.settings.previewWidth = Integer.parseInt(wh[0]);
+            StudioUi.settings.previewHeight = Integer.parseInt(wh[1]);
+            StudioUi.settings.save();
+            lastKey = null;
+        });
+        row2.add(size);
+        row2.add(button("World look...", "How the preview world draws the game's image: light map, face shading, water and glass, view distance",
+            this::lookDialog));
+        row2.add(button("Reload world", "Load the world again (the game saves the place you stand on each time it opens Studio)", () -> {
             worldView = null;
             lastKey = null;
         }));
         bar.add(right, BorderLayout.EAST);
+        bar.add(row2, BorderLayout.SOUTH);
         root.add(bar, BorderLayout.NORTH);
         view = new JComponent() {
             @Override protected void paintComponent(Graphics g0) {
@@ -163,6 +179,37 @@ final class PreviewPanel extends Panels.Listening {
         return out;
     }
 
+    /** The preview look (PreviewWorld.LOOK) as a dialog of numbers, saved in Studio settings. */
+    private void lookDialog() {
+        JPanel p = new JPanel(new GridLayout(0, 2, 6, 4));
+        java.util.Map<String, JTextField> fields = new java.util.LinkedHashMap<>();
+        for (var s : PreviewWorld.LOOK) {
+            JLabel l = new JLabel(s.label());
+            l.setToolTipText(s.help());
+            double[] v = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(StudioUi.settings.previewLook, s);
+            JTextField f = new JTextField(InspectorPanel.numbers(v), 12);
+            f.setToolTipText(s.help());
+            p.add(l);
+            p.add(f);
+            fields.put(s.key(), f);
+        }
+        JScrollPane sp = new JScrollPane(p);
+        sp.setPreferredSize(new Dimension(460, 420));
+        Object[] options = {"Apply", "Defaults", "Cancel"};
+        int r = JOptionPane.showOptionDialog(root, sp, "Preview world look", JOptionPane.DEFAULT_OPTION, JOptionPane.PLAIN_MESSAGE, null, options, options[0]);
+        if (r == 1) StudioUi.settings.previewLook.clear();
+        else if (r == 0) {
+            for (var s : PreviewWorld.LOOK) {
+                double[] v = InspectorPanel.parse(fields.get(s.key()).getText());
+                if (v == null || v.length != s.size()) continue;
+                if (java.util.Arrays.equals(v, s.def())) StudioUi.settings.previewLook.remove(s.key());
+                else StudioUi.settings.previewLook.put(s.key(), v);
+            }
+        } else return;
+        StudioUi.settings.save();
+        lastKey = null;
+    }
+
     private void loop() {
         while (alive) {
             try {
@@ -181,7 +228,7 @@ final class PreviewPanel extends Panels.Listening {
                         int ticks = Math.floorMod(Math.round(snap.timeOfDay() * 24000) + 6000, 24000);
                         SwingUtilities.invokeLater(() -> time.setValue(ticks));
                     }
-                    wv = worldView;
+                    wv = worldView.with(model.doc.settings, StudioUi.settings.previewLook);
                 } else input = model.liveBefore != null ? fit(model.liveBefore, 960) : null;
                 if (model.rendererDoc()) {
                     show(null, "Renderer graphs set up Bedray itself: they apply in the game (Result shows its frames)");
@@ -211,7 +258,7 @@ final class PreviewPanel extends Panels.Listening {
                 }
                 var runs = model.passRuns;
                 Object key = java.util.List.of(System.identityHashCode(c), System.identityHashCode(input), s, System.identityHashCode(runs),
-                    System.identityHashCode(wv));
+                    wv == null ? 0 : System.identityHashCode(worldView), lookKey());
                 if (!playing && key.equals(lastKey)) {
                     Thread.sleep(120);
                     continue;
@@ -235,6 +282,8 @@ final class PreviewPanel extends Panels.Listening {
                 BufferedImage out;
                 try {
                     float t = (System.nanoTime() - start) / 1e9f;
+                    gpu.worldWidth = StudioUi.settings.previewWidth;
+                    gpu.worldHeight = StudioUi.settings.previewHeight;
                     var list = runs != null ? runs : java.util.List.of(new GpuPreview.PassRun(c.spirv(), 1, -1));
                     out = gpu.runChain(list, input, t, frame++, extras(), wv);
                 } catch (UnsupportedOperationException e) {
@@ -261,6 +310,12 @@ final class PreviewPanel extends Panels.Listening {
                 }
             }
         }
+    }
+
+    private String lookKey() {
+        return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.toJson(model.doc.settings) + "|"
+            + io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.toJson(StudioUi.settings.previewLook) + "|"
+            + StudioUi.settings.previewWidth + "x" + StudioUi.settings.previewHeight;
     }
 
     private Path extrasFrom;

@@ -19,7 +19,8 @@ final class PreviewWorld {
 
     private PreviewWorld() {}
 
-    static final int SX = MosaicWorld.SX, SY = MosaicWorld.SY, SZ = MosaicWorld.SZ;
+    /** Size of the built-in landscape (content, not a limit: the game's capture has the size of its graph settings). */
+    static final int SX = 96, SY = 48, SZ = 96;
 
     /** The game's capture when there is one, else the built-in landscape. */
     static MosaicWorld.Snapshot load(Path gameDir) {
@@ -116,7 +117,7 @@ final class PreviewWorld {
         for (int y = 1; y < 6; y++) set(m, 18, height[18][30] + y, 30, Material.STONE);
         set(m, 18, height[18][30] + 6, 30, Material.SNOW);
         short[] cells = light(m);
-        DEMO = new MosaicWorld.Snapshot(ox, oy, oz, cells, ox + 44.5, oy + height[44][92] + 9.6, oz + 92.5, 160f, 20f, 0.06f);
+        DEMO = new MosaicWorld.Snapshot(SX, SY, SZ, ox, oy, oz, cells, ox + 44.5, oy + height[44][92] + 9.6, oz + 92.5, 160f, 20f, 0.06f);
         return DEMO;
     }
 
@@ -207,7 +208,12 @@ final class PreviewWorld {
         int[] flat = {0, 0x2F5FA8, 0xFF7A1A, 0x7F7F80, 0x6A8F3E, 0x3F7A26, 0x5D9B3E, 0x6B5130, 0xDBCFA0, 0xF4F8FA, 0x9ABCF4,
             0xD8E6EC, 0xC8C8CC, 0xF2D27A, 0x7A7A7C, 0x6FA544, 0x86603E, 0xA8885A};
         int[] out = new int[TILES * 16 * 16];
-        StudioLibrary.Source jar = StudioLibrary.vanillaJars().stream().findFirst().orElse(null);
+        StudioLibrary.Source jar;
+        try {
+            jar = StudioLibrary.vanillaJars().stream().findFirst().orElse(null);
+        } catch (RuntimeException e) { // no Studio settings yet (tests, tools): flat colours
+            jar = null;
+        }
         for (int t = 0; t < TILES; t++) {
             BufferedImage img = jar == null || names[t] == null ? null
                 : StudioLibrary.image(jar, "assets/minecraft/textures/block/" + names[t] + ".png");
@@ -244,16 +250,68 @@ final class PreviewWorld {
         return (argb & 0xFF000000) | r << 16 | g << 8 | b;
     }
 
+    // ------------------------------------------------------------------ the look of the preview world (Studio settings)
+
+    /**
+     * How the preview world draws the game's image (the scene colour the graph starts from): the game's light map, face
+     * shading, translucency. Edited in the Preview's "World look" dialog, kept in Studio settings, emitted as constants.
+     */
+    static final java.util.List<io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting> LOOK = java.util.List.of(
+        look("maxDistance", "View distance", "Blocks the preview camera sees.", 256),
+        look("lightCurve", "Light curve", "Shape of the light map: level / ((1 + k) - k x level); 3 is Minecraft's.", 3),
+        look("dayRise", "Daylight rise", "How fast sky light brightens with the sun's height.", 2.5),
+        look("dayOffset", "Daylight offset", "Sky light when the sun is at the horizon.", 0.55),
+        look("nightLevel", "Night level", "Sky light at night (0..1).", 0.12),
+        new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting("blockColor", "Block light colour", "Preview",
+            "Colour of torch and lava light.", 3, new double[] {1.0, 0.86, 0.66}, false),
+        look("blockBoost", "Block light strength", "Strength of torch and lava light.", 1.1),
+        look("ambient", "Ambient floor", "Light everywhere, even in caves.", 0.03),
+        look("faceTop", "Top face shade", "Brightness of faces looking up.", 1.0),
+        look("faceBottom", "Bottom face shade", "Brightness of faces looking down.", 0.5),
+        look("faceX", "East / west face shade", "Brightness of faces along x.", 0.6),
+        look("faceZ", "North / south face shade", "Brightness of faces along z.", 0.8),
+        look("waterOpacity", "Water opacity", "How much of the water surface covers what lies under it.", 0.55),
+        look("waterReflection", "Water sky reflection", "How much sky the water surface reflects.", 0.25),
+        look("glassOpacity", "Glass and ice opacity", "How much glass and ice cover what lies behind.", 0.35),
+        look("cutout", "Cutout threshold", "Texture alpha below which leaves, plants and glass are see-through.", 0.5),
+        look("moonSharpness", "Moon size", "Higher = smaller moon disc.", 900),
+        look("moonBrightness", "Moon brightness", "Brightness of the moon disc.", 2));
+
+    private static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting look(String key, String label, String help, double def) {
+        return new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting(key, label, "Preview", help, 1, new double[] {def}, false);
+    }
+
+    /** Constants pw_<key> of the look for the G-buffer shader. */
+    static String lookConstants(java.util.Map<String, double[]> values) {
+        StringBuilder sb = new StringBuilder();
+        for (var s : LOOK) {
+            double[] v = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(values, s);
+            if (s.size() == 1) sb.append("const float pw_").append(s.key()).append(" = ").append(String.format(java.util.Locale.ROOT, "%.6f", v[0])).append(";\n");
+            else sb.append("const vec3 pw_").append(s.key()).append(" = vec3(").append(String.format(java.util.Locale.ROOT, "%.6f, %.6f, %.6f", v[0], v[1], v[2])).append(");\n");
+        }
+        return sb.toString();
+    }
+
     // ------------------------------------------------------------------ the preview camera
 
     /** Where the preview looks from: absolute position, Minecraft yaw / pitch in degrees, time of day (0 noon). */
-    record View(MosaicWorld.Snapshot world, double x, double y, double z, float yaw, float pitch, float timeOfDay, int[] atlas) {
+    record View(MosaicWorld.Snapshot world, double x, double y, double z, float yaw, float pitch, float timeOfDay, int[] atlas,
+                java.util.Map<String, double[]> graphSettings, java.util.Map<String, double[]> look) {
+        View(MosaicWorld.Snapshot world, double x, double y, double z, float yaw, float pitch, float timeOfDay, int[] atlas) {
+            this(world, x, y, z, yaw, pitch, timeOfDay, atlas, java.util.Map.of(), java.util.Map.of());
+        }
+
         static View of(MosaicWorld.Snapshot s) {
             return new View(s, s.camX(), s.camY(), s.camZ(), s.yaw(), s.pitch(), s.timeOfDay(), PreviewWorld.atlas());
         }
 
+        /** The graph's settings (sky model, material colours) and the preview look the G-buffer draws with. */
+        View with(java.util.Map<String, double[]> graph, java.util.Map<String, double[]> lookValues) {
+            return new View(world, x, y, z, yaw, pitch, timeOfDay, atlas, java.util.Map.copyOf(graph), java.util.Map.copyOf(lookValues));
+        }
+
         View look(float dYaw, float dPitch) {
-            return new View(world, x, y, z, yaw + dYaw, Math.max(-89f, Math.min(89f, pitch + dPitch)), timeOfDay, atlas);
+            return new View(world, x, y, z, yaw + dYaw, Math.max(-89f, Math.min(89f, pitch + dPitch)), timeOfDay, atlas, graphSettings, look);
         }
 
         /** Moves along the view direction (forward > 0), staying inside the volume. */
@@ -262,12 +320,12 @@ final class PreviewWorld {
             double fx = -Math.sin(ry) * Math.cos(rp), fy = -Math.sin(rp), fz = Math.cos(ry) * Math.cos(rp);
             double rx = -Math.cos(ry), rz = -Math.sin(ry);
             double nx = x + fx * forward + rx * right, ny = y + fy * forward + up, nz = z + fz * forward + rz * right;
-            nx = Math.max(world.ox() + 0.5, Math.min(world.ox() + SX - 0.5, nx));
-            ny = Math.max(world.oy() + 0.5, Math.min(world.oy() + SY + 16, ny));
-            nz = Math.max(world.oz() + 0.5, Math.min(world.oz() + SZ - 0.5, nz));
-            return new View(world, nx, ny, nz, yaw, pitch, timeOfDay, atlas);
+            nx = Math.max(world.ox() + 0.5, Math.min(world.ox() + world.sx() - 0.5, nx));
+            ny = Math.max(world.oy() + 0.5, Math.min(world.oy() + world.sy() + 16, ny));
+            nz = Math.max(world.oz() + 0.5, Math.min(world.oz() + world.sz() - 0.5, nz));
+            return new View(world, nx, ny, nz, yaw, pitch, timeOfDay, atlas, graphSettings, look);
         }
 
-        View at(float tod) { return new View(world, x, y, z, yaw, pitch, tod, atlas); }
+        View at(float tod) { return new View(world, x, y, z, yaw, pitch, tod, atlas, graphSettings, look); }
     }
 }

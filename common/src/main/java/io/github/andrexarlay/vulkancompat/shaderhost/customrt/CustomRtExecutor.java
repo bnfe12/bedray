@@ -88,6 +88,9 @@ final class CustomRtExecutor implements AutoCloseable {
     // Optional pieces the compiled shader may not use: the scene TLAS (binding 0) and the host world volume (binding 15).
     private final boolean usesTlas, usesWorld;
     private RtMemory.Buf worldBuffer;
+    private final int worldBytes;
+
+    int worldBytes() { return worldBytes; }
     private long worldVersion = -1;
     /**
      * Multi-pass Mosaic graphs: the Buffer passes that run before the final shader, in plan order. Every pass has its own
@@ -174,6 +177,14 @@ final class CustomRtExecutor implements AutoCloseable {
      */
     CustomRtExecutor(VkDevice device, VulkanGlslPackCompiler.Compiled compiled, CustomRtResources resources,
                      List<ChainPass> chain, boolean mosaicHost) {
+        this(device, compiled, resources, chain, mosaicHost, new int[] {io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.DEFAULT_SX,
+            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.DEFAULT_SY, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.DEFAULT_SZ});
+    }
+
+    /** {@code worldSize}: blocks of the world volume (graph settings worldRadius / worldHeight), sizes binding 15. */
+    CustomRtExecutor(VkDevice device, VulkanGlslPackCompiler.Compiled compiled, CustomRtResources resources,
+                     List<ChainPass> chain, boolean mosaicHost, int[] worldSize) {
+        this.worldBytes = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.bytes(worldSize[0], worldSize[1], worldSize[2]);
         this.device = device;
         this.chain = List.copyOf(chain);
         this.chainPipelines = new long[this.chain.size()];
@@ -332,8 +343,7 @@ final class CustomRtExecutor implements AutoCloseable {
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
             frameUbo = memory.createBuffer("customrt_frame", FRAME_UBO_BYTES,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
-            if (usesWorld) worldBuffer = memory.createBuffer("customrt_world",
-                io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BYTES,
+            if (usesWorld) worldBuffer = memory.createBuffer("customrt_world", worldBytes,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
         }
         createUserResources();
@@ -637,7 +647,7 @@ final class CustomRtExecutor implements AutoCloseable {
             }
             int worldInfoSlot = 1 + bufferSpecs.size(), infoSlot = worldInfoSlot + 1;
             if (usesWorld) bufferInfos.get(worldInfoSlot).buffer(worldBuffer.handle).offset(0)
-                .range(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BYTES);
+                .range(worldBytes);
             if (usesInfo) bufferInfos.get(infoSlot).buffer(infoUbo.handle).offset(0).range(WORLD_INFO_BYTES);
             int prevSlot = infoSlot + 1;
             if (usesPrev) bufferInfos.get(prevSlot).buffer(prevUbo.handle).offset(0).range(PREV_FRAME_BYTES);
@@ -713,8 +723,9 @@ final class CustomRtExecutor implements AutoCloseable {
     private void recordWorldUpload(VkCommandBuffer cmd, WorldFrame.Camera camera,
                                    io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume volume) {
         if (!usesWorld) return;
-        int cellsBytes = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.CELLS * 2;
         int header = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.HEADER_BYTES;
+        if (volume != null && volume.bytes() != worldBytes) volume = null; // resized in settings: the next executor takes it
+        int cellsBytes = worldBytes - header;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer h = stack.calloc(header);
             if (volume != null) volume.writeHeader(h, camera.x(), camera.y(), camera.z());

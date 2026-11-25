@@ -176,7 +176,9 @@ name or none for the scene colour, input `blend`, default 0.9) blends the reproj
 (`MosaicSettings`): `sunTilt`, `skyHorizon`, `skyZenith`, `skyNight`, `skyDayRise`, `skyDayOffset`, `sunDiscColor`,
 `sunDiscSharpness`, `sunDiscBrightness`, `shadowDirection`, `shadowRayStart`, `shadowRayLength`, `hitOffset`,
 `voxelSteps`, `materialPathSteps`, `farShadowSteps`, `farShadowStep`, `farShadowGrowth`, `farShadowBias`,
-`materialColors` (45 numbers: 15 rgb colours in material-class order). They are emitted as constants `ms_<key>`;
+`materialColors` (45 numbers: 15 rgb colours in material-class order), and the host-side `worldRadius` (8..256,
+default 48), `worldHeight` (16..256, default 48) and `worldRefresh` (blocks re-read per frame, default 16384) that size
+the world volume of binding 15 (its header carries the size, so shaders adapt). They are emitted as constants `ms_<key>`;
 missing keys use their defaults, unknown keys or wrong counts are errors. Every built-in node function takes its
 own tunables (distances, colours, biases, strengths, speeds) as inputs with defaults, so nothing that changes the
 picture is fixed inside the generator.

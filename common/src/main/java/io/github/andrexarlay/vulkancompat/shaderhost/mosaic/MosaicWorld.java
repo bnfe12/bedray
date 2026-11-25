@@ -18,12 +18,12 @@ public final class MosaicWorld {
     private MosaicWorld() {}
 
     public static final int BINDING = 15;
-    public static final int SX = 96, SY = 48, SZ = 96;
-    public static final int CELLS = SX * SY * SZ;
+    /** Defaults of the graph settings worldRadius / worldHeight (MosaicSettings): 96 x 48 x 96 blocks. */
+    public static final int DEFAULT_SX = 96, DEFAULT_SY = 48, DEFAULT_SZ = 96;
     public static final int HEADER_BYTES = 48;
-    public static final int BYTES = HEADER_BYTES + CELLS * 2;
-    /** Recenter when the camera drifts this many blocks from the volume center on any axis. */
-    public static final int RECENTER = 16;
+
+    /** Storage-buffer bytes of a volume of this size (header + 16-bit cells). */
+    public static int bytes(int sx, int sy, int sz) { return HEADER_BYTES + sx * sy * sz * 2; }
 
     /** Material classes, by id. The ids are part of the shader contract: never renumber. */
     public enum Material {
@@ -59,38 +59,45 @@ public final class MosaicWorld {
      * Mosaic Studio opens, and Studio's preview renders and lights it like the game. Positions are absolute blocks;
      * yaw / pitch in Minecraft's degrees; time of day as the shaders take it (0 noon, 0.25 sunset, 0.5 midnight).
      */
-    public record Snapshot(int ox, int oy, int oz, short[] cells, double camX, double camY, double camZ, float yaw, float pitch,
-                           float timeOfDay) {
+    public record Snapshot(int sx, int sy, int sz, int ox, int oy, int oz, short[] cells, double camX, double camY, double camZ,
+                           float yaw, float pitch, float timeOfDay) {
         public static final int MAGIC = 0x3157534D; // "MSW1"
         public static final int HEADER = 64;
 
+        public int cellCount() { return sx * sy * sz; }
+
+        public int bytes() { return MosaicWorld.bytes(sx, sy, sz); }
+
         public int get(int x, int y, int z) {
             int lx = x - ox, ly = y - oy, lz = z - oz;
-            if (lx < 0 || ly < 0 || lz < 0 || lx >= SX || ly >= SY || lz >= SZ) return 0;
-            return cells[(ly * SZ + lz) * SX + lx] & 0xFFFF;
+            if (lx < 0 || ly < 0 || lz < 0 || lx >= sx || ly >= sy || lz >= sz) return 0;
+            return cells[(ly * sz + lz) * sx + lx] & 0xFFFF;
         }
 
         public byte[] toBytes() {
-            ByteBuffer b = ByteBuffer.allocate(HEADER + CELLS * 2).order(ByteOrder.LITTLE_ENDIAN);
-            b.putInt(MAGIC).putInt(SX).putInt(SY).putInt(SZ).putInt(ox).putInt(oy).putInt(oz);
+            ByteBuffer b = ByteBuffer.allocate(HEADER + cells.length * 2).order(ByteOrder.LITTLE_ENDIAN);
+            b.putInt(MAGIC).putInt(sx).putInt(sy).putInt(sz).putInt(ox).putInt(oy).putInt(oz);
             b.putDouble(camX).putDouble(camY).putDouble(camZ).putFloat(yaw).putFloat(pitch).putFloat(timeOfDay);
             b.position(HEADER);
             for (short c : cells) b.putShort(c);
             return b.array();
         }
 
-        /** Null when the bytes are not a snapshot of this volume size. */
+        /** Null when the bytes are not a snapshot (any volume size from 8 to 512 blocks per side). */
         public static Snapshot read(byte[] data) {
-            if (data == null || data.length != HEADER + CELLS * 2) return null;
+            if (data == null || data.length < HEADER) return null;
             ByteBuffer b = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-            if (b.getInt() != MAGIC || b.getInt() != SX || b.getInt() != SY || b.getInt() != SZ) return null;
+            if (b.getInt() != MAGIC) return null;
+            int sx = b.getInt(), sy = b.getInt(), sz = b.getInt();
+            if (sx < 8 || sy < 8 || sz < 8 || sx > 512 || sy > 512 || sz > 512) return null;
+            if (data.length != HEADER + sx * sy * sz * 2) return null;
             int ox = b.getInt(), oy = b.getInt(), oz = b.getInt();
             double x = b.getDouble(), y = b.getDouble(), z = b.getDouble();
             float yaw = b.getFloat(), pitch = b.getFloat(), tod = b.getFloat();
-            short[] cells = new short[CELLS];
+            short[] cells = new short[sx * sy * sz];
             b.position(HEADER);
-            for (int i = 0; i < CELLS; i++) cells[i] = b.getShort();
-            return new Snapshot(ox, oy, oz, cells, x, y, z, yaw, pitch, tod);
+            for (int i = 0; i < cells.length; i++) cells[i] = b.getShort();
+            return new Snapshot(sx, sy, sz, ox, oy, oz, cells, x, y, z, yaw, pitch, tod);
         }
 
         /** The storage-buffer contents for a camera at (x, y, z): the 48-byte header of {@link Volume#writeHeader}, then cells. */
@@ -99,32 +106,54 @@ public final class MosaicWorld {
             int fx = (int) Math.floor(x), fy = (int) Math.floor(y), fz = (int) Math.floor(z);
             b.putInt(0, ox - fx).putInt(4, oy - fy).putInt(8, oz - fz).putInt(12, 1);
             b.putFloat(16, (float) (x - fx)).putFloat(20, (float) (y - fy)).putFloat(24, (float) (z - fz)).putFloat(28, 0f);
-            b.putInt(32, SX).putInt(36, SY).putInt(40, SZ).putInt(44, 0);
-            for (int i = 0; i < CELLS; i++) b.putShort(HEADER_BYTES + i * 2, cells[i]);
+            b.putInt(32, sx).putInt(36, sy).putInt(40, sz).putInt(44, 0);
+            for (int i = 0; i < cells.length; i++) b.putShort(HEADER_BYTES + i * 2, cells[i]);
         }
     }
 
-    /** The CPU copy of the volume, refreshed incrementally. Not thread-safe: use from the render thread. */
+    /**
+     * The CPU copy of the volume, refreshed incrementally. Its size comes from the graph settings worldRadius /
+     * worldHeight; it recenters when the camera drifts {@code recenter} blocks (a sixth of the width) from the middle.
+     * Not thread-safe: use from the render thread.
+     */
     public static final class Volume {
-        private short[] cells = new short[CELLS];
+        private final int sx, sy, sz, cellCount, recenter;
+        private short[] cells;
         private int ox, oy, oz;             // absolute block coordinates of cell (0, 0, 0)
         private boolean placed;
         private int cursor;                 // next cell to rescan
         private int scannedSincePlace;      // cells scanned since the last recenter
         private long version;
 
+        public Volume() { this(DEFAULT_SX, DEFAULT_SY, DEFAULT_SZ); }
+
+        public Volume(int sx, int sy, int sz) {
+            this.sx = Math.clamp(sx, 8, 512);
+            this.sy = Math.clamp(sy, 8, 512);
+            this.sz = Math.clamp(sz, 8, 512);
+            this.cellCount = this.sx * this.sy * this.sz;
+            this.recenter = Math.max(2, Math.min(this.sx, this.sz) / 6);
+            this.cells = new short[cellCount];
+        }
+
+        public int sizeX() { return sx; }
+        public int sizeY() { return sy; }
+        public int sizeZ() { return sz; }
+        public int cellCount() { return cellCount; }
+        public int bytes() { return MosaicWorld.bytes(sx, sy, sz); }
+        public int recenter() { return recenter; }
         public long version() { return version; }
         public int originX() { return ox; }
         public int originY() { return oy; }
         public int originZ() { return oz; }
 
         /** Valid once every cell was sampled at least once after the last (re)placement. */
-        public boolean complete() { return placed && scannedSincePlace >= CELLS; }
+        public boolean complete() { return placed && scannedSincePlace >= cellCount; }
 
         public int get(int x, int y, int z) {
             int lx = x - ox, ly = y - oy, lz = z - oz;
-            if (lx < 0 || ly < 0 || lz < 0 || lx >= SX || ly >= SY || lz >= SZ) return 0;
-            return cells[(ly * SZ + lz) * SX + lx] & 0xFFFF;
+            if (lx < 0 || ly < 0 || lz < 0 || lx >= sx || ly >= sy || lz >= sz) return 0;
+            return cells[(ly * sz + lz) * sx + lx] & 0xFFFF;
         }
 
         /**
@@ -133,7 +162,7 @@ public final class MosaicWorld {
          */
         public boolean update(Sampler sampler, double camX, double camY, double camZ, int budget) {
             int cx = (int) Math.floor(camX), cy = (int) Math.floor(camY), cz = (int) Math.floor(camZ);
-            int wantX = cx - SX / 2, wantY = cy - SY / 2, wantZ = cz - SZ / 2;
+            int wantX = cx - sx / 2, wantY = cy - sy / 2, wantZ = cz - sz / 2;
             boolean changed = false;
             if (!placed) {
                 ox = wantX;
@@ -143,45 +172,45 @@ public final class MosaicWorld {
                 cursor = 0;
                 scannedSincePlace = 0;
                 changed = true;
-            } else if (Math.abs(wantX - ox) >= RECENTER || Math.abs(wantY - oy) >= RECENTER || Math.abs(wantZ - oz) >= RECENTER) {
+            } else if (Math.abs(wantX - ox) >= recenter || Math.abs(wantY - oy) >= recenter || Math.abs(wantZ - oz) >= recenter) {
                 shift(wantX, wantY, wantZ);
                 changed = true;
             }
             for (int n = 0; n < budget; n++) {
                 int i = cursor;
-                cursor = (cursor + 1) % CELLS;
-                int lx = i % SX, lz = (i / SX) % SZ, ly = i / (SX * SZ);
+                cursor = (cursor + 1) % cellCount;
+                int lx = i % sx, lz = (i / sx) % sz, ly = i / (sx * sz);
                 short v = (short) sampler.sample(ox + lx, oy + ly, oz + lz);
                 if (cells[i] != v) {
                     cells[i] = v;
                     changed = true;
                 }
-                if (scannedSincePlace < CELLS) scannedSincePlace++;
+                if (scannedSincePlace < cellCount) scannedSincePlace++;
             }
             if (changed) version++;
             return changed;
         }
 
         private void shift(int nx, int ny, int nz) {
-            short[] next = new short[CELLS];
-            for (int ly = 0; ly < SY; ly++)
-                for (int lz = 0; lz < SZ; lz++)
-                    for (int lx = 0; lx < SX; lx++) {
+            short[] next = new short[cellCount];
+            for (int ly = 0; ly < sy; ly++)
+                for (int lz = 0; lz < sz; lz++)
+                    for (int lx = 0; lx < sx; lx++) {
                         int x = nx + lx - ox, y = ny + ly - oy, z = nz + lz - oz;
-                        if (x < 0 || y < 0 || z < 0 || x >= SX || y >= SY || z >= SZ) continue;
-                        next[(ly * SZ + lz) * SX + lx] = cells[(y * SZ + z) * SX + x];
+                        if (x < 0 || y < 0 || z < 0 || x >= sx || y >= sy || z >= sz) continue;
+                        next[(ly * sz + lz) * sx + lx] = cells[(y * sz + z) * sx + x];
                     }
             cells = next;
             ox = nx;
             oy = ny;
             oz = nz;
             // the overlap stays valid; the new margin fills as the cursor sweeps
-            scannedSincePlace = Math.min(scannedSincePlace, CELLS / 2);
+            scannedSincePlace = Math.min(scannedSincePlace, cellCount / 2);
         }
 
         /** A frozen copy with the camera that saw it (see {@link Snapshot}). */
         public Snapshot snapshot(double camX, double camY, double camZ, float yaw, float pitch, float timeOfDay) {
-            return new Snapshot(ox, oy, oz, cells.clone(), camX, camY, camZ, yaw, pitch, timeOfDay);
+            return new Snapshot(sx, sy, sz, ox, oy, oz, cells.clone(), camX, camY, camZ, yaw, pitch, timeOfDay);
         }
 
         /** The 48-byte header for this frame's camera. */
@@ -190,13 +219,13 @@ public final class MosaicWorld {
             int fx = (int) Math.floor(camX), fy = (int) Math.floor(camY), fz = (int) Math.floor(camZ);
             b.putInt(0, ox - fx).putInt(4, oy - fy).putInt(8, oz - fz).putInt(12, placed ? 1 : 0);
             b.putFloat(16, (float) (camX - fx)).putFloat(20, (float) (camY - fy)).putFloat(24, (float) (camZ - fz)).putFloat(28, 0f);
-            b.putInt(32, SX).putInt(36, SY).putInt(40, SZ).putInt(44, 0);
+            b.putInt(32, sx).putInt(36, sy).putInt(40, sz).putInt(44, 0);
         }
 
         /** The cell bytes (after the header): little-endian 16-bit cells. */
         public void writeCells(ByteBuffer b, int offset) {
             b.order(ByteOrder.LITTLE_ENDIAN);
-            for (int i = 0; i < CELLS; i++) b.putShort(offset + i * 2, cells[i]);
+            for (int i = 0; i < cellCount; i++) b.putShort(offset + i * 2, cells[i]);
         }
     }
 }

@@ -154,6 +154,10 @@ public final class StudioSettings {
     public String gameDir = "";
     /** A client jar to take vanilla textures from; empty: found in launcher and build caches. */
     public String vanillaJar = "";
+    /** Preview resolution (the G-buffer and every pass of the graph run at this size). */
+    public int previewWidth = 640, previewHeight = 360;
+    /** Look of the preview world (PreviewWorld.LOOK keys); missing keys use their defaults. */
+    public java.util.Map<String, double[]> previewLook = new java.util.LinkedHashMap<>();
     /** Last files of each workspace. */
     public String lastShader = "", lastMaterial = "";
     /** What an AI agent may do through the mosaic command (Settings > Agent). Off until the user turns it on. */
@@ -220,6 +224,9 @@ public final class StudioSettings {
         if (keys == null) keys = new java.util.LinkedHashMap<>();
         if (hiddenLibraries == null) hiddenLibraries = new java.util.LinkedHashSet<>();
         if (collapsed == null) collapsed = new java.util.LinkedHashSet<>();
+        previewWidth = Math.clamp(previewWidth, 160, 3840);
+        previewHeight = Math.clamp(previewHeight, 90, 2160);
+        if (previewLook == null) previewLook = new java.util.LinkedHashMap<>();
         return this;
     }
 

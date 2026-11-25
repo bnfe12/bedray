@@ -52,6 +52,24 @@ class MosaicSettingsTest {
     }
 
     @Test
+    void worldVolumeSettingsAreHostSideAndSizeTheVolume() {
+        String src = MosaicCodegen.generate(MosaicGraph.parse(GRAPH), MosaicCodegen.Options.DEFAULT, false).source();
+        assertFalse(src.contains("ms_worldRadius"), "host settings are not shader constants");
+        java.util.Map<String, double[]> s = java.util.Map.of("worldRadius", new double[] {20}, "worldHeight", new double[] {24});
+        assertEquals(20, MosaicSettings.intValue(s, "worldRadius", 8, 256));
+        assertEquals(48, MosaicSettings.intValue(java.util.Map.of(), "worldRadius", 8, 256));
+        MosaicWorld.Volume v = new MosaicWorld.Volume(40, 24, 40);
+        v.update((x, y, z) -> MosaicWorld.cell(MosaicWorld.Material.STONE, 0, 15), 0.5, 64.5, 0.5, v.cellCount());
+        assertTrue(v.complete());
+        MosaicWorld.Snapshot snap = MosaicWorld.Snapshot.read(v.snapshot(0.5, 64.5, 0.5, 10f, 20f, 0.1f).toBytes());
+        assertNotNull(snap);
+        assertEquals(40, snap.sx());
+        assertEquals(24, snap.sy());
+        assertEquals(MosaicWorld.Material.STONE, MosaicWorld.material(snap.get(0, 64, 0)));
+        assertEquals(MosaicWorld.bytes(40, 24, 40), v.bytes());
+    }
+
+    @Test
     void documentKeepsSettingsThroughSaveAndUndo() throws Exception {
         java.nio.file.Path f = java.nio.file.Files.createTempFile("mosaic", ".json");
         java.nio.file.Files.writeString(f, GRAPH);

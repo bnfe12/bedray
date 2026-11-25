@@ -31,7 +31,7 @@ public final class MosaicStudioScreen extends Screen {
     }
 
     /**
-     * The blocks around the player (the 96 x 48 x 96 world volume: material classes, sky and block light), the camera and
+     * The blocks around the player (the world volume of the graph settings worldRadius / worldHeight: material classes, sky and block light), the camera and
      * the time of day, for Studio's preview world: graphs are previewed on the place the player stands in.
      */
     static void captureWorld(Minecraft mc) {
@@ -39,9 +39,10 @@ public final class MosaicStudioScreen extends Screen {
         var player = mc.player;
         if (level == null || player == null) return;
         try {
-            var volume = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume();
+            int[] dims = CustomRtStage.worldDims();
+            var volume = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume(dims[0], dims[1], dims[2]);
             double x = player.getX(), y = player.getEyeY(), z = player.getZ();
-            volume.update(new MosaicWorldFeed(level), x, y, z, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.CELLS);
+            volume.update(new MosaicWorldFeed(level), x, y, z, volume.cellCount());
             float tod = (float) (Math.floorMod(level.getDefaultClockTime() - 6000L, 24000L) / 24000.0);
             java.nio.file.Path dir = java.nio.file.Files.createDirectories(mc.gameDirectory.toPath().resolve("bedray-studio"));
             java.nio.file.Files.write(dir.resolve("preview-world.bin"),

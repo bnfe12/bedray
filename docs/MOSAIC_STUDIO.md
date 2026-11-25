@@ -32,6 +32,15 @@ shadows take over, colours, biases, strengths, speeds), so a value is never deci
 all nodes - sky model, sun path tilt, ray lengths, march limits, material colours - are **Graph settings**: click empty
 canvas, edit them in Properties; they are saved with the graph.
 
+## Settings of the world volume and the preview
+
+- **World volume** (graph settings, Properties > Graph settings > World volume): radius and height of the block
+  volume the game keeps around the camera for voxel shadows, GI, reflections and material nodes, and how many blocks
+  it re-reads per frame. Saved with the graph, applied by the game when it loads the pack.
+- **Preview** (Studio settings): resolution (Preview > size list) and the look of the preview world
+  (Preview > World look: light map curve, daylight, block light colour and strength, face shading, water and glass
+  opacity, view distance, moon). The preview's sky follows the graph's own sky settings.
+
 ## Preview world
 
 The Preview renders the open graph over a **real scene**, not a picture: the blocks around the player when the game

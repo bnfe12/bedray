@@ -93,8 +93,22 @@ public final class CustomRtStage {
     private static String lastProblem;
     private static MosaicCodegen.Stats lastStats;
     // World volume (binding 15) for shaders that read materials and light around the camera.
-    private static final io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume worldVolume =
+    // Its size and refresh rate are graph settings (worldRadius, worldHeight, worldRefresh) of the active Mosaic graph.
+    private static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume worldVolume =
         new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume();
+    private static volatile Map<String, double[]> worldSettings = Map.of();
+
+    /** World volume size {x, y, z} the active graph asks for (graph settings worldRadius / worldHeight). */
+    static int[] worldDims() {
+        int r = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.intValue(worldSettings, "worldRadius", 8, 256);
+        int h = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.intValue(worldSettings, "worldHeight", 16, 256);
+        return new int[] {r * 2, h, r * 2};
+    }
+
+    /** Blocks re-read per frame (graph setting worldRefresh). */
+    static int worldRefresh() {
+        return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.intValue(worldSettings, "worldRefresh", 1024, 262144);
+    }
     private static MosaicWorldFeed worldFeed;
     // Height field (binding 18) for far shadows: refreshed a slice per frame while a shader reads it.
     private static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field heightField = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field();
@@ -340,6 +354,7 @@ public final class CustomRtStage {
         };
         if (entry.endsWith(".json")) {
             MosaicGraph graph = MosaicGraph.parse(packReader.read(entry));
+            worldSettings = graph.settings();
             pendingChain = List.of();
             if (graph.multiPass()) return compileChain(graph, root, entries, src, packReader);
             String glsl = mosaicGlsl(graph);
@@ -512,7 +527,7 @@ public final class CustomRtStage {
         try {
             if (executor == null) {
                 owner = device;
-                executor = new CustomRtExecutor(device.vkDevice(), compiled, resources, chain, mosaicEntry);
+                executor = new CustomRtExecutor(device.vkDevice(), compiled, resources, chain, mosaicEntry, worldDims());
             }
             // Folder-pack live editing: changed rt.push / buffer<N>.bin bytes reach the next dispatch without a restart.
             if (resources != null && resources.refresh()) {
@@ -623,8 +638,12 @@ public final class CustomRtStage {
             worldLevel = level;
             worldFeed = new MosaicWorldFeed(level);
         }
+        int[] dims = worldDims();
+        if (worldVolume.sizeX() != dims[0] || worldVolume.sizeY() != dims[1] || worldVolume.sizeZ() != dims[2]
+            || executor != null && executor.worldBytes() != io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.bytes(dims[0], dims[1], dims[2]))
+            worldVolume = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume(dims[0], dims[1], dims[2]);
         long t0 = System.nanoTime();
-        worldVolume.update(worldFeed, camera.x(), camera.y(), camera.z(), MosaicWorldFeed.BUDGET);
+        worldVolume.update(worldFeed, camera.x(), camera.y(), camera.z(), worldRefresh());
         worldUpdateMicros = (System.nanoTime() - t0) / 1000;
         return worldVolume;
     }

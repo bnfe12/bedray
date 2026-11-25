@@ -21,8 +21,6 @@ import java.util.Map;
  */
 final class MosaicWorldFeed implements MosaicWorld.Sampler {
 
-    /** Cells rescanned per frame: the 96 x 48 x 96 volume refreshes about every 27 frames. */
-    static final int BUDGET = 16384;
 
     private final ClientLevel level;
     private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();

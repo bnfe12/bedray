@@ -25,7 +25,7 @@ class MosaicWorldTest {
             v.update(MosaicWorldTest::sample, 0.5, 60.5, 0.5, 6144);
             frames++;
         }
-        assertEquals((MosaicWorld.CELLS + 6143) / 6144, frames);
+        assertEquals((v.cellCount() + 6143) / 6144, frames);
         assertEquals(Material.WATER, MosaicWorld.material(v.get(0, 55, 0)));
         assertEquals(15, MosaicWorld.skyLight(v.get(0, 61, 0)));
         assertEquals(15, MosaicWorld.blockLight(v.get(5, 61, 0)));
@@ -34,7 +34,7 @@ class MosaicWorldTest {
         assertEquals(version, v.version());
         // walk 20 blocks east (past RECENTER): the volume moves, the old overlap is still there before any rescan
         v.update((x, y, z) -> 0, 20.5, 60.5, 0.5, 0);
-        assertEquals(20 - MosaicWorld.SX / 2, v.originX());
+        assertEquals(20 - MosaicWorld.DEFAULT_SX / 2, v.originX());
         assertEquals(Material.WATER, MosaicWorld.material(v.get(0, 55, 0)));
         assertFalse(v.complete());
     }
@@ -45,11 +45,11 @@ class MosaicWorldTest {
         v.update(MosaicWorldTest::sample, 1000.25, 64.5, -2000.75, 10);
         ByteBuffer b = ByteBuffer.allocate(MosaicWorld.HEADER_BYTES).order(ByteOrder.LITTLE_ENDIAN);
         v.writeHeader(b, 1003.5, 64.5, -2000.75);
-        assertEquals(1000 - MosaicWorld.SX / 2 - 1003, b.getInt(0));            // origin - floor(camera) after the camera moved
+        assertEquals(1000 - MosaicWorld.DEFAULT_SX / 2 - 1003, b.getInt(0));            // origin - floor(camera) after the camera moved
         assertEquals(1, b.getInt(12));
         assertEquals(0.5f, b.getFloat(16), 1e-6);
         assertEquals(0.25f, b.getFloat(24), 1e-6);               // -2000.75 - floor(-2000.75) = 0.25
-        assertEquals(MosaicWorld.SX, b.getInt(32));
+        assertEquals(MosaicWorld.DEFAULT_SX, b.getInt(32));
     }
 
     @Test

@@ -265,8 +265,8 @@ final class GpuPreview implements AutoCloseable {
         return runChain(runs, input, time, frame, extras, null);
     }
 
-    /** Preview world size: the G-buffer and every pass run at this resolution. */
-    static final int WORLD_W = 640, WORLD_H = 360;
+    /** Preview world size (Studio settings previewWidth / previewHeight): the G-buffer and every pass run at this size. */
+    volatile int worldWidth = 640, worldHeight = 360;
 
     /**
      * With a {@code view}, the frame comes from the preview world instead of a picture: a G-buffer pass renders its blocks
@@ -274,8 +274,8 @@ final class GpuPreview implements AutoCloseable {
      * binding 15 and the camera moves between runs (binding 17 holds the previous one), so the graph sees a real scene.
      */
     synchronized BufferedImage runChain(List<PassRun> runs, BufferedImage input, float time, int frame, Extras extras, PreviewWorld.View view) {
-        int w = view != null ? WORLD_W : input.getWidth(), h = view != null ? WORLD_H : input.getHeight();
-        int key = java.util.Objects.hash(view != null, w, h, runs.stream().map(r -> Arrays.hashCode(r.spirv()) * 31 + r.scale() * 7 + r.binding() + (r.after() ? 1 << 20 : 0)).toList());
+        int w = view != null ? worldWidth : input.getWidth(), h = view != null ? worldHeight : input.getHeight();
+        int key = java.util.Objects.hash(view != null, view == null ? 0 : gbufferSource(view).hashCode(), view == null ? 0 : view.world().bytes(), w, h, runs.stream().map(r -> Arrays.hashCode(r.spirv()) * 31 + r.scale() * 7 + r.binding() + (r.after() ? 1 << 20 : 0)).toList());
         if (chain == null || chain.key != key) {
             if (chain != null) chain.destroy();
             chain = null;
@@ -437,18 +437,27 @@ final class GpuPreview implements AutoCloseable {
         MemoryUtil.memCopy(MemoryUtil.memAddress(frameBlock) + 256, MemoryUtil.memAddress(into) + 128, 16);  // camera position
     }
 
-    private static byte[] gbufferSpirv;
+    private static final java.util.Map<String, byte[]> GBUFFER_SPIRV = new java.util.HashMap<>();
 
-    private static synchronized byte[] gbufferSpirv() {
-        if (gbufferSpirv != null) return gbufferSpirv;
-        MosaicShaderCheck.Result r = MosaicShaderCheck.compile(new MosaicCodegen.Generated(GBUFFER_GLSL, List.of(), null));
+    /** The G-buffer shader with the graph's settings (sky model) and the preview look as constants. */
+    static String gbufferSource(PreviewWorld.View view) {
+        return GBUFFER_GLSL.replace("%CONSTANTS%", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.constants(view.graphSettings(), false)
+            + PreviewWorld.lookConstants(view.look()));
+    }
+
+    private static synchronized byte[] gbufferSpirv(String source) {
+        byte[] cached = GBUFFER_SPIRV.get(source);
+        if (cached != null) return cached;
+        MosaicShaderCheck.Result r = MosaicShaderCheck.compile(new MosaicCodegen.Generated(source, List.of(), null));
         if (!r.ok()) throw new IllegalStateException("preview world shader: " + r.errors());
-        return gbufferSpirv = r.spirv();
+        if (GBUFFER_SPIRV.size() > 16) GBUFFER_SPIRV.clear();
+        GBUFFER_SPIRV.put(source, r.spirv());
+        return r.spirv();
     }
 
     /** The world's G-buffer pass: bindings 1 frame, 15 world volume, 6 block atlas, 3 scene colour out, 7 ray distance out. */
     private void prepareGbuffer(Chain c, PreviewWorld.View view) {
-        byte[] spirv = gbufferSpirv();
+        byte[] spirv = gbufferSpirv(gbufferSource(view));
         int[] atlas = view.atlas();
         c.atlas = image(PreviewWorld.TILES * 16, 16, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         int[] rgba = new int[atlas.length];
@@ -539,7 +548,7 @@ final class GpuPreview implements AutoCloseable {
             c.prev = buffer(144, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
             if (view != null) {
                 c.world = true;
-                c.worldBuf = buffer(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                c.worldBuf = buffer(view.world().bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 c.scene = image(w, h, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
                 c.dist = image(w, h, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
             }
@@ -648,11 +657,13 @@ final class GpuPreview implements AutoCloseable {
     private Buf extraBuffer(Chain c, Prepared p, SpirvReflection.Binding b, Extras extras) {
         Buf buf;
         if (b.binding() == 15) {
-            int cells = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.CELLS;
+            // a game frame has no world: an empty volume of the default size, sky light everywhere
+            int sx = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.DEFAULT_SX, sy = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.DEFAULT_SY,
+                sz = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.DEFAULT_SZ, cells = sx * sy * sz;
             buf = buffer(48 + cells * 2L, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-            MemoryUtil.memPutInt(buf.mapped() + 32, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.SX);
-            MemoryUtil.memPutInt(buf.mapped() + 36, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.SY);
-            MemoryUtil.memPutInt(buf.mapped() + 40, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.SZ);
+            MemoryUtil.memPutInt(buf.mapped() + 32, sx);
+            MemoryUtil.memPutInt(buf.mapped() + 36, sy);
+            MemoryUtil.memPutInt(buf.mapped() + 40, sz);
             for (int i = 0; i < cells; i++) MemoryUtil.memPutShort(buf.mapped() + 48 + i * 2L, (short) (15 << 12)); // air, full sky light
         } else if (b.binding() == io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BINDING) { // height field: none in the preview (no far shadows)
             buf = buffer(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -726,7 +737,7 @@ final class GpuPreview implements AutoCloseable {
         layout(set = 0, binding = 6) uniform sampler2D atlas;
         layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D sceneOut;
         layout(set = 0, binding = 7, r32f) uniform writeonly image2D distOut;
-        
+        %CONSTANTS%
         const float TILES = 18.0;
         bool inside(ivec3 c) {
             ivec3 p = c - world.originRel.xyz;
@@ -738,13 +749,14 @@ final class GpuPreview implements AutoCloseable {
             int i = (p.y * world.size.z + p.z) * world.size.x + p.x;
             return (world.cells[i >> 1] >> uint((i & 1) * 16)) & 0xFFFFu;
         }
-        vec3 sunDir() { float a = frame.timing.w * 6.2831853; return normalize(vec3(-sin(a), cos(a), 0.25)); }
+        vec3 sunDir() { float a = frame.timing.w * 6.2831853; return normalize(vec3(-sin(a), cos(a), ms_sunTilt)); }
+        // the graph's own sky model (graph settings) plus a moon
         vec3 sky(vec3 dir) {
             vec3 sun = sunDir();
-            float day = clamp(sun.y * 2.0 + 0.3, 0.05, 1.0);
-            vec3 c = mix(vec3(0.70, 0.80, 0.95), vec3(0.25, 0.45, 0.85), clamp(dir.y, 0.0, 1.0)) * day;
-            c += vec3(1.0, 0.9, 0.7) * pow(max(dot(dir, sun), 0.0), 256.0) * 4.0 * day;
-            c += vec3(0.8, 0.85, 1.0) * pow(max(dot(dir, -sun), 0.0), 900.0) * 2.0 * (1.0 - day); // the moon
+            float day = clamp(sun.y * ms_skyDayRise + ms_skyDayOffset, ms_skyNight, 1.0);
+            vec3 c = mix(ms_skyHorizon, ms_skyZenith, clamp(dir.y, 0.0, 1.0)) * day;
+            c += ms_sunDiscColor * pow(max(dot(dir, sun), 0.0), ms_sunDiscSharpness) * ms_sunDiscBrightness * day;
+            c += vec3(0.8, 0.85, 1.0) * pow(max(dot(dir, -sun), 0.0), pw_moonSharpness) * pw_moonBrightness * (1.0 - day);
             return c;
         }
         vec3 viewDir(vec2 uv) {
@@ -761,13 +773,13 @@ final class GpuPreview implements AutoCloseable {
             f = fract(f);
             return textureLod(atlas, vec2((float(tile) + clamp(f.x, 0.002, 0.998)) / TILES, clamp(f.y, 0.002, 0.998)), 0.0);
         }
-        // the game's light map: sky light by the time of day, warm block light, the classic per-face shading
+        // the game's light map: sky light by the time of day, coloured block light, per-face shading (all from the look)
+        float curve(float l) { return l / ((1.0 + pw_lightCurve) - pw_lightCurve * l); }
         vec3 light(uint front, vec3 n) {
             float s = float((front >> 12) & 15u) / 15.0, b = float((front >> 8) & 15u) / 15.0;
-            float day = clamp(sunDir().y * 2.5 + 0.55, 0.12, 1.0);
-            float sl = s / (4.0 - 3.0 * s) * day, bl = b / (4.0 - 3.0 * b);
-            vec3 l = max(vec3(sl), vec3(1.0, 0.86, 0.66) * bl * 1.1) + 0.03;
-            float face = n.y > 0.5 ? 1.0 : (n.y < -0.5 ? 0.5 : (abs(n.x) > 0.5 ? 0.6 : 0.8));
+            float day = clamp(sunDir().y * pw_dayRise + pw_dayOffset, pw_nightLevel, 1.0);
+            vec3 l = max(vec3(curve(s) * day), pw_blockColor * curve(b) * pw_blockBoost) + pw_ambient;
+            float face = n.y > 0.5 ? pw_faceTop : (n.y < -0.5 ? pw_faceBottom : (abs(n.x) > 0.5 ? pw_faceX : pw_faceZ));
             return min(l, vec3(1.0)) * face;
         }
         void main() {
@@ -786,14 +798,14 @@ final class GpuPreview implements AutoCloseable {
             float trans = 1.0, depth = 1.0e6;
             uint prev = cellAt(cell) & 0xFFu;
             bool entered = inside(cell);
-            for (int i = 0; i < 320; i++) {
+            for (int i = 0; i < 4096; i++) {
                 float t;
                 vec3 n;
                 ivec3 back = cell;
                 if (nextT.x <= nextT.y && nextT.x <= nextT.z) { t = nextT.x; cell.x += stp.x; nextT.x += delta.x; n = vec3(-float(stp.x), 0.0, 0.0); }
                 else if (nextT.y <= nextT.z) { t = nextT.y; cell.y += stp.y; nextT.y += delta.y; n = vec3(0.0, -float(stp.y), 0.0); }
                 else { t = nextT.z; cell.z += stp.z; nextT.z += delta.z; n = vec3(0.0, 0.0, -float(stp.z)); }
-                if (t > 256.0) break;
+                if (t > pw_maxDistance) break;
                 bool in_ = inside(cell);
                 if (!in_) { if (entered) break; else continue; }
                 entered = true;
@@ -806,18 +818,18 @@ final class GpuPreview implements AutoCloseable {
                     if (prev == 1u) continue;
                     prev = 1u;
                     depth = min(depth, t);
-                    vec3 w = tx.rgb * light(front, n) + sky(reflect(d, n)) * 0.25;
-                    acc += trans * 0.55 * w;
-                    trans *= 0.45;
+                    vec3 w = tx.rgb * light(front, n) + sky(reflect(d, n)) * pw_waterReflection;
+                    acc += trans * pw_waterOpacity * w;
+                    trans *= 1.0 - pw_waterOpacity;
                     continue;
                 }
                 prev = m;
-                if ((m == 5u || m == 6u || m == 11u) && tx.a < 0.5) continue; // cutout leaves, plants, glass
+                if ((m == 5u || m == 6u || m == 11u) && tx.a < pw_cutout) continue; // cutout leaves, plants, glass
                 vec3 col = (m == 2u || m == 13u) ? tx.rgb : tx.rgb * light(front, n);
                 depth = min(depth, t);
                 if (m == 11u || m == 10u) {
-                    acc += trans * 0.35 * col;
-                    trans *= 0.65;
+                    acc += trans * pw_glassOpacity * col;
+                    trans *= 1.0 - pw_glassOpacity;
                     continue;
                 }
                 acc += trans * col;

@@ -20,7 +20,10 @@ public final class MosaicSettings {
     private MosaicSettings() {}
 
     /** One setting: key, label, help, number of components (1 float, 3 colour/vector, 45 = 15 colours), default, integer. */
-    public record Setting(String key, String label, String group, String help, int size, double[] def, boolean integer) {}
+    public record Setting(String key, String label, String group, String help, int size, double[] def, boolean integer) {
+        /** Read by the game (world volume size, refresh), not emitted into the shader. */
+        public boolean host() { return key.startsWith("world"); }
+    }
 
     private static Setting f(String key, String label, String group, String help, double def) {
         return new Setting(key, label, group, help, 1, new double[] {def}, false);
@@ -52,6 +55,9 @@ public final class MosaicSettings {
         v("shadowDirection", "Shadow ray default direction", "Rays", "Direction of a Shadow ray node whose direction input is not wired.", 0.32, 0.90, 0.28),
         f("shadowRayStart", "Shadow ray start", "Rays", "Distance (blocks) a hardware shadow ray skips at its start.", 0.01),
         f("shadowRayLength", "Shadow ray length", "Rays", "How far (blocks) shadow rays look for a blocker.", 256),
+        i("worldRadius", "World volume radius", "World volume", "Blocks around the camera the world volume covers sideways (8..256): detail for voxel shadows, GI, reflections and material nodes. Bigger costs memory and refresh time.", 48),
+        i("worldHeight", "World volume height", "World volume", "Blocks the world volume covers vertically, centred on the camera (16..256).", 48),
+        i("worldRefresh", "World refresh per frame", "World volume", "Blocks re-read from the world every frame (1024..262144): higher follows block changes sooner, costs CPU.", 16384),
         f("hitOffset", "Surface probe offset", "World volume", "How far past a hit the material is read and before it the light (blocks).", 0.02),
         i("voxelSteps", "Voxel ray steps", "World volume", "Most blocks a voxel ray crosses (longer rays cost more).", 192),
         i("materialPathSteps", "Material path steps", "World volume", "Most blocks crossed when measuring water / material thickness.", 160),
@@ -115,6 +121,11 @@ public final class MosaicSettings {
         return o;
     }
 
+    /** An integer setting of a graph (its default when the graph does not set it), clamped to lo..hi. */
+    public static int intValue(Map<String, double[]> values, String key, int lo, int hi) {
+        return Math.clamp(Math.round(value(values, of(key))[0]), lo, hi);
+    }
+
     public static double[] value(Map<String, double[]> values, Setting s) {
         double[] v = values == null ? null : values.get(s.key());
         return v != null && v.length == s.size() ? v : s.def();
@@ -131,6 +142,7 @@ public final class MosaicSettings {
         StringBuilder sb = new StringBuilder("// graph settings (mosaic.json \"settings\")\n");
         String c = slang ? "static const " : "const ", v3 = slang ? "float3" : "vec3";
         for (Setting s : ALL) {
+            if (s.host()) continue;
             double[] v = value(values, s);
             if (s.integer()) sb.append(c).append("int ms_").append(s.key()).append(" = ").append(Math.max(1, (int) Math.round(v[0]))).append(";\n");
             else if (s.size() == 1) sb.append(c).append("float ms_").append(s.key()).append(" = ").append(num(v[0])).append(";\n");
