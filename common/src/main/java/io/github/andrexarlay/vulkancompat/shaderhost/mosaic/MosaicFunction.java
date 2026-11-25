@@ -25,7 +25,7 @@ import java.util.regex.Pattern;
 public record MosaicFunction(String name, String label, String category, String help, List<Param> params, Kind output,
                              String glsl, String slang) {
 
-    public static final int MAX_PARAMS = 8, MAX_BODY = 20_000;
+    public static final int MAX_PARAMS = 24, MAX_BODY = 20_000;
 
     /** One parameter: a port of the node; a default value makes it optional. */
     public record Param(String name, Kind kind, double[] defaultValue) {

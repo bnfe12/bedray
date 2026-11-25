@@ -29,20 +29,21 @@ public final class MosaicEffects {
         ALL.put(f.name(), new MosaicFunction(f.name(), label, category, help, f.params(), f.output(), body, SLANG.get(f.name())));
     }
 
+
     /** Hand-written Slang bodies where the automatic GLSL translation does not apply (matrix products). */
     private static Map<String, String> slangBodies() { return Map.of("rtReflections", """
         float m = mosaicHitMaterial(uv);
         if (mosaicDepth(uv) >= 1.0e5 || (material >= 0.0 && m != floor(material + 0.5))) return color;
         float3 n = mosaicNormal(uv), v = mosaicViewDir(uv);
-        float3 r = reflect(v, n), p = mosaicHitPos(uv) + n * 0.02;
-        float t = mosaicTrace(p, r, 128.0);
+        float3 r = reflect(v, n), p = mosaicHitPos(uv) + n * bias;
+        float t = mosaicTrace(p, r, maxDistance);
         float3 refl = mosaicSky(r);
         if (t >= 0.0) {
             float4 clip = mul(frame.projection, mul(frame.modelView, float4(p + r * t, 1.0)));
             float2 suv = clip.xy / clip.w * 0.5 + 0.5;
-            refl = (clip.w > 0.0 && all(suv >= 0.0) && all(suv <= 1.0)) ? mosaicScene(suv).rgb : color.rgb * 0.5;
+            refl = (clip.w > 0.0 && all(suv >= 0.0) && all(suv <= 1.0)) ? mosaicScene(suv).rgb : color.rgb * offscreen;
         }
-        float fres = 0.02 + 0.98 * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
+        float fres = f0 + (1.0 - f0) * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
         return float4(lerp(color.rgb, refl, clamp(amount + fres, 0.0, 1.0) * amount * 2.0), color.a);""", "godRays", """
         float3 L = mosaicSunDir();
         if (L.y <= 0.0) return color;
@@ -59,164 +60,165 @@ public final class MosaicEffects {
             if (mosaicDepth(clamp(q, 0.0, 1.0)) >= 1.0e5) sum += w;
             w *= decay;
         }
-        float edge = clamp(1.0 - length((sun - 0.5) * 1.2), 0.0, 1.0);
-        float3 light = float3(1.0, 0.86, 0.65) * sum / float(k) * strength * edge * clamp(L.y * 3.0, 0.0, 1.0);
+        float edge = clamp(1.0 - length((sun - 0.5) * edgeFalloff), 0.0, 1.0);
+        float3 light = shaftColor * sum / float(k) * strength * edge * clamp(L.y * sunHeightFade, 0.0, 1.0);
         return float4(color.rgb + light, color.a);"""); }
 
+    // ---------------------------------------------------------------- post effects
     static {
-        add("vec4 vignette(vec4 color, vec2 uv, float strength = 0.6, float radius = 0.75)", "Vignette",
-            "Darkens the corners of the screen.", """
-            vec2 d = uv - 0.5;
-            float v = smoothstep(radius, radius - 0.45, length(d) * 1.4142);
-            return vec4(color.rgb * mix(1.0 - strength, 1.0, v), color.a);""");
-        add("vec4 colorGrade(vec4 color, float exposure = 0, float contrast = 1, float saturation = 1, vec3 tint = 1)",
-            "Color grade", "Exposure (stops), contrast, saturation and a color tint.", """
+        add("vec4 vignette(vec4 color, vec2 uv, float strength = 0.6, float radius = 0.75, float softness = 0.45, vec3 tint = vec3(0.0))", "Vignette",
+            "Darkens (or tints) the corners of the screen: radius where it starts, softness of the edge.", """
+            float v = smoothstep(radius, radius - softness, length(uv - 0.5) * 1.4142);
+            return vec4(mix(mix(color.rgb, tint, strength), color.rgb, v), color.a);""");
+        add("vec4 colorGrade(vec4 color, float exposure = 0, float contrast = 1, float saturation = 1, vec3 tint = 1, float pivot = 0.18, vec3 lift = vec3(0.0), vec3 gain = vec3(1.0))",
+            "Color grade", "Exposure (stops), contrast around a pivot grey, saturation, tint, lift (shadows) and gain (highlights).", """
             vec3 c = color.rgb * exp2(exposure) * tint;
-            c = (c - 0.18) * contrast + 0.18;
+            c = (c - pivot) * contrast + pivot;
             float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
             c = mix(vec3(l), c, saturation);
+            c = c * gain + lift * (1.0 - c);
             return vec4(max(c, 0.0), color.a);""");
-        add("vec4 filmGrain(vec4 color, vec2 uv, float amount = 0.05)", "Film grain",
-            "Animated noise like film grain.", """
-            vec2 p = uv * frame.viewSize.xy + frame.timing.x * 61.0;
+        add("vec4 filmGrain(vec4 color, vec2 uv, float amount = 0.05, float speed = 61, float size = 1, float colored = 0)", "Film grain",
+            "Animated noise like film grain: amount, how fast it changes, grain size in pixels, colour grain (0 grey .. 1 colour).", """
+            vec2 p = floor(uv * frame.viewSize.xy / max(size, 1.0)) + frame.timing.x * speed;
             float n = fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-            return vec4(color.rgb + (n - 0.5) * amount, color.a);""");
-        add("vec4 chromaticAberration(vec2 uv, float amount = 0.004)", "Chromatic aberration",
-            "Splits red and blue toward the screen edges, like a cheap lens.", """
-            vec2 d = (uv - 0.5) * amount * 2.0;
-            float r = mosaicScene(uv + d).r;
-            float g = mosaicScene(uv).g;
-            float b = mosaicScene(uv - d).b;
-            return vec4(r, g, b, 1.0);""");
-        add("vec4 sharpen(vec2 uv, float amount = 0.5)", "Sharpen",
-            "Boosts edges with a 5-tap unsharp mask of the world image.", """
-            vec2 px = frame.viewSize.zw;
+            vec3 nc = vec3(n, fract(n * 7.13), fract(n * 13.7));
+            return vec4(color.rgb + (mix(vec3(n), nc, colored) - 0.5) * amount, color.a);""");
+        add("vec4 chromaticAberration(vec2 uv, float amount = 0.004, vec2 center = vec2(0.5))", "Chromatic aberration",
+            "Splits red and blue away from a centre, like a cheap lens.", """
+            vec2 d = (uv - center) * amount * 2.0;
+            return vec4(mosaicScene(uv + d).r, mosaicScene(uv).g, mosaicScene(uv - d).b, 1.0);""");
+        add("vec4 sharpen(vec2 uv, float amount = 0.5, float radius = 1)", "Sharpen",
+            "Boosts edges with a 5-tap unsharp mask of the world image; radius in pixels.", """
+            vec2 px = frame.viewSize.zw * radius;
             vec4 c = mosaicScene(uv);
             vec4 n = mosaicScene(uv + vec2(px.x, 0.0)) + mosaicScene(uv - vec2(px.x, 0.0))
                    + mosaicScene(uv + vec2(0.0, px.y)) + mosaicScene(uv - vec2(0.0, px.y));
             return vec4(max(c.rgb + (c.rgb * 4.0 - n.rgb) * amount, 0.0), c.a);""");
-        add("vec4 depthFog(vec4 color, vec2 uv, vec3 fogColor = vec3(0.62, 0.72, 0.85), float start = 16, float end = 160)",
-            "Distance fog", "Fades distant blocks into a fog color; the sky stays as it is.", """
+        add("vec4 depthFog(vec4 color, vec2 uv, vec3 fogColor = vec3(0.62, 0.72, 0.85), float start = 16, float end = 160, float density = 1, float skyAmount = 0)",
+            "Distance fog", "Fades distant blocks into a fog colour between start and end (blocks); density scales it, skyAmount fogs the sky too.", """
             float d = mosaicDepth(uv);
-            float f = d >= 1.0e5 ? 0.0 : smoothstep(start, end, d);
+            float f = d >= 1.0e5 ? skyAmount : clamp(smoothstep(start, end, d) * density, 0.0, 1.0);
             return vec4(mix(color.rgb, fogColor, f), color.a);""");
         add("vec4 posterize(vec4 color, float steps = 6)", "Posterize",
-            "Reduces colors to a few bands (comic / toon look).", """
+            "Reduces colours to a few bands (comic / toon look).", """
             return vec4(floor(color.rgb * steps + 0.5) / steps, color.a);""");
-        add("vec4 scanlines(vec4 color, vec2 uv, float strength = 0.25, float density = 1)", "Scanlines",
-            "Horizontal CRT lines.", """
-            float s = 0.5 + 0.5 * sin(uv.y * frame.viewSize.y * 3.14159 * density);
+        add("vec4 scanlines(vec4 color, vec2 uv, float strength = 0.25, float density = 1, float speed = 0)", "Scanlines",
+            "Horizontal CRT lines: density per pixel row, speed scrolls them.", """
+            float s = 0.5 + 0.5 * sin((uv.y * frame.viewSize.y + frame.timing.x * speed) * 3.14159 * density);
             return vec4(color.rgb * (1.0 - strength * s), color.a);""");
-        add("vec4 depthOutline(vec4 color, vec2 uv, vec3 lineColor = vec3(0.0), float threshold = 0.08)", "Outline",
-            "Draws lines where the distance jumps (block silhouettes).", """
-            vec2 px = frame.viewSize.zw;
-            float d = min(mosaicDepth(uv), 1000.0);
-            float dx = abs(min(mosaicDepth(uv + vec2(px.x, 0.0)), 1000.0) - d) + abs(min(mosaicDepth(uv - vec2(px.x, 0.0)), 1000.0) - d);
-            float dy = abs(min(mosaicDepth(uv + vec2(0.0, px.y)), 1000.0) - d) + abs(min(mosaicDepth(uv - vec2(0.0, px.y)), 1000.0) - d);
+        add("vec4 depthOutline(vec4 color, vec2 uv, vec3 lineColor = vec3(0.0), float threshold = 0.08, float width = 1, float maxDistance = 1000)", "Outline",
+            "Draws lines where the distance jumps (block silhouettes): threshold relative to distance, width in pixels.", """
+            vec2 px = frame.viewSize.zw * width;
+            float d = min(mosaicDepth(uv), maxDistance);
+            float dx = abs(min(mosaicDepth(uv + vec2(px.x, 0.0)), maxDistance) - d) + abs(min(mosaicDepth(uv - vec2(px.x, 0.0)), maxDistance) - d);
+            float dy = abs(min(mosaicDepth(uv + vec2(0.0, px.y)), maxDistance) - d) + abs(min(mosaicDepth(uv - vec2(0.0, px.y)), maxDistance) - d);
             float edge = step(threshold * max(d, 1.0), dx + dy);
             return vec4(mix(color.rgb, lineColor, edge), color.a);""");
-        add("vec4 glow(vec4 color, vec2 uv, float threshold = 1, float intensity = 0.4, float radius = 6)", "Glow",
-            "Cheap bloom: bright areas bleed light around them (8 taps).", """
+        add("vec4 glow(vec4 color, vec2 uv, float threshold = 1, float intensity = 0.4, float radius = 6, vec3 tint = vec3(1.0))", "Glow",
+            "Cheap bloom: bright areas above the threshold bleed light around them (8 taps, radius in pixels).", """
             vec2 px = frame.viewSize.zw * radius;
             vec3 acc = vec3(0.0);
             for (int i = 0; i < 8; i++) {
                 float a = float(i) * 0.785398;
-                vec3 s = mosaicScene(uv + vec2(cos(a), sin(a)) * px).rgb;
-                acc += max(s - threshold, 0.0);
+                acc += max(mosaicScene(uv + vec2(cos(a), sin(a)) * px).rgb - threshold, 0.0);
             }
-            return vec4(color.rgb + acc / 8.0 * intensity, color.a);""");
-        add("vec4 heatHaze(vec2 uv, float amount = 0.002, float speed = 2)", "Heat haze",
-            "Wobbles the image like hot air.", """
+            return vec4(color.rgb + acc / 8.0 * intensity * tint, color.a);""");
+        add("vec4 heatHaze(vec2 uv, float amount = 0.002, float speed = 2, float frequency = 40)", "Heat haze",
+            "Wobbles the image like hot air: amount, speed and how dense the ripples are.", """
             float t = frame.timing.x * speed;
-            vec2 o = vec2(sin(uv.y * 40.0 + t), cos(uv.x * 35.0 + t * 1.3)) * amount;
+            vec2 o = vec2(sin(uv.y * frequency + t), cos(uv.x * frequency * 0.875 + t * 1.3)) * amount;
             return mosaicScene(uv + o);""");
-        add("vec4 skyShadow(vec4 color, vec2 uv, float darkness = 0.45)", "Sky shadow (ray traced)",
-            "Traces one ray per pixel toward the sky and darkens what is blocked.", """
+        add("vec4 skyShadow(vec4 color, vec2 uv, float darkness = 0.45, vec3 skyDirection = vec3(0.32, 0.90, 0.28), float bias = 0.01)",
+            "Sky shadow (ray traced)", "Traces one ray per pixel toward the sky direction and darkens what is blocked.", """
             float t = mosaicDepth(uv);
             if (t >= 1.0e5) return color;
-            vec3 p = mosaicEye() + mosaicViewDir(uv) * (t - 0.01);
-            float lit = mosaicShadow(p, normalize(vec3(0.32, 0.90, 0.28)));
+            vec3 p = mosaicEye() + mosaicViewDir(uv) * (t - bias);
+            float lit = mosaicShadow(p, normalize(skyDirection));
             return vec4(color.rgb * mix(1.0 - darkness, 1.0, lit), color.a);""");
     }
 
+    // ---------------------------------------------------------------- water
     static {
-        add("vec4 waterColor(vec4 color, vec2 uv, vec3 deepColor = vec3(0.02, 0.16, 0.22), float clarity = 3, float tint = 0.6)",
-            "Water color", "Absorbs light by how much water the view crosses: shallow water stays clear, deep water"
-                + " turns to the deep color.", """
+        add("vec4 waterColor(vec4 color, vec2 uv, vec3 deepColor = vec3(0.02, 0.16, 0.22), float clarity = 3, float tint = 0.6, vec3 shallowColor = vec3(0.55, 0.85, 0.95))",
+            "Water color", "Absorbs light by how much water the view crosses: shallow water keeps the shallow tint, deep water"
+                + " turns to the deep colour; clarity in blocks.", """
             float d = mosaicWaterDepth(uv);
             if (d <= 0.0) return color;
             float keep = exp(-d / max(clarity, 0.01));
-            vec3 absorbed = color.rgb * mix(vec3(1.0), vec3(0.55, 0.85, 0.95), tint) * keep;
+            vec3 absorbed = color.rgb * mix(vec3(1.0), shallowColor, tint) * keep;
             return vec4(absorbed + deepColor * (1.0 - keep), color.a);""");
-        add("vec4 underwater(vec4 color, vec2 uv, vec3 fogColor = vec3(0.04, 0.22, 0.32), float density = 0.09, float wobble = 0.003)",
-            "Underwater", "While the camera is in water: wobble, blue tint and fog by distance.", """
+        add("vec4 underwater(vec4 color, vec2 uv, vec3 fogColor = vec3(0.04, 0.22, 0.32), float density = 0.09, float wobble = 0.003, vec3 tint = vec3(0.6, 0.9, 1.0), float speed = 2, float maxDistance = 200)",
+            "Underwater", "While the camera is in water: wobble, a tint and fog by distance.", """
             if (mosaicUnderwater() < 0.5) return color;
-            float t = frame.timing.x;
+            float t = frame.timing.x * speed * 0.5;
             vec2 w = uv + vec2(sin(uv.y * 30.0 + t * 2.0), cos(uv.x * 25.0 + t * 1.7)) * wobble;
             vec4 c = mosaicScene(w);
-            float f = 1.0 - exp(-min(mosaicDepth(w), 200.0) * density);
-            return vec4(mix(c.rgb * vec3(0.6, 0.9, 1.0), fogColor, f), c.a);""");
-        add("vec4 caustics(vec4 color, vec2 uv, float strength = 0.4, float scale = 1)", "Water caustics",
-            "Animated light ripples on blocks that lie under water.", """
+            float f = 1.0 - exp(-min(mosaicDepth(w), maxDistance) * density);
+            return vec4(mix(c.rgb * tint, fogColor, f), c.a);""");
+        add("vec4 caustics(vec4 color, vec2 uv, float strength = 0.4, float scale = 1, float speed = 0.8, float sharpness = 4, float waterAbove = 0.6)",
+            "Water caustics", "Animated light ripples on blocks that lie under water: scale, speed, how sharp the lines are,"
+                + " how far above the surface water is looked for (blocks).", """
             float t = mosaicDepth(uv);
             if (t >= 1.0e5) return color;
             vec3 rel = mosaicEye() + mosaicViewDir(uv) * t;
-            if (mosaicMaterialAt(rel + vec3(0.0, 0.6, 0.0)) != 1.0) return color;
+            if (mosaicMaterialAt(rel + vec3(0.0, waterAbove, 0.0)) != 1.0) return color;
             vec2 p = (frame.cameraPosition.xz + rel.xz) * 1.7 * scale;
-            float tm = frame.timing.x * 0.8, c = 0.0;
+            float tm = frame.timing.x * speed, c = 0.0;
             for (int i = 0; i < 3; i++) {
                 p = p * 1.31 + vec2(sin(p.y + tm), cos(p.x - tm));
                 c += abs(sin(p.x) * cos(p.y));
             }
-            c = pow(clamp(1.0 - c / 3.0, 0.0, 1.0), 4.0);
+            c = pow(clamp(1.0 - c / 3.0, 0.0, 1.0), sharpness);
             return vec4(color.rgb * (1.0 + c * strength * 4.0), color.a);""");
-        add("vec4 waterSparkle(vec4 color, vec2 uv, float strength = 0.6)", "Water sparkle",
-            "Twinkling sun glints on the water surface.", """
+        add("vec4 waterSparkle(vec4 color, vec2 uv, float strength = 0.6, float density = 0.015, float size = 6, float speed = 4, vec3 tint = vec3(1.0))",
+            "Water sparkle", "Twinkling glints on the water surface: how many (density), their size per block, how fast they change.", """
             if (mosaicWaterDepth(uv) <= 0.0 || mosaicUnderwater() > 0.5) return color;
             vec3 w = mosaicWorldPos(uv);
-            float n = fract(sin(dot(floor(w.xz * 6.0) + floor(frame.timing.x * 4.0), vec2(12.9898, 78.233))) * 43758.5453);
-            return vec4(color.rgb + step(0.985, n) * strength, color.a);""");
+            float n = fract(sin(dot(floor(w.xz * size) + floor(frame.timing.x * speed), vec2(12.9898, 78.233))) * 43758.5453);
+            return vec4(color.rgb + step(1.0 - density, n) * strength * tint, color.a);""");
     }
 
+    // ---------------------------------------------------------------- world looks
     static {
-        add("vec4 caveDarkness(vec4 color, vec2 uv, float strength = 0.6)", "Cave darkness",
-            "Darkens surfaces the sky cannot reach unless a torch or lamp lights them.", """
+        add("vec4 caveDarkness(vec4 color, vec2 uv, float strength = 0.6, float torchProtect = 1)", "Cave darkness",
+            "Darkens surfaces the sky cannot reach; torchProtect = how much block light keeps them lit.", """
             float sky = mosaicHitSkyLight(uv), lamp = mosaicHitBlockLight(uv);
-            float dark = (1.0 - sky) * (1.0 - lamp);
+            float dark = (1.0 - sky) * (1.0 - lamp * torchProtect);
             return vec4(color.rgb * (1.0 - strength * dark), color.a);""");
-        add("vec4 torchWarmth(vec4 color, vec2 uv, vec3 warmColor = vec3(1.0, 0.62, 0.3), float strength = 0.5)",
-            "Torch warmth", "Warms surfaces lit by torches, lamps and lava.", """
-            float lamp = mosaicHitBlockLight(uv);
-            return vec4(color.rgb * mix(vec3(1.0), warmColor * 1.4, lamp * lamp * strength), color.a);""");
-        add("vec4 leafGlow(vec4 color, vec2 uv, vec3 glowColor = vec3(0.55, 0.85, 0.2), float strength = 0.35)",
-            "Leaf glow", "Leaves let sunlight through when you look toward the sun.", """
-            if (mosaicHitMaterial(uv) != 5.0) return color;
-            float toward = max(dot(mosaicViewDir(uv), normalize(vec3(0.32, 0.90, 0.28))), 0.0);
-            return vec4(color.rgb + glowColor * pow(toward, 3.0) * strength * mosaicHitSkyLight(uv), color.a);""");
-        add("vec4 lavaHeat(vec2 uv, float amount = 0.004, float reach = 6)", "Lava heat",
-            "Hot air wobble above and around lava.", """
+        add("vec4 torchWarmth(vec4 color, vec2 uv, vec3 warmColor = vec3(1.0, 0.62, 0.3), float strength = 0.5, float boost = 1.4, float falloff = 2)",
+            "Torch warmth", "Warms surfaces lit by torches, lamps and lava: colour, strength, extra brightness, falloff power of the light level.", """
+            float lamp = pow(mosaicHitBlockLight(uv), falloff);
+            return vec4(color.rgb * mix(vec3(1.0), warmColor * boost, lamp * strength), color.a);""");
+        add("vec4 leafGlow(vec4 color, vec2 uv, vec3 glowColor = vec3(0.55, 0.85, 0.2), float strength = 0.35, float focus = 3, float material = 5)",
+            "Leaf glow", "Leaves (or another material) let sunlight through when you look toward the sun: focus narrows the glow.", """
+            if (mosaicHitMaterial(uv) != floor(material + 0.5)) return color;
+            float toward = max(dot(mosaicViewDir(uv), mosaicSunDir()), 0.0);
+            return vec4(color.rgb + glowColor * pow(toward, focus) * strength * mosaicHitSkyLight(uv), color.a);""");
+        add("vec4 lavaHeat(vec2 uv, float amount = 0.004, float reach = 6, float speed = 3, float frequency = 60)", "Lava heat",
+            "Hot air wobble above and around lava: amount, reach in blocks, speed, ripple density.", """
             float lava = mosaicLavaDepth(uv) > 0.0 || mosaicHitMaterial(uv) == 2.0 ? 1.0 : mosaicHitBlockLight(uv);
-            float t = frame.timing.x * 3.0;
-            vec2 o = vec2(sin(uv.y * 60.0 + t), cos(uv.x * 50.0 + t * 1.2)) * amount * lava * smoothstep(reach, 0.0, min(mosaicDepth(uv), reach));
+            float t = frame.timing.x * speed;
+            vec2 o = vec2(sin(uv.y * frequency + t), cos(uv.x * frequency * 0.83 + t * 1.2)) * amount * lava * smoothstep(reach, 0.0, min(mosaicDepth(uv), reach));
             return mosaicScene(uv + o);""");
-        add("vec4 snowSparkle(vec4 color, vec2 uv, float strength = 0.5)", "Snow sparkle",
-            "Tiny glints on snow and ice.", """
+        add("vec4 snowSparkle(vec4 color, vec2 uv, float strength = 0.5, float density = 0.008, float size = 16, float speed = 2)", "Snow sparkle",
+            "Tiny glints on snow and ice: how many, their size per block, how fast they change.", """
             float m = mosaicHitMaterial(uv);
             if (m != 9.0 && m != 10.0) return color;
             vec3 w = mosaicWorldPos(uv);
-            float n = fract(sin(dot(floor(w.xz * 16.0 + w.y * 7.0), vec2(12.9898, 78.233)) + floor(frame.timing.x * 2.0)) * 43758.5453);
-            return vec4(color.rgb + step(0.992, n) * strength, color.a);""");
+            float n = fract(sin(dot(floor(w.xz * size + w.y * 7.0), vec2(12.9898, 78.233)) + floor(frame.timing.x * speed)) * 43758.5453);
+            return vec4(color.rgb + step(1.0 - density, n) * strength, color.a);""");
         add("vec4 materialTint(vec4 color, vec2 uv, float material = 5, vec3 tint = vec3(1.15, 1.0, 0.85), float amount = 1)",
-            "Material tint", "Recolors one material class everywhere: 3 stone, 4 dirt, 5 leaves, 6 plants, 7 wood, 8 sand,"
+            "Material tint", "Recolours one material class everywhere: 3 stone, 4 dirt, 5 leaves, 6 plants, 7 wood, 8 sand,"
                 + " 9 snow, 10 ice, 11 glass, 12 metal, 13 lights.", """
             if (mosaicHitMaterial(uv) != floor(material + 0.5)) return color;
             return vec4(mix(color.rgb, color.rgb * tint, amount), color.a);""");
     }
 
-    // ---------------------------------------------------------------- rendering: voxels, rays, paths, shading blocks
+    // ---------------------------------------------------------------- rendering: voxels, rays, paths
     static {
-        add("Rendering", "vec4 voxelRender(vec2 uv, float shadows = 1, float maxDistance = 96)", "Voxel render",
-            "Renders the world volume by itself: block colors, sun with voxel shadows, sky and torch light."
+        add("Rendering", "vec4 voxelRender(vec2 uv, float shadows = 1, float maxDistance = 96, float shadowDistance = 64, vec3 sunColor = vec3(1.0, 0.95, 0.85), float skyAmbient = 0.35, vec3 torchColor = vec3(1.0, 0.7, 0.4), float torchStrength = 1.2, float glowStrength = 1.5, float surfaceOffset = 0.5)",
+            "Voxel render", "Renders the world volume by itself: block colours, sun with voxel shadows, sky and torch light."
                 + " Works without hardware ray tracing.", """
             vec3 o = mosaicEye(), d = mosaicViewDir(uv), n, n2;
             float m, m2;
@@ -224,40 +226,39 @@ public final class MosaicEffects {
             if (t < 0.0) return vec4(mosaicSky(d), 1.0);
             vec3 p = o + d * t;
             vec3 albedo = mosaicAlbedo(m);
-            float sky = mosaicSkyLightAt(p + n * 0.5), lamp = mosaicBlockLightAt(p + n * 0.5);
+            float sky = mosaicSkyLightAt(p + n * surfaceOffset), lamp = mosaicBlockLightAt(p + n * surfaceOffset);
             vec3 L = mosaicSunDir();
             float ndl = max(dot(n, L), 0.0);
-            float vis = (shadows > 0.5 && ndl > 0.0) ? (mosaicVoxelTrace(p + n * 0.01, L, 64.0, n2, m2) < 0.0 ? 1.0 : 0.0) : 1.0;
-            vec3 light = vec3(1.0, 0.95, 0.85) * ndl * vis * sky + mosaicSky(n) * 0.35 * sky + vec3(1.0, 0.7, 0.4) * lamp * lamp * 1.2;
+            float vis = (shadows > 0.5 && ndl > 0.0) ? (mosaicVoxelTrace(p + n * 0.01, L, shadowDistance, n2, m2) < 0.0 ? 1.0 : 0.0) : 1.0;
+            vec3 light = sunColor * ndl * vis * sky + mosaicSky(n) * skyAmbient * sky + torchColor * lamp * lamp * torchStrength;
             vec3 c = albedo * light;
-            if (m == 2.0 || m == 13.0) c += albedo * 1.5;
+            if (m == 2.0 || m == 13.0) c += albedo * glowStrength;
             return vec4(c, 1.0);""");
-        add("Rendering", "vec4 voxelSunShadow(vec4 color, vec2 uv, float darkness = 0.55, float maxDistance = 64)",
-            "Sun shadows (voxels)", "Shadows of the sun (the moon at night) traced through the world volume, then the height field for far hills and trees, on top of"
-                + " the image: works with every renderer, no ray tracing hardware needed. Caves keep their own darkness.", """
+        add("Rendering", "vec4 voxelSunShadow(vec4 color, vec2 uv, float darkness = 0.55, float maxDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35, float moonStrength = 0.35, float horizonFade = 0.15)",
+            "Sun shadows (voxels)", "Shadows of the sun (the moon at night) through the world volume up to maxDistance, then the height field"
+                + " from farShadowFrom to farShadowTo blocks for far hills and trees; bias pushes the start off the surface (more far away),"
+                + " hits closer than selfHit are the pixel's own block. Works with every renderer; caves keep their own darkness.", """
             float t = mosaicDepth(uv);
             if (t >= 1.0e5) return color;
             vec3 n = mosaicNormal(uv), n2;
             float m2;
             vec3 L = mosaicSunDir();
-            // the moon casts softer shadows; both fade out near the horizon instead of flipping sides at once
-            float strength = L.y > 0.0 ? smoothstep(0.0, 0.15, L.y) : 0.35 * smoothstep(0.0, 0.15, -L.y);
+            float strength = L.y > 0.0 ? smoothstep(0.0, horizonFade, L.y) : moonStrength * smoothstep(0.0, horizonFade, -L.y);
             if (L.y < 0.0) L = -L;
             float lit = 0.0;
             if (dot(n, L) > 0.0) {
-                vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * (0.03 + t * 0.004);
+                vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * (bias + t * biasPerBlock);
                 float h = mosaicVoxelTrace(p, L, maxDistance, n2, m2);
-                lit = h >= 0.35 ? 0.0 : mosaicFarShadow(p, L, t > 40.0 ? 1.5 : 40.0, 192.0);
+                lit = h >= selfHit ? 0.0 : mosaicFarShadow(p, L, t > farShadowFrom ? 1.5 : farShadowFrom, farShadowTo);
             }
             float k = darkness * strength * clamp(mosaicHitSkyLight(uv), 0.0, 1.0);
             return vec4(color.rgb * mix(1.0 - k, 1.0, lit), color.a);""");
-        add("Rendering", "vec4 ssao(vec4 color, vec2 uv, float radius = 1.2, float strength = 0.7, float samples = 10)",
+        add("Rendering", "vec4 ssao(vec4 color, vec2 uv, float radius = 1.2, float strength = 0.7, float samples = 10, float maxDarkening = 0.85, float angleBias = 0.05, float spread = 0.6)",
             "Ambient occlusion (screen)", "Darkens corners and contact areas from the depth guide alone (ray tracing or"
-                + " raster depth): samples around each pixel's surface; radius in blocks.", """
+                + " raster depth): samples around each pixel's surface; radius in blocks, at most maxDarkening.", """
             float t = mosaicDepth(uv);
             if (t >= 1.0e5) return color;
             vec3 p = mosaicHitPos(uv), n = mosaicNormal(uv);
-            // the pattern turns every frame: with Temporal smoothing after it the noise averages away
             // interleaved gradient noise, shifted every frame: an even pattern Temporal smoothing resolves cleanly
             vec2 px = uv * frame.viewSize.xy + vec2(5.588238, 5.588238) * mod(frame.timing.z, 64.0);
             float n0 = fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715)))) * 6.2831853;
@@ -267,19 +268,19 @@ public final class MosaicEffects {
                 if (i >= k) break;
                 float a = n0 + float(i) * 2.3999632, r = (float(i) + 0.5) / float(k);
                 vec2 o = vec2(cos(a), sin(a)) * r * radius / max(t, 0.5);
-                vec2 su = uv + o * vec2(frame.viewSize.y / frame.viewSize.x, 1.0) * 0.6;
+                vec2 su = uv + o * vec2(frame.viewSize.y / frame.viewSize.x, 1.0) * spread;
                 if (su.x < 0.0 || su.y < 0.0 || su.x > 1.0 || su.y > 1.0) continue;
                 vec3 d = mosaicHitPos(su) - p;
                 float l = length(d);
                 if (l < 1e-3) continue;
-                occ += max(dot(n, d / l) - 0.05, 0.0) * clamp(1.0 - l / (radius * 2.0), 0.0, 1.0);
+                occ += max(dot(n, d / l) - angleBias, 0.0) * clamp(1.0 - l / (radius * 2.0), 0.0, 1.0);
                 count += 1.0;
             }
-            float ao = 1.0 - clamp(occ / max(count, 1.0) * 2.0 * strength, 0.0, 0.85);
+            float ao = 1.0 - clamp(occ / max(count, 1.0) * 2.0 * strength, 0.0, maxDarkening);
             return vec4(color.rgb * ao, color.a);""");
-        add("Rendering", "vec4 godRays(vec4 color, vec2 uv, float strength = 0.3, float decay = 0.96, float samples = 32)",
+        add("Rendering", "vec4 godRays(vec4 color, vec2 uv, float strength = 0.3, float decay = 0.96, float samples = 32, vec3 shaftColor = vec3(1.0, 0.86, 0.65), float edgeFalloff = 1.2, float sunHeightFade = 3)",
             "Light shafts (screen)", "Sun shafts streaming from the sun across the screen where the sky shows through"
-                + " leaves and edges; fades at night and when the sun is behind the camera.", """
+                + " leaves and edges; fade toward the screen edge (edgeFalloff) and with a low sun (sunHeightFade).", """
             vec3 L = mosaicSunDir();
             if (L.y <= 0.0) return color;
             vec4 clip = frame.projection * (frame.modelView * vec4(L, 0.0));
@@ -295,10 +296,10 @@ public final class MosaicEffects {
                 if (mosaicDepth(clamp(q, 0.0, 1.0)) >= 1.0e5) sum += w;
                 w *= decay;
             }
-            float edge = clamp(1.0 - length((sun - 0.5) * 1.2), 0.0, 1.0);
-            vec3 light = vec3(1.0, 0.86, 0.65) * sum / float(k) * strength * edge * clamp(L.y * 3.0, 0.0, 1.0);
+            float edge = clamp(1.0 - length((sun - 0.5) * edgeFalloff), 0.0, 1.0);
+            vec3 light = shaftColor * sum / float(k) * strength * edge * clamp(L.y * sunHeightFade, 0.0, 1.0);
             return vec4(color.rgb + light, color.a);""");
-        add("Rendering", "vec4 pathTraceGI(vec4 color, vec2 uv, float samples = 2, float bounces = 2, float strength = 1, float maxDistance = 32)",
+        add("Rendering", "vec4 pathTraceGI(vec4 color, vec2 uv, float samples = 2, float bounces = 2, float strength = 1, float maxDistance = 32, float shadowDistance = 48, vec3 sunColor = vec3(1.0, 0.95, 0.85), vec3 torchColor = vec3(1.0, 0.7, 0.4), float glowStrength = 2, float skyStrength = 1)",
             "Path-traced GI", "Bounces light through the world volume (voxel paths with sun, sky and torches) and adds"
                 + " it to the image. Noisy: more samples cost more.", """
             float t0 = mosaicDepth(uv);
@@ -322,14 +323,14 @@ public final class MosaicEffects {
                     vec3 hn, sn;
                     float hm, sm;
                     float tt = mosaicVoxelTrace(pos, dir, maxDistance, hn, hm);
-                    if (tt < 0.0) { irradiance += throughput * mosaicSky(dir); break; }
+                    if (tt < 0.0) { irradiance += throughput * mosaicSky(dir) * skyStrength; break; }
                     vec3 hp = pos + dir * tt;
                     vec3 alb = mosaicAlbedo(hm);
                     float lamp = mosaicBlockLightAt(hp + hn * 0.5), sky = mosaicSkyLightAt(hp + hn * 0.5);
                     float ndl = max(dot(hn, L), 0.0);
-                    float vis = ndl > 0.0 && mosaicVoxelTrace(hp + hn * 0.01, L, 48.0, sn, sm) < 0.0 ? 1.0 : 0.0;
-                    vec3 emit = (hm == 2.0 || hm == 13.0) ? alb * 2.0 : vec3(0.0);
-                    irradiance += throughput * alb * (vec3(1.0, 0.95, 0.85) * ndl * vis * sky + vec3(1.0, 0.7, 0.4) * lamp * lamp) + throughput * emit;
+                    float vis = ndl > 0.0 && mosaicVoxelTrace(hp + hn * 0.01, L, shadowDistance, sn, sm) < 0.0 ? 1.0 : 0.0;
+                    vec3 emit = (hm == 2.0 || hm == 13.0) ? alb * glowStrength : vec3(0.0);
+                    irradiance += throughput * alb * (sunColor * ndl * vis * sky + torchColor * lamp * lamp) + throughput * emit;
                     throughput *= alb;
                     pos = hp + hn * 0.01;
                     nrm = hn;
@@ -337,10 +338,10 @@ public final class MosaicEffects {
             }
             irradiance /= float(ns);
             return vec4(color.rgb + color.rgb * irradiance * strength, color.a);""");
-        add("Rendering", "vec4 rtAmbientOcclusion(vec4 color, vec2 uv, float radius = 1.5, float samples = 4, float strength = 0.8)",
-            "RT ambient occlusion", "Hardware rays around each surface darken corners and crevices.", """
+        add("Rendering", "vec4 rtAmbientOcclusion(vec4 color, vec2 uv, float radius = 1.5, float samples = 4, float strength = 0.8, float bias = 0.02)",
+            "RT ambient occlusion", "Hardware rays around each surface darken corners and crevices: radius in blocks.", """
             if (mosaicDepth(uv) >= 1.0e5) return color;
-            vec3 n = mosaicNormal(uv), p = mosaicHitPos(uv) + n * 0.02;
+            vec3 n = mosaicNormal(uv), p = mosaicHitPos(uv) + n * bias;
             vec3 tg = normalize(abs(n.y) < 0.99 ? cross(n, vec3(0.0, 1.0, 0.0)) : cross(n, vec3(1.0, 0.0, 0.0)));
             vec3 bt = cross(n, tg);
             int ns = int(clamp(samples, 1.0, 16.0));
@@ -351,26 +352,27 @@ public final class MosaicEffects {
                 if (mosaicTrace(p, dir, radius) >= 0.0) occluded += 1.0;
             }
             return vec4(color.rgb * (1.0 - strength * occluded / float(ns)), color.a);""");
-        add("Rendering", "vec4 rtReflections(vec4 color, vec2 uv, float amount = 0.35, float material = 1)", "RT reflections",
-            "Hardware-traced mirror reflections on one material class (1 water by default; -1 = every surface).", """
+        add("Rendering", "vec4 rtReflections(vec4 color, vec2 uv, float amount = 0.35, float material = 1, float maxDistance = 128, float f0 = 0.02, float bias = 0.02, float offscreen = 0.5)", "RT reflections",
+            "Hardware-traced mirror reflections on one material class (1 water by default; -1 = every surface); offscreen = how dark a"
+                + " reflection of something outside the screen is.", """
             float m = mosaicHitMaterial(uv);
             if (mosaicDepth(uv) >= 1.0e5 || (material >= 0.0 && m != floor(material + 0.5))) return color;
             vec3 n = mosaicNormal(uv), v = mosaicViewDir(uv);
-            vec3 r = reflect(v, n), p = mosaicHitPos(uv) + n * 0.02;
-            float t = mosaicTrace(p, r, 128.0);
+            vec3 r = reflect(v, n), p = mosaicHitPos(uv) + n * bias;
+            float t = mosaicTrace(p, r, maxDistance);
             vec3 refl = mosaicSky(r);
             if (t >= 0.0) {
                 vec4 clip = frame.projection * (frame.modelView * vec4(p + r * t, 1.0));
                 vec2 suv = clip.xy / clip.w * 0.5 + 0.5;
                 refl = (clip.w > 0.0 && all(greaterThanEqual(suv, vec2(0.0))) && all(lessThanEqual(suv, vec2(1.0))))
-                    ? mosaicScene(suv).rgb : color.rgb * 0.5;
+                    ? mosaicScene(suv).rgb : color.rgb * offscreen;
             }
-            float fres = 0.02 + 0.98 * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
+            float fres = f0 + (1.0 - f0) * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
             return vec4(mix(color.rgb, refl, clamp(amount + fres, 0.0, 1.0) * amount * 2.0), color.a);""");
         // shading building blocks
-        add("Shading", "float fresnelSchlick(float cosTheta, float f0 = 0.04)", "Fresnel (Schlick)",
+        add("Shading", "float fresnelSchlick(float cosTheta, float f0 = 0.04, float power = 5)", "Fresnel (Schlick)",
             "How reflective a surface is at a view angle (cosTheta = dot(normal, toViewer)).", """
-            return f0 + (1.0 - f0) * pow(1.0 - clamp(cosTheta, 0.0, 1.0), 5.0);""");
+            return f0 + (1.0 - f0) * pow(1.0 - clamp(cosTheta, 0.0, 1.0), power);""");
         add("Shading", "float ggxSpecular(vec3 n, vec3 v, vec3 l, float roughness = 0.5)", "GGX specular",
             "Microfacet highlight strength (n normal, v to viewer, l to light).", """
             vec3 h = normalize(v + l);
@@ -380,17 +382,19 @@ public final class MosaicEffects {
             float k = a * 0.5;
             float g = nv / (nv * (1.0 - k) + k) * nl / (nl * (1.0 - k) + k);
             return d * g / (4.0 * nv + 1e-4);""");
-        add("Shading", "float lambert(vec3 n, vec3 l)", "Lambert diffuse", "Diffuse light: dot(normal, toLight), never negative.", """
-            return max(dot(normalize(n), normalize(l)), 0.0);""");
-        add("Shading", "vec3 acesTonemap(vec3 c)", "ACES tonemap", "Filmic curve from HDR to display range.", """
+        add("Shading", "float lambert(vec3 n, vec3 l, float wrap = 0)", "Lambert diffuse",
+            "Diffuse light: dot(normal, toLight), never negative; wrap > 0 lets light reach past the terminator (foliage, cloth).", """
+            return max((dot(normalize(n), normalize(l)) + wrap) / (1.0 + wrap), 0.0);""");
+        add("Shading", "vec3 acesTonemap(vec3 c, float exposure = 0)", "ACES tonemap", "Filmic curve from HDR to display range (exposure in stops).", """
+            c *= exp2(exposure);
             return clamp((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);""");
         add("Shading", "vec3 skyColor(vec3 dir)", "Sky color", "The analytic sky in a direction (follows the time of day).", """
             return mosaicSky(normalize(dir));""");
-        add("Shading", "vec3 materialColor(float material)", "Material color", "Typical color of a material class.", """
+        add("Shading", "vec3 materialColor(float material)", "Material color", "Typical colour of a material class.", """
             return mosaicAlbedo(material);""");
-        add("Shading", "float sunVisibility(vec2 uv, float maxDistance = 64)", "Sun visibility (voxels)",
-            "1 where the sun (the moon at night) reaches the pixel's surface, 0 in shadow: a ray through the world"
-                + " volume, so it works without hardware ray tracing (raster depth included).", """
+        add("Shading", "float sunVisibility(vec2 uv, float maxDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35)",
+            "Sun visibility (voxels)", "1 where the sun (the moon at night) reaches the pixel's surface, 0 in shadow: a ray through the world"
+                + " volume up to maxDistance, then the height field from farShadowFrom to farShadowTo; works without hardware ray tracing.", """
             float t = mosaicDepth(uv);
             if (t >= 1.0e5) return 1.0;
             vec3 n = mosaicNormal(uv), n2;
@@ -400,11 +404,10 @@ public final class MosaicEffects {
             if (dot(n, L) <= 0.0) return 0.0;
             // positions rebuilt from depth drift with distance: the start moves off the surface by more far away, and a
             // hit right at the start is the pixel's own block, not a caster
-            vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * (0.03 + t * 0.004);
+            vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * (bias + t * biasPerBlock);
             float h = mosaicVoxelTrace(p, L, maxDistance, n2, m2);
-            if (h >= 0.35) return 0.0;
-            // past the world volume: hills and trees of the height field (near pixels start where the volume ends)
-            return mosaicFarShadow(p, L, t > 40.0 ? 1.5 : 40.0, 192.0);""");
+            if (h >= selfHit) return 0.0;
+            return mosaicFarShadow(p, L, t > farShadowFrom ? 1.5 : farShadowFrom, farShadowTo);""");
         add("Shading", "float voxelDistance(vec3 origin, vec3 dir, float maxDistance = 96)", "Voxel distance",
             "Distance along a ray to the first solid block of the world volume (-1 = none).", """
             vec3 n;
@@ -415,20 +418,24 @@ public final class MosaicEffects {
     // ---------------------------------------------------------------- render pipeline: the pieces of a renderer of your own
     // Each takes surface data (position, normal, light levels from the G-buffer nodes) and gives light in linear HDR, so a
     // renderer is wired as: G-buffer -> lights (+ GI into a Buffer, Accumulate, Denoise) -> Combine -> Tone map -> TAA.
+    // Every number that changes the picture is a parameter: nothing is decided inside a node.
     static {
-        add("Render pipeline", "vec3 sceneAlbedo(vec2 uv, float brightness = 1)", "Albedo (from the game image)",
-            "The surface colour without the game's own lighting, in linear light: the game image divided by an estimate of"
-                + " its light map (sky light by time of day, block light). The base colour of a renderer of your own.", """
-            vec3 c = pow(max(mosaicScene(uv).rgb, vec3(0.0)), vec3(2.2));
+        add("Render pipeline", "vec3 sceneAlbedo(vec2 uv, float brightness = 1, float gamma = 2.2, float lightCurve = 1.4, float minLight = 0.05, float ambientFloor = 0.08, float nightLevel = 0.2)",
+            "Albedo (from the game image)", "The surface colour without the game's own lighting, in linear light: the game image (gamma)"
+                + " divided by an estimate of its light map (sky light by time of day, block light; lightCurve, the darkest light"
+                + " minLight, a floor ambientFloor, night sky level nightLevel). The base colour of a renderer of your own.", """
+            vec3 c = pow(max(mosaicScene(uv).rgb, vec3(0.0)), vec3(gamma));
             if (mosaicDepth(uv) >= 1.0e5) return c;
             float sky = mosaicHitSkyLight(uv), lamp = mosaicHitBlockLight(uv);
-            float day = clamp(mosaicSunDir().y * 4.0 + 0.35, 0.2, 1.0);
-            float lm = max(max(sky * day, lamp), 0.05);
-            lm = pow(lm, 1.4) * 0.92 + 0.08;
+            float day = clamp(mosaicSunDir().y * 4.0 + 0.35, nightLevel, 1.0);
+            float lm = max(max(sky * day, lamp), minLight);
+            lm = pow(lm, lightCurve) * (1.0 - ambientFloor) + ambientFloor;
             return clamp(c / lm, vec3(0.0), vec3(1.0)) * brightness;""");
-        add("Render pipeline", "vec3 sunLight(vec3 position, vec3 normal, float shadows = 1, float intensity = 2.2)", "Sun & moon light",
-            "Direct light of the sun (the moon at night: dim and blue) on a surface, with shadows traced through the world volume"
-                + " and the height field for far hills. Warm at sunrise and sunset. position and normal from the G-buffer nodes.", """
+        add("Render pipeline", "vec3 sunLight(vec3 position, vec3 normal, float shadows = 1, float intensity = 2.2, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), float sunsetHeight = 0.35, vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float horizonFade = 0.08, float shadowDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35)",
+            "Sun & moon light", "Direct light of the sun (the moon at night) on a surface: colours by day, at sunset (below sunsetHeight)"
+                + " and at night (moonColor x moonLevel), fading at the horizon; shadows through the world volume up to shadowDistance,"
+                + " then the height field from farShadowFrom to farShadowTo blocks; bias, biasPerBlock and selfHit keep surfaces from"
+                + " shadowing themselves. position and normal from the G-buffer nodes.", """
             vec3 L = mosaicSunDir();
             float moon = L.y < 0.0 ? 1.0 : 0.0;
             if (L.y < 0.0) L = -L;
@@ -439,31 +446,33 @@ public final class MosaicEffects {
                 vec3 n2;
                 float m2;
                 float d = length(position);
-                vec3 p = position + normal * (0.03 + d * 0.004);
-                float h = mosaicVoxelTrace(p, L, 64.0, n2, m2);
-                vis = h >= 0.35 ? 0.0 : mosaicFarShadow(p, L, d > 40.0 ? 1.5 : 40.0, 192.0);
+                vec3 p = position + normal * (bias + d * biasPerBlock);
+                float h = mosaicVoxelTrace(p, L, shadowDistance, n2, m2);
+                vis = h >= selfHit ? 0.0 : mosaicFarShadow(p, L, d > farShadowFrom ? 1.5 : farShadowFrom, farShadowTo);
             }
-            vec3 col = mix(vec3(1.0, 0.45, 0.18), vec3(1.0, 0.95, 0.88), smoothstep(0.0, 0.35, L.y));
-            col = mix(col, vec3(0.32, 0.4, 0.62) * 0.06, moon);
-            return col * ndl * vis * intensity * smoothstep(0.0, 0.08, L.y);""");
-        add("Render pipeline", "vec3 skyAmbient(vec3 normal, float skyLight = 1, float intensity = 1)", "Sky ambient",
-            "Cheap light from the sky dome on a surface (no rays): the sky colour above the normal, fading with the sky light level"
-                + " (0 in caves). Use it instead of Diffuse GI on slow GPUs.", """
-            return mosaicSky(normalize(normal + vec3(0.0, 1.0, 0.0))) * skyLight * skyLight * intensity * 0.6;""");
-        add("Render pipeline", "vec3 torchLight(float blockLight, vec3 tint = vec3(1.0, 0.6, 0.3), float intensity = 2)", "Block light",
-            "Light of torches, lamps and lava from the block light level (0..1, Block light node), in the colour you pick.", """
-            return tint * pow(clamp(blockLight, 0.0, 1.0), 2.5) * intensity;""");
-        add("Render pipeline", "vec4 diffuseGI(vec3 position, vec3 normal, float bounces = 1, float maxDistance = 24, float sunStrength = 2.2, float skyStrength = 1)",
+            vec3 col = mix(sunsetColor, sunColor, smoothstep(0.0, sunsetHeight, L.y));
+            col = mix(col, moonColor * moonLevel, moon);
+            return col * ndl * vis * intensity * smoothstep(0.0, horizonFade, L.y);""");
+        add("Render pipeline", "vec3 skyAmbient(vec3 normal, float skyLight = 1, float intensity = 0.6, float skyCurve = 2, float upBias = 1)", "Sky ambient",
+            "Cheap light from the sky dome on a surface (no rays): the sky colour above the normal (upBias tilts it up), fading with"
+                + " the sky light level to the power skyCurve (0 in caves). Use it instead of Diffuse GI on slow GPUs.", """
+            return mosaicSky(normalize(normal + vec3(0.0, upBias, 0.0))) * pow(clamp(skyLight, 0.0, 1.0), skyCurve) * intensity;""");
+        add("Render pipeline", "vec3 torchLight(float blockLight, vec3 tint = vec3(1.0, 0.6, 0.3), float intensity = 2, float falloff = 2.5)", "Block light",
+            "Light of torches, lamps and lava from the block light level (0..1, Block light node), in the colour you pick; falloff"
+                + " shapes how fast it fades from the source.", """
+            return tint * pow(clamp(blockLight, 0.0, 1.0), falloff) * intensity;""");
+        add("Render pipeline", "vec4 diffuseGI(vec3 position, vec3 normal, float bounces = 1, float maxDistance = 24, float sunStrength = 2.2, float skyStrength = 1, float shadowDistance = 48, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float hitSkyAmbient = 0.3, vec3 torchColor = vec3(1.0, 0.6, 0.3), float torchStrength = 1.5, float glowStrength = 2, float bias = 0.03)",
             "Diffuse GI (voxel paths)", "Light arriving at a surface from everywhere, one random path per pixel and frame through the"
-                + " world volume: sky through openings, sun bounced off lit blocks, torch light and glowing blocks. Noisy by design:"
-                + " Accumulate into a Buffer (1/2 size) and Denoise it, then add it to the light. No ray tracing hardware needed.", """
+                + " world volume (maxDistance, up to 4 bounces): sky through openings (skyStrength), sun bounced off lit blocks (its own"
+                + " colours, shadowDistance), torch light and glowing blocks. Noisy by design: Accumulate into a Buffer (1/2 size)"
+                + " and Denoise it, then add it to the light. No ray tracing hardware needed.", """
             if (length(position) > 4000.0) return vec4(0.0, 0.0, 0.0, 1.0);
             vec3 L = mosaicSunDir();
             float moon = L.y < 0.0 ? 1.0 : 0.0;
             if (L.y < 0.0) L = -L;
-            vec3 sunCol = mix(vec3(1.0, 0.45, 0.18), vec3(1.0, 0.95, 0.88), smoothstep(0.0, 0.35, L.y));
-            sunCol = mix(sunCol, vec3(0.32, 0.4, 0.62) * 0.06, moon) * smoothstep(0.0, 0.08, L.y) * sunStrength;
-            vec3 pos = position + normal * 0.03, nrm = normal, through = vec3(1.0), sum = vec3(0.0);
+            vec3 sunCol = mix(sunsetColor, sunColor, smoothstep(0.0, 0.35, L.y));
+            sunCol = mix(sunCol, moonColor * moonLevel, moon) * smoothstep(0.0, 0.08, L.y) * sunStrength;
+            vec3 pos = position + normal * bias, nrm = normal, through = vec3(1.0), sum = vec3(0.0);
             float f = frame.timing.z;
             vec3 h = mosaicHash33(position * 3.17 + vec3(f * 0.6180339, f * 0.4142135, f * 0.7320508));
             int nb = int(clamp(bounces, 1.0, 4.0));
@@ -485,120 +494,128 @@ public final class MosaicEffects {
                 vec3 alb = mosaicAlbedo(hm);
                 float lamp = mosaicBlockLightAt(hp + hn * 0.5), sky = mosaicSkyLightAt(hp + hn * 0.5);
                 float ndl = max(dot(hn, L), 0.0);
-                float vis = ndl > 0.0 && mosaicVoxelTrace(hp + hn * 0.01, L, 48.0, sn, sm) < 0.0 ? 1.0 : 0.0;
-                vec3 glow = (hm == 2.0 || hm == 13.0) ? alb * 2.0 : vec3(0.0);
-                sum += through * (alb * (sunCol * ndl * vis * sky + mosaicSky(hn) * 0.3 * sky * skyStrength
-                    + vec3(1.0, 0.6, 0.3) * lamp * lamp * 1.5) + glow);
+                float vis = ndl > 0.0 && mosaicVoxelTrace(hp + hn * 0.01, L, shadowDistance, sn, sm) < 0.0 ? 1.0 : 0.0;
+                vec3 glow = (hm == 2.0 || hm == 13.0) ? alb * glowStrength : vec3(0.0);
+                sum += through * (alb * (sunCol * ndl * vis * sky + mosaicSky(hn) * hitSkyAmbient * sky * skyStrength
+                    + torchColor * lamp * lamp * torchStrength) + glow);
                 through *= alb;
                 pos = hp + hn * 0.01;
                 nrm = hn;
             }
             return vec4(sum, 1.0);""");
-        add("Render pipeline", "vec3 voxelReflection(vec3 position, vec3 normal, float maxDistance = 64)", "Reflection (voxels)",
-            "What a mirror at the surface would show, traced through the world volume: lit block colours, the sky where the ray"
-                + " escapes. Mix it in by Fresnel for water, glass and metal.", """
+        add("Render pipeline", "vec3 voxelReflection(vec3 position, vec3 normal, float maxDistance = 64, float sunStrength = 3, vec3 sunColor = vec3(1.0, 0.95, 0.88), float shadowDistance = 48, float skyAmbient = 0.4, vec3 torchColor = vec3(1.0, 0.6, 0.3), float torchStrength = 1.5, float bias = 0.03)",
+            "Reflection (voxels)", "What a mirror at the surface would show, traced through the world volume: lit block colours, the sky"
+                + " where the ray escapes. Mix it in by Fresnel for water, glass and metal.", """
             vec3 v = normalize(position - mosaicEye());
             vec3 r = reflect(v, normal), hn, sn;
             float hm, sm;
-            float t = mosaicVoxelTrace(position + normal * 0.03, r, maxDistance, hn, hm);
+            float t = mosaicVoxelTrace(position + normal * bias, r, maxDistance, hn, hm);
             if (t < 0.0) return mosaicSky(r);
-            vec3 hp = position + normal * 0.03 + r * t;
+            vec3 hp = position + normal * bias + r * t;
             vec3 L = mosaicSunDir();
             if (L.y < 0.0) L = -L;
             float ndl = max(dot(hn, L), 0.0);
-            float vis = ndl > 0.0 && mosaicVoxelTrace(hp + hn * 0.01, L, 48.0, sn, sm) < 0.0 ? 1.0 : 0.0;
+            float vis = ndl > 0.0 && mosaicVoxelTrace(hp + hn * 0.01, L, shadowDistance, sn, sm) < 0.0 ? 1.0 : 0.0;
             float sky = mosaicSkyLightAt(hp + hn * 0.5), lamp = mosaicBlockLightAt(hp + hn * 0.5);
-            return mosaicAlbedo(hm) * (vec3(3.0, 2.85, 2.6) * ndl * vis * sky * smoothstep(0.0, 0.08, L.y)
-                + mosaicSky(hn) * 0.4 * sky + vec3(1.0, 0.6, 0.3) * lamp * lamp * 1.5);""");
-        add("Render pipeline", "vec3 selfGlow(vec2 uv, vec3 albedo, float strength = 2)", "Emission",
-            "Light a surface gives off itself: lava and light-source blocks seen at this pixel glow in their own colour.", """
+            return mosaicAlbedo(hm) * (sunColor * sunStrength * ndl * vis * sky * smoothstep(0.0, 0.08, L.y)
+                + mosaicSky(hn) * skyAmbient * sky + torchColor * lamp * lamp * torchStrength);""");
+        add("Render pipeline", "vec3 selfGlow(vec2 uv, vec3 albedo, float strength = 2, float lavaStrength = 2)", "Emission",
+            "Light a surface gives off itself: light-source blocks (strength) and lava (lavaStrength) seen at this pixel glow in their own colour.", """
             float m = mosaicHitMaterial(uv);
-            return (m == 2.0 || m == 13.0) ? albedo * strength : vec3(0.0);""");
-        add("Render pipeline", "vec4 litSurface(vec2 uv, vec3 albedo, vec3 light, vec3 glow = vec3(0.0))", "Combine (shade)",
-            "The lit image in linear HDR: albedo times the sum of the lights, plus emission; the sky keeps the game's own sky.", """
-            if (mosaicDepth(uv) >= 1.0e5) return vec4(pow(max(mosaicScene(uv).rgb, vec3(0.0)), vec3(2.2)), 1.0);
+            return m == 13.0 ? albedo * strength : (m == 2.0 ? albedo * lavaStrength : vec3(0.0));""");
+        add("Render pipeline", "vec4 litSurface(vec2 uv, vec3 albedo, vec3 light, vec3 glow = vec3(0.0), float skyGamma = 2.2, float skyBrightness = 1)", "Combine (shade)",
+            "The lit image in linear HDR: albedo times the sum of the lights, plus emission; the sky keeps the game's own sky (made"
+                + " linear with skyGamma, scaled by skyBrightness).", """
+            if (mosaicDepth(uv) >= 1.0e5) return vec4(pow(max(mosaicScene(uv).rgb, vec3(0.0)), vec3(skyGamma)) * skyBrightness, 1.0);
             return vec4(albedo * light + glow, 1.0);""");
-        add("Render pipeline", "vec4 reflectiveSurface(vec4 color, vec2 uv, float material = 1, float waves = 1, float strength = 1)",
+        add("Render pipeline", "vec4 reflectiveSurface(vec4 color, vec2 uv, float material = 1, float waves = 1, float strength = 1, float waveScale = 1, float waveSpeed = 1, float waveHeight = 0.08, float maxDistance = 64, float f0 = 0.02, vec3 sunColor = vec3(1.6, 1.5, 1.4), float skyAmbient = 0.4, float minLight = 0.05, float shadowDistance = 48)",
             "Reflective surface (water)", "Mirror reflections traced through the world volume on one material (1 water, 10 ice, 11 glass,"
-                + " 12 metal), mixed in by Fresnel; on water the normal moves with waves. Works on linear (before Tone map) or display colour.", """
+                + " 12 metal), mixed in by Fresnel (f0); on water the normal moves with waves (scale, speed, height). Works on linear"
+                + " (before Tone map) or display colour.", """
             float m = mosaicHitMaterial(uv);
             if (mosaicDepth(uv) >= 1.0e5 || m != floor(material + 0.5)) return color;
             vec3 p = mosaicHitPos(uv), n = mosaicNormal(uv);
             if (waves > 0.0 && n.y > 0.5) {
-                vec3 w = mosaicWorldPos(uv);
-                float t = frame.timing.x;
+                vec3 w = mosaicWorldPos(uv) * waveScale;
+                float t = frame.timing.x * waveSpeed;
                 float hx = sin(w.x * 1.7 + t * 1.3) * 0.5 + sin(w.z * 2.3 - t * 1.1 + w.x * 0.7) * 0.35 + sin((w.x + w.z) * 4.1 + t * 2.1) * 0.15;
                 float hz = cos(w.z * 1.9 + t * 1.2) * 0.5 + cos(w.x * 2.1 + t * 0.9 - w.z * 0.6) * 0.35 + cos((w.x - w.z) * 3.7 - t * 1.7) * 0.15;
-                n = normalize(vec3(-hx * 0.08 * waves, 1.0, -hz * 0.08 * waves));
+                n = normalize(vec3(-hx * waveHeight * waves, 1.0, -hz * waveHeight * waves));
             }
             vec3 v = normalize(p - mosaicEye());
             vec3 r = reflect(v, n), hn, sn;
             if (r.y < 0.02 && n.y > 0.5) r.y = 0.02;
             float hm, sm;
             vec3 o = p + n * 0.05;
-            float th = mosaicVoxelTrace(o, normalize(r), 64.0, hn, hm);
+            float th = mosaicVoxelTrace(o, normalize(r), maxDistance, hn, hm);
             vec3 refl = mosaicSky(normalize(r));
             if (th >= 0.0) {
                 vec3 hp = o + normalize(r) * th;
                 vec3 L = mosaicSunDir();
                 if (L.y < 0.0) L = -L;
                 float ndl = max(dot(hn, L), 0.0);
-                float vis = ndl > 0.0 && mosaicVoxelTrace(hp + hn * 0.01, L, 48.0, sn, sm) < 0.0 ? 1.0 : 0.0;
+                float vis = ndl > 0.0 && mosaicVoxelTrace(hp + hn * 0.01, L, shadowDistance, sn, sm) < 0.0 ? 1.0 : 0.0;
                 float sky = mosaicSkyLightAt(hp + hn * 0.5);
-                refl = mosaicAlbedo(hm) * (vec3(1.6, 1.5, 1.4) * ndl * vis * sky + mosaicSky(hn) * 0.4 * sky + 0.05);
+                refl = mosaicAlbedo(hm) * (sunColor * ndl * vis * sky + mosaicSky(hn) * skyAmbient * sky + minLight);
             }
-            float fres = 0.02 + 0.98 * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
+            float fres = f0 + (1.0 - f0) * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
             return vec4(mix(color.rgb, refl, clamp(fres * strength, 0.0, 1.0)), color.a);""");
-        add("Render pipeline", "vec3 sunLightRT(vec3 position, vec3 normal, float intensity = 2.2)", "Sun & moon light (RT)",
-            "Sun & moon light with an exact shadow ray through the real scene geometry (hardware ray tracing: an RTX-class GPU).", """
+        add("Render pipeline", "vec3 sunLightRT(vec3 position, vec3 normal, float intensity = 2.2, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), float sunsetHeight = 0.35, vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float horizonFade = 0.08, float bias = 0.02, float biasPerBlock = 0.001)",
+            "Sun & moon light (RT)", "Sun & moon light with an exact shadow ray through the real scene geometry (hardware ray tracing:"
+                + " an RTX-class GPU); the same colours and fades as Sun & moon light.", """
             vec3 L = mosaicSunDir();
             float moon = L.y < 0.0 ? 1.0 : 0.0;
             if (L.y < 0.0) L = -L;
             float ndl = max(dot(normal, L), 0.0);
             if (ndl <= 0.0 || length(position) > 4000.0) return vec3(0.0);
-            float vis = mosaicShadow(position + normal * (0.02 + length(position) * 0.001), L);
-            vec3 col = mix(vec3(1.0, 0.45, 0.18), vec3(1.0, 0.95, 0.88), smoothstep(0.0, 0.35, L.y));
-            col = mix(col, vec3(0.32, 0.4, 0.62) * 0.06, moon);
-            return col * ndl * vis * intensity * smoothstep(0.0, 0.08, L.y);""");
-        add("Render pipeline", "vec4 diffuseGIRT(vec3 position, vec3 normal, float maxDistance = 64, float sunStrength = 2.2, float skyStrength = 1)",
+            float vis = mosaicShadow(position + normal * (bias + length(position) * biasPerBlock), L);
+            vec3 col = mix(sunsetColor, sunColor, smoothstep(0.0, sunsetHeight, L.y));
+            col = mix(col, moonColor * moonLevel, moon);
+            return col * ndl * vis * intensity * smoothstep(0.0, horizonFade, L.y);""");
+        add("Render pipeline", "vec4 diffuseGIRT(vec3 position, vec3 normal, float maxDistance = 64, float sunStrength = 2.2, float skyStrength = 1, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float hitSunShare = 0.6, float hitSkyAmbient = 0.3, vec3 unknownAlbedo = vec3(0.4), vec3 torchColor = vec3(1.0, 0.6, 0.3), float torchStrength = 1.5, float glowStrength = 2, float bias = 0.03)",
             "Diffuse GI (RT)", "One-bounce light from a hardware ray per pixel and frame through the real scene geometry; the hit is shaded"
-                + " with the world volume's block colour, a shadow ray toward the sun and its sky light. Accumulate and Denoise it like"
-                + " Diffuse GI. Needs hardware ray tracing.", """
+                + " with the world volume's block colour (unknownAlbedo outside it), a shadow ray toward the sun and its sky light."
+                + " Accumulate and Denoise it like Diffuse GI. Needs hardware ray tracing.", """
             if (length(position) > 4000.0) return vec4(0.0, 0.0, 0.0, 1.0);
             vec3 L = mosaicSunDir();
             float moon = L.y < 0.0 ? 1.0 : 0.0;
             if (L.y < 0.0) L = -L;
-            vec3 sunCol = mix(vec3(1.0, 0.45, 0.18), vec3(1.0, 0.95, 0.88), smoothstep(0.0, 0.35, L.y));
-            sunCol = mix(sunCol, vec3(0.32, 0.4, 0.62) * 0.06, moon) * smoothstep(0.0, 0.08, L.y) * sunStrength;
+            vec3 sunCol = mix(sunsetColor, sunColor, smoothstep(0.0, 0.35, L.y));
+            sunCol = mix(sunCol, moonColor * moonLevel, moon) * smoothstep(0.0, 0.08, L.y) * sunStrength;
             float f = frame.timing.z;
             vec3 h = mosaicHash33(position * 3.17 + vec3(f * 0.6180339, f * 0.4142135, f * 0.7320508));
             vec3 tg = normalize(abs(normal.y) < 0.99 ? cross(normal, vec3(0.0, 1.0, 0.0)) : cross(normal, vec3(1.0, 0.0, 0.0)));
             vec3 bt = cross(normal, tg);
             float phi = 6.2831853 * h.x, cr = sqrt(h.y);
             vec3 dir = normalize(tg * cos(phi) * cr + bt * sin(phi) * cr + normal * sqrt(max(1.0 - h.y, 0.0)));
-            vec3 o = position + normal * 0.03;
+            vec3 o = position + normal * bias;
             float t = mosaicTrace(o, dir, maxDistance);
             if (t < 0.0) return vec4(mosaicSky(dir) * skyStrength, 1.0);
             vec3 hp = o + dir * t;
             float m = mosaicMaterialAt(hp + dir * 0.05);
-            vec3 alb = m >= 2.0 ? mosaicAlbedo(m) : vec3(0.4);
+            vec3 alb = m >= 2.0 ? mosaicAlbedo(m) : unknownAlbedo;
             float sky = mosaicSkyLightAt(hp - dir * 0.3), lamp = mosaicBlockLightAt(hp - dir * 0.3);
             float vis = mosaicShadow(hp - dir * 0.02, L);
-            vec3 glow = (m == 2.0 || m == 13.0) ? alb * 2.0 : vec3(0.0);
-            return vec4(alb * (sunCol * 0.6 * vis * sky + mosaicSky(-dir) * 0.3 * sky * skyStrength + vec3(1.0, 0.6, 0.3) * lamp * lamp * 1.5) + glow, 1.0);""");
-        add("Render pipeline", "vec4 tonemap(vec4 color, float exposure = 0, float curve = 0)", "Tone map",
-            "Linear HDR light to the screen: exposure in stops, then a curve (0 ACES, 1 Reinhard, 2 Hable filmic, 3 exponential,"
-                + " 4 clip) and the display gamma. The last step of a renderer of your own.", """
+            vec3 glow = (m == 2.0 || m == 13.0) ? alb * glowStrength : vec3(0.0);
+            return vec4(alb * (sunCol * hitSunShare * vis * sky + mosaicSky(-dir) * hitSkyAmbient * sky * skyStrength
+                + torchColor * lamp * lamp * torchStrength) + glow, 1.0);""");
+        add("Render pipeline", "vec4 tonemap(vec4 color, float exposure = 0, float curve = 0, float gamma = 2.2, float whitePoint = 11.2, float saturation = 1)", "Tone map",
+            "Linear HDR light to the screen: exposure in stops, then a curve (0 ACES, 1 Reinhard, 2 Hable filmic with whitePoint,"
+                + " 3 exponential, 4 clip), saturation and the display gamma. The last step of a renderer of your own.", """
             vec3 c = max(color.rgb, vec3(0.0)) * exp2(exposure);
             int k = int(curve + 0.5);
             if (k == 0) c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);
             else if (k == 1) c = c / (1.0 + dot(c, vec3(0.2126, 0.7152, 0.0722)));
             else if (k == 2) {
                 vec3 x = c * 2.0;
-                c = ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.5) + 0.06) - 0.0666667) / 0.7251;
+                float wp = whitePoint;
+                float white = (wp * (0.15 * wp + 0.05) + 0.004) / (wp * (0.15 * wp + 0.5) + 0.06) - 0.0666667;
+                c = ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.5) + 0.06) - 0.0666667) / white;
             }
             else if (k == 3) c = vec3(1.0) - exp(-c);
-            return vec4(pow(clamp(c, vec3(0.0), vec3(1.0)), vec3(1.0 / 2.2)), color.a);""");
+            float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+            c = mix(vec3(l), c, saturation);
+            return vec4(pow(clamp(c, vec3(0.0), vec3(1.0)), vec3(1.0 / max(gamma, 0.1))), color.a);""");
     }
 
     /** Every built-in effect, in palette order. */

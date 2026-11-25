@@ -1463,6 +1463,7 @@ final class StudioModel {
             doc.nodes.clear();
             doc.functions.clear();
             doc.frames.clear();
+            doc.settings.clear();
             try {
                 Path tmp = Files.createTempFile("mosaic", ".json");
                 Files.writeString(tmp, json, StandardCharsets.UTF_8);
@@ -1470,6 +1471,7 @@ final class StudioModel {
                 Files.deleteIfExists(tmp);
                 doc.nodes.addAll(loaded.nodes);
                 doc.functions.addAll(loaded.functions);
+                doc.settings.putAll(loaded.settings);
                 doc.frames.addAll(loaded.frames);
                 doc.paint = loaded.paint;
                 doc.bedrayFunction = loaded.bedrayFunction;

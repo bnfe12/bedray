@@ -25,6 +25,13 @@ to Minecraft, or without it.
 | **Result** | The frame of the running game before and after the shader, side by side, split, or against an earlier step; record GIF / MP4, save frames. |
 | **Workflow** | Document tabs, Blender-like areas you can split, pop out and dock back, rebindable keys (also on the Russian layout), themes including OLED black, named undo history per tab. |
 
+## Every number is yours
+
+Built-in nodes take every number that changes the picture as an input with a default (distances such as where far
+shadows take over, colours, biases, strengths, speeds), so a value is never decided inside a node. The numbers under
+all nodes - sky model, sun path tilt, ray lengths, march limits, material colours - are **Graph settings**: click empty
+canvas, edit them in Properties; they are saved with the graph.
+
 ## Preview world
 
 The Preview renders the open graph over a **real scene**, not a picture: the blocks around the player when the game

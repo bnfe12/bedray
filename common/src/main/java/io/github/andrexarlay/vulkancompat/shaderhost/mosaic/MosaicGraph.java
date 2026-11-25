@@ -421,6 +421,10 @@ public final class MosaicGraph {
     private final Map<String, Kind> kinds;
     private final Map<String, MosaicFunction> functions;
     private final String outputId;
+    private Map<String, double[]> settings = Map.of();
+
+    /** Graph settings (MosaicSettings): only the keys the graph sets; the rest use their defaults. */
+    public Map<String, double[]> settings() { return settings; }
 
     private MosaicGraph(Map<String, Node> nodes, Map<String, Kind> kinds, Map<String, MosaicFunction> functions,
                         String outputId) {
@@ -485,6 +489,8 @@ public final class MosaicGraph {
             problems.add(new Problem(Severity.HINT, node, null, message, fix));
         }
 
+        Map<String, double[]> graphSettings = new LinkedHashMap<>();
+
         Analysis run(String json) {
             JsonObject root;
             try {
@@ -494,6 +500,7 @@ public final class MosaicGraph {
                 return done(null);
             }
             if (root.has("functions")) readFunctions(root.get("functions"));
+            if (root.has("settings")) graphSettings = MosaicSettings.read(root.get("settings"), msg -> error(null, null, msg, Fix.NONE));
             if (!root.has("nodes") || !root.get("nodes").isJsonArray()) {
                 error(null, null, "the graph needs a non-empty \"nodes\" array", Fix.NONE);
                 return done(null);
@@ -561,6 +568,7 @@ public final class MosaicGraph {
             if (g != null) g = new MosaicGraph(Collections.unmodifiableMap(new LinkedHashMap<>(nodes)),
                 Collections.unmodifiableMap(new LinkedHashMap<>(kinds)), Collections.unmodifiableMap(new LinkedHashMap<>(functions)),
                 outputId);
+            if (g != null) g.settings = Collections.unmodifiableMap(graphSettings);
             Cost cost = cost(reachable.isEmpty() ? nodes.keySet() : reachable);
             return new Analysis(g, List.copyOf(problems), Collections.unmodifiableMap(new LinkedHashMap<>(kinds)),
                 Collections.unmodifiableMap(new LinkedHashMap<>(functions)), Collections.unmodifiableSet(reachable), cost);

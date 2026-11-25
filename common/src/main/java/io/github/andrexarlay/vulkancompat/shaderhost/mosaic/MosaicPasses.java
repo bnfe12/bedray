@@ -157,6 +157,7 @@ public final class MosaicPasses {
         out.add("inputs", in);
         nodes.add(out);
         o.add("nodes", nodes);
+        if (!g.settings().isEmpty()) o.add("settings", MosaicSettings.toJson(g.settings()));
         if (!fns.isEmpty()) {
             JsonArray fa = new JsonArray();
             for (String f : fns) fa.add(g.functions().get(f).toJson());

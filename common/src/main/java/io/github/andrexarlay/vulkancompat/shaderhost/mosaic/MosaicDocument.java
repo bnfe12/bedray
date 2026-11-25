@@ -221,6 +221,20 @@ public final class MosaicDocument {
         return out;
     }
 
+    /** Graph settings (MosaicSettings, written as "settings"): only keys changed from their defaults. */
+    public final java.util.Map<String, double[]> settings = new java.util.LinkedHashMap<>();
+
+    /** Reads the graph settings of a mosaic.json text (lenient: unknown or malformed keys are left out). */
+    static java.util.Map<String, double[]> readSettings(String json) {
+        try {
+            JsonElement root = JsonParser.parseString(json);
+            if (!root.isJsonObject() || !root.getAsJsonObject().has("settings")) return new java.util.LinkedHashMap<>();
+            return MosaicSettings.read(root.getAsJsonObject().get("settings"), msg -> { });
+        } catch (RuntimeException e) {
+            return new java.util.LinkedHashMap<>();
+        }
+    }
+
     /** User functions of this graph (written as "functions" in mosaic.json). */
     public final List<FDef> functions = new ArrayList<>();
 
@@ -270,6 +284,7 @@ public final class MosaicDocument {
             String text = Files.readString(json, StandardCharsets.UTF_8);
             d.nodes.addAll(readNodes(text));
             d.functions.addAll(readFunctions(text));
+            d.settings.putAll(readSettings(text));
             d.frames.addAll(readFrames(text));
             d.paint = readPaint(text);
             JsonElement root = JsonParser.parseString(text);
@@ -388,6 +403,7 @@ public final class MosaicDocument {
             arr.add(o);
         }
         root.add("nodes", arr);
+        if (!settings.isEmpty()) root.add("settings", MosaicSettings.toJson(settings));
         if (!frames.isEmpty()) {
             JsonArray fr = new JsonArray();
             for (Frame f : frames) fr.add(f.toJson());
@@ -652,6 +668,8 @@ public final class MosaicDocument {
         nodes.addAll(restored);
         functions.clear();
         functions.addAll(readFunctions(state));
+        settings.clear();
+        settings.putAll(readSettings(state));
         frames.clear();
         frames.addAll(readFrames(state));
         paint = readPaint(state);

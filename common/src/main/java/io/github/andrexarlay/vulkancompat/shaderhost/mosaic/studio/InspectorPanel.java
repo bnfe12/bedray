@@ -140,6 +140,7 @@ final class InspectorPanel extends Panels.Listening {
             content.add(text("Click a node (or Tab / Alt+arrows) to edit it. Enter focuses this panel.", MUTED));
             content.add(Box.createVerticalStrut(8));
             content.add(text("Socket colors: grey float, green vec2, amber vec3, violet vec4, white several.", FAINT));
+            if (!model.rendererDoc() && !model.materialDoc()) graphSettings();
             return;
         }
         boolean fn = MosaicFunction.isFunctionType(n.type);
@@ -803,6 +804,65 @@ final class InspectorPanel extends Panels.Listening {
         s.setMaximumSize(new Dimension(Integer.MAX_VALUE, s.getPreferredSize().height));
         content.add(s);
         content.add(text("Each run gets the last result as acc and its number as i (0, 1, 2...).", FAINT));
+    }
+
+    /**
+     * Graph settings (MosaicSettings): the numbers every node builds on - sky model, sun path, ray lengths, march limits,
+     * material colours - edited per graph and saved with it. A value equal to the default is not written.
+     */
+    private void graphSettings() {
+        content.add(section("Graph settings"));
+        content.add(text("Numbers every node builds on (sky, sun path, ray lengths, material colours). Saved with this graph; Enter applies.", FAINT));
+        String group = null;
+        for (io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting s
+                : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.ALL) {
+            if (!s.group().equals(group)) {
+                group = s.group();
+                content.add(Box.createVerticalStrut(8));
+                JLabel g = text(group, TEXT);
+                g.setFont(UI_B);
+                content.add(g);
+            }
+            double[] cur = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(model.doc.settings, s);
+            if (s.size() == 45) {
+                var mats = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Material.values();
+                for (int k = 0; k < 15; k++) {
+                    final int at = k;
+                    settingRow(s, mats[k].label, new double[] {cur[k * 3], cur[k * 3 + 1], cur[k * 3 + 2]}, v -> {
+                        double[] all = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(model.doc.settings, s).clone();
+                        System.arraycopy(v, 0, all, at * 3, 3);
+                        return all;
+                    }, 3);
+                }
+            } else settingRow(s, s.label(), cur, v -> v, s.size());
+        }
+        content.add(Box.createVerticalStrut(6));
+        content.add(button("Reset graph settings", "Every graph setting back to its default", () -> model.edit("Reset graph settings",
+            () -> model.doc.settings.clear())));
+    }
+
+    private void settingRow(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting s, String label, double[] shown,
+                            java.util.function.UnaryOperator<double[]> into, int size) {
+        JLabel l = text(label, MUTED);
+        l.setToolTipText(s.help());
+        content.add(l);
+        JTextField f = field(numbers(shown));
+        f.setToolTipText(s.help() + (size == 3 ? "  (three numbers: r, g, b or x, y, z)" : ""));
+        f.addActionListener(ev -> {
+            double[] v = parse(f.getText());
+            if (v == null || v.length != size) {
+                f.setForeground(BAD);
+                return;
+            }
+            double[] all = into.apply(v);
+            model.edit(s.label() + ": " + f.getText().trim(), () -> {
+                if (java.util.Arrays.equals(all, s.def())) model.doc.settings.remove(s.key());
+                else model.doc.settings.put(s.key(), all);
+            });
+        });
+        f.setAlignmentX(0);
+        f.setMaximumSize(new Dimension(Integer.MAX_VALUE, f.getPreferredSize().height));
+        content.add(f);
     }
 
     /** Read buffer / Blur buffer / Kawase blur: which Buffer of this graph they read. */

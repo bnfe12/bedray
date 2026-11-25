@@ -121,10 +121,10 @@ public final class MosaicHeight {
             /** 1 when a ray from rel toward L clears the height field between tStart and tMax, 0 when terrain blocks it. */
             float mosaicFarShadow(vec3 rel, vec3 L, float tStart, float tMax) {
                 float t = tStart;
-                for (int i = 0; i < 96 && t < tMax; i++) {
+                for (int i = 0; i < ms_farShadowSteps && t < tMax; i++) {
                     vec3 q = rel + L * t;
-                    if (q.y < mosaicHeightAt(q) - 0.05) return 0.0;
-                    t += 1.0 + t * 0.03;
+                    if (q.y < mosaicHeightAt(q) - ms_farShadowBias) return 0.0;
+                    t += ms_farShadowStep + t * ms_farShadowGrowth;
                 }
                 return 1.0;
             }
@@ -149,10 +149,10 @@ public final class MosaicHeight {
             float mosaicFarShadow(float3 rel, float3 L, float tStart, float tMax)
             {
                 float t = tStart;
-                for (int i = 0; i < 96 && t < tMax; i++) {
+                for (int i = 0; i < ms_farShadowSteps && t < tMax; i++) {
                     float3 q = rel + L * t;
-                    if (q.y < mosaicHeightAt(q) - 0.05) return 0.0;
-                    t += 1.0 + t * 0.03;
+                    if (q.y < mosaicHeightAt(q) - ms_farShadowBias) return 0.0;
+                    t += ms_farShadowStep + t * ms_farShadowGrowth;
                 }
                 return 1.0;
             }

@@ -172,6 +172,15 @@ index = 1..64 runs, optional `init` and `uv` inputs) emits `acc = f(acc, i)` in 
 name or none for the scene colour, input `blend`, default 0.9) blends the reprojected previous frame clamped to the
 3x3 neighbourhood of its source.
 
+**Graph settings.** An optional `"settings": {key: [numbers]}` object sets the numbers the generated helpers use
+(`MosaicSettings`): `sunTilt`, `skyHorizon`, `skyZenith`, `skyNight`, `skyDayRise`, `skyDayOffset`, `sunDiscColor`,
+`sunDiscSharpness`, `sunDiscBrightness`, `shadowDirection`, `shadowRayStart`, `shadowRayLength`, `hitOffset`,
+`voxelSteps`, `materialPathSteps`, `farShadowSteps`, `farShadowStep`, `farShadowGrowth`, `farShadowBias`,
+`materialColors` (45 numbers: 15 rgb colours in material-class order). They are emitted as constants `ms_<key>`;
+missing keys use their defaults, unknown keys or wrong counts are errors. Every built-in node function takes its
+own tunables (distances, colours, biases, strengths, speeds) as inputs with defaults, so nothing that changes the
+picture is fixed inside the generator.
+
 **History buffers (feedback).** `mosaic.bufferPrev` (Buffer last frame; mask = a Buffer name, input `uv`) reads a
 Buffer as it was at the end of the previous frame, and `mosaic.accumulate` (mask = the Buffer it feeds, inputs
 `color`, `uv`, `frames` default 32) blends this frame's value into it: last frame's value at the reprojected
