@@ -621,7 +621,7 @@ final class StudioApp {
         if (tabStrip != null) tabStrip.repaint();
         Timer fit = new Timer(350, e -> {
             GraphPanel g = main == null ? null : findGraph(main.root);
-            if (g != null) g.fit();
+            if (g != null) g.fitReadable();
         });
         fit.setRepeats(false);
         fit.start();
@@ -645,7 +645,7 @@ final class StudioApp {
         if (tabStrip != null) tabStrip.repaint();
         Timer fit = new Timer(350, e -> {
             GraphPanel g = main == null ? null : findGraph(main.root);
-            if (g != null) g.fit();
+            if (g != null) g.fitReadable();
         });
         fit.setRepeats(false);
         fit.start();

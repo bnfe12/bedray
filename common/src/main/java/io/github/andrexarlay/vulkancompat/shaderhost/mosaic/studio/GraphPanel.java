@@ -797,6 +797,25 @@ final class GraphPanel extends JComponent {
     }
 
     /** Keeps the keyboard node on screen after keyboard navigation. */
+    /** Fit when that keeps nodes readable; a big graph instead opens at a readable zoom at its start (top left). */
+    void fitReadable() {
+        fit();
+        if (zoom >= 0.55 || model.doc.nodes.isEmpty()) return;
+        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE;
+        for (MosaicDocument.ENode n : model.doc.nodes) {
+            minX = Math.min(minX, n.x);
+            minY = Math.min(minY, n.y);
+        }
+        for (MosaicDocument.Frame f : model.doc.frames) {
+            minX = Math.min(minX, f.x);
+            minY = Math.min(minY, f.y);
+        }
+        zoom = 0.8;
+        panX = 40 - minX * zoom;
+        panY = 40 - minY * zoom;
+        repaint();
+    }
+
     void reveal(MosaicDocument.ENode n) {
         if (n == null) return;
         double sx = n.x * zoom + panX, sy = n.y * zoom + panY;
