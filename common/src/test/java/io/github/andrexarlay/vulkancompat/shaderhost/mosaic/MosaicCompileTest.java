@@ -180,4 +180,43 @@ class MosaicCompileTest {
         assertEquals(2, e.bodyLine(), r.errors() + "\n" + r.raw());
         assertTrue(e.message().contains("kk"), e.message());
     }
+
+    @Test
+    void colorAndVectorNodesCompileInGlslAndSlang() {
+        String json = """
+            {"nodes": [
+              {"id": "c", "type": "mosaic.sceneColor"},
+              {"id": "rgb", "type": "mosaic.swizzle", "mask": "rgb", "inputs": {"a": "c"}},
+              {"id": "vm", "type": "mosaic.vectorMath", "mask": "project", "inputs": {"a": "rgb"}, "defaults": {"b": [0.2, 0.7, 0.1]}},
+              {"id": "vd", "type": "mosaic.vectorMath", "mask": "dotProduct", "inputs": {"a": "rgb", "b": "vm"}},
+              {"id": "sep", "type": "mosaic.separate", "inputs": {"a": "c"}},
+              {"id": "hs", "type": "mosaic.hueSat", "inputs": {"color": "c", "hue": "sep.y"}},
+              {"id": "bc", "type": "mosaic.brightContrast", "inputs": {"color": "hs", "bright": "vd"}},
+              {"id": "ga", "type": "mosaic.gamma", "inputs": {"color": "bc"}},
+              {"id": "iv", "type": "mosaic.invert", "inputs": {"color": "ga", "fac": "sep.w"}},
+              {"id": "fr", "type": "mosaic.fresnel", "inputs": {"normal": "vm"}},
+              {"id": "mp", "type": "mosaic.mapping", "inputs": {"vector": "rgb"}, "defaults": {"rotation": [0.3, 0.2, 0.1]}},
+              {"id": "ss", "type": "mosaic.smoothstep", "inputs": {"x": "fr"}},
+              {"id": "bb", "type": "mosaic.blackbody", "defaults": {"temperature": [3000]}},
+              {"id": "m1", "type": "mosaic.mul", "inputs": {"a": "mp", "b": "bb"}},
+              {"id": "m2", "type": "mosaic.mul", "inputs": {"a": "m1", "b": "ss"}},
+              {"id": "s2", "type": "mosaic.separate", "inputs": {"a": "m2"}},
+              {"id": "v4", "type": "mosaic.vec", "size": 4, "inputs": {"x": "s2", "y": "s2.y", "z": "s2.z"}},
+              {"id": "mx", "type": "mosaic.mix", "inputs": {"a": "iv", "b": "v4", "t": "sep.z"}},
+              {"id": "o", "type": "mosaic.output", "inputs": {"color": "mx"}}
+            ]}""";
+        MosaicGraph.Analysis a = MosaicGraph.analyze(json);
+        assertNull(a.firstError(), String.valueOf(a.problems()));
+        assertCompiles("new colour / vector nodes (GLSL)", MosaicCodegen.generate(a.graph(), MosaicCodegen.Options.DEFAULT, false));
+        for (String op : MosaicGraph.VECTOR_OPS) {
+            MosaicGraph.Analysis b = MosaicGraph.analyze(json.replace("\"mask\": \"project\"", "\"mask\": \"" + op + "\""));
+            if (b.firstError() != null) continue; // a float result wired where a vector is wanted: the analyzer refuses it
+            assertCompiles("vectorMath " + op, MosaicCodegen.generate(b.graph(), MosaicCodegen.Options.DEFAULT, false));
+        }
+        java.nio.file.Path slangc = MosaicSlang.locate(null);
+        if (slangc != null) {
+            MosaicShaderCheck.Result r = MosaicSlang.compile(MosaicCodegen.generate(a.graph(), MosaicCodegen.Options.DEFAULT, true), slangc);
+            assertTrue(r.ok(), "Slang: " + r.errors());
+        }
+    }
 }

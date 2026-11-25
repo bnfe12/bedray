@@ -38,6 +38,16 @@ public final class MosaicEval {
             case "mosaic.noise.detail", "mosaic.wave.detail" -> new double[] {2.0};
             case "mosaic.checker.color1" -> new double[] {0.8, 0.8, 0.8, 1.0};
             case "mosaic.checker.color2" -> new double[] {0.2, 0.2, 0.2, 1.0};
+            case "mosaic.vectorMath.scale", "mosaic.hueSat.saturation", "mosaic.hueSat.value", "mosaic.hueSat.fac", "mosaic.gamma.gamma",
+                 "mosaic.invert.fac", "mosaic.smoothstep.edge1" -> new double[] {1.0};
+            case "mosaic.hueSat.hue" -> new double[] {0.5};
+            case "mosaic.hueSat.color", "mosaic.brightContrast.color", "mosaic.gamma.color", "mosaic.invert.color" -> new double[] {0.8, 0.8, 0.8, 1.0};
+            case "mosaic.fresnel.normal" -> new double[] {0.0, 0.0, 1.0};
+            case "mosaic.fresnel.view" -> new double[] {0.0, 0.0, -1.0};
+            case "mosaic.fresnel.ior" -> new double[] {1.45};
+            case "mosaic.mapping.scale" -> new double[] {1.0, 1.0, 1.0};
+            case "mosaic.blackbody.temperature" -> new double[] {6500.0};
+            case "mosaic.smoothstep.x" -> new double[] {0.5};
             default -> null;
         };
     }

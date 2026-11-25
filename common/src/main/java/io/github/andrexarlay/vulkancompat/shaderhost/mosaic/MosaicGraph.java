@@ -139,6 +139,8 @@ public final class MosaicGraph {
         "mosaic.abs", "mosaic.saturate", "mosaic.normalize", "mosaic.length", "mosaic.lum",
         // Blender-style utility nodes
         "mosaic.math", "mosaic.mixColor", "mosaic.mapRange", "mosaic.colorRamp", "mosaic.reroute",
+        "mosaic.vectorMath", "mosaic.separate", "mosaic.hueSat", "mosaic.brightContrast", "mosaic.gamma", "mosaic.invert",
+        "mosaic.fresnel", "mosaic.mapping", "mosaic.smoothstep", "mosaic.blackbody",
         // procedural textures
         "mosaic.noise", "mosaic.voronoi", "mosaic.whiteNoise", "mosaic.checker", "mosaic.wave", "mosaic.gradient",
         // multi-pass: write a named buffer, read it (any uv), the previous frame; weather and sky (binding 16)
@@ -223,6 +225,18 @@ public final class MosaicGraph {
         m.put("mosaic.mapRange", List.of(new Port("value", Kind.V4, false), new Port("fromMin", Kind.F, false),
             new Port("fromMax", Kind.F, false), new Port("toMin", Kind.F, false), new Port("toMax", Kind.F, false)));
         m.put("mosaic.colorRamp", List.of(new Port("fac", Kind.F, false)));
+        m.put("mosaic.vectorMath", List.of(new Port("a", Kind.V3, false), new Port("b", Kind.V3, false), new Port("scale", Kind.F, false)));
+        m.put("mosaic.separate", List.of(new Port("a", Kind.V4, true)));
+        m.put("mosaic.hueSat", List.of(new Port("color", Kind.V4, false), new Port("hue", Kind.F, false), new Port("saturation", Kind.F, false),
+            new Port("value", Kind.F, false), new Port("fac", Kind.F, false)));
+        m.put("mosaic.brightContrast", List.of(new Port("color", Kind.V4, false), new Port("bright", Kind.F, false), new Port("contrast", Kind.F, false)));
+        m.put("mosaic.gamma", List.of(new Port("color", Kind.V4, false), new Port("gamma", Kind.F, false)));
+        m.put("mosaic.invert", List.of(new Port("color", Kind.V4, false), new Port("fac", Kind.F, false)));
+        m.put("mosaic.fresnel", List.of(new Port("normal", Kind.V3, false), new Port("view", Kind.V3, false), new Port("ior", Kind.F, false)));
+        m.put("mosaic.mapping", List.of(new Port("vector", Kind.V3, false), new Port("location", Kind.V3, false), new Port("rotation", Kind.V3, false),
+            new Port("scale", Kind.V3, false)));
+        m.put("mosaic.smoothstep", List.of(new Port("x", Kind.V4, false), new Port("edge0", Kind.F, false), new Port("edge1", Kind.F, false)));
+        m.put("mosaic.blackbody", List.of(new Port("temperature", Kind.F, false)));
         m.put("mosaic.reroute", List.of(new Port("a", Kind.V4, true)));
         m.put("mosaic.noise", List.of(new Port("vector", Kind.V3, false), new Port("scale", Kind.F, false),
             new Port("detail", Kind.F, false), new Port("roughness", Kind.F, false), new Port("distortion", Kind.F, false)));
@@ -253,7 +267,8 @@ public final class MosaicGraph {
         "mosaic.noise", orderedKinds("color", Kind.V3),
         "mosaic.voronoi", orderedKinds("color", Kind.V3, "position", Kind.V3),
         "mosaic.whiteNoise", orderedKinds("color", Kind.V3),
-        "mosaic.checker", orderedKinds("fac", Kind.F));
+        "mosaic.checker", orderedKinds("fac", Kind.F),
+        "mosaic.separate", orderedKinds("y", Kind.F, "z", Kind.F, "w", Kind.F));
 
     private static Map<String, Kind> orderedKinds(Object... pairs) {
         Map<String, Kind> m = new LinkedHashMap<>();
@@ -302,6 +317,12 @@ public final class MosaicGraph {
         "lighten", "difference", "divide", "softLight", "linearLight", "burn", "dodge");
 
     public static final List<String> RAMP_MODES = List.of("linear", "constant", "ease");
+    /** Operations of {@code mosaic.vectorMath} (Blender's Vector Math), in menu order. */
+    public static final List<String> VECTOR_OPS = List.of("add", "subtract", "multiply", "divide", "crossProduct", "project", "reflect",
+        "dotProduct", "distance", "length", "scale", "normalize", "absolute", "minimum", "maximum", "floor", "ceil", "fraction", "modulo",
+        "snap", "sine", "cosine", "tangent");
+    /** Vector Math operations whose result is a float. */
+    public static final Set<String> VECTOR_SCALAR = Set.of("dotProduct", "distance", "length");
     public static final List<String> GRADIENT_MODES = List.of("linear", "quadratic", "easing", "diagonal", "spherical", "radial");
     public static final List<String> WAVE_MODES = List.of("bands", "rings");
 
@@ -344,6 +365,8 @@ public final class MosaicGraph {
         return switch (type) {
             case "mosaic.math", "mosaic.mixColor" -> port.equals("a") || port.equals("b");
             case "mosaic.mapRange" -> port.equals("value");
+            case "mosaic.separate" -> port.equals("a");
+            case "mosaic.smoothstep" -> port.equals("x");
             case "mosaic.reroute" -> port.equals("a");
             case "mat.bsdf" -> port.equals("baseColor");
             default -> false;
@@ -760,6 +783,7 @@ public final class MosaicGraph {
                 case "mosaic.math" -> mask == null || MATH_OPS.contains(mask) ? null : "math operation must be one of " + MATH_OPS;
                 case "mosaic.mixColor" -> mask == null || BLEND_MODES.contains(mask) ? null : "blend mode must be one of " + BLEND_MODES;
                 case "mosaic.colorRamp" -> mask == null || RAMP_MODES.contains(mask) ? null : "interpolation must be one of " + RAMP_MODES;
+                case "mosaic.vectorMath" -> mask == null || VECTOR_OPS.contains(mask) ? null : "operation must be one of " + VECTOR_OPS;
                 case "mosaic.gradient" -> mask == null || GRADIENT_MODES.contains(mask) ? null : "gradient type must be one of " + GRADIENT_MODES;
                 case "mosaic.wave" -> mask == null || WAVE_MODES.contains(mask) ? null : "wave type must be one of " + WAVE_MODES;
                 default -> null;
@@ -902,6 +926,14 @@ public final class MosaicGraph {
                 }
                 case "mosaic.reroute" -> operand(n, "a", visiting);
                 case "mosaic.colorRamp", "mosaic.checker" -> Kind.V4;
+                case "mosaic.vectorMath" -> VECTOR_SCALAR.contains(n.mask() == null ? "add" : n.mask()) ? Kind.F : Kind.V3;
+                case "mosaic.separate", "mosaic.fresnel" -> Kind.F;
+                case "mosaic.hueSat", "mosaic.brightContrast", "mosaic.gamma", "mosaic.invert" -> Kind.V4;
+                case "mosaic.mapping", "mosaic.blackbody" -> Kind.V3;
+                case "mosaic.smoothstep" -> {
+                    Kind k = operand(n, "x", visiting);
+                    yield k == null ? Kind.F : k;
+                }
                 case "mosaic.noise", "mosaic.voronoi", "mosaic.whiteNoise", "mosaic.wave", "mosaic.gradient" -> {
                     for (String port : n.inputs().keySet()) operand(n, port, visiting);
                     yield Kind.F;

@@ -738,6 +738,7 @@ final class InspectorPanel extends Panels.Listening {
                 modeCombo(n, "Interpolation", java.util.List.of("linear", "smooth"), "linear");
                 clampBox(n);
             }
+            case "mosaic.vectorMath" -> modeCombo(n, "Operation", MosaicGraph.VECTOR_OPS, "add");
             case "mosaic.colorRamp" -> {
                 modeCombo(n, "Interpolation", MosaicGraph.RAMP_MODES, "linear");
                 rampEditor(n);

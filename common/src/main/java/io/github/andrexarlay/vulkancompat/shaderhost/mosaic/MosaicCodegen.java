@@ -786,6 +786,26 @@ public final class MosaicCodegen {
             shadow(o, p, n, slang);
             return;
         }
+        if (n.type().equals("mosaic.separate")) {
+            String a = as(in(p, n, "a"), inKind(p, n, "a"), Kind.V4, slang), id = "g_" + n.id(), v4 = slang ? "float4" : "vec4";
+            o.a("    " + v4 + " " + id + "_v = " + a + ";\n");
+            o.a("    float " + id + " = " + id + "_v.x, " + id + "_y = " + id + "_v.y, " + id + "_z = " + id + "_v.z, " + id + "_w = " + id + "_v.w;\n");
+            return;
+        }
+        if (n.type().equals("mosaic.hueSat")) {
+            hueSat(o, p, n, slang);
+            return;
+        }
+        if (n.type().equals("mosaic.mapping")) {
+            String v3 = slang ? "float3" : "vec3", id = "g_" + n.id();
+            o.a("    " + v3 + " " + id + " = " + in(p, n, "vector") + " * " + in(p, n, "scale") + ";\n");
+            o.a("    { " + v3 + " r = " + in(p, n, "rotation") + "; float cx = cos(r.x), sx = sin(r.x), cy = cos(r.y), sy = sin(r.y), cz = cos(r.z), sz = sin(r.z);\n");
+            o.a("      " + id + " = " + v3 + "(" + id + ".x, cx * " + id + ".y - sx * " + id + ".z, sx * " + id + ".y + cx * " + id + ".z);\n");
+            o.a("      " + id + " = " + v3 + "(cy * " + id + ".x + sy * " + id + ".z, " + id + ".y, -sy * " + id + ".x + cy * " + id + ".z);\n");
+            o.a("      " + id + " = " + v3 + "(cz * " + id + ".x - sz * " + id + ".y, sz * " + id + ".x + cz * " + id + ".y, " + id + ".z); }\n");
+            o.a("    " + id + " += " + in(p, n, "location") + ";\n");
+            return;
+        }
         o.a("    " + type + " g_" + n.id() + " = " + expr(g, p, n, k, slang) + ";\n");
     }
 
@@ -851,6 +871,33 @@ public final class MosaicCodegen {
             case "mosaic.math" -> mathExpr(p, n, k, sl);
             case "mosaic.mixColor" -> mixExpr(p, n, k, sl);
             case "mosaic.mapRange" -> mapRangeExpr(p, n, k, sl);
+            case "mosaic.vectorMath" -> vectorMathExpr(p, n, sl);
+            case "mosaic.brightContrast" -> {
+                String c = in(p, n, "color"), ct = in(p, n, "contrast");
+                yield (sl ? "float4" : "vec4") + "(max((1.0 + " + ct + ") * (" + c + ").rgb + (" + in(p, n, "bright") + " - " + ct + " * 0.5), 0.0), (" + c + ").a)";
+            }
+            case "mosaic.gamma" -> {
+                String c = in(p, n, "color");
+                yield (sl ? "float4" : "vec4") + "(pow(max((" + c + ").rgb, 0.0), " + (sl ? "float3" : "vec3") + "(" + in(p, n, "gamma") + ")), (" + c + ").a)";
+            }
+            case "mosaic.invert" -> {
+                String c = in(p, n, "color");
+                yield (sl ? "lerp(" : "mix(") + c + ", " + (sl ? "float4" : "vec4") + "(1.0 - (" + c + ").rgb, (" + c + ").a), " + in(p, n, "fac") + ")";
+            }
+            case "mosaic.fresnel" -> {
+                String ior = in(p, n, "ior");
+                String f0 = "pow((" + ior + " - 1.0) / (" + ior + " + 1.0), 2.0)";
+                String cosT = "clamp(abs(dot(normalize(" + in(p, n, "normal") + "), normalize(" + in(p, n, "view") + "))), 0.0, 1.0)";
+                yield "(" + f0 + " + (1.0 - " + f0 + ") * pow(1.0 - " + cosT + ", 5.0))";
+            }
+            case "mosaic.smoothstep" -> "smoothstep(" + in(p, n, "edge0") + ", " + in(p, n, "edge1") + ", " + in(p, n, "x") + ")";
+            case "mosaic.blackbody" -> {
+                String t = "(" + in(p, n, "temperature") + " / 100.0)", v3 = sl ? "float3" : "vec3";
+                yield v3 + "(" + t + " <= 66.0 ? 1.0 : clamp(1.29293618606 * pow(max(" + t + " - 60.0, 1e-3), -0.1332047592), 0.0, 1.0), "
+                    + t + " <= 66.0 ? clamp(0.39008157876 * log(max(" + t + ", 1e-3)) - 0.63184144378, 0.0, 1.0)"
+                    + " : clamp(1.12989086089 * pow(max(" + t + " - 60.0, 1e-3), -0.0755148492), 0.0, 1.0), "
+                    + t + " >= 66.0 ? 1.0 : (" + t + " <= 19.0 ? 0.0 : clamp(0.54320678911 * log(max(" + t + " - 10.0, 1e-3)) - 1.19625408914, 0.0, 1.0)))";
+            }
             case "mosaic.whiteNoise" -> "mosaicHash31(" + vector(p, n, sl) + ")";
             case "mosaic.wave" -> "mosaicWave(" + vector(p, n, sl) + " * " + in(p, n, "scale") + ", " + in(p, n, "distortion") + ", "
                 + in(p, n, "detail") + ", " + ("rings".equals(n.mask()) ? "1.0" : "0.0") + ")";
@@ -968,6 +1015,51 @@ public final class MosaicCodegen {
         };
         String e = lerp + a + ", (" + target + "), " + f + ")";
         return n.clampFlag() ? "clamp(" + e + ", 0.0, 1.0)" : e;
+    }
+
+    /** Blender's Vector Math on vec3 (dot, distance and length give a float). */
+    private static String vectorMathExpr(Plan p, Node n, boolean sl) {
+        String a = in(p, n, "a"), b = in(p, n, "b"), op = n.mask() == null ? "add" : n.mask();
+        return switch (op) {
+            case "subtract" -> "(" + a + " - " + b + ")";
+            case "multiply" -> "(" + a + " * " + b + ")";
+            case "divide" -> "(" + a + " / " + b + ")";
+            case "crossProduct" -> "cross(" + a + ", " + b + ")";
+            case "project" -> "(dot(" + a + ", " + b + ") / max(dot(" + b + ", " + b + "), 1e-8) * " + b + ")";
+            case "reflect" -> "reflect(" + a + ", normalize(" + b + "))";
+            case "dotProduct" -> "dot(" + a + ", " + b + ")";
+            case "distance" -> "distance(" + a + ", " + b + ")";
+            case "length" -> "length(" + a + ")";
+            case "scale" -> "(" + a + " * " + in(p, n, "scale") + ")";
+            case "normalize" -> "normalize(" + a + ")";
+            case "absolute" -> "abs(" + a + ")";
+            case "minimum" -> "min(" + a + ", " + b + ")";
+            case "maximum" -> "max(" + a + ", " + b + ")";
+            case "floor" -> "floor(" + a + ")";
+            case "ceil" -> "ceil(" + a + ")";
+            case "fraction" -> (sl ? "frac(" : "fract(") + a + ")";
+            case "modulo" -> "(" + a + " - " + b + " * floor(" + a + " / " + b + "))";
+            case "snap" -> "(floor(" + a + " / " + b + ") * " + b + ")";
+            case "sine" -> "sin(" + a + ")";
+            case "cosine" -> "cos(" + a + ")";
+            case "tangent" -> "tan(" + a + ")";
+            default -> "(" + a + " + " + b + ")";
+        };
+    }
+
+    /** Blender's Hue/Saturation/Value: through HSV and back, blended in by fac; alpha kept. */
+    private static void hueSat(Out o, Plan p, Node n, boolean sl) {
+        String v4 = sl ? "float4" : "vec4", v3 = sl ? "float3" : "vec3", mix = sl ? "lerp(" : "mix(", fr = sl ? "frac(" : "fract(", id = "g_" + n.id();
+        o.a("    " + v4 + " " + id + ";\n    { " + v4 + " c = " + in(p, n, "color") + ";\n");
+        o.a("      " + v4 + " K = " + v4 + "(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);\n");
+        o.a("      " + v4 + " pp = " + mix + v4 + "(c.bg, K.wz), " + v4 + "(c.gb, K.xy), step(c.b, c.g));\n");
+        o.a("      " + v4 + " q = " + mix + v4 + "(pp.xyw, c.r), " + v4 + "(c.r, pp.yzx), step(pp.x, c.r));\n");
+        o.a("      float d = q.x - min(q.w, q.y);\n");
+        o.a("      " + v3 + " hsv = " + v3 + "(abs(q.z + (q.w - q.y) / (6.0 * d + 1e-10)), d / (q.x + 1e-10), q.x);\n");
+        o.a("      hsv.x = " + fr + "hsv.x + " + in(p, n, "hue") + " - 0.5); hsv.y = clamp(hsv.y * " + in(p, n, "saturation") + ", 0.0, 1.0); hsv.z *= "
+            + in(p, n, "value") + ";\n");
+        o.a("      " + v3 + " rgb = hsv.z * " + mix + v3 + "(1.0), clamp(abs(" + fr + "hsv.xxx + " + v3 + "(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0), hsv.y);\n");
+        o.a("      " + id + " = " + mix + "c, " + v4 + "(rgb, c.a), " + in(p, n, "fac") + "); }\n");
     }
 
     private static String mapRangeExpr(Plan p, Node n, Kind k, boolean sl) {

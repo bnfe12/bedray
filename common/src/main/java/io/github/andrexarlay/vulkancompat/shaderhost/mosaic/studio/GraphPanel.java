@@ -270,6 +270,7 @@ final class GraphPanel extends JComponent {
             case "mosaic.colorRamp" -> (n.value == null ? 2 : n.value.length / 5) + " stops, " + (n.mask == null ? "linear" : n.mask);
             case "mosaic.gradient" -> n.mask == null ? "linear" : n.mask;
             case "mosaic.wave" -> n.mask == null ? "bands" : n.mask;
+            case "mosaic.vectorMath" -> n.mask == null ? "add" : n.mask;
             case MosaicSlangGraph.LET, MosaicSlangGraph.PARAM, MosaicSlangGraph.OUT -> n.mask == null ? "" : n.mask.substring(0, Math.max(0, n.mask.lastIndexOf(' ')));
             case MosaicSlangGraph.RESULT -> n.mask == null ? "" : "returns " + n.mask;
             case MosaicSlangGraph.SETTING -> {
