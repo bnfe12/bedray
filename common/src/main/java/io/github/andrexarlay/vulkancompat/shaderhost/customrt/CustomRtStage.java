@@ -350,7 +350,8 @@ public final class CustomRtStage {
 
     /**
      * A multi-pass graph: {@link io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses#plan} orders the Buffer
-     * passes; every pass is compiled on its own (studio SPIR-V does not cover passes, so slangc in game or GLSL) and checked
+     * passes; every pass is compiled on its own (the studio's SPIR-V of that pass when its hash matches, else slangc in game,
+     * else GLSL) and checked
      * against the contract. Returns the final pass; the Buffer passes are left in {@link #pendingChain}.
      */
     private static VulkanGlslPackCompiler.Compiled compileChain(MosaicGraph graph, String root, Set<String> entries, PackSource src,
@@ -364,7 +365,8 @@ public final class CustomRtStage {
             MosaicGraph pg = MosaicGraph.parse(p.json());
             String glsl = mosaicGlsl(pg);
             signature.append("// pass ").append(p.name()).append(" 1/").append(p.scale()).append('\n').append(glsl);
-            VulkanGlslPackCompiler.Compiled c = slangStage(pg, root, entries, src);
+            VulkanGlslPackCompiler.Compiled c = slangStage(pg, root, entries, src,
+                io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.prebuiltName(p.name()));
             if (c == null) {
                 IncludeExpander.Reader reader = e -> e.endsWith(MOSAIC_ENTRY) ? glsl : packReader.read(e);
                 try {
@@ -402,13 +404,19 @@ public final class CustomRtStage {
     }
 
     /** How the last mosaic graph was turned into SPIR-V: "studio SPIR-V", "slangc in game" or "GLSL (shaderc)". */
-    private static String lastMosaicCompiler = "";
+    static String lastMosaicCompiler = "";
 
     /**
      * The Slang paths for a graph: SPIR-V the studio built for exactly this graph (sidecar hash of the generated Slang),
      * else slangc in the game when it is installed and -Dbedray.mosaic.slang is not "off". Null falls back to GLSL.
      */
     private static VulkanGlslPackCompiler.Compiled slangStage(MosaicGraph graph, String root, Set<String> entries, PackSource src) {
+        return slangStage(graph, root, entries, src, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT);
+    }
+
+    /** @param prebuiltName the studio's SPIR-V file for this graph or pass (MosaicSlang.prebuiltName) */
+    private static VulkanGlslPackCompiler.Compiled slangStage(MosaicGraph graph, String root, Set<String> entries, PackSource src,
+                                                              String prebuiltName) {
         String mode = System.getProperty("bedray.mosaic.slang", "auto");
         if (mode.equals("off")) {
             lastMosaicCompiler = "GLSL (shaderc)";
@@ -418,8 +426,8 @@ public final class CustomRtStage {
             new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicCodegen.Options(debugPreview, debugNan, true);
         MosaicCodegen.Generated gen = MosaicCodegen.generate(graph, options, true);
         String hash = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sourceHash(gen.source());
-        String spv = root + "bedray/" + io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT;
-        String info = root + "bedray/" + io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT_INFO;
+        String spv = root + "bedray/" + prebuiltName;
+        String info = root + "bedray/" + prebuiltName + ".json";
         try {
             if (entries.contains(spv) && entries.contains(info) && hash.equals(
                 io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sidecarHash(new String(src.read(info), StandardCharsets.UTF_8)))) {

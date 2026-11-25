@@ -127,6 +127,11 @@ public final class MosaicSlang {
     /** Files the studio writes next to mosaic.json: the SPIR-V and a sidecar naming the graph it was built from. */
     public static final String PREBUILT = "mosaic.spv", PREBUILT_INFO = "mosaic.spv.json";
 
+    /** The prebuilt SPIR-V of one pass of a multi-pass graph: the final image is mosaic.spv, Buffer x is mosaic.pass.x.spv. */
+    public static String prebuiltName(String pass) {
+        return pass == null ? PREBUILT : "mosaic.pass." + pass + ".spv";
+    }
+
     /** Options the prebuilt SPIR-V is generated with (no debug view); the game hashes the same source to trust it. */
     public static final MosaicCodegen.Options PREBUILT_OPTIONS = new MosaicCodegen.Options(null, false, true);
 

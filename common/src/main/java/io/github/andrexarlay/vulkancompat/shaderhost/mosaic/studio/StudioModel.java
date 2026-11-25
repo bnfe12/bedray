@@ -1511,53 +1511,71 @@ final class StudioModel {
         if (g == null || g.isMaterial() || g.isRenderer() || g.isPackMap() || g.isFunctionGraph() || doc.bedrayFunction != null) return;
         Path bedray = doc.file.getParent();
         Path cacheDir = bedray.resolve(".studio").resolve("cache");
+        // a multi-pass graph ships one pair per pass (mosaic.pass.<buffer>.spv, the final image as mosaic.spv)
+        java.util.List<java.util.Map.Entry<MosaicGraph, String>> jobs = new java.util.ArrayList<>();
+        if (g.multiPass()) {
+            try {
+                for (var p : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.plan(g).passes())
+                    jobs.add(java.util.Map.entry(MosaicGraph.parse(p.json()), io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.prebuiltName(p.name())));
+            } catch (RuntimeException e) {
+                return;
+            }
+        } else {
+            jobs.add(java.util.Map.entry(g, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT));
+        }
         slangWorker.execute(() -> {
             try {
-                MosaicCodegen.Generated gen = MosaicCodegen.generate(g, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT_OPTIONS, true);
-                String hash = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sourceHash(gen.source());
-                Path info = bedray.resolve(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT_INFO);
-                Path spv = bedray.resolve(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT);
-                if (Files.exists(info) && Files.exists(spv) && hash.equals(
-                    io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sidecarHash(Files.readString(info)))) return;
-                Path cached = cacheDir.resolve(hash + ".slang.spv");
-                byte[] bytes;
-                long ms;
-                if (Files.exists(cached)) {
-                    bytes = Files.readAllBytes(cached);
-                    ms = 0;
-                } else {
-                    Path slangc = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.locate(StudioUi.settings.slangcPath);
-                    if (slangc == null) {
-                        slangStatus = "Slang: slangc not found, the game compiles GLSL (Settings > Compiler)";
-                        javax.swing.SwingUtilities.invokeLater(this::fire);
-                        return;
-                    }
-                    MosaicShaderCheck.Result r = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.compile(gen, slangc);
-                    if (!r.ok()) {
-                        slangStatus = "Slang failed (" + r.errors().get(0).where() + "): " + r.errors().get(0).message();
-                        javax.swing.SwingUtilities.invokeLater(this::fire);
-                        return;
-                    }
-                    bytes = r.spirv();
-                    ms = r.micros() / 1000;
-                    Files.createDirectories(cacheDir);
-                    Files.write(cached, bytes);
-                }
-                // SPIR-V first, sidecar last: the game trusts the pair only once the hash matches
-                Path tmp = bedray.resolve(spv.getFileName() + ".tmp");
-                Files.write(tmp, bytes);
-                Files.move(tmp, spv, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
-                Path tmpInfo = bedray.resolve(info.getFileName() + ".tmp");
-                Files.writeString(tmpInfo, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sidecar(hash,
-                    new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.Result("slangc (Mosaic Studio)", bytes.length)));
-                Files.move(tmpInfo, info, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
-                slangStatus = "Slang: " + bytes.length / 1024 + " KB SPIR-V for the game" + (ms > 0 ? " (" + ms + " ms)" : " (cached)");
-                javax.swing.SwingUtilities.invokeLater(this::fire);
+                for (var job : jobs) if (!shipOne(job.getKey(), bedray, cacheDir, job.getValue())) return;
             } catch (Exception e) {
                 slangStatus = "Slang: " + e.getMessage();
                 javax.swing.SwingUtilities.invokeLater(this::fire);
             }
         });
+    }
+
+    /** One SPIR-V + sidecar pair next to mosaic.json; false when slangc is missing or refused the graph (status says why). */
+    private boolean shipOne(MosaicGraph g, Path bedray, Path cacheDir, String spvName) throws Exception {
+        MosaicCodegen.Generated gen = MosaicCodegen.generate(g, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT_OPTIONS, true);
+        String hash = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sourceHash(gen.source());
+        Path info = bedray.resolve(spvName + ".json");
+        Path spv = bedray.resolve(spvName);
+        if (Files.exists(info) && Files.exists(spv) && hash.equals(
+            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sidecarHash(Files.readString(info)))) return true;
+        Path cached = cacheDir.resolve(hash + ".slang.spv");
+        byte[] bytes;
+        long ms;
+        if (Files.exists(cached)) {
+            bytes = Files.readAllBytes(cached);
+            ms = 0;
+        } else {
+            Path slangc = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.locate(StudioUi.settings.slangcPath);
+            if (slangc == null) {
+                slangStatus = "Slang: slangc not found, the game compiles GLSL (Settings > Compiler)";
+                javax.swing.SwingUtilities.invokeLater(this::fire);
+                return false;
+            }
+            MosaicShaderCheck.Result r = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.compile(gen, slangc);
+            if (!r.ok()) {
+                slangStatus = "Slang failed" + (spvName.equals(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT) ? "" : " in " + spvName) + " (" + r.errors().get(0).where() + "): " + r.errors().get(0).message();
+                javax.swing.SwingUtilities.invokeLater(this::fire);
+                return false;
+            }
+            bytes = r.spirv();
+            ms = r.micros() / 1000;
+            Files.createDirectories(cacheDir);
+            Files.write(cached, bytes);
+        }
+        // SPIR-V first, sidecar last: the game trusts the pair only once the hash matches
+        Path tmp = bedray.resolve(spv.getFileName() + ".tmp");
+        Files.write(tmp, bytes);
+        Files.move(tmp, spv, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        Path tmpInfo = bedray.resolve(info.getFileName() + ".tmp");
+        Files.writeString(tmpInfo, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sidecar(hash,
+            new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.Result("slangc (Mosaic Studio)", bytes.length)));
+        Files.move(tmpInfo, info, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        slangStatus = "Slang: " + bytes.length / 1024 + " KB SPIR-V for the game" + (ms > 0 ? " (" + ms + " ms)" : " (cached)");
+        javax.swing.SwingUtilities.invokeLater(this::fire);
+        return true;
     }
 
     // ================================================================== game link (result frames)

@@ -102,6 +102,47 @@ class CustomRtChainTest {
     }
 
     @Test
+    void studioSpirvOfEveryPassIsTakenByTheGame() throws Exception {
+        java.nio.file.Path slangc = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.locate(System.getProperty("mosaic.slangc"));
+        org.junit.jupiter.api.Assumptions.assumeTrue(slangc != null, "slangc not installed");
+        Path pack = Files.createTempDirectory("mosaic-chain-spv");
+        Path bedray = Files.createDirectories(pack.resolve("shaders/bedray"));
+        Files.writeString(bedray.resolve("mosaic.json"), BLOOM_RAIN, StandardCharsets.UTF_8);
+        var plan = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.plan(
+            io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph.parse(BLOOM_RAIN));
+        for (var p : plan.passes()) { // what Mosaic Studio ships next to mosaic.json
+            var gen = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicCodegen.generate(
+                io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph.parse(p.json()),
+                io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.PREBUILT_OPTIONS, true);
+            var r = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.compile(gen, slangc);
+            assertTrue(r.ok(), p.name() + ": " + r.errors());
+            String name = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.prebuiltName(p.name());
+            Files.write(bedray.resolve(name), r.spirv());
+            Files.writeString(bedray.resolve(name + ".json"), io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sidecar(
+                io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.sourceHash(gen.source()),
+                new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.Result("test", r.spirv().length)));
+        }
+        String previous = System.getProperty("bedray.mosaic.slang");
+        System.clearProperty("bedray.mosaic.slang");
+        String previousSlangc = System.getProperty("bedray.slangc");
+        System.setProperty("bedray.slangc", pack.resolve("no-slangc-here.exe").toString()); // the game must not need slangc
+        try (PackSource src = PackSource.open(pack, ScanLimits.defaults())) {
+            VulkanGlslPackCompiler.Compiled last = CustomRtStage.compileStage(src, CustomRtStage.MOSAIC);
+            assertEquals("studio SPIR-V", CustomRtStage.lastMosaicCompiler);
+            assertNull(CustomRtStage.validate(last));
+            assertEquals(2, CustomRtStage.pendingChain.size());
+            for (CustomRtExecutor.ChainPass p : CustomRtStage.pendingChain) {
+                assertTrue(p.compiled().entry().endsWith(".spv"), "pass " + p.binding() + " from " + p.compiled().entry());
+                assertNull(CustomRtStage.validate(p.compiled()));
+            }
+        } finally {
+            if (previous != null) System.setProperty("bedray.mosaic.slang", previous);
+            if (previousSlangc == null) System.clearProperty("bedray.slangc");
+            else System.setProperty("bedray.slangc", previousSlangc);
+        }
+    }
+
+    @Test
     void rasterDepthPassCompilesWithItsThreeBindings() throws Exception {
         java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler.compile(CustomRtExecutor.RASTER_DEPTH_GLSL,
             org.lwjgl.util.shaderc.Shaderc.shaderc_compute_shader, "raster-depth");
