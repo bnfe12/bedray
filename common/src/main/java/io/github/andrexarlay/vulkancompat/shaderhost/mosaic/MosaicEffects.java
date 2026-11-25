@@ -233,7 +233,7 @@ public final class MosaicEffects {
             if (m == 2.0 || m == 13.0) c += albedo * 1.5;
             return vec4(c, 1.0);""");
         add("Rendering", "vec4 voxelSunShadow(vec4 color, vec2 uv, float darkness = 0.55, float maxDistance = 64)",
-            "Sun shadows (voxels)", "Shadows of the sun (the moon at night) traced through the world volume on top of"
+            "Sun shadows (voxels)", "Shadows of the sun (the moon at night) traced through the world volume, then the height field for far hills and trees, on top of"
                 + " the image: works with every renderer, no ray tracing hardware needed. Caves keep their own darkness.", """
             float t = mosaicDepth(uv);
             if (t >= 1.0e5) return color;
@@ -247,7 +247,7 @@ public final class MosaicEffects {
             if (dot(n, L) > 0.0) {
                 vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * (0.03 + t * 0.004);
                 float h = mosaicVoxelTrace(p, L, maxDistance, n2, m2);
-                lit = (h < 0.0 || h < 0.35) ? 1.0 : 0.0;
+                lit = h >= 0.35 ? 0.0 : mosaicFarShadow(p, L, t > 20.0 ? 1.5 : 20.0, 192.0);
             }
             float k = darkness * strength * clamp(mosaicHitSkyLight(uv), 0.0, 1.0);
             return vec4(color.rgb * mix(1.0 - k, 1.0, lit), color.a);""");
@@ -402,7 +402,9 @@ public final class MosaicEffects {
             // hit right at the start is the pixel's own block, not a caster
             vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * (0.03 + t * 0.004);
             float h = mosaicVoxelTrace(p, L, maxDistance, n2, m2);
-            return (h < 0.0 || h < 0.35) ? 1.0 : 0.0;""");
+            if (h >= 0.35) return 0.0;
+            // past the world volume: hills and trees of the height field (near pixels start where the volume ends)
+            return mosaicFarShadow(p, L, t > 20.0 ? 1.5 : 20.0, 192.0);""");
         add("Shading", "float voxelDistance(vec3 origin, vec3 dir, float maxDistance = 96)", "Voxel distance",
             "Distance along a ray to the first solid block of the world volume (-1 = none).", """
             vec3 n;

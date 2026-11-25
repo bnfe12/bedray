@@ -251,6 +251,6 @@ BEDRAY_LAUNCHER_LIBRARIES = Freesm libraries (NeoForge jars are not installed on
 In-game check: Freesm instance Mosaic-Bedray-26.3, JvmArgs `-Dvkbridge.autotest=iris -Dbedray.customrt=<pack>`, shots in
 `<instance>/minecraft/autotest/iris/`.
 
-Still open: a real shadow map pass (sun-view raster) instead of the voxel volume (casters beyond 24 blocks are missed),
-neighbourhood clamp for temporal smoothing (ghosting on fast motion), studio-built SPIR-V for multi-pass graphs, loops as
-nodes (loops live in function code today), hardware-RT run of Mosaic on the RTX PC.
+Later the same day: far shadows over a 256 x 256 height field (`MosaicHeight`, binding 18, `mosaicFarShadow`), Temporal AA
+with neighbourhood clamp (`mosaic.taa`), loops as nodes (`mosaic.repeat`), studio SPIR-V per pass
+(`MosaicSlang.prebuiltName`). Only hardware RT with Mosaic is unverified: it needs the RTX PC (this GPU has no ray query).

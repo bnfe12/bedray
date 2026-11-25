@@ -96,6 +96,11 @@ public final class CustomRtStage {
     private static final io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume worldVolume =
         new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume();
     private static MosaicWorldFeed worldFeed;
+    // Height field (binding 18) for far shadows: refreshed a slice per frame while a shader reads it.
+    private static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field heightField = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field();
+    private static Object heightLevel;
+    /** Columns resampled per frame: the 256 x 256 field refreshes about every 16 frames. */
+    private static final int HEIGHT_BUDGET = 4096;
     // Multi-pass Mosaic graphs: the Buffer passes before the final shader (empty for one pass); compileStage leaves the
     // chain of the graph it compiled in pendingChain, adopted together with the compiled final pass.
     private static List<CustomRtExecutor.ChainPass> chain = List.of();
@@ -183,6 +188,7 @@ public final class CustomRtStage {
         Set<Integer> s = new LinkedHashSet<>();
         s.add(CustomRtExecutor.WORLD_INFO_BINDING);
         s.add(CustomRtExecutor.PREV_FRAME_BINDING);
+        s.add(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BINDING);
         s.add(CustomRtExecutor.HISTORY_BINDING);
         for (CustomRtExecutor.ChainPass p : passes) s.add(p.binding());
         return s;
@@ -531,6 +537,7 @@ public final class CustomRtStage {
             executor.depthScale = frame.camera().depthScale();
             executor.depthBias = frame.camera().depthBias();
             if (executor.usesInfo()) fillWorldInfo(camera, executor.worldInfo);
+            executor.heightField = executor.usesHeight() ? updateHeight(frame.camera()) : null;
             executor.captureRequested = StudioLink.tick(liveDir);
             executor.record(command, frame, updateWorld(frame.camera()));
             recorded = true;
@@ -583,6 +590,19 @@ public final class CustomRtStage {
         } catch (RuntimeException ignored) {
             // keep the last values
         }
+    }
+
+    /** Follows the camera with the height field (MOTION_BLOCKING heightmap of the client level); null without a level. */
+    private static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field updateHeight(WorldFrame.Camera camera) {
+        var level = net.minecraft.client.Minecraft.getInstance().level;
+        if (level == null) return null;
+        if (level != heightLevel) {
+            heightLevel = level;
+            heightField = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field(); // another world: nothing of the last one may cast shadows here
+        }
+        heightField.update((x, z) -> level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, x, z),
+            camera.x(), camera.z(), HEIGHT_BUDGET);
+        return heightField;
     }
 
     /** Shader time of day: 0 at noon, 0.25 at sunset, 0.5 at midnight, 0.75 at sunrise. */

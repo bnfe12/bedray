@@ -153,7 +153,7 @@ public final class MosaicCodegen {
 
     /** Which bindings and helpers the emitted code needs. */
     private record Needs(boolean ray, boolean scene, boolean depth, boolean world, boolean buffer, boolean lut, int maxPush, boolean noise,
-                         java.util.Set<Integer> buffers, boolean history, boolean worldInfo, boolean blur, boolean prev, boolean taa) {}
+                         java.util.Set<Integer> buffers, boolean history, boolean worldInfo, boolean blur, boolean prev, boolean taa, boolean height) {}
 
     private static final String[] NOISE_HELPERS = {"mosaicNoise(", "mosaicNoiseColor(", "mosaicVoronoi(", "mosaicHash31(", "mosaicHash33(",
         "mosaicChecker(", "mosaicWave(", "mosaicGradient(", "mosaicFbm(", "mosaicGradNoise("};
@@ -172,7 +172,7 @@ public final class MosaicCodegen {
 
     private static Needs needs(MosaicGraph g, Plan p) {
         boolean ray = false, scene = false, depth = false, world = false, buffer = false, lut = false, noise = false, history = false, info = false,
-            blur = false, prev = false, taa = false;
+            blur = false, prev = false, taa = false, height = false;
         java.util.Set<Integer> buffers = new java.util.TreeSet<>();
         int push = -1;
         for (Node n : p.emit) {
@@ -215,8 +215,9 @@ public final class MosaicCodegen {
             world |= view || mentions(body, WORLD_HELPERS);
             depth |= view;
             noise |= mentions(body, NOISE_HELPERS);
+            height |= body.contains("mosaicHeightAt(") || body.contains("mosaicFarShadow(");
         }
-        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur, prev, taa);
+        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur, prev, taa, height);
     }
 
     /** Header of a stats comment so authors see what the optimizer did. */
@@ -386,6 +387,7 @@ public final class MosaicCodegen {
         if (nd.blur()) o.a(GLSL_BLUR);
         if (nd.prev()) o.a(GLSL_REPROJECT);
         if (nd.taa()) o.a(GLSL_TAA);
+        if (nd.height()) o.a(MosaicHeight.GLSL);
         if (nd.ray()) o.a("""
             const uint MOSAIC_CULL_MASK = 0x01u; // section geometry
             const vec3 MOSAIC_SKY_DIRECTION = vec3(0.32, 0.90, 0.28); // shadow-node default
@@ -1360,6 +1362,7 @@ public final class MosaicCodegen {
         if (nd.blur()) o.a(SLANG_BLUR);
         if (nd.prev()) o.a(SLANG_REPROJECT);
         if (nd.taa()) o.a(SLANG_TAA);
+        if (nd.height()) o.a(MosaicHeight.SLANG);
         if (nd.ray()) o.a("""
             static const uint MOSAIC_CULL_MASK = 0x01; // section geometry
             static const float3 MOSAIC_SKY_DIRECTION = float3(0.32, 0.90, 0.28); // shadow-node default

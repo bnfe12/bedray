@@ -486,6 +486,9 @@ final class GpuPreview implements AutoCloseable {
             MemoryUtil.memPutInt(buf.mapped() + 36, 32);
             MemoryUtil.memPutInt(buf.mapped() + 40, 48);
             for (int i = 0; i < cells; i++) MemoryUtil.memPutShort(buf.mapped() + 48 + i * 2L, (short) (15 << 12)); // air, full sky light
+        } else if (b.binding() == io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BINDING) { // height field: none in the preview (no far shadows)
+            buf = buffer(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            MemoryUtil.memSet(buf.mapped(), 0, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.HEADER_BYTES);
         } else if (b.binding() == 17) { // previous camera: the preview camera stands still
             buf = buffer(144, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
             long tmp = MemoryUtil.nmemCalloc(1, 320);

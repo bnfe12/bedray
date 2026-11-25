@@ -155,6 +155,7 @@ from pack files** (a hand-written `rt.comp` keeps the pack-file meaning of 16..3
 | 4 | `uniform sampler2D` | Also on **raster** frames: the game's depth buffer turned into the same ray distance (blocks, `1e6` = sky) by a host pass, so `depthInfo.z == 1` whenever the renderer has a depth buffer |
 | 15 | `readonly buffer` | World volume around the camera (`MosaicWorld`) |
 | 16 | `layout(std140) uniform BedrayWorldInfo { vec4 weather; vec4 skyColor; vec4 fogColor; vec4 extra; }` | `weather` = rain 0..1, thunder 0..1, biome base temperature at the camera, 0; sky and fog colour of the frame (rgb); `extra` reserved (0) |
+| 18 | `readonly buffer BedrayHeight { ivec4 originRel; vec4 camFrac; uint heights[]; }` | Height field for far shadows (`MosaicHeight`): 256 x 256 columns around the camera, signed 16-bit absolute height above the top motion-blocking block (two per uint, x fastest; `-32768` = not sampled yet); `originRel` = field origin x / z - floor(camera), z = floor(camera y), w = 1 when valid |
 | 17 | `layout(std140) uniform BedrayPrevFrame { mat4 projection; mat4 modelView; vec4 cameraPosition; }` | The previous frame's `BedrayFrame.projection`, `modelView` and `cameraPosition` (144 B); on the first frame equal to the current one |
 | 19 | `uniform sampler2D` | Previous final image of the stage (rgba16f, bilinear, clamp); black on the first frame |
 | 20 + i | `uniform sampler2D` | Buffer pass `i` of a multi-pass graph (buffer names sorted), rgba16f at 1/1, 1/2, 1/4 or 1/8 of the frame, bilinear, clamp |
@@ -162,8 +163,14 @@ from pack files** (a hand-written `rt.comp` keeps the pack-file meaning of 16..3
 **Multi-pass graphs.** Each `mosaic.pass` (Buffer) node becomes its own compute dispatch writing binding 3 of its
 pass into its buffer image; passes run in dependency order before the final image, every pass on the same descriptor
 set layout (the union of all passes' bindings; one binding used with two kinds is refused). Read buffer, Blur buffer
-and Kawase blur nodes sample a buffer at binding 20 + i. Studio-built SPIR-V (`mosaic.spv`) covers single-pass graphs;
-multi-pass graphs are compiled in the game (slangc when installed, else GLSL through shaderc).
+and Kawase blur nodes sample a buffer at binding 20 + i. Studio-built SPIR-V covers every pass: `mosaic.spv` for the final image and `mosaic.pass.<buffer>.spv` for each Buffer,
+each with a `.json` sidecar holding the hash of the generated Slang; a pass without a matching pair is compiled in the
+game (slangc when installed, else GLSL through shaderc).
+
+**Loop and temporal nodes.** `mosaic.repeat` (mask = a function `vec4 f(vec4 acc, float i[, vec2 uv])` of the file,
+index = 1..64 runs, optional `init` and `uv` inputs) emits `acc = f(acc, i)` in a loop. `mosaic.taa` (mask = a Buffer
+name or none for the scene colour, input `blend`, default 0.9) blends the reprojected previous frame clamped to the
+3x3 neighbourhood of its source.
 
 ### `BedrayFrame` (std140, 320 bytes)
 

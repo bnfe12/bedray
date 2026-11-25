@@ -4567,3 +4567,12 @@ Fabric 26.3 dev instance, fabric combinedJar built from this branch (`:fabric:co
 * Found and fixed in the game: the first raster depth conversion went through GL window depth and lost precision far
   away (diagonal banding on every face); it now forms 1 - window depth without cancellation.
 * Not verified: hardware RT renderer with Mosaic (no RT GPU here), Studio UI by hand, Apply of Bedray function graphs.
+
+### 2026-11-25 (later) — far shadows, Temporal AA, Repeat, per-pass Studio SPIR-V (L1-L4)
+
+85/85 Mosaic and 13/13 custom RT tests (incl. a real slangc build of every pass taken by the game as studio SPIR-V
+without slangc, and shaderc + slangc compiles of Temporal AA, Repeat and the height-field shadows). In game (same
+autotest, pack with a fifth full-size pass and Temporal AA on it): `5 passes (binding 22 1/2, binding 23 1/4,
+binding 21 1/8, binding 20 1/1, final)`, `result=PASS`, 13 FPS; the morning shot shows hills and terraces beyond the
+world volume casting long shadows over the height field, and the grain of the earlier runs is gone.
+Hardware RT with Mosaic stays unverified: this GPU reports `Optional FeatureSet [Hardware Ray Tracing] not supported`.

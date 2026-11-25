@@ -98,7 +98,11 @@ final class CustomRtExecutor implements AutoCloseable {
     private final List<ChainPass> chain;
     private final long[] chainPipelines, chainSets;
     private final RtMemory.Img[] chainImages;
-    private final boolean usesInfo, usesHistory, usesPrev;
+    private final boolean usesInfo, usesHistory, usesPrev, usesHeight;
+    private RtMemory.Buf heightBuffer;
+    private long heightVersion = -1;
+    /** The height field for far shadows (binding 18), set by the stage before {@link #record} when the shader reads it. */
+    io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field heightField;
     static final int PREV_FRAME_BINDING = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.PREV_FRAME_BINDING;
     static final int PREV_FRAME_BYTES = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.PREV_FRAME_BYTES;
     private RtMemory.Buf prevUbo;
@@ -191,6 +195,7 @@ final class CustomRtExecutor implements AutoCloseable {
         this.usesInfo = mosaicHost && usesAny(compiled, this.chain, WORLD_INFO_BINDING);
         this.usesHistory = mosaicHost && usesAny(compiled, this.chain, HISTORY_BINDING);
         this.usesPrev = mosaicHost && usesAny(compiled, this.chain, PREV_FRAME_BINDING);
+        this.usesHeight = mosaicHost && usesAny(compiled, this.chain, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BINDING);
         try {
             create(compiled, bufferCount, textureCount);
         } catch (RuntimeException | LinkageError e) {
@@ -211,6 +216,8 @@ final class CustomRtExecutor implements AutoCloseable {
 
     /** True when the shader reads weather and sky (binding 16): the stage then fills {@link #worldInfo} each frame. */
     boolean usesInfo() { return usesInfo; }
+
+    boolean usesHeight() { return usesHeight; }
 
     /** True when the shader traces the scene TLAS (only then the stage needs the hardware RT renderer). */
     boolean usesTlas() { return usesTlas; }
@@ -239,7 +246,7 @@ final class CustomRtExecutor implements AutoCloseable {
 
             // A shader that never traces gets no acceleration-structure binding at all, so it also runs on devices and
             // renderers without ray tracing (raster, voxel compute).
-            int hostExtras = (usesInfo ? 1 : 0) + (usesPrev ? 1 : 0) + (usesHistory ? 1 : 0) + chain.size();
+            int hostExtras = (usesInfo ? 1 : 0) + (usesPrev ? 1 : 0) + (usesHeight ? 1 : 0) + (usesHistory ? 1 : 0) + chain.size();
             var bindings = VkDescriptorSetLayoutBinding.calloc((usesTlas ? 5 : 4) + (usesWorld ? 1 : 0) + bufferCount + textureCount + hostExtras, stack);
             int slot = 0;
             if (usesTlas) bindings.get(slot++).binding(CustomRtStage.B_SCENE)
@@ -260,6 +267,8 @@ final class CustomRtExecutor implements AutoCloseable {
                     .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
             }
             if (usesInfo) bindings.get(slot++).binding(WORLD_INFO_BINDING).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            if (usesHeight) bindings.get(slot++).binding(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BINDING).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
                 .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
             if (usesPrev) bindings.get(slot++).binding(PREV_FRAME_BINDING).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
                 .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
@@ -282,7 +291,7 @@ final class CustomRtExecutor implements AutoCloseable {
             for (int i = 0; i < chain.size(); i++) chainPipelines[i] = createPipeline(chain.get(i).compiled(), "pass pipeline " + i);
 
             int uniformBuffers = 1 + (usesInfo ? 1 : 0) + (usesPrev ? 1 : 0);
-            int storageBuffers = usesWorld ? 1 : 0;
+            int storageBuffers = (usesWorld ? 1 : 0) + (usesHeight ? 1 : 0);
             int combinedImages = 2 + (usesHistory ? 1 : 0) + chain.size();
             int sampledImages = 0;
             for (CustomRtResources.BufferSpec spec : bufferSpecs)
@@ -313,6 +322,8 @@ final class CustomRtExecutor implements AutoCloseable {
                     .pSetLayouts(stack.longs(setLayout)), handle), "pass descriptor set " + i);
                 chainSets[i] = handle.get(0);
             }
+            if (usesHeight) heightBuffer = memory.createBuffer("customrt_height", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BYTES,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
             if (usesPrev) prevUbo = memory.createBuffer("customrt_prev_frame", PREV_FRAME_BYTES,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
             if (usesInfo) infoUbo = memory.createBuffer("customrt_world_info", WORLD_INFO_BYTES,
@@ -616,7 +627,7 @@ final class CustomRtExecutor implements AutoCloseable {
         List<CustomRtResources.BufferSpec> bufferSpecs = resources == null ? List.of() : resources.bufferSpecs();
         List<CustomRtResources.TextureSpec> textureSpecs = resources == null ? List.of() : resources.textureSpecs();
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            var bufferInfos = VkDescriptorBufferInfo.calloc(4 + bufferSpecs.size(), stack);
+            var bufferInfos = VkDescriptorBufferInfo.calloc(5 + bufferSpecs.size(), stack);
             bufferInfos.get(0).buffer(frameUbo.handle).offset(0).range(FRAME_UBO_BYTES);
             for (int i = 0; i < bufferSpecs.size(); i++) {
                 bufferInfos.get(1 + i).buffer(userBuffers[i].handle).offset(0).range(bufferBytes[i]);
@@ -627,6 +638,8 @@ final class CustomRtExecutor implements AutoCloseable {
             if (usesInfo) bufferInfos.get(infoSlot).buffer(infoUbo.handle).offset(0).range(WORLD_INFO_BYTES);
             int prevSlot = infoSlot + 1;
             if (usesPrev) bufferInfos.get(prevSlot).buffer(prevUbo.handle).offset(0).range(PREV_FRAME_BYTES);
+            int heightSlot = prevSlot + 1;
+            if (usesHeight) bufferInfos.get(heightSlot).buffer(heightBuffer.handle).offset(0).range(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BYTES);
 
             var imageInfos = VkDescriptorImageInfo.calloc(4 + textureSpecs.size() + chain.size(), stack);
             imageInfos.get(0).sampler(sampler).imageView(input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
@@ -642,7 +655,7 @@ final class CustomRtExecutor implements AutoCloseable {
                 imageInfos.get(passSlot + i).sampler(linearSampler).imageView(chainImages[i].view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
             }
 
-            int count = 5 + bufferSpecs.size() + textureSpecs.size() + (usesWorld ? 1 : 0) + (usesInfo ? 1 : 0) + (usesPrev ? 1 : 0)
+            int count = 5 + bufferSpecs.size() + textureSpecs.size() + (usesWorld ? 1 : 0) + (usesInfo ? 1 : 0) + (usesPrev ? 1 : 0) + (usesHeight ? 1 : 0)
                 + (usesHistory ? 1 : 0) + chain.size();
             var writes = VkWriteDescriptorSet.calloc(count, stack);
             var as = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack).sType$Default()
@@ -671,6 +684,8 @@ final class CustomRtExecutor implements AutoCloseable {
                 .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(worldInfoSlot, 1));
             if (usesInfo) writes.get(w++).sType$Default().dstSet(dst).dstBinding(WORLD_INFO_BINDING)
                 .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(infoSlot, 1));
+            if (usesHeight) writes.get(w++).sType$Default().dstSet(dst).dstBinding(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BINDING)
+                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(heightSlot, 1));
             if (usesPrev) writes.get(w++).sType$Default().dstSet(dst).dstBinding(PREV_FRAME_BINDING)
                 .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(prevSlot, 1));
             if (usesHistory) writes.get(w++).sType$Default().dstSet(dst).dstBinding(HISTORY_BINDING)
@@ -720,6 +735,33 @@ final class CustomRtExecutor implements AutoCloseable {
         VkBarriers.fullMemoryBarrier(cmd);
     }
 
+    /** Header every frame (camera-relative origin), columns when the field changed, in 64 KiB update chunks. */
+    private void recordHeightUpload(VkCommandBuffer cmd, WorldFrame.Camera camera) {
+        if (!usesHeight) return;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer h = stack.calloc(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.HEADER_BYTES);
+            if (heightField != null) heightField.writeHeader(h, camera.x(), camera.y(), camera.z());
+            vkCmdUpdateBuffer(cmd, heightBuffer.handle, 0, h); // zeros (invalid) before the first field
+        }
+        if (heightField != null && heightField.version() != heightVersion) {
+            int bytes = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.COLUMNS * 2;
+            ByteBuffer cols = org.lwjgl.system.MemoryUtil.memAlloc(bytes);
+            try {
+                heightField.writeColumns(cols, 0);
+                for (int off = 0; off < bytes; off += 65536) {
+                    int len = Math.min(65536, bytes - off);
+                    cols.limit(off + len).position(off);
+                    vkCmdUpdateBuffer(cmd, heightBuffer.handle, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.HEADER_BYTES + off, cols.slice());
+                    cols.clear();
+                }
+            } finally {
+                org.lwjgl.system.MemoryUtil.memFree(cols);
+            }
+            heightVersion = heightField.version();
+        }
+        VkBarriers.fullMemoryBarrier(cmd);
+    }
+
     void record(VkCommandBuffer cmd, WorldFrame frame,
                 io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume volume) {
         updateTiming();
@@ -755,6 +797,7 @@ final class CustomRtExecutor implements AutoCloseable {
 
             recordUserUploads(cmd);
             recordWorldUpload(cmd, frame.camera(), volume);
+            recordHeightUpload(cmd, frame.camera());
             if (usesInfo) {
                 ByteBuffer info = stack.calloc(WORLD_INFO_BYTES).order(ByteOrder.nativeOrder());
                 for (int i = 0; i < 16; i++) info.putFloat(i * 4, worldInfo[i]);
@@ -960,6 +1003,8 @@ final class CustomRtExecutor implements AutoCloseable {
         }
         if (history != null) memory.destroy(history);
         if (infoUbo != null) memory.destroy(infoUbo);
+        if (heightBuffer != null) memory.destroy(heightBuffer);
+        heightBuffer = null;
         if (prevUbo != null) memory.destroy(prevUbo);
         prevUbo = null;
         if (prevBlock != null) org.lwjgl.system.MemoryUtil.memFree(prevBlock);
