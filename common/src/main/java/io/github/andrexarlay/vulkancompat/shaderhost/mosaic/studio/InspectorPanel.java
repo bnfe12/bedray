@@ -365,11 +365,28 @@ final class InspectorPanel extends Panels.Listening {
         content.add(text(wired ? "On: wired into the Bedray frame." : "Off: wire it into the Bedray frame to turn it on.", wired ? OK : WARN));
         if (!stage.enableKeys().isEmpty())
             content.add(text("Switch: " + String.join(", ", stage.enableKeys()) + " (follows the wire)", FAINT));
+        boolean edited = model.stageEdited(n.type);
+        content.add(text(edited ? "Your version: functions of this stage were edited (Apply to Bedray sends them)."
+            : "Bedray's own: every function inside is Bedray's.", edited ? WARN : MUTED));
+        content.add(button("Open inside: settings, modules, functions", "The stage as nodes: its public parameters and every function"
+            + " of its modules, each one openable as nodes (double-click the stage does the same)", () -> {
+                if (model.openStage != null) model.openStage.accept(n.type);
+            }));
         content.add(section("Settings"));
         for (MosaicRenderer.Setting s : stage.settings()) {
             if (stage.enableKeys().contains(s.key()) && s.type() == MosaicRenderer.Type.BOOL) continue; // the wire is the switch
             double[] cur = n.defaults.get(s.key());
             double value = cur != null && cur.length > 0 ? cur[0] : s.def();
+            settingRow(s, value, v -> set(n, s, v));
+        }
+        content.add(Box.createVerticalStrut(8));
+        content.add(button("Defaults of this stage", "Every setting of this stage back to Bedray's default", () ->
+            model.edit("Defaults of " + stage.label(), () -> stage.settings().forEach(s -> n.defaults.remove(s.key())))));
+    }
+
+    /** One setting: a toggle, a slider with its number, or a choice; with its help below. */
+    private void settingRow(MosaicRenderer.Setting s, double value, java.util.function.DoubleConsumer onChange) {
+        {
             JPanel row = new JPanel(new BorderLayout(10, 2));
             row.setOpaque(false);
             row.setAlignmentX(0);
@@ -379,11 +396,11 @@ final class InspectorPanel extends Panels.Listening {
             row.add(name, BorderLayout.CENTER);
             JComponent control;
             switch (s.type()) {
-                case BOOL -> control = new StudioWidgets.Toggle(value != 0, v -> set(n, s, v ? 1 : 0));
+                case BOOL -> control = new StudioWidgets.Toggle(value != 0, v -> onChange.accept(v ? 1 : 0));
                 case CHOICE -> {
                     JComboBox<String> box = new JComboBox<>(s.options().stream().map(o -> o.replace('_', ' ')).toArray(String[]::new));
                     box.setSelectedIndex((int) Math.max(0, Math.min(s.options().size() - 1, Math.round(value))));
-                    box.addActionListener(ev -> set(n, s, box.getSelectedIndex()));
+                    box.addActionListener(ev -> onChange.accept(box.getSelectedIndex()));
                     control = box;
                 }
                 default -> {
@@ -394,7 +411,7 @@ final class InspectorPanel extends Panels.Listening {
                     num.setPreferredSize(new Dimension(38, 18));
                     slider.addChangeListener(ev -> {
                         num.setText(Integer.toString(slider.getValue()));
-                        if (!slider.getValueIsAdjusting()) set(n, s, slider.getValue());
+                        if (!slider.getValueIsAdjusting()) onChange.accept(slider.getValue());
                     });
                     slider.setPreferredSize(new Dimension(Math.max(110, width - 190), 22));
                     p.add(slider, BorderLayout.CENTER);
@@ -412,9 +429,6 @@ final class InspectorPanel extends Panels.Listening {
                 content.add(h);
             }
         }
-        content.add(Box.createVerticalStrut(8));
-        content.add(button("Defaults of this stage", "Every setting of this stage back to Bedray's default", () ->
-            model.edit("Defaults of " + stage.label(), () -> stage.settings().forEach(s -> n.defaults.remove(s.key())))));
     }
 
     /** A module of the pack map: what it is, what it declares, who controls it, its source. */
@@ -500,6 +514,22 @@ final class InspectorPanel extends Panels.Listening {
         if (n.note != null && !n.note.isBlank()) {
             content.add(section("Developer's note"));
             content.add(text(n.note, TEXT));
+        }
+        if (t.equals(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.SETTING)) {
+            MosaicRenderer.Setting s = MosaicRenderer.setting(n.mask);
+            if (s == null) {
+                content.add(text("No setting " + n.mask + " in this Bedray", BAD));
+                return;
+            }
+            content.add(text("Public parameter " + s.key() + ": Studio's value wins over the game's menu while the renderer graph is live.", MUTED));
+            double v = n.value != null && n.value.length > 0 ? n.value[0] : s.def();
+            settingRow(s, v, nv -> {
+                if (n.value != null && n.value.length > 0 && n.value[0] == nv) return;
+                model.edit(s.label() + " = " + s.format(nv), () -> n.value = new double[] {nv});
+            });
+            content.add(button("Bedray's default (" + s.format(s.def()) + ")", "Back to the default", () ->
+                model.edit(s.label() + " default", () -> n.value = new double[] {s.def()})));
+            return;
         }
         var f = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.function(t);
         if (f != null) {

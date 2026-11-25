@@ -145,7 +145,7 @@ public final class MosaicGraph {
         "mosaic.pass", "mosaic.bufferIn", "mosaic.history", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
         "mosaic.fogColor",
         // Bedray's renderer as nodes (MosaicRenderer): stages of the real pipeline and the frame they produce
-        "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.voxels", "bedray.raster", "bedray.upscaler", "bedray.output",
+        "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.voxels", "bedray.raster", "bedray.upscaler", "bedray.output", "bedray.stageMap",
         // the Slang pack map (MosaicPack): modules wired by their imports into the passes of a frame
         "slang.module", "slang.pack",
         // output
@@ -156,12 +156,15 @@ public final class MosaicGraph {
     /** The output node of a shader graph ({@code mosaic.output}) or of a material graph ({@code mat.output}). */
     public static boolean isOutput(String type) {
         return type.equals("mosaic.output") || type.equals("mat.output") || type.equals(MosaicRenderer.OUTPUT) || type.equals("slang.pack")
-            || type.equals(MosaicSlangGraph.RESULT);
+            || type.equals(MosaicSlangGraph.RESULT) || type.equals(MosaicStageMap.OUTPUT);
     }
 
     /** The Slang pack map (output {@code slang.pack}): a view of Bedray's modules, never compiled. */
     /** A Bedray function graph (output {@code slang.result}): compiles to a Slang function, not a pass. */
     public boolean isFunctionGraph() { return node(outputId) != null && node(outputId).type().equals(MosaicSlangGraph.RESULT); }
+
+    /** The inside of a renderer stage (output bedray.stageMap): a view, never compiled. */
+    public boolean isStageMap() { return node(outputId) != null && node(outputId).type().equals(MosaicStageMap.OUTPUT); }
 
     public boolean isPackMap() { return node(outputId) != null && node(outputId).type().equals("slang.pack"); }
 
@@ -878,7 +881,7 @@ public final class MosaicGraph {
                 case "mosaic.swizzle" -> swizzleKind(n, visiting);
                 case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf", "mosaic.pass", "mosaic.bufferIn", "mosaic.history" -> Kind.V4;
                 case "mosaic.rain", "mosaic.thunder", "mosaic.temperature" -> Kind.F;
-                case "bedray.output", "slang.module", "slang.pack" -> Kind.V4;
+                case "bedray.output", "slang.module", "slang.pack", "bedray.stageMap" -> Kind.V4;
                 case "mosaic.skyColor", "mosaic.fogColor" -> Kind.V3;
                 case "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt",
                      "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post",
@@ -1049,9 +1052,10 @@ public final class MosaicGraph {
         // -------------------------------------------------------------- warnings and cost
 
         void warnings(Set<String> reachable) {
-            boolean anyOutput = nodes.values().stream().anyMatch(n -> isOutput(n.type()));
+            boolean anyOutput = nodes.values().stream().anyMatch(n -> isOutput(n.type()) && !n.type().equals(MosaicStageMap.OUTPUT));
             for (Node n : nodes.values()) {
-                if (anyOutput && !reachable.contains(n.id()) && !broken.contains(n.id()) && !n.type().startsWith("slang."))
+                if (anyOutput && !reachable.contains(n.id()) && !broken.contains(n.id()) && !n.type().startsWith("slang.")
+                    && !n.type().startsWith(MosaicSlangGraph.FN))
                     warn(n.id(), "node " + n.id() + " is not connected to the output, so it does nothing", Fix.DELETE_NODE);
                 if (n.type().equals("mosaic.div")) {
                     double[] b = constValue(n.inputs().get("b"));

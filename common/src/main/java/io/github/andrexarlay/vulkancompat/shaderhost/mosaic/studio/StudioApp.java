@@ -55,6 +55,7 @@ final class StudioApp {
         });
         kfm.addKeyEventDispatcher(this::dispatch);
         model.openFunction = this::openFunctionTab;
+        model.openStage = this::openStageTab;
         model.listen(this::updateStatus);
         initTabs();
         try {
@@ -147,6 +148,12 @@ final class StudioApp {
             });
             m.setRepeats(false);
             m.start();
+        }
+        String shotStage = System.getProperty("mosaic.selfshot.stage"); // e.g. bedray.sky: verification aid
+        if (shot != null && shotStage != null) {
+            Timer stT = new Timer(1200, e -> openStageTab(shotStage));
+            stT.setRepeats(false);
+            stT.start();
         }
         String shotFunction = System.getProperty("mosaic.selfshot.function"); // e.g. light/sun/sunSolidAngle: verification aid
         if (shot != null && shotFunction != null) {
@@ -612,6 +619,30 @@ final class StudioApp {
         fit.start();
     }
 
+    /** A renderer stage's inside in its own tab (or the tab that has it). */
+    void openStageTab(String type) {
+        Path file = StudioModel.stageFile(type);
+        for (DocTabs.Tab t : tabs) {
+            Path f = t == active ? model.doc.file : t.file;
+            if (file.equals(f)) {
+                activate(t);
+                return;
+            }
+        }
+        DocTabs.Tab t = new DocTabs.Tab(StudioModel.Workspace.RENDERER, null);
+        tabs.add(t);
+        activate(t);
+        if (!model.openStageMap(type)) return;
+        t.file = model.doc.file;
+        if (tabStrip != null) tabStrip.repaint();
+        Timer fit = new Timer(350, e -> {
+            GraphPanel g = main == null ? null : findGraph(main.root);
+            if (g != null) g.fit();
+        });
+        fit.setRepeats(false);
+        fit.start();
+    }
+
     /** Pick any function of the pack (searchable) and open it as nodes. */
     void pickFunction(Component owner, Point at) {
         var lib = model.bedrayLibrary();
@@ -792,6 +823,13 @@ final class StudioApp {
             statusLeft.setForeground(model.messageColor);
             if (model.messageColor == OK || model.messageColor == BAD) StudioWidgets.toast(main, model.message, model.messageColor);
             model.message = "";
+        } else if (model.doc.stage != null) {
+            var st = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.stage(model.doc.stage);
+            statusLeft.setText((st == null ? model.doc.stage : st.label()) + " inside   " + model.doc.nodes.stream()
+                .filter(n -> n.type.startsWith(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.FN)).count()
+                + " functions, " + model.doc.nodes.stream().filter(n -> n.type.equals(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.SETTING)).count()
+                + " public parameters" + (model.stageEdited(model.doc.stage) ? "   -   your version" : "   -   Bedray's own"));
+            statusLeft.setForeground(OK);
         } else if (model.functionDoc()) {
             long blocks = model.doc.nodes.stream().filter(n -> n.type.equals(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.CODE)).count();
             String head = "Bedray function " + model.doc.bedrayFunction + "   " + model.doc.nodes.size() + " nodes"

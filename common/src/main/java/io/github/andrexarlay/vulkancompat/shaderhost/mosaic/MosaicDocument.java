@@ -170,6 +170,8 @@ public final class MosaicDocument {
     public String paint;
     /** The Bedray pack function this graph is the body of ("light/sun/sunSolidAngle"), or null. */
     public String bedrayFunction;
+    /** The renderer stage this document is the inside of ("bedray.sky"), or null. */
+    public String stage;
 
     static String readPaint(String json) {
         try {
@@ -273,6 +275,8 @@ public final class MosaicDocument {
             JsonElement root = JsonParser.parseString(text);
             if (root.isJsonObject() && root.getAsJsonObject().has("function") && root.getAsJsonObject().get("function").isJsonPrimitive())
                 d.bedrayFunction = root.getAsJsonObject().get("function").getAsString();
+            if (root.isJsonObject() && root.getAsJsonObject().has("stage") && root.getAsJsonObject().get("stage").isJsonPrimitive())
+                d.stage = root.getAsJsonObject().get("stage").getAsString();
         } catch (RuntimeException e) {
             throw new java.io.IOException("mosaic.json: " + e.getMessage());
         }
@@ -391,6 +395,7 @@ public final class MosaicDocument {
         }
         if (paint != null && !paint.isEmpty()) root.addProperty("paint", paint);
         if (bedrayFunction != null) root.addProperty("function", bedrayFunction);
+        if (stage != null) root.addProperty("stage", stage);
         return GSON.toJson(root);
     }
 
@@ -652,6 +657,7 @@ public final class MosaicDocument {
         paint = readPaint(state);
         JsonElement st = JsonParser.parseString(state);
         bedrayFunction = st.isJsonObject() && st.getAsJsonObject().has("function") ? st.getAsJsonObject().get("function").getAsString() : null;
+        stage = st.isJsonObject() && st.getAsJsonObject().has("stage") ? st.getAsJsonObject().get("stage").getAsString() : null;
         dirty = true;
         return true;
     }

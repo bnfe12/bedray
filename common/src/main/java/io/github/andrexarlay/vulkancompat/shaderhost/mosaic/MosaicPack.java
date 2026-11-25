@@ -77,7 +77,9 @@ public final class MosaicPack {
             {"volumetric", "bedray.fog"}, {"^denoise/|nrd_|rr_depth", "bedray.denoiser"},
             {"tonemap|output_resolve|^post/", "bedray.exposure"}, {"bloom|post_cinema", "bedray.post"},
             {"^light/sun|^light/sky|sky_|frame_sky", "bedray.sky"}, {"^surface/|^shading/", "bedray.materials"},
-            {"^traversal/|^voxel/|^light/(emitter|block_emitters)", "bedray.scene"}};
+            {"^voxel/|voxel_traversal", "bedray.voxels"}, {"^nort/|nort_", "bedray.raster"},
+            {"^spatial/|fsr1_|nis_|fg_prepare", "bedray.upscaler"},
+            {"^traversal/|^light/(emitter|block_emitters)", "bedray.scene"}};
         for (String[] r : rules) if (Pattern.compile(r[0]).matcher(path).find()) return r[1];
         return null;
     }

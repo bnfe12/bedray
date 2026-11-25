@@ -109,7 +109,7 @@ final class StudioModel {
                 if (name.contains(".")) name = name.substring(name.lastIndexOf('.') + 1);
                 functionCode = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.function(g, name);
             }
-        } else if (g != null && g.isPackMap() || doc.nodes.stream().anyMatch(n -> n.type.startsWith("slang."))) {
+        } else if (g != null && (g.isPackMap() || g.isStageMap()) || doc.stage != null || doc.nodes.stream().anyMatch(n -> n.type.startsWith("slang."))) {
             generated = null;
             baked = null;
             rendererSettings = null; // a map is a view: it never sends settings
@@ -314,6 +314,134 @@ final class StudioModel {
         functionWorker.execute();
     }
 
+    // ================================================================== stage insides
+
+    /** Opens a renderer stage's inside in a tab of its own; set by the app. */
+    java.util.function.Consumer<String> openStage;
+
+    static Path stagesDir() { return StudioSettings.file().resolveSibling("studio").resolve("stages"); }
+
+    static Path stageFile(String type) { return stagesDir().resolve(type.replace('.', '_') + ".mosaic.json"); }
+
+    /** The stage's current numbers: from the open renderer graph, else the saved one, else Bedray's defaults. */
+    java.util.Map<String, Double> stageValues(String type) {
+        java.util.Map<String, Double> out = new java.util.LinkedHashMap<>();
+        List<MosaicDocument.ENode> from = null;
+        if (rendererDoc() && doc.stage == null && doc.bedrayFunction == null) from = doc.nodes;
+        else if (Files.exists(rendererFile())) {
+            try {
+                from = MosaicDocument.load(rendererFile()).nodes;
+            } catch (Exception ignored) {
+                // defaults below
+            }
+        }
+        if (from != null) for (MosaicDocument.ENode n : from)
+            if (n.type.equals(type)) {
+                n.defaults.forEach((k, v) -> { if (v.length > 0) out.put(k, v[0]); });
+                break;
+            }
+        return out;
+    }
+
+    /** Opens the inside of a stage: its settings as public parameters and the functions of its modules. */
+    boolean openStageMap(String type) {
+        var lib = bedrayLibrary();
+        if (lib == null) {
+            say("Bedray's Slang sources were not found: choose the game instance with the Bedray mod (Library)", StudioUi.BAD);
+            return false;
+        }
+        java.util.Map<String, Double> values = stageValues(type);
+        Path f = stageFile(type);
+        try {
+            Files.createDirectories(f.getParent());
+            Files.writeString(f, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicStageMap.graph(type, lib, values), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            say("Could not open the stage: " + e.getMessage(), StudioUi.BAD);
+            return false;
+        }
+        workspace = Workspace.RENDERER;
+        open(f);
+        var st = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.stage(type);
+        long fns = doc.nodes.stream().filter(n -> n.type.startsWith(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.FN)).count();
+        say((st == null ? type : st.label()) + ": " + (st == null ? 0 : st.settings().size()) + " public parameters, "
+            + io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicStageMap.modules(type, lib).size() + " modules, " + fns
+            + " functions (double-click one to open its body)", StudioUi.MUTED);
+        return true;
+    }
+
+    /** The parameters of an open stage inside go to the renderer graph and on to the game. */
+    void syncStageSettings() {
+        if (doc.stage == null) return;
+        try {
+            Path rf = rendererFile();
+            MosaicDocument rd;
+            if (Files.exists(rf)) rd = MosaicDocument.load(rf);
+            else {
+                Files.createDirectories(rf.getParent());
+                Files.writeString(rf, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.defaultGraph(rendererState()), StandardCharsets.UTF_8);
+                rd = MosaicDocument.load(rf);
+            }
+            MosaicDocument.ENode st = rd.nodes.stream().filter(n -> n.type.equals(doc.stage)).findFirst().orElse(null);
+            if (st == null) {
+                rendererStatus = "this stage is not in your renderer graph: add it there to send its parameters";
+                fire();
+                return;
+            }
+            boolean changed = false;
+            for (MosaicDocument.ENode n : doc.nodes) {
+                if (!n.type.equals(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.SETTING) || n.value == null || n.value.length == 0) continue;
+                double[] cur = st.defaults.get(n.mask);
+                if (cur != null && cur.length > 0 && cur[0] == n.value[0]) continue;
+                st.defaults.put(n.mask, new double[] {n.value[0]});
+                changed = true;
+            }
+            if (!changed) return;
+            rd.save();
+            MosaicGraph rg = MosaicGraph.analyze(rd.toJson()).graph();
+            if (rg != null && rg.isRenderer()) writeRenderer(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.settings(rg));
+        } catch (Exception e) {
+            rendererStatus = "could not update the renderer graph: " + e.getMessage();
+            fire();
+        }
+    }
+
+    private long editedAt;
+    private java.util.Set<String> editedModules = java.util.Set.of();
+
+    /** Modules with a function you edited (read again at most every two seconds). */
+    java.util.Set<String> editedModules() {
+        if (System.currentTimeMillis() - editedAt < 2000) return editedModules;
+        editedAt = System.currentTimeMillis();
+        java.util.Set<String> out = new java.util.TreeSet<>();
+        var lib = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.library();
+        if (lib != null && Files.isDirectory(functionsDir())) {
+            try (var files = Files.list(functionsDir())) {
+                for (Path f : (Iterable<Path>) files::iterator) {
+                    String name = f.getFileName().toString().replace(".mosaic.json", "");
+                    for (var fn : lib.functions().values())
+                        if (functionFile(fn.id()).getFileName().toString().equals(f.getFileName().toString())) {
+                            out.add(fn.module());
+                            break;
+                        }
+                }
+            } catch (Exception ignored) {
+                // none
+            }
+        }
+        editedModules = out;
+        return out;
+    }
+
+    /** Is a stage your version (a function of one of its modules edited) rather than Bedray's own? */
+    boolean stageEdited(String type) {
+        var lib = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangGraph.library();
+        if (lib == null) return false;
+        java.util.Set<String> edited = editedModules();
+        if (edited.isEmpty()) return false;
+        for (String m : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicStageMap.modules(type, lib)) if (edited.contains(m)) return true;
+        return false;
+    }
+
     /** Writes every edited function into the game (bedray-studio/slang) and rebuilds the passes that use them. */
     void applyFunctions() {
         if (doc.dirty && doc.file != null) save(false);
@@ -363,8 +491,10 @@ final class StudioModel {
     }
 
     /** Sends the graph's settings to the game, which applies them at once and saves bedray.toml. */
-    void writeRenderer() {
-        java.util.Map<String, String> s = rendererSettings;
+    void writeRenderer() { writeRenderer(rendererSettings); }
+
+    /** Sends renderer settings to the game: Studio's numbers win over the game's menu ("priority") while they are live. */
+    void writeRenderer(java.util.Map<String, String> s) {
         Path g = StudioLibrary.gameDir(this);
         if (s == null) return;
         if (g == null) {
@@ -378,6 +508,7 @@ final class StudioModel {
             com.google.gson.JsonObject o = new com.google.gson.JsonObject();
             o.addProperty("apply", System.currentTimeMillis());
             o.addProperty("save", true);
+            o.addProperty("priority", true);
             com.google.gson.JsonObject set = new com.google.gson.JsonObject();
             s.forEach(set::addProperty);
             o.add("settings", set);
@@ -795,6 +926,11 @@ final class StudioModel {
             checkFunction();
             return;
         }
+        if (doc.stage != null) {
+            if (doc.dirty && doc.file != null) save(false);
+            if (live) syncStageSettings();
+            return;
+        }
         if (rendererSettings != null && rendererDoc()) {
             if (live && doc.file != null) {
                 save(false);
@@ -1007,6 +1143,7 @@ final class StudioModel {
         for (MosaicCatalog.Entry e : MosaicCatalog.all()) {
             boolean stage = e.category() == MosaicCatalog.Category.RENDERER;
             if (renderer ? !stage : stage) continue;
+            if (e.type().equals("bedray.stageMap")) continue; // written by Studio, not added by hand
             if (materials ? !MosaicGraph.MATERIAL_SAFE.contains(e.type()) : e.category() == MosaicCatalog.Category.MATERIAL) continue;
             items.add(new Item(e.type(), e.label(), e.category().label, new Color(e.category().color, true), e.help(), null));
         }
@@ -1326,6 +1463,7 @@ final class StudioModel {
                 doc.frames.addAll(loaded.frames);
                 doc.paint = loaded.paint;
                 doc.bedrayFunction = loaded.bedrayFunction;
+                doc.stage = loaded.stage;
             } catch (Exception e) {
                 say("Could not read the graph: " + e.getMessage(), StudioUi.BAD);
             }

@@ -213,6 +213,19 @@ public final class MosaicRenderer {
 
     public static boolean isStage(String type) { return STAGES.containsKey(type); }
 
+    /** A setting by its bedray.toml key, or null. */
+    public static Setting setting(String key) {
+        if (key == null) return null;
+        for (Stage s : STAGES.values()) for (Setting st : s.settings()) if (st.key().equals(key)) return st;
+        return null;
+    }
+
+    /** The stage type that owns a setting, or null. */
+    public static String stageOfSetting(String key) {
+        for (Stage s : STAGES.values()) for (Setting st : s.settings()) if (st.key().equals(key)) return s.type();
+        return null;
+    }
+
     /**
      * The settings a renderer graph stands for: every stage wired into the output with its values (node inline values, else
      * the stage default), every stage left out switched off. Values of stages that are absent and have no switch are not sent.

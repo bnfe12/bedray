@@ -66,6 +66,7 @@ public final class MosaicCatalog {
         e("bedray.voxels", "Voxels", Category.RENDERER, "The voxel world the tracers walk: distance, memory, quality profile, bounced light and glass, and which scene renderer runs."),
         e("bedray.raster", "Raster (no ray tracing)", Category.RENDERER, "Minecraft's own lighting with Bedray's post: the mode when nothing traces rays."),
         e("bedray.upscaler", "Upscaler", Category.RENDERER, "Render at a lower resolution and upscale: built-in Bilinear, FSR 1 and NIS on every GPU, FSR 2/3/4, XeSS and DLSS with their libraries."),
+        e("bedray.stageMap", "Stage inside", Category.RENDERER, "The end of a stage's inside: its settings and the functions it is made of."),
         e("bedray.output", "Bedray frame", Category.RENDERER, "The frame Bedray shows: every stage wired into it is on, the rest are off."),
         e("mosaic.pass", "Buffer (pass)", Category.PASSES, "Writes its input into a named buffer as its own pass, at full, 1/2, 1/4 or 1/8 size (blur, bloom)."),
         e("mosaic.bufferIn", "Read buffer", Category.PASSES, "Reads a buffer written by a Buffer node, at any uv (offsets for blur kernels)."),

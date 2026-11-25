@@ -149,4 +149,23 @@ class MosaicSlangGraphTest {
             assertTrue(check.ok(), module + ": " + check.log());
         }
     }
+
+    @Test
+    void aStageOpensIntoItsModulesFunctionsAndSettings() {
+        MosaicSlangLib.Library lib = lib();
+        java.util.List<String> sky = MosaicStageMap.modules("bedray.sky", lib);
+        assertTrue(sky.contains("light/sun"), String.valueOf(sky));
+        assertTrue(sky.contains("light/sky"), String.valueOf(sky));
+        String json = MosaicStageMap.graph("bedray.sky", lib, java.util.Map.of("sun_size_tenths", 12.0));
+        MosaicGraph.Analysis a = MosaicGraph.analyze(json);
+        assertNull(a.firstError(), String.valueOf(a.problems()));
+        assertTrue(a.graph().isStageMap());
+        assertTrue(json.contains("bedray.fn:light/sun/SunMoonSampler.sample"), "its functions are nodes");
+        assertTrue(json.contains("\"bedray.setting\""), "its settings are public parameters");
+        assertTrue(json.contains("12.0"), "with the current value");
+        // every stage has something inside
+        for (MosaicRenderer.Stage s : MosaicRenderer.stages())
+            if (!s.type().equals("bedray.rays") && !s.type().equals("bedray.output"))
+                assertTrue(!MosaicStageMap.modules(s.type(), lib).isEmpty() || !s.settings().isEmpty(), s.type());
+    }
 }

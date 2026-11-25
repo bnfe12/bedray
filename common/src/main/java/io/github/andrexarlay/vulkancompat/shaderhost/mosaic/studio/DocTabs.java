@@ -97,6 +97,10 @@ final class DocTabs extends JComponent {
     String title(Tab t) {
         Path f = t == app.active ? app.model.doc.file : t.file;
         if (t.kind == StudioModel.Workspace.RENDERER) {
+            if (f != null && f.getParent() != null && f.getParent().equals(StudioModel.stagesDir())) {
+                var st = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.stage(f.getFileName().toString().replace(".mosaic.json", "").replaceFirst("_", "."));
+                return (st == null ? "Stage" : st.label()) + " (inside)";
+            }
             if (f != null && f.getParent() != null && f.getParent().equals(StudioModel.functionsDir())) {
                 String id = f.getFileName().toString().replace(".mosaic.json", "");
                 String name = id.replaceAll("\\(.*", "");

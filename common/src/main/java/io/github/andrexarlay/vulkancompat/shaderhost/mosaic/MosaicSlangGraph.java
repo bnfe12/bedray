@@ -32,7 +32,9 @@ public final class MosaicSlangGraph {
     /** Pieces of a function body (see {@link MosaicSlangDecompile}). */
     public static final String LITERAL = "slang.literal", OP = "slang.op", CALL = "slang.call", DO = "slang.do", MEMBER = "slang.member",
         SET = "slang.set", LET = "slang.let", CODE = "slang.code";
-    static final Set<String> BODY = Set.of(PARAM, RESULT, OUT, LITERAL, OP, CALL, DO, MEMBER, SET, LET, CODE);
+    /** A stage setting as a public parameter (mask: its bedray.toml key, value: the number). */
+    public static final String SETTING = "bedray.setting";
+    static final Set<String> BODY = Set.of(PARAM, RESULT, OUT, LITERAL, OP, CALL, DO, MEMBER, SET, LET, CODE, SETTING);
     /** A port that takes or gives any Slang value (slangc checks it). */
     public static final String AUTO = "auto";
     /** The ordering token of a void call: wire it into another call's {@code after} to keep side effects in order. */
@@ -116,7 +118,7 @@ public final class MosaicSlangGraph {
     public static boolean isKnown(String type) {
         if (BODY.contains(type)) return true;
         MosaicSlangLib.Function f = function(type);
-        if (f != null) return f.isNode();
+        if (f != null) return f.isNode() || f.entry(); // a pass entry is a node of stage maps (it opens; nothing calls it)
         return struct(type) != null || constant(type) != null;
     }
 
@@ -165,7 +167,7 @@ public final class MosaicSlangGraph {
                 out.add(new SPort("value", t, kind(t), type.equals(OUT)));
                 return out;
             }
-            case LITERAL -> { return out; }
+            case LITERAL, SETTING -> { return out; }
             case OP -> {
                 String op = mask == null ? "+" : mask;
                 out.add(new SPort("a", AUTO, MosaicGraph.Kind.S, true));
@@ -197,7 +199,7 @@ public final class MosaicSlangGraph {
         }
         MosaicSlangLib.Function f = function(type);
         if (f != null) {
-            if (f.owner() != null) out.add(new SPort(SELF, f.owner(), MosaicGraph.Kind.S, true));
+            if (f.owner() != null) out.add(new SPort(SELF, f.owner(), MosaicGraph.Kind.S, false));
             for (MosaicSlangLib.Param p : f.params()) if (p.isIn()) out.add(new SPort(p.name(), p.type(), kind(p.type()), false));
             out.add(new SPort(AFTER, "void", MosaicGraph.Kind.S, false));
             return out;
@@ -227,6 +229,10 @@ public final class MosaicSlangGraph {
             }
             case LITERAL, OP, CALL, MEMBER, SET -> {
                 out.add(new SPort("", AUTO, MosaicGraph.Kind.S, false));
+                return out;
+            }
+            case SETTING -> {
+                out.add(new SPort("", "float", MosaicGraph.Kind.F, false));
                 return out;
             }
             case DO -> {
@@ -316,6 +322,10 @@ public final class MosaicSlangGraph {
             case MEMBER -> mask == null ? "member" : mask;
             case SET -> "set " + (mask == null ? "" : mask);
             case CODE -> "Slang block";
+            case SETTING -> {
+                MosaicRenderer.Setting st = MosaicRenderer.setting(mask);
+                yield st == null ? String.valueOf(mask) : st.label();
+            }
             default -> type;
         };
     }

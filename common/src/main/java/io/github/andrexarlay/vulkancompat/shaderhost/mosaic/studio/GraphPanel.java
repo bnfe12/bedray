@@ -89,6 +89,9 @@ final class GraphPanel extends JComponent {
                     // into a Bedray function: its body as nodes in a tab of its own (a code block: its Slang in the inspector)
                     if (n.type.startsWith(MosaicSlangGraph.FN)) model.openFunction.accept(n.type.substring(MosaicSlangGraph.FN.length()));
                     else model.say("A code block: edit its Slang in the inspector", StudioUi.MUTED);
+                } else if (n != null && io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.isStage(n.type) && model.openStage != null
+                    && toWorld(e.getPoint()).y >= n.y + HEAD) {
+                    model.openStage.accept(n.type); // into the stage: its parameters, modules and functions
                 } else if (n != null && toWorld(e.getPoint()).y < n.y + HEAD) renameDialog();
                 else if (n == null && f != null) {
                     model.selectedFrame = f;
@@ -220,6 +223,8 @@ final class GraphPanel extends JComponent {
             return d != null && d.label != null ? d.label : MosaicFunction.nameOf(n.type);
         }
         if (MosaicSlangGraph.handles(n.type)) return MosaicSlangGraph.label(n.type, n.mask);
+        if (io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.isStage(n.type))
+            return MosaicCatalog.of(n.type).label() + (model.stageEdited(n.type) ? "  (your version)" : "");
         return MosaicCatalog.of(n.type).label();
     }
 
@@ -267,6 +272,11 @@ final class GraphPanel extends JComponent {
             case "mosaic.wave" -> n.mask == null ? "bands" : n.mask;
             case MosaicSlangGraph.LET, MosaicSlangGraph.PARAM, MosaicSlangGraph.OUT -> n.mask == null ? "" : n.mask.substring(0, Math.max(0, n.mask.lastIndexOf(' ')));
             case MosaicSlangGraph.RESULT -> n.mask == null ? "" : "returns " + n.mask;
+            case MosaicSlangGraph.SETTING -> {
+                var s = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.setting(n.mask);
+                double v = n.value != null && n.value.length > 0 ? n.value[0] : s == null ? 0 : s.def();
+                yield s == null ? n.mask : s.key() + " = " + s.format(v).replace('_', ' ');
+            }
             case MosaicSlangGraph.CODE -> {
                 String body = MosaicSlangGraph.codeSignature(n.mask).body().strip();
                 String first = body.isEmpty() ? "" : body.lines().findFirst().orElse("");
