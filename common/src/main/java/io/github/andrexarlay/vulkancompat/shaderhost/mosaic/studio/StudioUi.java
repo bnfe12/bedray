@@ -233,6 +233,7 @@ final class StudioUi {
             case "Effects" -> new Color(0xC06A3A);
             case "Rendering" -> new Color(0x8A5CC8);
             case "Shading" -> new Color(0x3E8EB0);
+            case "Render pipeline" -> new Color(0xD08A2E);
             default -> new Color(0x4FA3A0);
         };
     }

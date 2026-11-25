@@ -94,7 +94,9 @@ final class CustomRtExecutor implements AutoCloseable {
      * pipeline and descriptor set on the shared (union) set layout; binding 3 of a pass is its own rgba16f image, which
      * later passes sample at the pass's binding (20+). Binding 19 is the previous final image, binding 16 weather and sky.
      */
-    record ChainPass(VulkanGlslPackCompiler.Compiled compiled, int scale, int binding) {}
+    record ChainPass(VulkanGlslPackCompiler.Compiled compiled, int scale, int binding, boolean after) {
+        ChainPass(VulkanGlslPackCompiler.Compiled compiled, int scale, int binding) { this(compiled, scale, binding, false); }
+    }
     private final List<ChainPass> chain;
     private final long[] chainPipelines, chainSets;
     private final RtMemory.Img[] chainImages;
@@ -490,7 +492,8 @@ final class CustomRtExecutor implements AutoCloseable {
                 if (chainImages[i] != null) memory.destroy(chainImages[i]);
                 int s = Math.max(1, chain.get(i).scale());
                 chainImages[i] = memory.createImage("customrt_pass" + chain.get(i).binding(), Math.max(1, color.width() / s),
-                    Math.max(1, color.height() / s), OUTPUT_FORMAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+                    Math.max(1, color.height() / s), OUTPUT_FORMAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
+                        | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
             }
             if (usesHistory) {
                 if (history != null) memory.destroy(history);
@@ -770,8 +773,14 @@ final class CustomRtExecutor implements AutoCloseable {
             if (!imagesInitialized) {
                 VkBarriers.transition(cmd, input.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
                 VkBarriers.transition(cmd, output.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-                for (RtMemory.Img img : chainImages)
+                for (RtMemory.Img img : chainImages) {
                     VkBarriers.transition(cmd, img.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+                    // buffers are kept between frames (history copies, Buffer last frame): start from black, not garbage
+                    var r0 = org.lwjgl.vulkan.VkImageSubresourceRange.calloc(1, stack);
+                    r0.get(0).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
+                    vkCmdClearColorImage(cmd, img.image, VK_IMAGE_LAYOUT_GENERAL, org.lwjgl.vulkan.VkClearColorValue.calloc(stack), r0);
+                }
+                if (chainImages.length > 0) VkBarriers.fullMemoryBarrier(cmd);
                 if (history != null) {
                     // the first frame's "previous frame" is black, as in the studio's preview
                     VkBarriers.transition(cmd, history.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
@@ -814,12 +823,20 @@ final class CustomRtExecutor implements AutoCloseable {
             recordRasterDepth(cmd, stack);
             // Buffer passes in plan order (each reads only passes before it), then the final image
             for (int i = 0; i < chain.size(); i++) {
+                if (chain.get(i).after()) continue;
                 int[] ls = chain.get(i).compiled().module().localSize();
                 dispatch(cmd, stack, chainPipelines[i], chainSets[i], ls, chainImages[i].width, chainImages[i].height);
                 VkBarriers.fullMemoryBarrier(cmd);
             }
             dispatch(cmd, stack, pipeline, set, localSize, color.width(), color.height());
             VkBarriers.fullMemoryBarrier(cmd);
+            // history copies for the next frame (Accumulate, Buffer last frame): after everything that reads them
+            for (int i = 0; i < chain.size(); i++) {
+                if (!chain.get(i).after()) continue;
+                int[] ls = chain.get(i).compiled().module().localSize();
+                dispatch(cmd, stack, chainPipelines[i], chainSets[i], ls, chainImages[i].width, chainImages[i].height);
+                VkBarriers.fullMemoryBarrier(cmd);
+            }
             if (history != null) {
                 // the final image is the next frame's "previous frame" (binding 19)
                 var keep = VkImageCopy.calloc(1, stack);

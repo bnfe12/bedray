@@ -412,6 +412,127 @@ public final class MosaicEffects {
             return mosaicVoxelTrace(origin, normalize(dir), maxDistance, n, m);""");
     }
 
+    // ---------------------------------------------------------------- render pipeline: the pieces of a renderer of your own
+    // Each takes surface data (position, normal, light levels from the G-buffer nodes) and gives light in linear HDR, so a
+    // renderer is wired as: G-buffer -> lights (+ GI into a Buffer, Accumulate, Denoise) -> Combine -> Tone map -> TAA.
+    static {
+        add("Render pipeline", "vec3 sceneAlbedo(vec2 uv, float brightness = 1)", "Albedo (from the game image)",
+            "The surface colour without the game's own lighting, in linear light: the game image divided by an estimate of"
+                + " its light map (sky light by time of day, block light). The base colour of a renderer of your own.", """
+            vec3 c = pow(max(mosaicScene(uv).rgb, vec3(0.0)), vec3(2.2));
+            if (mosaicDepth(uv) >= 1.0e5) return c;
+            float sky = mosaicHitSkyLight(uv), lamp = mosaicHitBlockLight(uv);
+            float day = clamp(mosaicSunDir().y * 4.0 + 0.35, 0.2, 1.0);
+            float lm = max(max(sky * day, lamp), 0.05);
+            lm = pow(lm, 1.4) * 0.92 + 0.08;
+            return clamp(c / lm, vec3(0.0), vec3(1.0)) * brightness;""");
+        add("Render pipeline", "vec3 sunLight(vec3 position, vec3 normal, float shadows = 1, float intensity = 3)", "Sun & moon light",
+            "Direct light of the sun (the moon at night: dim and blue) on a surface, with shadows traced through the world volume"
+                + " and the height field for far hills. Warm at sunrise and sunset. position and normal from the G-buffer nodes.", """
+            vec3 L = mosaicSunDir();
+            float moon = L.y < 0.0 ? 1.0 : 0.0;
+            if (L.y < 0.0) L = -L;
+            float ndl = max(dot(normal, L), 0.0);
+            if (ndl <= 0.0 || length(position) > 4000.0) return vec3(0.0);
+            float vis = 1.0;
+            if (shadows > 0.5) {
+                vec3 n2;
+                float m2;
+                float d = length(position);
+                vec3 p = position + normal * (0.03 + d * 0.004);
+                float h = mosaicVoxelTrace(p, L, 64.0, n2, m2);
+                vis = h >= 0.35 ? 0.0 : mosaicFarShadow(p, L, d > 20.0 ? 1.5 : 20.0, 192.0);
+            }
+            vec3 col = mix(vec3(1.0, 0.45, 0.18), vec3(1.0, 0.95, 0.88), smoothstep(0.0, 0.35, L.y));
+            col = mix(col, vec3(0.32, 0.4, 0.62) * 0.06, moon);
+            return col * ndl * vis * intensity * smoothstep(0.0, 0.08, L.y);""");
+        add("Render pipeline", "vec3 skyAmbient(vec3 normal, float skyLight = 1, float intensity = 1)", "Sky ambient",
+            "Cheap light from the sky dome on a surface (no rays): the sky colour above the normal, fading with the sky light level"
+                + " (0 in caves). Use it instead of Diffuse GI on slow GPUs.", """
+            return mosaicSky(normalize(normal + vec3(0.0, 1.0, 0.0))) * skyLight * skyLight * intensity * 0.6;""");
+        add("Render pipeline", "vec3 torchLight(float blockLight, vec3 tint = vec3(1.0, 0.6, 0.3), float intensity = 2)", "Block light",
+            "Light of torches, lamps and lava from the block light level (0..1, Block light node), in the colour you pick.", """
+            return tint * pow(clamp(blockLight, 0.0, 1.0), 2.5) * intensity;""");
+        add("Render pipeline", "vec4 diffuseGI(vec3 position, vec3 normal, float bounces = 1, float maxDistance = 24, float sunStrength = 3, float skyStrength = 1)",
+            "Diffuse GI (voxel paths)", "Light arriving at a surface from everywhere, one random path per pixel and frame through the"
+                + " world volume: sky through openings, sun bounced off lit blocks, torch light and glowing blocks. Noisy by design:"
+                + " Accumulate into a Buffer (1/2 size) and Denoise it, then add it to the light. No ray tracing hardware needed.", """
+            if (length(position) > 4000.0) return vec4(0.0, 0.0, 0.0, 1.0);
+            vec3 L = mosaicSunDir();
+            float moon = L.y < 0.0 ? 1.0 : 0.0;
+            if (L.y < 0.0) L = -L;
+            vec3 sunCol = mix(vec3(1.0, 0.45, 0.18), vec3(1.0, 0.95, 0.88), smoothstep(0.0, 0.35, L.y));
+            sunCol = mix(sunCol, vec3(0.32, 0.4, 0.62) * 0.06, moon) * smoothstep(0.0, 0.08, L.y) * sunStrength;
+            vec3 pos = position + normal * 0.03, nrm = normal, through = vec3(1.0), sum = vec3(0.0);
+            float f = frame.timing.z;
+            vec3 h = mosaicHash33(position * 3.17 + vec3(f * 0.6180339, f * 0.4142135, f * 0.7320508));
+            int nb = int(clamp(bounces, 1.0, 4.0));
+            for (int b = 0; b < 4; b++) {
+                if (b >= nb) break;
+                if (b > 0) h = mosaicHash33(h * 17.31 + vec3(float(b)));
+                vec3 tg = normalize(abs(nrm.y) < 0.99 ? cross(nrm, vec3(0.0, 1.0, 0.0)) : cross(nrm, vec3(1.0, 0.0, 0.0)));
+                vec3 bt = cross(nrm, tg);
+                float phi = 6.2831853 * h.x, cr = sqrt(h.y);
+                vec3 dir = normalize(tg * cos(phi) * cr + bt * sin(phi) * cr + nrm * sqrt(max(1.0 - h.y, 0.0)));
+                vec3 hn, sn;
+                float hm, sm;
+                float tt = mosaicVoxelTrace(pos, dir, maxDistance, hn, hm);
+                if (tt < 0.0) {
+                    sum += through * mosaicSky(dir) * skyStrength;
+                    break;
+                }
+                vec3 hp = pos + dir * tt;
+                vec3 alb = mosaicAlbedo(hm);
+                float lamp = mosaicBlockLightAt(hp + hn * 0.5), sky = mosaicSkyLightAt(hp + hn * 0.5);
+                float ndl = max(dot(hn, L), 0.0);
+                float vis = ndl > 0.0 && mosaicVoxelTrace(hp + hn * 0.01, L, 48.0, sn, sm) < 0.0 ? 1.0 : 0.0;
+                vec3 glow = (hm == 2.0 || hm == 13.0) ? alb * 2.0 : vec3(0.0);
+                sum += through * (alb * (sunCol * ndl * vis * sky + mosaicSky(hn) * 0.3 * sky * skyStrength
+                    + vec3(1.0, 0.6, 0.3) * lamp * lamp * 1.5) + glow);
+                through *= alb;
+                pos = hp + hn * 0.01;
+                nrm = hn;
+            }
+            return vec4(sum, 1.0);""");
+        add("Render pipeline", "vec3 voxelReflection(vec3 position, vec3 normal, float maxDistance = 64)", "Reflection (voxels)",
+            "What a mirror at the surface would show, traced through the world volume: lit block colours, the sky where the ray"
+                + " escapes. Mix it in by Fresnel for water, glass and metal.", """
+            vec3 v = normalize(position - mosaicEye());
+            vec3 r = reflect(v, normal), hn, sn;
+            float hm, sm;
+            float t = mosaicVoxelTrace(position + normal * 0.03, r, maxDistance, hn, hm);
+            if (t < 0.0) return mosaicSky(r);
+            vec3 hp = position + normal * 0.03 + r * t;
+            vec3 L = mosaicSunDir();
+            if (L.y < 0.0) L = -L;
+            float ndl = max(dot(hn, L), 0.0);
+            float vis = ndl > 0.0 && mosaicVoxelTrace(hp + hn * 0.01, L, 48.0, sn, sm) < 0.0 ? 1.0 : 0.0;
+            float sky = mosaicSkyLightAt(hp + hn * 0.5), lamp = mosaicBlockLightAt(hp + hn * 0.5);
+            return mosaicAlbedo(hm) * (vec3(3.0, 2.85, 2.6) * ndl * vis * sky * smoothstep(0.0, 0.08, L.y)
+                + mosaicSky(hn) * 0.4 * sky + vec3(1.0, 0.6, 0.3) * lamp * lamp * 1.5);""");
+        add("Render pipeline", "vec3 selfGlow(vec2 uv, vec3 albedo, float strength = 2)", "Emission",
+            "Light a surface gives off itself: lava and light-source blocks seen at this pixel glow in their own colour.", """
+            float m = mosaicHitMaterial(uv);
+            return (m == 2.0 || m == 13.0) ? albedo * strength : vec3(0.0);""");
+        add("Render pipeline", "vec4 litSurface(vec2 uv, vec3 albedo, vec3 light, vec3 glow = vec3(0.0))", "Combine (shade)",
+            "The lit image in linear HDR: albedo times the sum of the lights, plus emission; the sky keeps the game's own sky.", """
+            if (mosaicDepth(uv) >= 1.0e5) return vec4(pow(max(mosaicScene(uv).rgb, vec3(0.0)), vec3(2.2)), 1.0);
+            return vec4(albedo * light + glow, 1.0);""");
+        add("Render pipeline", "vec4 tonemap(vec4 color, float exposure = 0, float curve = 0)", "Tone map",
+            "Linear HDR light to the screen: exposure in stops, then a curve (0 ACES, 1 Reinhard, 2 Hable filmic, 3 exponential,"
+                + " 4 clip) and the display gamma. The last step of a renderer of your own.", """
+            vec3 c = max(color.rgb, vec3(0.0)) * exp2(exposure);
+            int k = int(curve + 0.5);
+            if (k == 0) c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);
+            else if (k == 1) c = c / (1.0 + dot(c, vec3(0.2126, 0.7152, 0.0722)));
+            else if (k == 2) {
+                vec3 x = c * 2.0;
+                c = ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.5) + 0.06) - 0.0666667) / 0.7251;
+            }
+            else if (k == 3) c = vec3(1.0) - exp(-c);
+            return vec4(pow(clamp(c, vec3(0.0), vec3(1.0)), vec3(1.0 / 2.2)), color.a);""");
+    }
+
     /** Every built-in effect, in palette order. */
     public static List<MosaicFunction> all() { return new ArrayList<>(ALL.values()); }
 

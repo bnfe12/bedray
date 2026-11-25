@@ -88,11 +88,16 @@ public final class VulkanRtxKeyBinds {
         }
     }
 
-    /** Opens the Mosaic node editor over the game; its documents live in the active folder pack (or a new one). */
+    /**
+     * Opens Mosaic Studio inside the game - the same app as the desktop Studio, started from Bedray's jar and laid
+     * over the game window - on the active folder pack's graph. Only when it cannot start does the older in-game
+     * editor screen open instead.
+     */
     private static void openMosaicEditor() {
-        var screen = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicEditorScreen.open(null,
-            io.github.andrexarlay.vulkancompat.shaderhost.customrt.CustomRtStage::editableMosaicPath);
-        Minecraft.getInstance().gui.setScreen(screen);
+        if (io.github.andrexarlay.vulkancompat.shaderhost.customrt.MosaicStudioScreen.open()
+            == io.github.andrexarlay.vulkancompat.shaderhost.customrt.StudioLauncher.Result.FAILED)
+            Minecraft.getInstance().gui.setScreen(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicEditorScreen.open(null,
+                io.github.andrexarlay.vulkancompat.shaderhost.customrt.CustomRtStage::editableMosaicPath));
     }
 
     public static void toggleRayTracing() {

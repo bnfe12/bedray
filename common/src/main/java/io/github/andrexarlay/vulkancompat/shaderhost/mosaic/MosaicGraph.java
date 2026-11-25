@@ -144,7 +144,7 @@ public final class MosaicGraph {
         // procedural textures
         "mosaic.noise", "mosaic.voronoi", "mosaic.whiteNoise", "mosaic.checker", "mosaic.wave", "mosaic.gradient",
         // multi-pass: write a named buffer, read it (any uv), the previous frame; weather and sky (binding 16)
-        "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.reproject", "mosaic.taa", "mosaic.repeat", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
+        "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.reproject", "mosaic.taa", "mosaic.repeat", "mosaic.bufferPrev", "mosaic.accumulate", "mosaic.atrous", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
         "mosaic.fogColor",
         // Bedray's renderer as nodes (MosaicRenderer): stages of the real pipeline and the frame they produce
         "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.voxels", "bedray.raster", "bedray.upscaler", "bedray.output", "bedray.stageMap", "user.post", "user.hdr", "user.sky",
@@ -175,7 +175,17 @@ public final class MosaicGraph {
 
     /** Node types that read a Buffer pass by its name (mask): Read buffer, Blur buffer, Kawase blur. */
     public static boolean readsBuffer(String type) {
-        return type.equals("mosaic.bufferIn") || type.equals("mosaic.blur") || type.equals("mosaic.kawase") || type.equals("mosaic.taa");
+        return type.equals("mosaic.bufferIn") || type.equals("mosaic.blur") || type.equals("mosaic.kawase") || type.equals("mosaic.taa")
+            || type.equals("mosaic.atrous");
+    }
+
+    /**
+     * Node types that read a Buffer as it was at the end of the last frame (Buffer last frame, Accumulate): no ordering
+     * dependency, so a buffer may feed itself (temporal accumulation). The planner keeps a copy of such buffers (see
+     * MosaicPasses: a history pass after the final image).
+     */
+    public static boolean readsHistory(String type) {
+        return type.equals("mosaic.bufferPrev") || type.equals("mosaic.accumulate");
     }
 
     /** Whether the graph has Buffer nodes (it runs as several passes, see MosaicPasses). */
@@ -213,6 +223,9 @@ public final class MosaicGraph {
         m.put("mosaic.reproject", List.of(new Port("uv", Kind.V2, false)));
         m.put("mosaic.repeat", List.of(new Port("init", Kind.V4, false), new Port("uv", Kind.V2, false)));
         m.put("mosaic.taa", List.of(new Port("uv", Kind.V2, false), new Port("blend", Kind.F, false)));
+        m.put("mosaic.bufferPrev", List.of(new Port("uv", Kind.V2, false)));
+        m.put("mosaic.accumulate", List.of(new Port("color", Kind.V4, true), new Port("uv", Kind.V2, false), new Port("frames", Kind.F, false)));
+        m.put("mosaic.atrous", List.of(new Port("uv", Kind.V2, false), new Port("step", Kind.F, false), new Port("edges", Kind.F, false)));
         m.put("mat.texture", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.image", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.bsdf", List.of(new Port("baseColor", Kind.V4, false), new Port("roughness", Kind.F, false),
@@ -639,6 +652,12 @@ public final class MosaicGraph {
                     error(n.id(), null, "buffer " + n.mask() + " is read while it is being written: use Previous frame for feedback",
                         Fix.CHANGE_PARAM);
             }
+            for (Node n : nodes.values()) {
+                if (!readsHistory(n.type()) || n.index() >= MosaicPasses.FIRST_BUFFER_BINDING) continue;
+                if (n.mask() == null || !written.containsKey(n.mask()))
+                    error(n.id(), null, "node " + n.id() + " reads last frame's buffer " + n.mask() + ", which no Buffer node writes"
+                        + (written.isEmpty() ? "" : " (buffers: " + written.keySet() + ")"), Fix.CHANGE_PARAM);
+            }
         }
 
         void upstream(String id, Set<String> into) {
@@ -938,7 +957,8 @@ public final class MosaicGraph {
                 case "mosaic.const" -> n.value() == null ? null : Kind.ofSize(n.value().length);
                 case "mosaic.vec" -> Kind.ofSize(n.index());
                 case "mosaic.swizzle" -> swizzleKind(n, visiting);
-                case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf", "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.taa", "mosaic.repeat", "mosaic.history" -> Kind.V4;
+                case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf", "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.taa", "mosaic.repeat", "mosaic.history",
+                     "mosaic.bufferPrev", "mosaic.accumulate", "mosaic.atrous" -> Kind.V4;
                 case "mosaic.rain", "mosaic.thunder", "mosaic.temperature" -> Kind.F;
                 case "mosaic.reproject" -> Kind.V2;
                 case "bedray.output", "slang.module", "slang.pack", "bedray.stageMap" -> Kind.V4;

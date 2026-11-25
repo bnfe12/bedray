@@ -35,5 +35,6 @@ public final class RtxAutotest {
         AutotestScenarios.register(new AtmosphereScenario());
         AutotestScenarios.register(new ParticlesScenario());
         AutotestScenarios.register(new IrisScenario());
+        AutotestScenarios.register(new MosaicStudioScenario());
     }
 }

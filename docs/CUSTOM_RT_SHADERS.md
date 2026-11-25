@@ -172,6 +172,22 @@ index = 1..64 runs, optional `init` and `uv` inputs) emits `acc = f(acc, i)` in 
 name or none for the scene colour, input `blend`, default 0.9) blends the reprojected previous frame clamped to the
 3x3 neighbourhood of its source.
 
+**History buffers (feedback).** `mosaic.bufferPrev` (Buffer last frame; mask = a Buffer name, input `uv`) reads a
+Buffer as it was at the end of the previous frame, and `mosaic.accumulate` (mask = the Buffer it feeds, inputs
+`color`, `uv`, `frames` default 32) blends this frame's value into it: last frame's value at the reprojected
+position with weight `1/n`, `n` counted in alpha up to `frames`, reset off screen, on the sky, on NaN and where the
+previous ray distance there does not match this surface seen from the previous camera. Neither is an ordering
+dependency, so a Buffer may feed itself. For every Buffer read this way the plan adds a **history pass**
+`~prev.<buffer>` (same size, copies the Buffer), and with Accumulate also `~depth` (full size, the ray distance of
+binding 4 in every channel). History passes run **after the final image**, so all readers in the frame see the previous
+frame. Their bindings follow the user Buffers (names sorted; `~` sorts after letters, so user Buffer bindings keep
+their numbers); Studio SPIR-V for them is `mosaic.pass.~prev.<buffer>.spv` / `mosaic.pass.~depth.spv`. Buffer
+images are kept between frames and cleared to black when they are (re)created.
+
+**Denoise.** `mosaic.atrous` (mask = a Buffer, inputs `uv`, `step` default 1, `edges` default 1; 0 = plain blur)
+is one edge-aware a-trous step: a 5 x 5 B3 kernel with taps `step` buffer pixels apart, weighted down by the tap's
+distance from this pixel's surface plane and by its brightness difference. Chain steps 1, 2, 4 through Buffers.
+
 ### `BedrayFrame` (std140, 320 bytes)
 
 | Offset | Member | Meaning |

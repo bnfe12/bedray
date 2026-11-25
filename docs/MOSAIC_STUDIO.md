@@ -25,6 +25,21 @@ to Minecraft, or without it.
 | **Result** | The frame of the running game before and after the shader, side by side, split, or against an earlier step; record GIF / MP4, save frames. |
 | **Workflow** | Document tabs, Blender-like areas you can split, pop out and dock back, rebindable keys (also on the Russian layout), themes including OLED black, named undo history per tab. |
 
+## A renderer of your own
+
+"+" > **New renderer of your own** opens a whole renderer made of nodes, which runs in the game's custom RT stage on any
+GPU (voxel rays through the world volume, no ray tracing hardware needed):
+
+- G-buffer: Albedo (from the game image), Hit position, Surface normal, Sky light, Block light.
+- Lights (category *Render pipeline*): Sun & moon light with voxel and far shadows, Block light, Sky ambient, Emission,
+  Diffuse GI (voxel paths), Reflection (voxels).
+- Passes: Buffer (1/1..1/8), **Accumulate** (temporal accumulation with reprojection and disocclusion reset),
+  **Buffer (last frame)** (feedback), **Denoise (a-trous)** steps, Temporal AA.
+- Combine (shade), **Tone map** (ACES, Reinhard, Hable, exponential, clip).
+
+The GI variant traces one path per pixel at 1/2 size, accumulates it over frames and denoises it in three steps; the
+fast variant uses sky ambient instead. Every node is an ordinary node: open its code, change it, or rewire the frame.
+
 ## Bedray as nodes
 
 - Renderer workspace: the frame as a chain of stages (one render mode: Raster, Path tracer or Hybrid ray effects).

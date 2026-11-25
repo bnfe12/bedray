@@ -117,11 +117,16 @@ final class GpuPreview implements AutoCloseable {
     private record Img(long image, long memory, long view, int w, int h, int format) {}
 
     /** One compute pass of a chain: SPIR-V, size divisor, the buffer binding it writes (-1 for the final image). */
-    record PassRun(byte[] spirv, int scale, int binding) {}
+    record PassRun(byte[] spirv, int scale, int binding, boolean after) {
+        PassRun(byte[] spirv, int scale, int binding) { this(spirv, scale, binding, false); }
+    }
 
     private final class Prepared {
         long module, setLayout, pipelineLayout, pipeline, pool, set;
         Img output;
+        /** Layout the output is in between runs (buffers keep their content from run to run: history passes). */
+        int layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        boolean fin;
         final List<Buf> buffers = new ArrayList<>();
         boolean push;
 
@@ -238,7 +243,7 @@ final class GpuPreview implements AutoCloseable {
      */
     synchronized BufferedImage runChain(List<PassRun> runs, BufferedImage input, float time, int frame, Extras extras) {
         int w = input.getWidth(), h = input.getHeight();
-        int key = java.util.Objects.hash(w, h, runs.stream().map(r -> Arrays.hashCode(r.spirv()) * 31 + r.scale() * 7 + r.binding()).toList());
+        int key = java.util.Objects.hash(w, h, runs.stream().map(r -> Arrays.hashCode(r.spirv()) * 31 + r.scale() * 7 + r.binding() + (r.after() ? 1 << 20 : 0)).toList());
         if (chain == null || chain.key != key) {
             if (chain != null) chain.destroy();
             chain = null;
@@ -267,9 +272,19 @@ final class GpuPreview implements AutoCloseable {
                 barrier(s, c.history.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 c.historyFresh = false;
             }
+            for (Prepared p : c.passes) {
+                if (p.layout != VK_IMAGE_LAYOUT_UNDEFINED) continue;
+                // first run: every buffer starts black (a history buffer is read before its pass writes it)
+                barrier(s, p.output.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                VkImageSubresourceRange.Buffer r0 = VkImageSubresourceRange.calloc(1, s);
+                r0.get(0).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
+                vkCmdClearColorImage(cmd, p.output.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VkClearColorValue.calloc(s), r0);
+                barrier(s, p.output.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                p.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            }
             for (int i = 0; i < c.passes.size(); i++) {
                 Prepared p = c.passes.get(i);
-                barrier(s, p.output.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+                barrier(s, p.output.image(), p.layout, VK_IMAGE_LAYOUT_GENERAL);
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipelineLayout, 0, s.longs(p.set), null);
                 if (p.push) {
@@ -278,10 +293,10 @@ final class GpuPreview implements AutoCloseable {
                     vkCmdPushConstants(cmd, p.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pb);
                 }
                 vkCmdDispatch(cmd, (p.output.w() + 7) / 8, (p.output.h() + 7) / 8, 1);
-                boolean last = i == c.passes.size() - 1;
-                barrier(s, p.output.image(), VK_IMAGE_LAYOUT_GENERAL, last ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                p.layout = p.fin ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                barrier(s, p.output.image(), VK_IMAGE_LAYOUT_GENERAL, p.layout);
             }
-            Img fin = c.passes.get(c.passes.size() - 1).output;
+            Img fin = c.passes.stream().filter(q -> q.fin).findFirst().orElse(c.passes.get(c.passes.size() - 1)).output;
             VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, s);
             region.get(0).imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
             region.get(0).imageExtent().set(w, h, 1);
@@ -387,7 +402,8 @@ final class GpuPreview implements AutoCloseable {
             boolean last = r.binding() < 0;
             int pw = last ? w : Math.max(1, w / r.scale()), ph = last ? h : Math.max(1, h / r.scale());
             p.output = image(pw, ph, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
-                | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+                | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            p.fin = last;
             if (!last) buffers.put(r.binding(), p.output);
             c.passes.add(p);
         }

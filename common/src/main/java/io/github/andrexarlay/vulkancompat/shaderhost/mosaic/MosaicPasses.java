@@ -30,11 +30,28 @@ public final class MosaicPasses {
     /** One pass: its buffer name (null for the final image), scale divisor, its graph JSON, buffer bindings it reads. */
     public record Pass(String name, int scale, String json, Set<Integer> reads, boolean history) {}
 
-    public record Plan(List<Pass> passes, Map<String, Integer> bindings) {
+    /**
+     * {@code passes}: Buffer passes in dependency order, the final image last. {@code after}: history passes that run after
+     * the final image and copy a buffer (or the ray distance) for the next frame's Buffer last frame / Accumulate nodes.
+     */
+    public record Plan(List<Pass> passes, Map<String, Integer> bindings, List<Pass> after) {
+        public Plan(List<Pass> passes, Map<String, Integer> bindings) { this(passes, bindings, List.of()); }
+
+        /** Every pass the host dispatches: the ordered passes, then the history copies. */
+        public List<Pass> all() {
+            List<Pass> out = new ArrayList<>(passes);
+            out.addAll(after);
+            return out;
+        }
+
         public Pass last() { return passes.get(passes.size() - 1); }
     }
 
     private static final String FINAL = "#final";
+    /** Buffer names of the history copies (never valid user names, sorted after them so user bindings keep their numbers). */
+    public static final String HISTORY_PREFIX = "~prev.", DEPTH_HISTORY = "~depth";
+
+    public static String historyName(String buffer) { return HISTORY_PREFIX + buffer; }
 
     /** Orders the passes the final image needs; throws IllegalArgumentException on a buffer cycle. */
     public static Plan plan(MosaicGraph g) {
@@ -42,7 +59,17 @@ public final class MosaicPasses {
         for (MosaicGraph.Node n : g.nodes()) if (n.type().equals("mosaic.pass")) writers.put(n.mask(), n);
         Map<String, Integer> bindings = new LinkedHashMap<>();
         int b = FIRST_BUFFER_BINDING;
-        for (String name : new TreeSet<>(writers.keySet())) bindings.put(name, b++);
+        Set<String> kept = new TreeSet<>();
+        boolean keepDepth = false;
+        for (MosaicGraph.Node n : g.nodes())
+            if (MosaicGraph.readsHistory(n.type()) && n.mask() != null && writers.containsKey(n.mask())) {
+                kept.add(n.mask());
+                keepDepth |= n.type().equals("mosaic.accumulate");
+            }
+        Set<String> names = new TreeSet<>(writers.keySet());
+        for (String k : kept) names.add(historyName(k));
+        if (keepDepth) names.add(DEPTH_HISTORY);
+        for (String name : names) bindings.put(name, b++);
         Map<String, Set<String>> upstream = new LinkedHashMap<>();
         for (Map.Entry<String, MosaicGraph.Node> e : writers.entrySet()) upstream.put(e.getKey(), up(g, e.getValue().inputs().get("color")));
         upstream.put(FINAL, up(g, g.node(g.outputId()).inputs().get("color")));
@@ -64,7 +91,17 @@ public final class MosaicPasses {
             boolean history = upstream.get(name).stream().anyMatch(id -> g.node(id).type().equals("mosaic.history"));
             passes.add(new Pass(last ? null : name, scale, passGraph(g, upstream.get(name), root, bindings), rb, history));
         }
-        return new Plan(passes, bindings);
+        List<Pass> after = new ArrayList<>();
+        for (String k : kept) {
+            int bind = bindings.get(k);
+            String json = "{\"nodes\":[{\"id\":\"r\",\"type\":\"mosaic.bufferIn\",\"mask\":" + GSON.toJson(k) + ",\"index\":" + bind
+                + "},{\"id\":\"m_pass_out\",\"type\":\"mosaic.output\",\"inputs\":{\"color\":\"r\"}}]}";
+            after.add(new Pass(historyName(k), Math.max(1, writers.get(k).index()), json, Set.of(bind), false));
+        }
+        if (keepDepth) after.add(new Pass(DEPTH_HISTORY, 1, "{\"nodes\":[{\"id\":\"d\",\"type\":\"mosaic.sceneDepth\"},"
+            + "{\"id\":\"v\",\"type\":\"mosaic.vec\",\"index\":4,\"inputs\":{\"x\":\"d\"}},"
+            + "{\"id\":\"m_pass_out\",\"type\":\"mosaic.output\",\"inputs\":{\"color\":\"v\"}}]}", Set.of(), false));
+        return new Plan(passes, bindings, after);
     }
 
     private static void visit(String name, Map<String, Set<String>> reads, List<String> order, Set<String> visiting) {
@@ -101,8 +138,11 @@ public final class MosaicPasses {
             j.addProperty("type", n.type());
             if (!n.inputs().isEmpty()) j.add("inputs", GSON.toJsonTree(n.inputs()));
             if (n.value() != null) j.add("value", GSON.toJsonTree(n.value()));
-            int index = MosaicGraph.readsBuffer(n.type()) ? bindings.getOrDefault(n.mask(), 0) : n.index();
+            int index = MosaicGraph.readsBuffer(n.type()) ? bindings.getOrDefault(n.mask(), 0)
+                : MosaicGraph.readsHistory(n.type()) ? bindings.getOrDefault(historyName(n.mask()), 0) : n.index();
             if (index != 0) j.addProperty("index", index);
+            // Accumulate also reads last frame's ray distance: its binding travels in the value
+            if (n.type().equals("mosaic.accumulate")) j.add("value", GSON.toJsonTree(new double[] {bindings.getOrDefault(DEPTH_HISTORY, 0)}));
             if (n.mask() != null) j.addProperty("mask", n.mask());
             if (!n.defaults().isEmpty()) j.add("defaults", GSON.toJsonTree(n.defaults()));
             nodes.add(j);

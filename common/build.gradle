@@ -44,6 +44,11 @@ dependencies {
     testImplementation project(':renderer-api')
     // Bedray Core (internal platform layer, vendored in this repository): device-requirement registry, native-library resolver, autotest harness.
     compileOnly project(':core')
+    // Mosaic Studio inside the game (MosaicStudioScreen / StudioEmbed): the game window through SDL and Win32 through
+    // JNA - both ship with Minecraft itself, so compile-only.
+    compileOnly("org.lwjgl:lwjgl-sdl:${rootProject.lwjgl_sdl_version}") { transitive = false }
+    compileOnly "net.java.dev.jna:jna:5.17.0"
+    compileOnly "net.java.dev.jna:jna-platform:5.17.0"
     testImplementation project(':core')
 
     if (rootProject.hasProperty('sodiumJar')) {

@@ -366,7 +366,8 @@ public final class CustomRtStage {
         List<CustomRtExecutor.ChainPass> passes = new ArrayList<>();
         StringBuilder signature = new StringBuilder();
         VulkanGlslPackCompiler.Compiled last = null;
-        for (var p : plan.passes()) {
+        for (var p : plan.all()) {
+            boolean after = plan.after().contains(p);
             String label = p.name() == null ? "final image" : "Buffer \"" + p.name() + "\"";
             MosaicGraph pg = MosaicGraph.parse(p.json());
             String glsl = mosaicGlsl(pg);
@@ -385,7 +386,7 @@ public final class CustomRtStage {
             String problem = validate(c);
             if (problem != null) throw new IllegalArgumentException(label + ": " + problem);
             if (p.name() == null) last = c;
-            else passes.add(new CustomRtExecutor.ChainPass(c, p.scale(), plan.bindings().get(p.name())));
+            else passes.add(new CustomRtExecutor.ChainPass(c, p.scale(), plan.bindings().get(p.name()), after));
         }
         lastCompiledMosaicGlsl = signature.toString();
         pendingChain = List.copyOf(passes);
@@ -396,7 +397,7 @@ public final class CustomRtStage {
     private static String mosaicSignature(MosaicGraph graph) {
         if (!graph.multiPass()) return mosaicGlsl(graph);
         StringBuilder signature = new StringBuilder();
-        for (var p : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.plan(graph).passes())
+        for (var p : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.plan(graph).all())
             signature.append("// pass ").append(p.name()).append(" 1/").append(p.scale()).append('\n')
                 .append(mosaicGlsl(MosaicGraph.parse(p.json())));
         return signature.toString();

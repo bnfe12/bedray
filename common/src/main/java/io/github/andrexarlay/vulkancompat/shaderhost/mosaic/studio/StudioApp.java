@@ -575,6 +575,13 @@ final class StudioApp {
         activate(t);
     }
 
+    /** A new shader tab holding a whole renderer of your own (Renderer from scratch template), ready to edit. */
+    void newRendererTab(boolean gi) {
+        newTab(StudioModel.Workspace.SHADERS);
+        String name = gi ? "Renderer from scratch (voxel GI)" : "Renderer from scratch (fast)";
+        MosaicTemplates.all().stream().filter(t -> t.name().equals(name)).findFirst().ifPresent(model::loadTemplate);
+    }
+
     void newTab(StudioModel.Workspace kind) {
         DocTabs.Tab t = new DocTabs.Tab(kind, null);
         tabs.add(t);
@@ -914,6 +921,14 @@ final class StudioApp {
 
     private boolean dispatch(KeyEvent e) {
         if (e.getID() != KeyEvent.KEY_PRESSED || capturingKeys) return false;
+        // inside the game, Esc goes back to the game like any game screen (not while a menu, popup or text edit is open)
+        if (embedded() && e.getKeyCode() == KeyEvent.VK_ESCAPE && e.getModifiersEx() == 0
+            && MenuSelectionManager.defaultManager().getSelectedPath().length == 0
+            && !(e.getComponent() instanceof JTextComponent tc && tc.isEditable())
+            && SwingUtilities.getWindowAncestor(e.getComponent()) == main) {
+            StudioEmbed.hide();
+            return true;
+        }
         Window w = e.getComponent() instanceof Window win ? win : SwingUtilities.getWindowAncestor(e.getComponent());
         if (!(w instanceof Dock.StudioWindow sw) || !windows.contains(sw)) return false;
         StudioKeys.Action a = model.keys.match(layoutIndependent(e));
@@ -1191,12 +1206,28 @@ final class StudioApp {
     }
 
     void requestClose() {
+        if (embedded()) { // inside the game: closing goes back to the game, Studio stays ready
+            StudioEmbed.hide();
+            return;
+        }
         if (model.doc.dirty && model.doc.file != null) {
             int r = JOptionPane.showConfirmDialog(main, "Save changes to " + model.doc.file.getFileName() + "?", "Mosaic Studio",
                 JOptionPane.YES_NO_CANCEL_OPTION);
             if (r == JOptionPane.CANCEL_OPTION || r == JOptionPane.CLOSED_OPTION) return;
             if (r == JOptionPane.YES_OPTION) model.save(false);
         }
+        quitNow();
+    }
+
+    /** Started by the game to live inside its window (StudioEmbed; checked here so JNA loads only then). */
+    static boolean embedded() {
+        return Long.getLong("mosaic.embed.hwnd", 0L) != 0L
+            && System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).startsWith("windows");
+    }
+
+    /** Saves settings and the project (and an open graph with Live save) and exits without asking. */
+    void quitNow() {
+        if (model.doc.dirty && model.doc.file != null) model.save(false);
         saveSettings();
         ProjectStore.save(model, graph());
         model.dispose();
@@ -1234,6 +1265,10 @@ final class StudioApp {
             doc.dirty = false;
         }
         MosaicDocument start = doc;
-        SwingUtilities.invokeLater(() -> new StudioApp(start, s).open());
+        SwingUtilities.invokeLater(() -> {
+            StudioApp app = new StudioApp(start, s);
+            app.open();
+            if (embedded()) StudioEmbed.attach(app);
+        });
     }
 }

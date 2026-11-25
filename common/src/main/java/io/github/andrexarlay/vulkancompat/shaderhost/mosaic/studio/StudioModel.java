@@ -956,13 +956,14 @@ final class StudioModel {
 
                 @Override protected MosaicShaderCheck.Result doInBackground() {
                     MosaicShaderCheck.Result last = null;
-                    for (var p : pl.passes()) {
+                    for (var p : pl.all()) {
                         MosaicGraph pg = MosaicGraph.analyze(p.json()).graph();
                         if (pg == null) return new MosaicShaderCheck.Result(false, 0, 0,
                             List.of(new MosaicShaderCheck.Error(0, "pass " + p.name() + " is not a valid graph", null, null, 0)), "");
                         MosaicShaderCheck.Result r = MosaicShaderCheck.compile(MosaicCodegen.generate(pg, MosaicCodegen.Options.DEFAULT, false));
                         if (!r.ok()) return r;
-                        runs.add(new GpuPreview.PassRun(r.spirv(), p.scale(), p.name() == null ? -1 : pl.bindings().get(p.name())));
+                        runs.add(new GpuPreview.PassRun(r.spirv(), p.scale(), p.name() == null ? -1 : pl.bindings().get(p.name()),
+                            pl.after().contains(p)));
                         last = r;
                     }
                     return last;
@@ -1515,7 +1516,7 @@ final class StudioModel {
         java.util.List<java.util.Map.Entry<MosaicGraph, String>> jobs = new java.util.ArrayList<>();
         if (g.multiPass()) {
             try {
-                for (var p : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.plan(g).passes())
+                for (var p : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.plan(g).all())
                     jobs.add(java.util.Map.entry(MosaicGraph.parse(p.json()), io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlang.prebuiltName(p.name())));
             } catch (RuntimeException e) {
                 return;

@@ -86,6 +86,11 @@ public final class MosaicTemplates {
             chain("pathTraceGI", "colorGrade")));
         ALL.add(new Template("Hybrid RT", "Rendering", "Classic image + hardware RT ambient occlusion and water"
             + " reflections + voxel GI.", chain("pathTraceGI", "rtAmbientOcclusion", "rtReflections")));
+        ALL.add(new Template("Renderer from scratch (voxel GI)", "Renderer", "A whole renderer of your own from render-pipeline nodes:"
+            + " albedo, sun and moon with voxel shadows, block light, emission, one-bounce voxel GI accumulated over frames and"
+            + " denoised (a-trous x3), tone map and Temporal AA. No ray tracing hardware needed.", renderer(true)));
+        ALL.add(new Template("Renderer from scratch (fast)", "Renderer", "The same renderer with sky ambient instead of GI:"
+            + " sun and moon shadows, block light and emission on any GPU.", renderer(false)));
         ALL.add(new Template("Debug: distance", "Debug", "Grey by hit distance (white = 64+ blocks).", """
             {"nodes": [
               {"id": "depth", "type": "mosaic.sceneDepth", "x": 0, "y": 0},
@@ -99,6 +104,137 @@ public final class MosaicTemplates {
               {"id": "sky", "type": "mosaic.skyLight", "x": 0, "y": 0},
               {"id": "out", "type": "mosaic.output", "inputs": {"color": "sky"}, "x": 200, "y": 0}
             ]}"""));
+    }
+
+    /**
+     * A renderer of your own from the render-pipeline nodes: G-buffer (albedo, position, normal, light levels), sun and moon
+     * with voxel shadows, block light, emission and either voxel GI (one path per pixel into a 1/2 Buffer, Accumulate,
+     * three Denoise steps) or the cheap sky ambient; combined, tone mapped into a Buffer and smoothed by Temporal AA.
+     */
+    static String renderer(boolean gi) {
+        JsonObject root = new JsonObject();
+        JsonArray fns = new JsonArray(), nodes = new JsonArray();
+        java.util.function.BiConsumer<JsonObject, String[]> wire = (n, kv) -> {
+            JsonObject in = n.has("inputs") ? n.getAsJsonObject("inputs") : new JsonObject();
+            for (int i = 0; i + 1 < kv.length; i += 2) in.addProperty(kv[i], kv[i + 1]);
+            n.add("inputs", in);
+        };
+        java.util.Set<String> used = new java.util.LinkedHashSet<>();
+        java.util.function.Function<Object[], JsonObject> add = a -> {
+            String id = (String) a[0], type = (String) a[1];
+            if (type.startsWith("fn:")) {
+                MosaicFunction f = MosaicEffects.get(type.substring(3));
+                if (used.add(f.name())) fns.add(f.toJson());
+                type = f.type();
+            }
+            JsonObject n = node(id, type, (Integer) a[2], (Integer) a[3]);
+            nodes.add(n);
+            return n;
+        };
+        add.apply(new Object[] {"uv", "mosaic.uv", 0, 0});
+        add.apply(new Object[] {"pos", "mosaic.position", 0, 90});
+        add.apply(new Object[] {"nrm", "mosaic.normal", 0, 180});
+        add.apply(new Object[] {"lamp", "mosaic.blockLight", 0, 360});
+        wire.accept(add.apply(new Object[] {"albedo", "fn:sceneAlbedo", 220, 0}), new String[] {"uv", "uv"});
+        wire.accept(add.apply(new Object[] {"sun", "fn:sunLight", 220, 110}), new String[] {"position", "pos", "normal", "nrm"});
+        wire.accept(add.apply(new Object[] {"torch", "fn:torchLight", 220, 360}), new String[] {"blockLight", "lamp"});
+        wire.accept(add.apply(new Object[] {"glow", "fn:selfGlow", 220, 450}), new String[] {"uv", "uv", "albedo", "albedo"});
+        wire.accept(add.apply(new Object[] {"l1", "mosaic.add", 460, 200}), new String[] {"a", "sun", "b", "torch"});
+        String indirect;
+        if (gi) {
+            wire.accept(add.apply(new Object[] {"giRaw", "fn:diffuseGI", 220, 560}), new String[] {"position", "pos", "normal", "nrm"});
+            JsonObject acc = add.apply(new Object[] {"acc", "mosaic.accumulate", 460, 560});
+            acc.addProperty("mask", "gi");
+            wire.accept(acc, new String[] {"color", "giRaw"});
+            JsonObject p0 = add.apply(new Object[] {"giBuf", "mosaic.pass", 660, 560});
+            p0.addProperty("mask", "gi");
+            p0.addProperty("index", 2);
+            wire.accept(p0, new String[] {"color", "acc"});
+            String prev = "gi";
+            String[] steps = {"giA", "giB"};
+            int x = 860;
+            for (int i = 0; i < 3; i++) {
+                JsonObject d = add.apply(new Object[] {"dn" + i, "mosaic.atrous", x, 560});
+                d.addProperty("mask", prev);
+                JsonObject def = new JsonObject();
+                JsonArray s = new JsonArray();
+                s.add(1 << i);
+                def.add("step", s);
+                d.add("defaults", def);
+                if (i == 2) break;
+                JsonObject p = add.apply(new Object[] {"buf" + i, "mosaic.pass", x + 190, 560});
+                p.addProperty("mask", steps[i]);
+                p.addProperty("index", 2);
+                wire.accept(p, new String[] {"color", "dn" + i});
+                prev = steps[i];
+                x += 380;
+            }
+            JsonObject sw = add.apply(new Object[] {"giRgb", "mosaic.swizzle", 1640, 420});
+            sw.addProperty("mask", "xyz");
+            wire.accept(sw, new String[] {"a", "dn2"});
+            indirect = "giRgb";
+        } else {
+            add.apply(new Object[] {"sky", "mosaic.skyLight", 0, 270});
+            wire.accept(add.apply(new Object[] {"amb", "fn:skyAmbient", 220, 240}), new String[] {"normal", "nrm", "skyLight", "sky"});
+            indirect = "amb";
+        }
+        wire.accept(add.apply(new Object[] {"light", "mosaic.add", 1800, 200}), new String[] {"a", "l1", "b", indirect});
+        wire.accept(add.apply(new Object[] {"shade", "fn:litSurface", 1980, 120}),
+            new String[] {"uv", "uv", "albedo", "albedo", "light", "light", "glow", "glow"});
+        wire.accept(add.apply(new Object[] {"tone", "fn:tonemap", 2180, 120}), new String[] {"color", "shade"});
+        JsonObject fb = add.apply(new Object[] {"frameBuf", "mosaic.pass", 2380, 120});
+        fb.addProperty("mask", "frame");
+        fb.addProperty("index", 1);
+        wire.accept(fb, new String[] {"color", "tone"});
+        JsonObject taa = add.apply(new Object[] {"taa", "mosaic.taa", 2580, 120});
+        taa.addProperty("mask", "frame");
+        JsonObject out = add.apply(new Object[] {"out", "mosaic.output", 2780, 120});
+        wire.accept(out, new String[] {"color", "taa"});
+        root.add("functions", fns);
+        root.add("nodes", nodes);
+        return root.toString();
+    }
+
+    /** One function alone, every required input fed by a source of its kind, its result shown (vec3: as xyzx): checks and docs. */
+    static String chainOf(String name) {
+        MosaicFunction f = MosaicEffects.get(name);
+        JsonObject root = new JsonObject();
+        JsonArray fns = new JsonArray(), nodes = new JsonArray();
+        fns.add(f.toJson());
+        nodes.add(node("uv", "mosaic.uv", 0, 0));
+        nodes.add(node("pos", "mosaic.position", 0, 80));
+        nodes.add(node("nrm", "mosaic.normal", 0, 160));
+        nodes.add(node("lvl", "mosaic.skyLight", 0, 240));
+        nodes.add(node("col", "mosaic.sceneColor", 0, 320));
+        JsonObject n = node("f", f.type(), 200, 0), in = new JsonObject();
+        for (MosaicFunction.Param p : f.params()) {
+            if (!p.required()) continue;
+            in.addProperty(p.name(), switch (p.kind()) {
+                case V2 -> "uv";
+                case V3 -> p.name().toLowerCase(java.util.Locale.ROOT).contains("normal") ? "nrm" : "pos";
+                case V4 -> "col";
+                default -> "lvl";
+            });
+        }
+        n.add("inputs", in);
+        nodes.add(n);
+        String last = "f";
+        if (f.output() != MosaicGraph.Kind.V4) {
+            JsonObject sw = node("sw", "mosaic.swizzle", 400, 0);
+            sw.addProperty("mask", f.output() == MosaicGraph.Kind.V3 ? "xyzx" : f.output() == MosaicGraph.Kind.V2 ? "xyxy" : "xxxx");
+            JsonObject si = new JsonObject();
+            si.addProperty("a", "f");
+            sw.add("inputs", si);
+            nodes.add(sw);
+            last = "sw";
+        }
+        JsonObject out = node("out", "mosaic.output", 600, 0), oi = new JsonObject();
+        oi.addProperty("color", last);
+        out.add("inputs", oi);
+        nodes.add(out);
+        root.add("functions", fns);
+        root.add("nodes", nodes);
+        return root.toString();
     }
 
     public static List<Template> all() { return List.copyOf(ALL); }
