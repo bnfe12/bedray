@@ -375,13 +375,63 @@ final class MaterialPanels {
                 cacheVersion = -1;
                 root.repaint();
             });
-            modelRow.add(light, BorderLayout.EAST);
+            JButton lightMenu = button("Light: " + PreviewLight.current.name, "Light the material: presets, an HDRI of your own, sun and fill colours", null);
+            lightMenu.addActionListener(e -> {
+                JPopupMenu p = new JPopupMenu();
+                for (PreviewLight pl : PreviewLight.PRESETS) {
+                    JMenuItem it = new JMenuItem(pl.name);
+                    it.addActionListener(ev -> setLight(pl, lightMenu));
+                    p.add(it);
+                }
+                p.addSeparator();
+                JMenuItem hd = new JMenuItem("Load HDRI (.hdr, .png, .jpg)...");
+                hd.addActionListener(ev -> {
+                    JFileChooser fc = new JFileChooser();
+                    fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("HDRI / panorama", "hdr", "png", "jpg", "jpeg"));
+                    if (fc.showOpenDialog(root) != JFileChooser.APPROVE_OPTION) return;
+                    try {
+                        setLight(PreviewLight.hdri(fc.getSelectedFile().toPath()), lightMenu);
+                    } catch (Exception ex) {
+                        model.say("Could not read the HDRI: " + ex.getMessage(), BAD);
+                    }
+                });
+                p.add(hd);
+                JMenuItem sc = new JMenuItem("Sun colour...");
+                sc.addActionListener(ev -> {
+                    PreviewLight cur = PreviewLight.current;
+                    Color c = JColorChooser.showDialog(root, "Sun colour", new Color((float) Math.min(1, cur.sun[0]), (float) Math.min(1, cur.sun[1]),
+                        (float) Math.min(1, cur.sun[2])));
+                    if (c != null) setLight(cur.withSun(PreviewLight.rgb(c.getRed() / 255.0, c.getGreen() / 255.0, c.getBlue() / 255.0), cur.sunStrength), lightMenu);
+                });
+                p.add(sc);
+                JMenu strength = new JMenu("Sun strength");
+                for (double s : new double[] {0, 0.25, 0.5, 1, 1.5, 2, 3}) {
+                    JMenuItem it = new JMenuItem(s == 0 ? "off" : "x " + s);
+                    it.addActionListener(ev -> setLight(PreviewLight.current.withSun(PreviewLight.current.sun, s), lightMenu));
+                    strength.add(it);
+                }
+                p.add(strength);
+                JMenuItem fl = new JMenuItem("Fill light colour... (black: off)");
+                fl.addActionListener(ev -> {
+                    Color c = JColorChooser.showDialog(root, "Fill light", Color.BLACK);
+                    if (c != null) setLight(PreviewLight.current.withFill(PreviewLight.rgb(c.getRed() / 255.0, c.getGreen() / 255.0, c.getBlue() / 255.0)), lightMenu);
+                });
+                p.add(fl);
+                p.show(lightMenu, 0, lightMenu.getHeight());
+            });
+            JPanel lightRow = new JPanel(new BorderLayout(6, 0));
+            lightRow.setOpaque(false);
+            lightRow.setBorder(new EmptyBorder(5, 0, 0, 0));
+            lightRow.add(lightMenu, BorderLayout.WEST);
+            lightRow.add(light, BorderLayout.EAST);
+            if (Boolean.getBoolean("mosaic.selfshot.pbr")) light.setSelectedItem(false);
             JPanel rows = new JPanel(new GridLayout(0, 1, 0, 0));
             rows.setOpaque(false);
             rows.add(modelRow);
             JPanel both = new JPanel(new BorderLayout());
             both.setOpaque(false);
             both.add(modelRow, BorderLayout.NORTH);
+            both.add(lightRow, BorderLayout.CENTER);
             both.add(paintRow, BorderLayout.SOUTH);
             bar.add(both, BorderLayout.SOUTH);
             root.add(bar, BorderLayout.NORTH);
@@ -904,8 +954,14 @@ final class MaterialPanels {
                 Nz /= len;
             }
             double ndl = Math.max(0, Nx * lx + Ny * ly + Nz * lz);
+            PreviewLight L = PreviewLight.current;
+            double fx = Math.cos(L.fillPitch) * Math.cos(L.fillYaw), fy = Math.sin(L.fillPitch), fz = Math.cos(L.fillPitch) * Math.sin(L.fillYaw);
+            double ndf = Math.max(0, Nx * fx + Ny * fy + Nz * fz);
             // viewer along (1, 1, 1) normalized (isometric)
             double vx = 0.577, vy = 0.577, vz = 0.577;
+            double vn = vx * Nx + vy * Ny + vz * Nz;
+            double rx = 2 * vn * Nx - vx, ry = 2 * vn * Ny - vy, rz = 2 * vn * Nz - vz; // reflection of the view
+            double[] amb = L.env(Nx, Ny, Nz, 1.0), refl = L.env(rx, ry, rz, rough);
             double hx = lx + vx, hy = ly + vy, hz = lz + vz, hl = Math.sqrt(hx * hx + hy * hy + hz * hz);
             double ndh = Math.max(0, (Nx * hx + Ny * hy + Nz * hz) / hl);
             double a2 = Math.pow(rough, 4), d = ndh * ndh * (a2 - 1) + 1;
@@ -915,13 +971,23 @@ final class MaterialPanels {
             for (int k = 0; k < 3; k++) {
                 double lin = Math.pow(c[k], 2.2);
                 double fk = metal ? lin : f0;
-                // sky light from everywhere: diffuse ambient, and a soft reflection that metals and smooth surfaces show
-                double env = (0.22 + 0.5 * (1 - rough)) * ao * (0.55 + 0.45 * Math.max(0, Ny));
-                double val = (metal ? 0 : lin) * (0.28 * ao + 0.85 * ndl) + fk * (Math.min(spec, 8) + env) + lin * emission * 2.5;
+                // sky light from everywhere (the preset's sky or the HDRI): diffuse ambient, and the reflection metals and smooth surfaces show
+                double sunK = L.sun[k] * L.sunStrength;
+                double env = refl[k] * (0.4 + 0.9 * (1 - rough)) * ao;
+                double val = (metal ? 0 : lin) * (0.55 * amb[k] * ao + 0.85 * ndl * sunK + 0.85 * ndf * L.fill[k])
+                    + fk * (Math.min(spec, 8) * sunK + env) + lin * emission * 2.5;
                 int q = (int) Math.round(Math.pow(Math.min(1, val / (1 + val * 0.25)), 1 / 2.2) * 255);
                 out |= Math.min(255, q) << (16 - k * 8);
             }
             return out;
+        }
+
+        void setLight(PreviewLight l, JButton menu) {
+            PreviewLight.current = l;
+            menu.setText("Light: " + l.name);
+            if (light.getSelectedItem()) light.setSelectedItem(false); // the light only shows on the Bedray PBR look
+            cacheVersion = -1;
+            root.repaint();
         }
 
         public JComponent component() { return root; }
