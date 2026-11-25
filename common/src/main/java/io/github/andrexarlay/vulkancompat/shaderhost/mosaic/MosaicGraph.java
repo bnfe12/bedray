@@ -149,7 +149,7 @@ public final class MosaicGraph {
         "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.reproject", "mosaic.taa", "mosaic.repeat", "mosaic.bufferPrev", "mosaic.accumulate", "mosaic.atrous", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
         "mosaic.fogColor",
         // Bedray's renderer as nodes (MosaicRenderer): stages of the real pipeline and the frame they produce
-        "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.voxels", "bedray.raster", "bedray.upscaler", "bedray.output", "bedray.stageMap", "user.post", "user.hdr", "user.sky",
+        "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.voxels", "bedray.raster", "bedray.upscaler", "bedray.output", "bedray.stageMap", "user.post", "user.hdr", "user.sky", "user.material",
         // the Slang pack map (MosaicPack): modules wired by their imports into the passes of a frame
         "slang.module", "slang.pack",
         // output
@@ -216,7 +216,7 @@ public final class MosaicGraph {
         for (MosaicRenderer.Stage s : MosaicRenderer.stages())
             m.put(s.type(), s.rank() == 0 ? List.of() : List.of(new Port("frame", Kind.V4, s.rank() >= 30)));
         // a stage of your own: its inside is a function graph run in Bedray's frame (user.post: after the tone curve and looks)
-        for (String t : List.of("user.post", "user.hdr", "user.sky")) m.put(t, List.of(new Port("frame", Kind.V4, true)));
+        for (String t : List.of("user.post", "user.hdr", "user.sky", "user.material")) m.put(t, List.of(new Port("frame", Kind.V4, true)));
         m.put(MosaicRenderer.OUTPUT, List.of(new Port("frame", Kind.V4, true)));
         m.put("mosaic.pass", List.of(new Port("color", Kind.V4, true)));
         m.put("mosaic.bufferIn", List.of(new Port("uv", Kind.V2, false)));
@@ -979,7 +979,7 @@ public final class MosaicGraph {
                 case "mosaic.skyColor", "mosaic.fogColor" -> Kind.V3;
                 case "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt",
                      "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post",
-                     "bedray.voxels", "bedray.raster", "bedray.upscaler", "user.post", "user.hdr", "user.sky" -> Kind.V4;
+                     "bedray.voxels", "bedray.raster", "bedray.upscaler", "user.post", "user.hdr", "user.sky", "user.material" -> Kind.V4;
                 case "mosaic.gt", "mosaic.lt", "mosaic.dot", "mosaic.length", "mosaic.lum" -> Kind.F;
                 case "mosaic.cross", "mosaic.reflect" -> Kind.V3;
                 case "mosaic.math" -> {

@@ -182,6 +182,14 @@ PathPtRecord emptyPathPtRecord() {
     return record;
 }
 
+// Mosaic Studio's material stage: the hook a "Your material (path tracer)" node of the renderer graph writes (Apply to
+// Bedray replaces this body with the stage's node graph). Every surface a path reaches - the camera hit and every bounce -
+// passes through it before it is shaded: change its albedo, roughness, metalness and emission by where it is (world
+// position), how it faces (shading normal) and what it is (material id). Bedray's own build leaves the surface unchanged.
+void materialStudio(inout float3 albedo, inout float roughness, inout float metallic, inout float3 emission,
+                    float3 worldPosition, float3 normal, float materialId) {
+}
+
 // The emitter decision of a first vertex, made on the decoded material - the twin of ptTerminalEmits in
 // experimental/restir_pt.slang.  HIT_FLAG_EMISSIVE is a backend hint the hardware traversal never sets.
 bool ptTerminalEmitsMaterial(MaterialSample material) {
@@ -746,6 +754,13 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             result.flags |= PATH_TRACE_FLAG_TRUNCATED;
             break;
         }
+        // Mosaic Studio's material stage (identity unless one is applied); results are kept physical below
+        materialStudio(surface.material.albedo, surface.material.roughness, surface.material.metallic, surface.material.emission,
+            surface.hit.worldPosition, surface.shadingNormal, float(surface.material.materialId));
+        surface.material.albedo = clamp(surface.material.albedo, float3(0.0), float3(1.0));
+        surface.material.roughness = clamp(surface.material.roughness, 0.0, 1.0);
+        surface.material.metallic = clamp(surface.material.metallic, 0.0, 1.0);
+        surface.material.emission = max(surface.material.emission, float3(0.0));
 
         // The AO-only continuation asks whether the environment is occluded, not for another reflected or lit
         // vertex. A window filters that test; treating it as an opaque AO hit would blacken the room behind it.

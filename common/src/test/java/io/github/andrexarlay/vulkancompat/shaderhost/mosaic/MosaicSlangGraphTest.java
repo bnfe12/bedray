@@ -89,6 +89,22 @@ class MosaicSlangGraphTest {
     }
 
     @Test
+    void yourMaterialStageIsAGraphOfThePathTracersMaterialHook() {
+        MosaicSlangLib.Library lib = lib();
+        MosaicSlangLib.Function hook = lib.functions().get("pathtrace/path_tracer/materialStudio");
+        assertNotNull(hook, "the path tracer has the material hook");
+        MosaicSlangDecompile.Result r = MosaicSlangDecompile.decompile(hook, lib);
+        assertTrue(r.whole(), r.json());
+        MosaicGraph.Analysis a = MosaicGraph.analyze(r.json());
+        assertNull(a.firstError(), String.valueOf(a.problems()) + "\n" + r.json());
+        MosaicSlangGraph.Code code = MosaicSlangGraph.function(a.graph(), hook.name());
+        Path slangc = MosaicSlang.locate(null);
+        assumeTrue(slangc != null, "no slangc");
+        MosaicSlangGraph.Check check = MosaicSlangGraph.check(MosaicSlangGraph.checkUnit(code), slangc, MosaicSlangGraph.packRoot());
+        assertTrue(check.ok(), check.log() + "\n" + MosaicSlangGraph.checkUnit(code));
+    }
+
+    @Test
     void aStructOnlyGoesWhereItsTypeIsWanted() {
         lib();
         MosaicGraph.Analysis a = MosaicGraph.analyze("""

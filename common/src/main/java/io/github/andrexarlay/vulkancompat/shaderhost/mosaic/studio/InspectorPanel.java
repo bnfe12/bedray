@@ -162,6 +162,7 @@ final class InspectorPanel extends Panels.Listening {
             content.add(text("Your own stage: name it with the label below. Its graph is the hook " + hook.substring(hook.lastIndexOf('/') + 1)
                 + " of Bedray's pack (identity in Bedray's own build): " + switch (n.type) {
                     case "user.hdr" -> "scene-linear colour after exposure in, your colour out, before the tone curve.";
+                    case "user.material" -> "every surface the path tracer reaches: albedo, roughness, metallic and emission in and out (inout), with its world position, normal and material id - it changes how light bounces, not just the picture.";
                     case "user.sky" -> "the direction and Bedray's sky colour in, the sky an eye or a reflection sees out (lighting keeps Bedray's dome).";
                     default -> "the display colour after the tone curve and Bedray's looks in, your colour out.";
                 } + " It runs in Bedray's frame once you Apply to Bedray.", MUTED));

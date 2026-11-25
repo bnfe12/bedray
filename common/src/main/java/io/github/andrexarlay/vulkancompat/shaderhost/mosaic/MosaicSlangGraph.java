@@ -367,19 +367,27 @@ public final class MosaicSlangGraph {
                     result = n;
                     ret = n.mask() == null || n.mask().isBlank() ? "float4" : n.mask().trim();
                 }
-                case OUT -> {
-                    outs.add(n);
-                    String[] tn = typedName(n.mask(), "float");
-                    params.add("out " + tn[0] + " " + tn[1]);
-                }
+                case OUT -> outs.add(n);
                 default -> { }
             }
         }
+        // an out end named like a parameter is that parameter written back: one inout parameter, not two
+        for (MosaicGraph.Node o : outs) {
+            String[] tn = typedName(o.mask(), "float");
+            int same = params.indexOf(tn[0] + " " + tn[1]);
+            if (same >= 0) params.set(same, "inout " + tn[0] + " " + tn[1]);
+            else params.add("out " + tn[0] + " " + tn[1]);
+        }
+        // every value first, then the writes: an inout written early must not change what a later end reads
+        List<String[]> writes = new ArrayList<>();
         for (MosaicGraph.Node o : outs) {
             String[] tn = typedName(o.mask(), "float");
             String v = e.input(o, "value", tn[0]);
-            e.body.append("    ").append(tn[1]).append(" = ").append(v).append(";\n");
+            String tmp = "o_" + tn[1];
+            e.body.append("    ").append(tn[0]).append(' ').append(tmp).append(" = ").append(v).append(";\n");
+            writes.add(new String[] {tn[1], tmp});
         }
+        for (String[] w : writes) e.body.append("    ").append(w[0]).append(" = ").append(w[1]).append(";\n");
         String retExpr = null;
         if (result != null && ret.equals("void")) {
             if (result.inputs().containsKey("value")) e.emit(MosaicGraph.split(result.inputs().get("value"))[0]);

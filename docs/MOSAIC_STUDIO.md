@@ -94,6 +94,10 @@ fast variant uses sky ambient instead. Every node is an ordinary node: open its 
 - Every function of Bedray's Slang pack opens as nodes ("+" > Bedray function as nodes). Change it, slangc checks it
   inside its module, **Apply to Bedray** rebuilds the passes that use it for the game.
 - "Your post stage": a stage of your own, built from nodes, run in Bedray's frame after its looks.
+- "Your material (path tracer)": every surface Bedray's path tracer reaches (camera hit and every bounce) passes through
+  your graph before it is shaded - albedo, roughness, metallic and emission in and out, with the world position, shading
+  normal and material id. It changes the light transport itself (bounced light, reflections, emission), not just the
+  picture. Hook `pathtrace/path_tracer/materialStudio`; values are clamped to physical ranges after it.
 - Help > Config: every public number of the renderer in one place; Studio's numbers win over the game's menu while
   Live is on. Help > Guide explains the editor step by step.
 
