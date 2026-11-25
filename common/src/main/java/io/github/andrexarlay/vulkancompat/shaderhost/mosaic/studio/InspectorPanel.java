@@ -150,6 +150,10 @@ final class InspectorPanel extends Panels.Listening {
             stageEditor(n);
             return;
         }
+        if (n.type.equals("slang.module")) {
+            moduleInfo(n);
+            return;
+        }
         for (MosaicGraph.Problem p : model.analysis.of(n.id))
             content.add(text(p.message(), p.severity() == MosaicGraph.Severity.ERROR ? BAD : WARN));
         content.add(section("Label"));
@@ -403,6 +407,46 @@ final class InspectorPanel extends Panels.Listening {
         content.add(Box.createVerticalStrut(8));
         content.add(button("Defaults of this stage", "Every setting of this stage back to Bedray's default", () ->
             model.edit("Defaults of " + stage.label(), () -> stage.settings().forEach(s -> n.defaults.remove(s.key())))));
+    }
+
+    /** A module of the pack map: what it is, what it declares, who controls it, its source. */
+    private void moduleInfo(MosaicDocument.ENode n) {
+        var m = model.packModules.get(n.mask);
+        String stage = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPack.stageOf(n.mask);
+        content.add(Box.createVerticalStrut(6));
+        content.add(text(n.mask, TEXT));
+        content.add(text(stage != null ? "Controlled by the Renderer stage " + MosaicRenderer.stage(stage).label() + " (its settings)"
+            : "Not a node yet: nothing in the Renderer controls this module", stage != null ? OK : WARN));
+        if (m == null) {
+            content.add(text("Reopen the pack map to read this module.", MUTED));
+            return;
+        }
+        content.add(text((m.entry() ? "Pass entry point (Bedray dispatches it)   " : "Library module   ") + m.lines() + " lines   " + m.imports().size()
+            + " imports", MUTED));
+        int usedBy = 0;
+        for (var other : model.packModules.values()) if (other.imports().contains(m.path())) usedBy++;
+        content.add(text("Used by " + usedBy + " module(s)", MUTED));
+        if (!m.structs().isEmpty()) {
+            content.add(section("Types"));
+            content.add(text(String.join(", ", m.structs()), MUTED));
+        }
+        if (!m.functions().isEmpty()) {
+            content.add(section("Functions"));
+            content.add(text(String.join(", ", m.functions()), MUTED));
+        }
+        content.add(section("Imports"));
+        content.add(text(m.imports().isEmpty() ? "none" : String.join("\n", m.imports()), FAINT));
+        content.add(Box.createVerticalStrut(6));
+        content.add(button("Show source", "The module's Slang code (read only here)", () -> {
+            String src = model.packSources.getOrDefault(n.mask, "");
+            JTextArea area = new JTextArea(src, 30, 100);
+            area.setFont(MONO);
+            area.setEditable(false);
+            area.setBackground(CODE_BG);
+            area.setForeground(TEXT);
+            area.setCaretPosition(0);
+            JOptionPane.showMessageDialog(content, scroll(area), n.mask, JOptionPane.PLAIN_MESSAGE);
+        }));
     }
 
     private void set(MosaicDocument.ENode n, MosaicRenderer.Setting s, double v) {

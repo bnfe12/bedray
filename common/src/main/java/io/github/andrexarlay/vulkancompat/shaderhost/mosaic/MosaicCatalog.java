@@ -61,6 +61,8 @@ public final class MosaicCatalog {
         e("bedray.denoiser", "Denoiser", Category.RENDERER, "NRD or DLSS Ray Reconstruction turns the noisy path tracer into a clean image."),
         e("bedray.exposure", "Exposure and tone", Category.RENDERER, "Auto exposure, exposure in EV and the tone curve that maps light to the screen."),
         e("bedray.post", "Post effects", Category.RENDERER, "Vibrant visuals, vignette and film grain of Bedray."),
+        e("slang.module", "Slang module", Category.RENDERER, "A module of Bedray's Slang pack (map view): its imports are its wires."),
+        e("slang.pack", "Bedray frame (passes)", Category.RENDERER, "Every pass entry point of Bedray's Slang pack (map view)."),
         e("bedray.output", "Bedray frame", Category.RENDERER, "The frame Bedray shows: every stage wired into it is on, the rest are off."),
         e("mosaic.pass", "Buffer (pass)", Category.PASSES, "Writes its input into a named buffer as its own pass, at full, 1/2, 1/4 or 1/8 size (blur, bloom)."),
         e("mosaic.bufferIn", "Read buffer", Category.PASSES, "Reads a buffer written by a Buffer node, at any uv (offsets for blur kernels)."),

@@ -204,6 +204,47 @@ final class StudioLibrary {
         return new ArrayList<>(best.values());
     }
 
+    // ------------------------------------------------------------------ Bedray's own Slang pack
+
+    /** Where the Slang sources were found and the sources (path under shaders/slang -> text); empty when none. */
+    record SlangPack(String origin, Map<String, String> sources) {}
+
+    /** Bedray's shaders/slang: a checkout above the working folder, else the Bedray mod jar of the game instance. */
+    static SlangPack bedraySlang(StudioModel model) {
+        for (Path p = Path.of(System.getProperty("user.dir")).toAbsolutePath(); p != null; p = p.getParent()) {
+            Path dir = p.resolve("common/src/main/resources/shaders/slang");
+            if (Files.isDirectory(dir)) {
+                Map<String, String> out = new java.util.TreeMap<>();
+                try (Stream<Path> w = Files.walk(dir)) {
+                    for (Path f : (Iterable<Path>) w.filter(x -> x.toString().endsWith(".slang"))::iterator)
+                        out.put(dir.relativize(f).toString().replace('\\', '/'), Files.readString(f));
+                } catch (Exception ignored) {
+                    // unreadable checkout
+                }
+                if (!out.isEmpty()) return new SlangPack("checkout " + dir, out);
+            }
+        }
+        Path g = gameDir(model);
+        if (g != null && Files.isDirectory(g.resolve("mods")))
+            try (Stream<Path> s = Files.list(g.resolve("mods"))) {
+                for (Path jar : (Iterable<Path>) s.filter(x -> x.getFileName().toString().toLowerCase(Locale.ROOT).startsWith("bedray")
+                    && x.toString().endsWith(".jar"))::iterator)
+                    try (ZipFile z = new ZipFile(jar.toFile())) {
+                        Map<String, String> out = new java.util.TreeMap<>();
+                        for (ZipEntry e : java.util.Collections.list(z.entries())) {
+                            String n = e.getName();
+                            int at = n.indexOf("shaders/slang/");
+                            if (at >= 0 && n.endsWith(".slang"))
+                                out.put(n.substring(at + "shaders/slang/".length()), new String(z.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8));
+                        }
+                        if (!out.isEmpty()) return new SlangPack("mod " + jar.getFileName(), out);
+                    }
+            } catch (Exception ignored) {
+                // no mods folder
+            }
+        return new SlangPack("", Map.of());
+    }
+
     // ------------------------------------------------------------------ launcher instances
 
     private static final Map<String, List<Instance>> INSTANCES = new ConcurrentHashMap<>();

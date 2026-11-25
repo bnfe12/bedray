@@ -111,7 +111,8 @@ final class StudioApp {
         String shotWorkspace = System.getProperty("mosaic.selfshot.workspace"); // e.g. RENDERER: verification aid
         if (shot != null && shotWorkspace != null) {
             Timer w = new Timer(1200, e -> {
-                switchWorkspace(StudioModel.Workspace.valueOf(shotWorkspace));
+                if (shotWorkspace.equals("PACK")) openPackMapTab();
+                else switchWorkspace(StudioModel.Workspace.valueOf(shotWorkspace));
                 String sel = System.getProperty("mosaic.selfshot.select");
                 MosaicDocument.ENode n = sel == null ? null : model.doc.byId(sel);
                 if (n != null) model.select(n);
@@ -429,7 +430,10 @@ final class StudioApp {
 
     private void loadTab(DocTabs.Tab t) {
         model.workspace = t.kind;
-        if (t.kind == StudioModel.Workspace.RENDERER && (t.file == null || !Files.exists(t.file))) {
+        if (t.kind == StudioModel.Workspace.RENDERER && t.file != null && t.file.getFileName().toString().startsWith("bedray-pack")) {
+            model.openPackMap();
+            t.file = model.doc.file;
+        } else if (t.kind == StudioModel.Workspace.RENDERER && (t.file == null || !Files.exists(t.file))) {
             model.openRenderer();
             t.file = model.doc.file;
         } else if (t.file != null && Files.exists(t.file)) {
@@ -565,6 +569,22 @@ final class StudioApp {
         model.openMaterial(src, entry);
         t.file = model.doc.file;
         if (tabStrip != null) tabStrip.repaint();
+    }
+
+    /** The map of Bedray's Slang pack in its own tab (rebuilt from the sources each time). */
+    void openPackMapTab() {
+        DocTabs.Tab t = new DocTabs.Tab(StudioModel.Workspace.RENDERER, null);
+        tabs.add(t);
+        activate(t);
+        model.openPackMap();
+        t.file = model.doc.file;
+        if (tabStrip != null) tabStrip.repaint();
+        Timer fit = new Timer(350, e -> { // after the swapped areas are laid out
+            GraphPanel g = main == null ? null : findGraph(main.root);
+            if (g != null) g.fit();
+        });
+        fit.setRepeats(false);
+        fit.start();
     }
 
     /** Opens a shader graph in its own tab (or the tab that has it). */
@@ -717,6 +737,12 @@ final class StudioApp {
             statusLeft.setForeground(model.messageColor);
             if (model.messageColor == OK || model.messageColor == BAD) StudioWidgets.toast(main, model.message, model.messageColor);
             model.message = "";
+        } else if (a.ok() && model.packDoc()) {
+            long passes = model.packModules.values().stream().filter(m -> m.entry()).count();
+            long covered = model.packModules.keySet().stream().filter(p -> io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPack.stageOf(p) != null).count();
+            statusLeft.setText("Bedray pack map   " + model.packModules.size() + " modules, " + passes + " passes   -   " + covered
+                + " controlled by Renderer stages, " + (model.packModules.size() - covered) + " not nodes yet");
+            statusLeft.setForeground(OK);
         } else if (a.ok() && model.rendererDoc()) {
             statusLeft.setText("Bedray renderer   " + model.doc.nodes.size() + " stages   -   " + (model.rendererSettings == null ? 0 : model.rendererSettings.size())
                 + " settings" + (model.doc.dirty ? "   - unsaved" : ""));

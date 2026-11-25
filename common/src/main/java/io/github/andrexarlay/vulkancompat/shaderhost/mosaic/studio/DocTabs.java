@@ -82,15 +82,19 @@ final class DocTabs extends JComponent {
         m.addActionListener(e -> app.newTab(StudioModel.Workspace.MATERIALS));
         JMenuItem r = new JMenuItem("Bedray renderer graph", StudioWidgets.glyph("chip", new Color(0x8A9CF0)));
         r.addActionListener(e -> app.switchWorkspace(StudioModel.Workspace.RENDERER));
+        JMenuItem k = new JMenuItem("Bedray pack map (every Slang module)", StudioWidgets.glyph("frame", new Color(0x8A9CF0)));
+        k.addActionListener(e -> app.openPackMapTab());
         p.add(s);
         p.add(m);
         p.add(r);
+        p.add(k);
         return p;
     }
 
     String title(Tab t) {
         Path f = t == app.active ? app.model.doc.file : t.file;
-        if (t.kind == StudioModel.Workspace.RENDERER) return "Bedray renderer";
+        if (t.kind == StudioModel.Workspace.RENDERER)
+            return f != null && f.getFileName().toString().startsWith("bedray-pack") ? "Bedray pack (map)" : "Bedray renderer";
         if (f == null) return t.kind == StudioModel.Workspace.MATERIALS ? "New material" : "Untitled graph";
         String n = f.getFileName().toString();
         if (t.kind == StudioModel.Workspace.MATERIALS) return n.replace(".mosaic.json", "");

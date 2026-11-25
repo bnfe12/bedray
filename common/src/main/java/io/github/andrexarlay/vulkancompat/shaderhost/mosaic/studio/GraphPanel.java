@@ -164,6 +164,8 @@ final class GraphPanel extends JComponent {
     }
 
     List<String> inputs(MosaicDocument.ENode n) {
+        if (n.type.equals("slang.module")) return List.of("imports");
+        if (n.type.equals("slang.pack")) return List.of("passes");
         List<String> out = new ArrayList<>();
         for (MosaicGraph.Port p : MosaicGraph.portsOf(n.type, model.functions())) out.add(p.name());
         return out;
@@ -171,7 +173,7 @@ final class GraphPanel extends JComponent {
 
     static List<String> outputs(MosaicDocument.ENode n) {
         List<String> out = new ArrayList<>();
-        if (n.type.equals("mosaic.output")) return out;
+        if (n.type.equals("mosaic.output") || n.type.equals("slang.pack") || n.type.equals("bedray.output")) return out;
         out.add("");
         out.addAll(MosaicGraph.namedOutputs(n.type));
         return out;
@@ -202,6 +204,9 @@ final class GraphPanel extends JComponent {
     }
 
     Color headColor(MosaicDocument.ENode n) {
+        if (n.type.equals("slang.module")) // pack map: green = a Renderer stage controls it, amber = not a node yet; passes brighter
+            return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPack.stageOf(n.mask) != null
+                ? (n.index == 1 ? new Color(0x3FA36B) : new Color(0x2E7A52)) : (n.index == 1 ? new Color(0xC08A2E) : new Color(0x8A6A2E));
         if (MosaicFunction.isFunctionType(n.type)) {
             MosaicDocument.FDef d = model.doc.function(MosaicFunction.nameOf(n.type));
             return categoryColor(d == null ? null : d.category);
@@ -679,7 +684,7 @@ final class GraphPanel extends JComponent {
 
     void zoomAt(Point screen, double factor) {
         Point w = toWorld(screen);
-        zoom = Math.clamp(zoom * factor, 0.25, 3.0);
+        zoom = Math.clamp(zoom * factor, 0.08, 3.0);
         panX = screen.x - w.x * zoom;
         panY = screen.y - w.y * zoom;
         repaint();
@@ -709,7 +714,7 @@ final class GraphPanel extends JComponent {
             maxX = Math.max(maxX, f.x + f.w);
             maxY = Math.max(maxY, f.y + f.h);
         }
-        zoom = Math.clamp(Math.min((getWidth() - 80.0) / Math.max(1, maxX - minX), (getHeight() - 80.0) / Math.max(1, maxY - minY)), 0.25, 1.4);
+        zoom = Math.clamp(Math.min((getWidth() - 80.0) / Math.max(1, maxX - minX), (getHeight() - 80.0) / Math.max(1, maxY - minY)), 0.08, 1.4);
         panX = (getWidth() - (maxX - minX) * zoom) / 2 - minX * zoom;
         panY = (getHeight() - (maxY - minY) * zoom) / 2 - minY * zoom;
         repaint();
@@ -1060,6 +1065,15 @@ final class GraphPanel extends JComponent {
         for (MosaicDocument.Frame f : model.doc.frames) frame(g, f);
         g.setStroke(new BasicStroke(settings.wireWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         for (MosaicDocument.ENode n : model.doc.nodes) {
+            if (n.type.startsWith("slang.")) { // map nodes: every import arrives at the one socket
+                for (String ref : n.inputs.values()) {
+                    MosaicDocument.ENode src = model.doc.byId(ref);
+                    if (src == null) continue;
+                    boolean hot = model.selection.contains(n) || model.selection.contains(src);
+                    wire(g, outSocket(src, 0), inSocket(n, 0), hot ? SELECT : new Color(EDGE.getRed(), EDGE.getGreen(), EDGE.getBlue(), 140));
+                }
+                continue;
+            }
             List<String> ins = inputs(n);
             for (int k = 0; k < ins.size(); k++) {
                 String ref = n.inputs.get(ins.get(k));

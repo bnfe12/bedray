@@ -99,13 +99,17 @@ final class StudioModel {
     private void analyze() {
         analysis = doc.analyze();
         MosaicGraph g = analysis.graph();
-        if (g != null && g.isMaterial()) {
+        if (g != null && g.isPackMap() || doc.nodes.stream().anyMatch(n -> n.type.startsWith("slang."))) {
+            generated = null;
+            baked = null;
+            rendererSettings = null; // a map is a view: it never sends settings
+        } else if (g != null && g.isMaterial()) {
             generated = null;
             bake(g);
         } else if (g != null && g.isRenderer() || workspace == Workspace.RENDERER) {
             generated = null;
             baked = null;
-            rendererSettings = g == null ? null : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.settings(g);
+            rendererSettings = g == null || !g.isRenderer() ? null : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.settings(g);
         } else {
             baked = null;
             bakeError = null;
@@ -150,6 +154,38 @@ final class StudioModel {
             return out;
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /** The modules of the open pack map (for the inspector), by path. */
+    java.util.Map<String, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPack.Module> packModules = java.util.Map.of();
+    java.util.Map<String, String> packSources = java.util.Map.of();
+    String packOrigin = "";
+
+    boolean packDoc() { return doc.nodes.stream().anyMatch(n -> n.type.equals("slang.pack")); }
+
+    /** Builds the map of Bedray's whole Slang pack (every module, import and pass) and opens it. */
+    void openPackMap() {
+        StudioLibrary.SlangPack sp = StudioLibrary.bedraySlang(this);
+        if (sp.sources().isEmpty()) {
+            say("Bedray's Slang sources were not found: choose the game instance with the Bedray mod (Library)", StudioUi.BAD);
+            return;
+        }
+        try {
+            packSources = sp.sources();
+            packOrigin = sp.origin();
+            packModules = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPack.parse(sp.sources());
+            Path f = StudioSettings.file().resolveSibling("studio").resolve("bedray-pack.mosaic.json");
+            Files.createDirectories(f.getParent());
+            Files.writeString(f, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPack.graph(packModules), StandardCharsets.UTF_8);
+            workspace = Workspace.RENDERER;
+            open(f);
+            long entries = packModules.values().stream().filter(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPack.Module::entry).count();
+            long covered = packModules.keySet().stream().filter(p -> io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPack.stageOf(p) != null).count();
+            say("Bedray pack: " + packModules.size() + " modules, " + entries + " passes; " + covered + " belong to a Renderer stage, "
+                + (packModules.size() - covered) + " are not nodes yet (" + sp.origin() + ")", StudioUi.OK);
+        } catch (Exception e) {
+            say("Could not build the pack map: " + e.getMessage(), StudioUi.BAD);
         }
     }
 
