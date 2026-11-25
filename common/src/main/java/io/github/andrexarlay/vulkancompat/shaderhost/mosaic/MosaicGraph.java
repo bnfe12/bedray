@@ -141,7 +141,7 @@ public final class MosaicGraph {
         "mosaic.pass", "mosaic.bufferIn", "mosaic.history", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
         "mosaic.fogColor",
         // Bedray's renderer as nodes (MosaicRenderer): stages of the real pipeline and the frame they produce
-        "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.output",
+        "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.voxels", "bedray.raster", "bedray.upscaler", "bedray.output",
         // the Slang pack map (MosaicPack): modules wired by their imports into the passes of a frame
         "slang.module", "slang.pack",
         // output
@@ -183,7 +183,7 @@ public final class MosaicGraph {
         m.put("mosaic.shadow", List.of(new Port("direction", Kind.V3, false), new Port("origin", Kind.V3, false)));
         m.put("mosaic.output", List.of(new Port("color", Kind.V4, true)));
         for (MosaicRenderer.Stage s : MosaicRenderer.stages())
-            m.put(s.type(), s.rank() == 0 ? List.of() : List.of(new Port("frame", Kind.V4, s.rank() > 2)));
+            m.put(s.type(), s.rank() == 0 ? List.of() : List.of(new Port("frame", Kind.V4, s.rank() >= 30)));
         m.put(MosaicRenderer.OUTPUT, List.of(new Port("frame", Kind.V4, true)));
         m.put("mosaic.pass", List.of(new Port("color", Kind.V4, true)));
         m.put("mosaic.bufferIn", List.of(new Port("uv", Kind.V2, false)));
@@ -500,11 +500,20 @@ public final class MosaicGraph {
                             error(n.id(), null, s.label() + " needs " + MosaicRenderer.stage(need).label() + " before it", Fix.CONNECT);
                 }
             }
-            boolean pt = nodes.values().stream().anyMatch(n -> n.type().equals("bedray.pathTracer"));
-            boolean rays = nodes.values().stream().anyMatch(n -> n.type().equals("bedray.rays"));
-            if (pt && rays)
-                warn(null, "Path tracer and Hybrid ray effects are two render modes: Bedray runs the one chosen in its mode setting,"
-                    + " the other's settings are kept for when you switch", Fix.NONE);
+            // exactly one render mode in the frame: the wired one is Bedray's rt_mode
+            Set<String> live = new LinkedHashSet<>();
+            for (Node n : nodes.values()) if (n.type().equals(MosaicRenderer.OUTPUT)) upstream(n.id(), live);
+            List<String> modes = new ArrayList<>();
+            for (String id : live) {
+                MosaicRenderer.Stage st = MosaicRenderer.stage(nodes.get(id) == null ? "" : nodes.get(id).type());
+                if (st != null && st.isMode()) modes.add(id);
+            }
+            if (modes.size() > 1)
+                for (String id : modes.subList(1, modes.size()))
+                    error(id, null, "two render modes in one frame (" + String.join(", ", modes) + "): wire one of Raster, Path tracer or"
+                        + " Hybrid ray effects into the frame; keep the others beside it to switch", Fix.CONNECT);
+            if (modes.isEmpty() && !live.isEmpty())
+                hint(null, "no render mode wired in: Bedray runs Raster (wire in Path tracer or Hybrid ray effects to trace rays)", Fix.NONE);
         }
 
         /** Buffer names: one word, written once, read only by name that exists, never read inside their own pass. */
@@ -837,7 +846,8 @@ public final class MosaicGraph {
                 case "bedray.output", "slang.module", "slang.pack" -> Kind.V4;
                 case "mosaic.skyColor", "mosaic.fogColor" -> Kind.V3;
                 case "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt",
-                     "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post" -> Kind.V4;
+                     "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post",
+                     "bedray.voxels", "bedray.raster", "bedray.upscaler" -> Kind.V4;
                 case "mosaic.gt", "mosaic.lt", "mosaic.dot", "mosaic.length", "mosaic.lum" -> Kind.F;
                 case "mosaic.cross", "mosaic.reflect" -> Kind.V3;
                 case "mosaic.math" -> {
