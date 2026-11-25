@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class MosaicRenderPipelineTest {
 
-    private static List<String> templates() { return List.of(MosaicTemplates.renderer(true), MosaicTemplates.renderer(false)); }
+    private static List<String> templates() { return List.of(MosaicTemplates.renderer(true), MosaicTemplates.renderer(false), MosaicTemplates.renderer(true, true)); }
 
     @Test
     void renderersAnalyzeClean() {

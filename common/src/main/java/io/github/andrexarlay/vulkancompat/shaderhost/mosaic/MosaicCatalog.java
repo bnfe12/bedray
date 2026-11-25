@@ -30,6 +30,8 @@ public final class MosaicCatalog {
         LOGIC("Compare", 0xFF9A4D7A),
         MATERIAL("Material", 0xFFB86A3A),
         PASSES("Passes", 0xFF3A8FA0),
+        /** Ready-made renderers as one node of the frame graph (Bedray render: its stages open in the Bedray stages workspace). */
+        READY("Ready-made renderers", 0xFF5A6FD0),
         RENDERER("Bedray renderer", 0xFF5A6FD0),
         /** Stages of your own in the renderer graph: named by you, built from nodes, run in Bedray's frame. */
         YOURS("Your stages", 0xFF2F8F5A);
@@ -99,6 +101,7 @@ public final class MosaicCatalog {
         e("mosaic.time", "Time", Category.INPUT, "Seconds since start (wraps at 3600)."),
         e("mosaic.frame", "Frame", Category.INPUT, "Frame counter."),
         e("mosaic.eye", "Camera", Category.INPUT, "Camera position in scene space."),
+        e("bedray.render", "Bedray render", Category.READY, "The frame Bedray's own renderer made (path tracer, ReSTIR, cascades, denoiser...), as one node: wire your passes after it. Double-click it to open its stages and settings (Bedray stages)."),
         e("mosaic.sceneColor", "Scene color", Category.SCENE, "The ray-traced world image at uv."),
         e("mosaic.sceneDepth", "Scene depth", Category.SCENE, "Primary-ray hit distance; 1e6 means sky."),
         e("mosaic.lut", "LUT texture", Category.SCENE, "texture6.png sampled at uv."),

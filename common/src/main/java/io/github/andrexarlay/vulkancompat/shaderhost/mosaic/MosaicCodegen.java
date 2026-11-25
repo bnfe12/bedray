@@ -180,7 +180,7 @@ public final class MosaicCodegen {
             if (p.folded.containsKey(n.id())) continue;
             switch (n.type()) {
                 case "mosaic.trace", "mosaic.shadow" -> ray = true;
-                case "mosaic.sceneColor" -> scene = true;
+                case "mosaic.sceneColor", "bedray.render" -> scene = true;
                 case "mosaic.sceneDepth", "mosaic.position", "mosaic.worldPos", "mosaic.normal" -> depth = true;
                 case "mosaic.waterDepth", "mosaic.waterMask", "mosaic.lavaMask", "mosaic.hitMaterial", "mosaic.materialMask",
                      "mosaic.materialDepth", "mosaic.skyLight", "mosaic.blockLight" -> depth = world = true;
@@ -244,7 +244,7 @@ public final class MosaicCodegen {
             if (p.folded.containsKey(n.id())) continue;
             switch (n.type()) {
                 case "mosaic.trace", "mosaic.shadow" -> rays++;
-                case "mosaic.sceneColor", "mosaic.sceneDepth", "mosaic.lut", "mosaic.position", "mosaic.worldPos" -> samples++;
+                case "mosaic.sceneColor", "bedray.render", "mosaic.sceneDepth", "mosaic.lut", "mosaic.position", "mosaic.worldPos" -> samples++;
                 case "mosaic.waterDepth", "mosaic.waterMask", "mosaic.lavaMask", "mosaic.materialDepth" -> { samples++; ops += 120; }
                 case "mosaic.hitMaterial", "mosaic.materialMask", "mosaic.skyLight", "mosaic.blockLight" -> { samples++; ops += 12; }
                 default -> ops += MosaicFunction.isFunctionType(n.type()) ? 16 : g.kind(n.id()).size();
@@ -1117,7 +1117,7 @@ public final class MosaicCodegen {
             case "mosaic.fogColor" -> "worldInfo.fogColor.xyz";
             case "mosaic.frame" -> "frame.timing.z";
             case "mosaic.eye" -> "mosaicEye()";
-            case "mosaic.sceneColor" -> sl ? "bedraySceneColor.SampleLevel(" + uv + ", 0.0)" : "texture(bedraySceneColor, " + uv + ")";
+            case "mosaic.sceneColor", "bedray.render" -> sl ? "bedraySceneColor.SampleLevel(" + uv + ", 0.0)" : "texture(bedraySceneColor, " + uv + ")";
             case "mosaic.sceneDepth" -> sl ? "bedrayDepth.SampleLevel(" + uv + ", 0.0).r" : "texture(bedrayDepth, " + uv + ").r";
             case "mosaic.lut" -> sl ? "bedrayLut.SampleLevel(" + uv + ", 0.0)" : "texture(bedrayLut, " + uv + ")";
             case "mosaic.reroute" -> in(p, n, "a");

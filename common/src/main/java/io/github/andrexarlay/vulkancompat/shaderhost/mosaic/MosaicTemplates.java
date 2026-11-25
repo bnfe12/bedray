@@ -89,6 +89,19 @@ public final class MosaicTemplates {
         ALL.add(new Template("Renderer from scratch (voxel GI)", "Renderer", "A whole renderer of your own from render-pipeline nodes:"
             + " albedo, sun and moon with voxel shadows, block light, emission, one-bounce voxel GI accumulated over frames and"
             + " denoised (a-trous x3), tone map and Temporal AA. No ray tracing hardware needed.", renderer(true)));
+        ALL.add(new Template("Renderer from scratch (hardware RT)", "Renderer", "The voxel GI renderer with exact shadows and GI rays"
+            + " through the real scene geometry: needs a GPU with hardware ray tracing (RTX-class).", renderer(true, true)));
+        ALL.add(new Template("Bedray render + your passes", "Renderer", "Bedray's own renderer as one node (double-click: its stages),"
+            + " then passes of your own: light shafts, a grade and Temporal AA.", """
+            {"nodes":[
+             {"id":"bedray","type":"bedray.render","x":0,"y":0},
+             {"id":"uv","type":"mosaic.uv","x":0,"y":90},
+             {"id":"shafts","type":"fn.godRays","inputs":{"color":"bedray","uv":"uv"},"x":200,"y":0},
+             {"id":"grade","type":"fn.colorGrade","inputs":{"color":"shafts"},"x":400,"y":0},
+             {"id":"buf","type":"mosaic.pass","mask":"frame","index":1,"inputs":{"color":"grade"},"x":600,"y":0},
+             {"id":"taa","type":"mosaic.taa","mask":"frame","x":800,"y":0},
+             {"id":"out","type":"mosaic.output","inputs":{"color":"taa"},"x":1000,"y":0}],
+             "functions":[%s,%s]}""".formatted(MosaicEffects.get("godRays").toJson(), MosaicEffects.get("colorGrade").toJson())));
         ALL.add(new Template("Renderer from scratch (fast)", "Renderer", "The same renderer with sky ambient instead of GI:"
             + " sun and moon shadows, block light and emission on any GPU.", renderer(false)));
         ALL.add(new Template("Debug: distance", "Debug", "Grey by hit distance (white = 64+ blocks).", """
@@ -111,7 +124,10 @@ public final class MosaicTemplates {
      * with voxel shadows, block light, emission and either voxel GI (one path per pixel into a 1/2 Buffer, Accumulate,
      * three Denoise steps) or the cheap sky ambient; combined, tone mapped into a Buffer and smoothed by Temporal AA.
      */
-    static String renderer(boolean gi) {
+    static String renderer(boolean gi) { return renderer(gi, false); }
+
+    /** {@code rt}: the hardware ray tracing pieces (Sun & moon light (RT), Diffuse GI (RT)) instead of the voxel ones. */
+    static String renderer(boolean gi, boolean rt) {
         JsonObject root = new JsonObject();
         JsonArray fns = new JsonArray(), nodes = new JsonArray();
         java.util.function.BiConsumer<JsonObject, String[]> wire = (n, kv) -> {
@@ -136,13 +152,13 @@ public final class MosaicTemplates {
         add.apply(new Object[] {"nrm", "mosaic.normal", 0, 180});
         add.apply(new Object[] {"lamp", "mosaic.blockLight", 0, 360});
         wire.accept(add.apply(new Object[] {"albedo", "fn:sceneAlbedo", 220, 0}), new String[] {"uv", "uv"});
-        wire.accept(add.apply(new Object[] {"sun", "fn:sunLight", 220, 110}), new String[] {"position", "pos", "normal", "nrm"});
+        wire.accept(add.apply(new Object[] {"sun", rt ? "fn:sunLightRT" : "fn:sunLight", 220, 110}), new String[] {"position", "pos", "normal", "nrm"});
         wire.accept(add.apply(new Object[] {"torch", "fn:torchLight", 220, 360}), new String[] {"blockLight", "lamp"});
         wire.accept(add.apply(new Object[] {"glow", "fn:selfGlow", 220, 450}), new String[] {"uv", "uv", "albedo", "albedo"});
         wire.accept(add.apply(new Object[] {"l1", "mosaic.add", 460, 200}), new String[] {"a", "sun", "b", "torch"});
         String indirect;
         if (gi) {
-            wire.accept(add.apply(new Object[] {"giRaw", "fn:diffuseGI", 220, 560}), new String[] {"position", "pos", "normal", "nrm"});
+            wire.accept(add.apply(new Object[] {"giRaw", rt ? "fn:diffuseGIRT" : "fn:diffuseGI", 220, 560}), new String[] {"position", "pos", "normal", "nrm"});
             JsonObject acc = add.apply(new Object[] {"acc", "mosaic.accumulate", 460, 560});
             acc.addProperty("mask", "gi");
             wire.accept(acc, new String[] {"color", "giRaw"});

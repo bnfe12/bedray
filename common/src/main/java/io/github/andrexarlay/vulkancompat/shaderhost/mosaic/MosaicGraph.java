@@ -118,6 +118,8 @@ public final class MosaicGraph {
         "mosaic.uv", "mosaic.texel", "mosaic.size", "mosaic.time", "mosaic.frame", "mosaic.eye",
         // fixed stage resources
         "mosaic.sceneColor", "mosaic.sceneDepth", "mosaic.lut", "mosaic.buffer", "mosaic.push",
+        // ready-made: the frame Bedray's own renderer produced (its stages: the Bedray stages workspace)
+        "bedray.render",
         // ray tracing
         "mosaic.trace", "mosaic.shadow",
         // surface and fluids (host fluid volume, binding 15)
@@ -204,6 +206,7 @@ public final class MosaicGraph {
     private static Map<String, List<Port>> buildPorts() {
         Map<String, List<Port>> m = new LinkedHashMap<>();
         m.put("mosaic.sceneColor", List.of(new Port("uv", Kind.V2, false)));
+        m.put("bedray.render", List.of(new Port("uv", Kind.V2, false)));
         m.put("mosaic.sceneDepth", List.of(new Port("uv", Kind.V2, false)));
         m.put("mosaic.lut", List.of(new Port("uv", Kind.V2, false)));
         m.put("mosaic.trace", List.of(
@@ -948,7 +951,7 @@ public final class MosaicGraph {
                 case "mosaic.uv", "mosaic.texel", "mosaic.size" -> Kind.V2;
                 case "mosaic.time", "mosaic.frame" -> Kind.F;
                 case "mosaic.eye" -> Kind.V3;
-                case "mosaic.sceneColor", "mosaic.lut", "mosaic.buffer", "mosaic.push" -> Kind.V4;
+                case "mosaic.sceneColor", "bedray.render", "mosaic.lut", "mosaic.buffer", "mosaic.push" -> Kind.V4;
                 case "mosaic.sceneDepth", "mosaic.shadow", "mosaic.trace" -> Kind.F;
                 case "mosaic.position", "mosaic.worldPos", "mosaic.normal", "mosaic.sunDir" -> Kind.V3;
                 case "mosaic.waterDepth", "mosaic.waterMask", "mosaic.lavaMask", "mosaic.underwater", "mosaic.hitMaterial",
@@ -1195,7 +1198,7 @@ public final class MosaicGraph {
                 Kind k = kinds.getOrDefault(id, Kind.V4);
                 switch (n.type()) {
                     case "mosaic.trace", "mosaic.shadow" -> rays++;
-                    case "mosaic.sceneColor", "mosaic.sceneDepth", "mosaic.lut" -> samples++;
+                    case "mosaic.sceneColor", "bedray.render", "mosaic.sceneDepth", "mosaic.lut" -> samples++;
                     case "mosaic.const", "mosaic.uv", "mosaic.texel", "mosaic.size", "mosaic.time", "mosaic.frame",
                          "mosaic.push", "mosaic.buffer", "mosaic.output", "mosaic.swizzle", "mosaic.vec" -> { }
                     case "mosaic.sqrt", "mosaic.exp", "mosaic.normalize", "mosaic.length" -> ops += 4 * k.size();
@@ -1275,7 +1278,7 @@ public final class MosaicGraph {
             || n.type().equals("mosaic.underwater") || n.type().contains("aterial") || n.type().endsWith("Light")) return true;
         return false;
     }
-    public boolean needsSceneColor() { return uses("mosaic.sceneColor"); }
+    public boolean needsSceneColor() { return uses("mosaic.sceneColor") || uses("bedray.render"); }
 
     private boolean uses(String type) {
         for (Node n : nodes.values()) if (n.type().equals(type)) return true;

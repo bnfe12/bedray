@@ -56,6 +56,7 @@ final class StudioApp {
         kfm.addKeyEventDispatcher(this::dispatch);
         model.openFunction = this::openFunctionTab;
         model.openStage = this::openStageTab;
+        model.openRenderer = () -> switchWorkspace(StudioModel.Workspace.RENDERER);
         model.listen(this::updateStatus);
         initTabs();
         try {
@@ -148,6 +149,11 @@ final class StudioApp {
             });
             m.setRepeats(false);
             m.start();
+        }
+        if (shot != null && Boolean.getBoolean("mosaic.selfshot.renderer")) { // a renderer of your own: verification aid
+            Timer rT = new Timer(1200, e -> newRendererTab(true));
+            rT.setRepeats(false);
+            rT.start();
         }
         String shotPanel = System.getProperty("mosaic.selfshot.panel"); // e.g. GUIDE: verification aid
         if (shot != null && shotPanel != null) {
@@ -390,11 +396,12 @@ final class StudioApp {
     // ================================================================== workspaces
 
     final StudioWidgets.Segmented<StudioModel.Workspace> workspaceTabs = new StudioWidgets.Segmented<StudioModel.Workspace>()
-        .add(StudioModel.Workspace.SHADERS, "Shaders", StudioWidgets.glyph("shader", new Color(0x5AA0E0)), "Shader graphs: what the frame looks like")
+        .add(StudioModel.Workspace.SHADERS, "Render graph", StudioWidgets.glyph("shader", new Color(0x5AA0E0)),
+            "The frame as nodes: a renderer of your own (G-buffer, lights, GI, denoise, tone map) or Bedray render as one node, then your passes")
         .add(StudioModel.Workspace.MATERIALS, "Materials", StudioWidgets.glyph("vanilla", new Color(0xD08A4A)),
             "Materials: the surface of each block and item texture (PBR), baked into a resource pack")
-        .add(StudioModel.Workspace.RENDERER, "Renderer", StudioWidgets.glyph("chip", new Color(0x8A9CF0)),
-            "Bedray's renderer as nodes: path tracer, ReSTIR DI / PT, cascades, fog, denoiser, exposure - applied to the game live");
+        .add(StudioModel.Workspace.RENDERER, "Bedray stages", StudioWidgets.glyph("chip", new Color(0x8A9CF0)),
+            "Ready-made: the inside of the Bedray render node - path tracer, ReSTIR DI / PT, cascades, fog, denoiser, exposure and their settings, applied to the game live");
     private boolean switching, keepLayout;
 
     /** The layout of the open workspace, as saved (or its default). */

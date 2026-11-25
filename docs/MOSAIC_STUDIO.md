@@ -27,6 +27,10 @@ to Minecraft, or without it.
 
 ## A renderer of your own
 
+The main workspace is the **Render graph**: the frame as nodes. Bedray's own renderer is one ready-made node of it,
+**Bedray render** (double-click: its stages and settings in the **Bedray stages** workspace); wire your passes after it
+(template "Bedray render + your passes"), or build the whole renderer yourself:
+
 "+" > **New renderer of your own** opens a whole renderer made of nodes, which runs in the game's custom RT stage on any
 GPU (voxel rays through the world volume, no ray tracing hardware needed):
 
@@ -37,12 +41,16 @@ GPU (voxel rays through the world volume, no ray tracing hardware needed):
   **Buffer (last frame)** (feedback), **Denoise (a-trous)** steps, Temporal AA.
 - Combine (shade), **Tone map** (ACES, Reinhard, Hable, exponential, clip).
 
+A third variant, "Renderer from scratch (hardware RT)", uses Sun & moon light (RT) and Diffuse GI (RT): shadow and GI
+rays through the real scene geometry on GPUs with hardware ray tracing. Reflective surface (water) adds Fresnel
+reflections with waves on one material.
+
 The GI variant traces one path per pixel at 1/2 size, accumulates it over frames and denoises it in three steps; the
 fast variant uses sky ambient instead. Every node is an ordinary node: open its code, change it, or rewire the frame.
 
 ## Bedray as nodes
 
-- Renderer workspace: the frame as a chain of stages (one render mode: Raster, Path tracer or Hybrid ray effects).
+- Bedray stages workspace (the inside of the Bedray render node): the frame as a chain of stages (one render mode: Raster, Path tracer or Hybrid ray effects).
   Double-click a stage: its public parameters and every module and function it is made of.
 - Every function of Bedray's Slang pack opens as nodes ("+" > Bedray function as nodes). Change it, slangc checks it
   inside its module, **Apply to Bedray** rebuilds the passes that use it for the game.

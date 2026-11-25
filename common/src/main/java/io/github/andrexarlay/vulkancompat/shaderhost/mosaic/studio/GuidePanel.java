@@ -40,7 +40,7 @@ final class GuidePanel implements Panels.Panel {
             </ul>"""},
         {"Renderer: stages", """
             <h2>The Bedray renderer as nodes</h2>
-            <p>The Renderer workspace shows the frame as a chain: Scene, Materials, Sun and sky, Voxels, then <b>one render mode</b>
+            <p>The <b>Bedray stages</b> workspace is the inside of the <b>Bedray render</b> node of a render graph (double-click that node to get here). It shows the frame as a chain: Scene, Materials, Sun and sky, Voxels, then <b>one render mode</b>
             (Raster, Path tracer or Hybrid ray effects), the reuse stages (ReSTIR DI, ReSTIR PT, Radiance Cascades), fog, the denoiser,
             the upscaler, exposure and tone, post effects, and the Bedray frame.</p>
             <ul>

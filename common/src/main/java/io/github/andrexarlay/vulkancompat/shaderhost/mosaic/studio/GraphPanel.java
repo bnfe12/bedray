@@ -89,6 +89,8 @@ final class GraphPanel extends JComponent {
                     // into a Bedray function: its body as nodes in a tab of its own (a code block: its Slang in the inspector)
                     if (n.type.startsWith(MosaicSlangGraph.FN)) model.openFunction.accept(n.type.substring(MosaicSlangGraph.FN.length()));
                     else model.say("A code block: edit its Slang in the inspector", StudioUi.MUTED);
+                } else if (n != null && n.type.equals("bedray.render") && model.openRenderer != null && toWorld(e.getPoint()).y >= n.y + HEAD) {
+                    model.openRenderer.run(); // Bedray's own renderer: its stages and settings
                 } else if (n != null && StudioModel.USER_STAGES.containsKey(n.type) && model.openFunction != null && toWorld(e.getPoint()).y >= n.y + HEAD) {
                     model.openFunction.accept(StudioModel.USER_STAGES.get(n.type)); // your stage: its graph
                 } else if (n != null && io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicRenderer.isStage(n.type) && model.openStage != null

@@ -304,6 +304,8 @@ final class StudioModel {
 
     /** Opens a renderer stage's inside in a tab of its own; set by the app. */
     java.util.function.Consumer<String> openStage;
+    /** Opens the Bedray stages workspace (double-click on a Bedray render node). */
+    Runnable openRenderer;
 
     static Path stagesDir() { return StudioSettings.file().resolveSibling("studio").resolve("stages"); }
 
