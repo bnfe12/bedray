@@ -23,6 +23,16 @@ to Minecraft, or without it.
 | **Result** | The frame of the running game before and after the shader, side by side, split, or against an earlier step; record GIF / MP4, save frames. |
 | **Workflow** | Document tabs, Blender-like areas you can split, pop out and dock back, rebindable keys (also on the Russian layout), themes including OLED black, named undo history per tab. |
 
+## Bedray as nodes
+
+- Renderer workspace: the frame as a chain of stages (one render mode: Raster, Path tracer or Hybrid ray effects).
+  Double-click a stage: its public parameters and every module and function it is made of.
+- Every function of Bedray's Slang pack opens as nodes ("+" > Bedray function as nodes). Change it, slangc checks it
+  inside its module, **Apply to Bedray** rebuilds the passes that use it for the game.
+- "Your post stage": a stage of your own, built from nodes, run in Bedray's frame after its looks.
+- Help > Config: every public number of the renderer in one place; Studio's numbers win over the game's menu while
+  Live is on. Help > Guide explains the editor step by step.
+
 ## AI agents
 
 An AI agent (or you, in a terminal) can do everything through the `mosaic` command: list node types, read a graph,
@@ -41,6 +51,11 @@ those switches. Every call is logged to `~/.bedray/agent-log.txt`. **Settings > 
 writes `mosaic.cmd` / `mosaic` into `~/.bedray/bin`.
 
 ## Files it writes
+
+- `~/.bedray/studio/functions/*.mosaic.json`: your graphs of Bedray functions; `~/.bedray/studio/stages/`: stage insides.
+- `<game>/bedray-studio/slang`, `<game>/bedray-studio/passes`: modules and passes rebuilt by Apply to Bedray (delete them,
+  or "Remove Studio passes", and Bedray runs its own).
+
 
 * `~/.bedray/mosaic-studio.json` – studio settings, layouts and open tabs.
 * `<shader pack>/shaders/bedray/mosaic.json` – a shader graph; `mosaic.spv` and `mosaic.spv.json` next to it when the studio compiles Slang.

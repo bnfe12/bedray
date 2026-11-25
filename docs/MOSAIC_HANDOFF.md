@@ -178,3 +178,53 @@ variants, denoisers), let Mosaic shader graphs plug in as stages, expose per-pas
    built into Bedray.
 9. **Mods**: materials for mod blocks (mod jars are already library sources), custom shaders for mods,
    a node-based effect (particle / VFX) generator.
+
+## Bedray's pack as nodes (2026-11-25 night)
+
+Goal of the owner: every smallest part of Bedray (RT, PT, voxels, every graphics setting) is made and changed through
+nodes; Bedray's own parts are called Bedray, yours are yours; a config of public numbers that wins over the game menu.
+
+- **Library** (`MosaicSlangLib`): parses all 122 modules of `common/src/main/resources/shaders/slang`: functions and
+  struct methods (params with in / out / inout, defaults, doc comments, bodies with offsets, callees), structs with fields,
+  enums, `static const`. Overloads get ids with their parameter types (`contracts/math/safeNormalize(float3,float3)`).
+  Methods of generic structs / interfaces and entry points are not callable nodes (entries open as graphs).
+- **Node types** (`MosaicSlangGraph`): `bedray.fn:<module>/<name>` (methods: `<Struct>.<name>` with `self`, mutating
+  ones give it back; out params are named outputs; void calls chain with `then` / `after`), `bedray.make:` /
+  `bedray.break:` structs, `bedray.const:`, body pieces `slang.param / result / out / let / literal / op / call / do /
+  member / set / code`, `bedray.setting` (a stage setting as a public parameter). Ports carry Slang types;
+  `MosaicGraph.Kind.S` is a non-numeric Slang value that connects only to its own type, `auto` ports are checked by slangc.
+- **Bodies as nodes** (`MosaicSlangDecompile`): every function opens as a graph: one variable node per assignment,
+  operators / calls / fields, pack calls as real function nodes, early `if (c) return x;` as selections, control blocks
+  (if / for / while / switch) as `slang.code` nodes whose ports are the variables they read and change, comments as
+  node notes. 656 functions: 489 entirely nodes, 154 with code blocks, 13 one code node; every standalone module (76)
+  compiles after all its functions went through nodes (probe in the transcript; tests round-trip microfacet, sun,
+  restir_di).
+- **Back to Slang**: `MosaicSlangGraph.function` writes a body (code blocks become helper functions next to it,
+  mutating / static like the original); `overrideAll` replaces bodies inside the module (offsets from the end, imports
+  added); `checkModules` compiles a copy of the shader folder with slangc (Bedray's flags).
+- **Studio**: "+" > Bedray function as nodes / double-click a pack call: the body in a tab (palette: body pieces, every
+  function by folder, structs, constants, math). Inspector: signature, developer note, slangc verdict after every
+  change, code-block editor, Apply / Reset / Remove Studio passes. Files: `~/.bedray/studio/functions/<id>.mosaic.json`.
+- **Apply** (`StudioPack`): modules with your graphs -> `<game>/bedray-studio/slang`; every pass whose imports reach them
+  (quoted and `import name;`) is rebuilt with slang.gradle's flags (compute / raygen / SER), refused when it would use a
+  binding the manifest does not have (push constants excluded), written as `bedray-studio/passes/<name>.spv + .json`
+  (manifest copied from the build or the jar, word count updated). Game: `SlangPassLibrary.load` takes
+  `bedray-studio/passes` first (`-Dbedray.studioPasses=false` off, `-Dbedray.studio.dir` elsewhere). Verified:
+  SunMoonSampler.sample -> 9 passes; the game's loader accepts them. **Not run in Minecraft yet.**
+- **Stages open inside** (`MosaicStageMap`): double-click a renderer stage: its settings as `bedray.setting` nodes (edits
+  go to the renderer graph and the game) and every module of it (`MosaicPack.stagesOf`: Hybrid ray effects shares the
+  path trace passes) framed with each function. A stage with edited functions shows "(your version)".
+- **Render modes / settings**: one wired mode stage decides `rt_mode` (Raster / Path tracer / Hybrid ray effects with rays /
+  AO / direct). Stages Voxels and Upscaler added; all 64 keys are on nodes. MaterialLink applies VulkanRtxConfig keys too.
+- **Priority config**: renderer.json says `priority`; MaterialLink puts Studio's numbers back every 2 s if the menu changed
+  them. Help > Config lists, edits, copies / saves (bedray.toml lines) and sends every public number.
+- **Your post stage** (`user.post`): Bedray's pack has one hook, `post_cinema.slang postStudio(color, uv, pixel,
+  frameIndex)` (identity), called after the looks in path_display, local_tonemap_apply and the NRD compose. The node is
+  named by its label; its graph is the hook; Apply rebuilds those six passes.
+- **Other**: Help > Guide (built-in guide), node notes (Settings showNotes), Vector Math / Separate / Hue-Sat /
+  Bright-Contrast / Gamma / Invert / Fresnel / Mapping / Smoothstep / Blackbody nodes (GLSL + Slang tested), material
+  preview lights (presets, HDRI .hdr/.png/.jpg, sun and fill colours), agent CLI `mosaic pack ...` / `mosaic config`.
+
+Next, in order: run Apply in the real game on the RTX PC (pipeline reload of Studio passes without a restart); more
+user stage hooks (before tone mapping, sky, material decode) the same way as postStudio; turn the remaining code blocks
+(loops) into loop nodes; per-pass timings on nodes; HDRI in the game's sky; auto-unwrap / paint layers; Iris export.
