@@ -61,5 +61,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if ((pc.postFlags & (1u << 10u)) != 0u) display = postVibrant(display, 1.30, 1.12);
     if ((pc.postFlags & (1u << 8u)) != 0u) display = postVignette(display, (float2(p) + 0.5) / float2(pc.size), 0.40);
     if ((pc.postFlags & (1u << 9u)) != 0u) display = postFilmGrain(display, int2(p), pc.frameIndex, 0.06);
+    display = postStudio(display, (float2(p) + 0.5) / float2(pc.size), int2(p), pc.frameIndex); // Mosaic Studio's post stage
     outputColor[p] = float4(saturate(display), 1.0);
 }

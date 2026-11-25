@@ -168,4 +168,31 @@ class MosaicSlangGraphTest {
             if (!s.type().equals("bedray.rays") && !s.type().equals("bedray.output"))
                 assertTrue(!MosaicStageMap.modules(s.type(), lib).isEmpty() || !s.settings().isEmpty(), s.type());
     }
+
+    @Test
+    void yourPostStageIsAGraphOfBedraysPostHook() {
+        MosaicSlangLib.Library lib = lib();
+        MosaicSlangLib.Function hook = lib.functions().get("post_cinema/postStudio");
+        assertNotNull(hook, "Bedray's pack has the post hook");
+        // a stage of your own: Bedray's vignette, stronger, then a warm tint
+        String json = """
+            {"function": "post_cinema/postStudio", "nodes": [
+              {"id": "c", "type": "slang.param", "mask": "float3 color"},
+              {"id": "uv", "type": "slang.param", "mask": "float2 uv"},
+              {"id": "px", "type": "slang.param", "mask": "int2 pixel"},
+              {"id": "fi", "type": "slang.param", "mask": "uint frameIndex"},
+              {"id": "v", "type": "bedray.fn:post_cinema/postVignette", "inputs": {"color": "c", "uv": "uv"}, "defaults": {"strength": [0.6]}},
+              {"id": "t", "type": "mosaic.mul", "inputs": {"a": "v"}, "defaults": {"b": [1.1, 1.0, 0.9]}},
+              {"id": "r", "type": "slang.result", "mask": "float3", "inputs": {"value": "t"}}
+            ]}""";
+        MosaicGraph.Analysis a = MosaicGraph.analyze(json);
+        assertNull(a.firstError(), String.valueOf(a.problems()));
+        MosaicSlangGraph.Code code = MosaicSlangGraph.function(a.graph(), "postStudio");
+        assertTrue(code.body().contains("postVignette(color, uv, 0.6)"), code.body());
+        Path slangc = MosaicSlang.locate(null);
+        assumeTrue(slangc != null, "no slangc");
+        String module = MosaicSlangGraph.overrideAll(lib.sources().get("post_cinema.slang"), "post_cinema", java.util.Map.of(hook, code));
+        MosaicSlangGraph.Check check = MosaicSlangGraph.checkModules(java.util.Map.of("post_cinema", module), slangc, MosaicSlangGraph.packRoot());
+        assertTrue(check.ok(), check.log() + "\n" + module);
+    }
 }

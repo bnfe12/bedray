@@ -109,6 +109,9 @@ final class StudioPack {
             Set<String> s = new LinkedHashSet<>();
             Matcher mm = imp.matcher(e.getValue());
             while (mm.find()) s.add(MosaicSlangLib.moduleId(mm.group(1)));
+            // "import post_cinema;" / "import a.b;": a module by name (dots are folders)
+            Matcher named = Pattern.compile("(?m)^\\s*(?:__exported\\s+)?import\\s+([A-Za-z_][\\w.]*)\\s*;").matcher(e.getValue());
+            while (named.find()) s.add(named.group(1).replace('.', '/'));
             Matcher inc = Pattern.compile("(?m)^\\s*#include\\s+\"([^\"]+\\.slang)\"").matcher(e.getValue());
             while (inc.find()) s.add(MosaicSlangLib.moduleId(resolve(e.getKey(), inc.group(1))));
             imports.put(MosaicSlangLib.moduleId(e.getKey()), s);

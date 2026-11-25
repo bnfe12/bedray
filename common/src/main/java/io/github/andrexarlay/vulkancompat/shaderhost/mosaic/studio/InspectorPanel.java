@@ -154,6 +154,23 @@ final class InspectorPanel extends Panels.Listening {
             stageEditor(n);
             return;
         }
+        if (n.type.equals("user.post")) {
+            boolean edited = java.nio.file.Files.exists(StudioModel.functionFile(StudioModel.POST_HOOK));
+            content.add(Box.createVerticalStrut(6));
+            content.add(text("Your own stage: name it with the label below. Its graph is Bedray's post hook (postStudio): the display colour,"
+                + " uv, pixel and frame in, your colour out. It runs in Bedray's frame after the tone curve and Bedray's looks"
+                + " (path tracer display, ray-effects tone mapping and the denoiser's compose).", MUTED));
+            content.add(text(edited ? "Its graph is edited: Apply to Bedray sends it." : "Untouched: it passes the colour through.", edited ? OK : FAINT));
+            content.add(button("Open its graph", "Build the stage from nodes (double-click the node does the same)", () -> {
+                if (model.openFunction != null) model.openFunction.accept(StudioModel.POST_HOOK);
+            }));
+            content.add(button("Apply to Bedray", "Rebuilds the passes that run the hook with your graph", model::applyFunctions));
+            content.add(section("Label"));
+            JTextField label = field(n.label == null ? "" : n.label);
+            label.addActionListener(ev -> model.rename(label.getText()));
+            content.add(label);
+            return;
+        }
         if (n.type.equals("slang.module")) {
             moduleInfo(n);
             return;

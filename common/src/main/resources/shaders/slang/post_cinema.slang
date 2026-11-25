@@ -27,3 +27,10 @@ float3 postVibrant(float3 color, float saturation, float contrast) {
     float3 sat = max(float3(luma) + (color - float3(luma)) * saturation, float3(0.0));
     return saturate((sat - 0.5) * contrast + 0.5);
 }
+
+// Mosaic Studio's post stage: the hook a "Your post stage" node of the renderer graph writes (Apply to Bedray replaces
+// this body with the stage's node graph). Bedray's own build returns the colour unchanged. The display colour is 0..1
+// after the tone curve and Bedray's looks, uv is the pixel centre in [0,1], frameIndex is 0 where a pass has none.
+float3 postStudio(float3 color, float2 uv, int2 pixel, uint frameIndex) {
+    return color;
+}

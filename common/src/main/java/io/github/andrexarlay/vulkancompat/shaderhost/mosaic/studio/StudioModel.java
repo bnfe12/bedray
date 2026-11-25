@@ -176,6 +176,9 @@ final class StudioModel {
 
     // ================================================================== Bedray's functions as graphs
 
+    /** The function a "Your post stage" node is the graph of (post_cinema.slang: identity in Bedray's own build). */
+    static final String POST_HOOK = "post_cinema/postStudio";
+
     /** Opens a pack function ("light/sun/sunSolidAngle") in a tab of its own; set by the app. */
     java.util.function.Consumer<String> openFunction;
     private boolean libraryReady;

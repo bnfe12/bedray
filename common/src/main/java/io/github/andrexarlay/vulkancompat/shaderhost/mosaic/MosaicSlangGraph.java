@@ -441,6 +441,7 @@ public final class MosaicSlangGraph {
         for (String m : modules) {
             if (m.equals(self)) continue;
             if (src.contains("\"" + m + ".slang\"")) continue;
+            if (java.util.regex.Pattern.compile("(?m)^\\s*(__exported\\s+)?import\\s+" + java.util.regex.Pattern.quote(m.replace('/', '.')) + "\\s*;").matcher(src).find()) continue;
             add.append(MosaicSlangLib.importOf(m)).append('\n');
         }
         if (add.length() == 0) return src;

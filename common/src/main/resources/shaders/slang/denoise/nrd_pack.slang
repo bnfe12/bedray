@@ -170,5 +170,5 @@ float3 nrdPostCinema(float3 color, uint2 pixel, NrdPackPush pc) {
     float2 uv = (float2(pixel) + 0.5) / float2(pc.size);
     if ((pc.flags & NRD_FLAG_VIGNETTE) != 0u) color = postVignette(color, uv, 0.40);
     if ((pc.flags & NRD_FLAG_GRAIN) != 0u) color = postFilmGrain(color, int2(pixel), 0u, 0.06);
-    return color;
+    return postStudio(color, uv, int2(pixel), 0u); // Mosaic Studio's post stage (identity unless one is applied)
 }

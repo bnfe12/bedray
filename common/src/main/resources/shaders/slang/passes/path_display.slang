@@ -246,5 +246,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if ((pc.flags & PATH_DISPLAY_FLAG_GRAIN) != 0u) {
         display = postFilmGrain(display, p, frame.frame.x, 0.06);
     }
+    display = postStudio(display, uv, p, frame.frame.x); // Mosaic Studio's post stage (identity unless one is applied)
     outImage[p] = float4(saturate(display), 1.0);
 }

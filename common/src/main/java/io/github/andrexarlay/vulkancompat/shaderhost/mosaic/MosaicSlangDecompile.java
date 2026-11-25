@@ -272,6 +272,8 @@ public final class MosaicSlangDecompile {
                 .map(Map.Entry::getValue).findFirst().orElse("");
             Matcher m = Pattern.compile("import\\s+\"([^\"]+)\"").matcher(src);
             while (m.find()) moduleImports.add(MosaicSlangLib.moduleId(m.group(1)));
+            Matcher named = Pattern.compile("(?m)^\\s*(?:__exported\\s+)?import\\s+([A-Za-z_][\\w.]*)\\s*;").matcher(src);
+            while (named.find()) moduleImports.add(named.group(1).replace('.', '/'));
         }
 
         String add(String type, String mask, int index, Map<String, String> inputs, String label) {
