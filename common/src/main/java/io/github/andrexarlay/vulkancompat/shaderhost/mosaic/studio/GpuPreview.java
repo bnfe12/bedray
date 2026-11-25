@@ -453,7 +453,7 @@ final class GpuPreview implements AutoCloseable {
                 wr.get(0).sType$Default().dstSet(p.set).dstBinding(b.binding()).descriptorCount(1).descriptorType(vkType(b.kind()));
                 switch (vkType(b.kind())) {
                     case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER -> {
-                        Buf buf = b.binding() == 1 ? c.ubo : extraBuffer(p, b, extras);
+                        Buf buf = b.binding() == 1 ? c.ubo : extraBuffer(c, p, b, extras);
                         VkDescriptorBufferInfo.Buffer bi = VkDescriptorBufferInfo.calloc(1, s);
                         bi.get(0).buffer(buf.handle()).offset(0).range(buf.size());
                         wr.get(0).pBufferInfo(bi);
@@ -477,7 +477,7 @@ final class GpuPreview implements AutoCloseable {
     }
 
     /** User buffer (binding 5: buffer5.bin) and the world volume (15: empty world, sky light everywhere), else zeros. */
-    private Buf extraBuffer(Prepared p, SpirvReflection.Binding b, Extras extras) {
+    private Buf extraBuffer(Chain c, Prepared p, SpirvReflection.Binding b, Extras extras) {
         Buf buf;
         if (b.binding() == 15) {
             int cells = 48 * 32 * 48;
@@ -486,6 +486,17 @@ final class GpuPreview implements AutoCloseable {
             MemoryUtil.memPutInt(buf.mapped() + 36, 32);
             MemoryUtil.memPutInt(buf.mapped() + 40, 48);
             for (int i = 0; i < cells; i++) MemoryUtil.memPutShort(buf.mapped() + 48 + i * 2L, (short) (15 << 12)); // air, full sky light
+        } else if (b.binding() == 17) { // previous camera: the preview camera stands still
+            buf = buffer(144, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            long tmp = MemoryUtil.nmemCalloc(1, 320);
+            try {
+                writeFrame(tmp, Math.max(1, c.w), Math.max(1, c.h), 0f, 0);
+                MemoryUtil.memCopy(tmp, buf.mapped(), 64);              // projection
+                MemoryUtil.memCopy(tmp + 128, buf.mapped() + 64, 64);   // model-view
+                MemoryUtil.memCopy(tmp + 256, buf.mapped() + 128, 16);  // camera position
+            } finally {
+                MemoryUtil.nmemFree(tmp);
+            }
         } else if (b.binding() == 16) { // weather and sky: a clear day
             buf = buffer(64, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
             float[] v = {0f, 0f, 0.8f, 0f, 0.47f, 0.65f, 1f, 1f, 0.75f, 0.85f, 1f, 1f, 0f, 0f, 0f, 0f};

@@ -48,6 +48,20 @@ class MosaicBlurTest {
     }
 
     @Test
+    void reprojectCompilesInBothLanguagesWithThePreviousCamera() {
+        MosaicGraph g = MosaicGraph.parse(MosaicTemplates.TAA);
+        MosaicCodegen.Generated glsl = MosaicCodegen.generate(g, MosaicCodegen.Options.DEFAULT, false);
+        assertTrue(glsl.source().contains("binding = 17"), "BedrayPrevFrame");
+        MosaicShaderCheck.Result r = MosaicShaderCheck.compile(glsl);
+        assertTrue(r.ok(), String.valueOf(r.errors()));
+        java.nio.file.Path slangc = MosaicSlang.locate(System.getProperty("mosaic.slangc"));
+        if (slangc != null) {
+            MosaicShaderCheck.Result s = MosaicSlang.compile(MosaicCodegen.generate(g, MosaicCodegen.Options.DEFAULT, true), slangc);
+            assertTrue(s.ok(), String.valueOf(s.errors()));
+        }
+    }
+
+    @Test
     void blurOfAnUnwrittenBufferIsAnError() {
         MosaicGraph.Analysis a = MosaicGraph.analyze("{\"nodes\": [{\"id\": \"b\", \"type\": \"mosaic.kawase\", \"mask\": \"nope\"},"
             + "{\"id\": \"o\", \"type\": \"mosaic.output\", \"inputs\": {\"color\": \"b\"}}]}");

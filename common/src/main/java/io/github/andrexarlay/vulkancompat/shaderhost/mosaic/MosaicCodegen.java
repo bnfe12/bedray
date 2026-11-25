@@ -152,7 +152,7 @@ public final class MosaicCodegen {
 
     /** Which bindings and helpers the emitted code needs. */
     private record Needs(boolean ray, boolean scene, boolean depth, boolean world, boolean buffer, boolean lut, int maxPush, boolean noise,
-                         java.util.Set<Integer> buffers, boolean history, boolean worldInfo, boolean blur) {}
+                         java.util.Set<Integer> buffers, boolean history, boolean worldInfo, boolean blur, boolean prev) {}
 
     private static final String[] NOISE_HELPERS = {"mosaicNoise(", "mosaicNoiseColor(", "mosaicVoronoi(", "mosaicHash31(", "mosaicHash33(",
         "mosaicChecker(", "mosaicWave(", "mosaicGradient(", "mosaicFbm(", "mosaicGradNoise("};
@@ -171,7 +171,7 @@ public final class MosaicCodegen {
 
     private static Needs needs(MosaicGraph g, Plan p) {
         boolean ray = false, scene = false, depth = false, world = false, buffer = false, lut = false, noise = false, history = false, info = false,
-            blur = false;
+            blur = false, prev = false;
         java.util.Set<Integer> buffers = new java.util.TreeSet<>();
         int push = -1;
         for (Node n : p.emit) {
@@ -192,6 +192,7 @@ public final class MosaicCodegen {
                     blur = true;
                 }
                 case "mosaic.history" -> history = true;
+                case "mosaic.reproject" -> prev = depth = true;
                 case "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor", "mosaic.fogColor" -> info = true;
                 case "mosaic.noise", "mosaic.voronoi", "mosaic.whiteNoise", "mosaic.checker", "mosaic.wave", "mosaic.gradient" -> noise = true;
                 default -> { }
@@ -209,7 +210,7 @@ public final class MosaicCodegen {
             depth |= view;
             noise |= mentions(body, NOISE_HELPERS);
         }
-        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur);
+        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur, prev);
     }
 
     /** Header of a stats comment so authors see what the optimizer did. */
@@ -332,6 +333,8 @@ public final class MosaicCodegen {
         if (nd.lut()) o.a("\nlayout(set = 0, binding = 6) uniform sampler2D bedrayLut; // user LUT texture\n");
         for (int b : nd.buffers()) o.a("layout(set = 0, binding = " + b + ") uniform sampler2D bedrayBuf" + b + "; // a Buffer pass\n");
         if (nd.history()) o.a("layout(set = 0, binding = 19) uniform sampler2D bedrayHistory; // the previous final frame\n");
+        if (nd.prev()) o.a("layout(std140, set = 0, binding = 17) uniform BedrayPrevFrame { mat4 projection; mat4 modelView; vec4 cameraPosition; } prevFrame;"
+            + " // the previous frame's camera\n");
         if (nd.worldInfo()) o.a("layout(std140, set = 0, binding = 16) uniform BedrayWorldInfo { vec4 weather; vec4 skyColor; vec4 fogColor; vec4 extra; } worldInfo;"
             + " // weather: rain, thunder, temperature, 0\n");
         if (nd.maxPush() >= 0)
@@ -375,6 +378,7 @@ public final class MosaicCodegen {
         if (nd.world()) o.a(GLSL_WORLD.replace("%B", String.valueOf(MosaicWorld.BINDING)) + (nd.depth() ? GLSL_WORLD_VIEW : ""));
         if (nd.noise()) o.a(GLSL_NOISE);
         if (nd.blur()) o.a(GLSL_BLUR);
+        if (nd.prev()) o.a(GLSL_REPROJECT);
         if (nd.ray()) o.a("""
             const uint MOSAIC_CULL_MASK = 0x01u; // section geometry
             const vec3 MOSAIC_SKY_DIRECTION = vec3(0.32, 0.90, 0.28); // shadow-node default
@@ -487,6 +491,31 @@ public final class MosaicCodegen {
                 vec2 px = (max(r, 0.0) + 0.5) / vec2(textureSize(s, 0));
                 return (texture(s, uv + px) + texture(s, uv - px) + texture(s, uv + vec2(px.x, -px.y))
                     + texture(s, uv + vec2(-px.x, px.y))) * 0.25;
+            }
+            """;
+    /**
+     * The pixel's surface (or, for the sky, its direction) seen by last frame's camera: uv there. Positions are camera
+     * relative, so the camera's world move between the frames is added before the previous model-view.
+     */
+    private static final String GLSL_REPROJECT = """
+            vec2 mosaicReproject(vec2 uv) {
+                float t = mosaicDepth(uv);
+                vec4 clip = t >= 1.0e5
+                    ? prevFrame.projection * (prevFrame.modelView * vec4(mosaicViewDir(uv), 0.0))
+                    : prevFrame.projection * (prevFrame.modelView
+                        * vec4(mosaicHitPos(uv) + frame.cameraPosition.xyz - prevFrame.cameraPosition.xyz, 1.0));
+                return clip.xy / max(clip.w, 1e-6) * 0.5 + 0.5;
+            }
+            """;
+    private static final String SLANG_REPROJECT = """
+            float2 mosaicReproject(float2 uv)
+            {
+                float t = mosaicDepth(uv);
+                float4 clip = t >= 1.0e5
+                    ? mul(prevFrame.projection, mul(prevFrame.modelView, float4(mosaicViewDir(uv), 0.0)))
+                    : mul(prevFrame.projection, mul(prevFrame.modelView,
+                        float4(mosaicHitPos(uv) + frame.cameraPosition.xyz - prevFrame.cameraPosition.xyz, 1.0)));
+                return clip.xy / max(clip.w, 1e-6) * 0.5 + 0.5;
             }
             """;
     private static final String SLANG_BLUR = """
@@ -902,6 +931,7 @@ public final class MosaicCodegen {
             case "mosaic.time" -> "frame.timing.x";
             case "mosaic.bufferIn" -> sl ? "bedrayBuf" + n.index() + ".SampleLevel(" + uv + ", 0.0)" : "texture(bedrayBuf" + n.index() + ", " + uv + ")";
             case "mosaic.history" -> sl ? "bedrayHistory.SampleLevel(" + uv + ", 0.0)" : "texture(bedrayHistory, " + uv + ")";
+            case "mosaic.reproject" -> "mosaicReproject(" + uv + ")";
             case "mosaic.blur" -> "mosaicBlur(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "radius") + ")";
             case "mosaic.kawase" -> "mosaicKawase(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "radius") + ")";
             case "mosaic.rain" -> "worldInfo.weather.x";
@@ -1227,6 +1257,8 @@ public final class MosaicCodegen {
         if (nd.lut()) o.a("[[vk::binding(6, 0)]] Sampler2D bedrayLut;\n");
         for (int b : nd.buffers()) o.a("[[vk::binding(" + b + ", 0)]] Sampler2D bedrayBuf" + b + ";\n");
         if (nd.history()) o.a("[[vk::binding(19, 0)]] Sampler2D bedrayHistory;\n");
+        if (nd.prev()) o.a("struct BedrayPrevFrame { float4x4 projection; float4x4 modelView; float4 cameraPosition; };\n"
+            + "[[vk::binding(17, 0)]] ConstantBuffer<BedrayPrevFrame> prevFrame;\n");
         if (nd.worldInfo()) o.a("struct BedrayWorldInfo { float4 weather; float4 skyColor; float4 fogColor; float4 extra; };\n"
             + "[[vk::binding(16, 0)]] ConstantBuffer<BedrayWorldInfo> worldInfo;\n");
         if (nd.maxPush() >= 0)
@@ -1271,6 +1303,7 @@ public final class MosaicCodegen {
         if (nd.world()) o.a(SLANG_WORLD.replace("%B", String.valueOf(MosaicWorld.BINDING)) + (nd.depth() ? SLANG_WORLD_VIEW : ""));
         if (nd.noise()) o.a(SLANG_NOISE);
         if (nd.blur()) o.a(SLANG_BLUR);
+        if (nd.prev()) o.a(SLANG_REPROJECT);
         if (nd.ray()) o.a("""
             static const uint MOSAIC_CULL_MASK = 0x01; // section geometry
             static const float3 MOSAIC_SKY_DIRECTION = float3(0.32, 0.90, 0.28); // shadow-node default

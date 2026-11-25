@@ -182,6 +182,7 @@ public final class CustomRtStage {
         if (!mosaic) return Set.of();
         Set<Integer> s = new LinkedHashSet<>();
         s.add(CustomRtExecutor.WORLD_INFO_BINDING);
+        s.add(CustomRtExecutor.PREV_FRAME_BINDING);
         s.add(CustomRtExecutor.HISTORY_BINDING);
         for (CustomRtExecutor.ChainPass p : passes) s.add(p.binding());
         return s;

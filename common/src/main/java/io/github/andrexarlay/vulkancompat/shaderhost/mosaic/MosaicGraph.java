@@ -144,7 +144,7 @@ public final class MosaicGraph {
         // procedural textures
         "mosaic.noise", "mosaic.voronoi", "mosaic.whiteNoise", "mosaic.checker", "mosaic.wave", "mosaic.gradient",
         // multi-pass: write a named buffer, read it (any uv), the previous frame; weather and sky (binding 16)
-        "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
+        "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.reproject", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
         "mosaic.fogColor",
         // Bedray's renderer as nodes (MosaicRenderer): stages of the real pipeline and the frame they produce
         "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.voxels", "bedray.raster", "bedray.upscaler", "bedray.output", "bedray.stageMap", "user.post", "user.hdr", "user.sky",
@@ -210,6 +210,7 @@ public final class MosaicGraph {
         m.put("mosaic.blur", List.of(new Port("uv", Kind.V2, false), new Port("radius", Kind.F, false)));
         m.put("mosaic.kawase", List.of(new Port("uv", Kind.V2, false), new Port("radius", Kind.F, false)));
         m.put("mosaic.history", List.of(new Port("uv", Kind.V2, false)));
+        m.put("mosaic.reproject", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.texture", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.image", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.bsdf", List.of(new Port("baseColor", Kind.V4, false), new Port("roughness", Kind.F, false),
@@ -914,6 +915,7 @@ public final class MosaicGraph {
                 case "mosaic.swizzle" -> swizzleKind(n, visiting);
                 case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf", "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history" -> Kind.V4;
                 case "mosaic.rain", "mosaic.thunder", "mosaic.temperature" -> Kind.F;
+                case "mosaic.reproject" -> Kind.V2;
                 case "bedray.output", "slang.module", "slang.pack", "bedray.stageMap" -> Kind.V4;
                 case "mosaic.skyColor", "mosaic.fogColor" -> Kind.V3;
                 case "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt",

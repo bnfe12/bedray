@@ -72,6 +72,35 @@ class CustomRtChainTest {
         }
     }
 
+    /** Temporal AA: the previous frame read where this pixel was last frame, blended 90 %. */
+    static final String TAA = "{\"nodes\": ["
+        + "{\"id\": \"c\", \"type\": \"mosaic.sceneColor\"},"
+        + "{\"id\": \"r\", \"type\": \"mosaic.reproject\"},"
+        + "{\"id\": \"h\", \"type\": \"mosaic.history\", \"inputs\": {\"uv\": \"r\"}},"
+        + "{\"id\": \"m\", \"type\": \"mosaic.mix\", \"inputs\": {\"a\": \"c\", \"b\": \"h\"}, \"defaults\": {\"t\": [0.9]}},"
+        + "{\"id\": \"o\", \"type\": \"mosaic.output\", \"inputs\": {\"color\": \"m\"}}]}";
+
+    @Test
+    void reprojectedHistoryIsHostProduced() throws Exception {
+        Path pack = Files.createTempDirectory("mosaic-taa");
+        Files.writeString(Files.createDirectories(pack.resolve("shaders/bedray")).resolve("mosaic.json"), TAA, StandardCharsets.UTF_8);
+        String previous = System.getProperty("bedray.mosaic.slang");
+        System.setProperty("bedray.mosaic.slang", "off");
+        try (PackSource src = PackSource.open(pack, ScanLimits.defaults())) {
+            VulkanGlslPackCompiler.Compiled c = CustomRtStage.compileStage(src, CustomRtStage.MOSAIC);
+            assertNull(CustomRtStage.validate(c));
+            Set<Integer> bound = new java.util.TreeSet<>();
+            for (SpirvReflection.Binding b : c.module().bindings()) bound.add(b.binding());
+            assertTrue(bound.containsAll(Set.of(CustomRtStage.B_DEPTH, CustomRtExecutor.PREV_FRAME_BINDING, CustomRtExecutor.HISTORY_BINDING)), "" + bound);
+            CustomRtResources res = CustomRtResources.build(c.module(), CustomRtStage.hostBindings(true, List.of()), "shaders/",
+                (name, what) -> { throw new IllegalArgumentException("asked the pack for " + name); }, null);
+            assertTrue(res.bufferSpecs().isEmpty());
+        } finally {
+            if (previous == null) System.clearProperty("bedray.mosaic.slang");
+            else System.setProperty("bedray.mosaic.slang", previous);
+        }
+    }
+
     @Test
     void rasterDepthPassCompilesWithItsThreeBindings() throws Exception {
         java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler.compile(CustomRtExecutor.RASTER_DEPTH_GLSL,

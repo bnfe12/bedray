@@ -46,6 +46,15 @@ public final class MosaicTemplates {
  {"id":"sum","type":"mosaic.add","inputs":{"a":"c","b":"glow"},"x":720,"y":200},
  {"id":"out","type":"mosaic.output","inputs":{"color":"sum"},"x":900,"y":200}]}""";
 
+    /** Temporal smoothing: last frame read where this pixel's surface was (Reproject), blended in. */
+    static final String TAA = """
+{"nodes":[
+ {"id":"c","type":"mosaic.sceneColor","x":0,"y":0},
+ {"id":"r","type":"mosaic.reproject","x":0,"y":120},
+ {"id":"h","type":"mosaic.history","inputs":{"uv":"r"},"x":180,"y":120},
+ {"id":"m","type":"mosaic.mix","inputs":{"a":"c","b":"h"},"defaults":{"t":[0.85]},"x":360,"y":40},
+ {"id":"out","type":"mosaic.output","inputs":{"color":"m"},"x":540,"y":40}]}""";
+
     static {
         ALL.add(new Template("Pass-through", "Start", "The world image unchanged: the smallest valid graph.", chain()));
         ALL.add(new Template("Cinematic", "Post effects", "Color grade, vignette and film grain.",
@@ -57,6 +66,8 @@ public final class MosaicTemplates {
         ALL.add(new Template("Dreamy glow", "Post effects", "Soft bloom with a warm grade.", chain("glow", "colorGrade")));
         ALL.add(new Template("Bloom (multi-pass)", "Passes", "Bright parts at 1/4 size, blurred at 1/2 in its own pass, added back:"
             + " Buffer and Read buffer nodes.", BLOOM));
+        ALL.add(new Template("Temporal smoothing", "Passes", "The previous frame, reprojected to where each surface was,"
+            + " blended in: calmer noise and edges while the camera moves.", TAA));
         ALL.add(new Template("Bloom chain (mip)", "Passes", "Bright parts at 1/2, Kawase steps down to 1/4 and 1/8, every level"
             + " blurred and added back: the wide glow of big shader packs.", BLOOM_CHAIN));
         ALL.add(new Template("Realistic water", "World", "Water absorbs light by depth, caustics under it, sparkle on"

@@ -98,7 +98,12 @@ final class CustomRtExecutor implements AutoCloseable {
     private final List<ChainPass> chain;
     private final long[] chainPipelines, chainSets;
     private final RtMemory.Img[] chainImages;
-    private final boolean usesInfo, usesHistory;
+    private final boolean usesInfo, usesHistory, usesPrev;
+    static final int PREV_FRAME_BINDING = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.PREV_FRAME_BINDING;
+    static final int PREV_FRAME_BYTES = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.PREV_FRAME_BYTES;
+    private RtMemory.Buf prevUbo;
+    /** Last frame's projection, model-view and camera position (BedrayPrevFrame); empty before the first frame. */
+    private ByteBuffer prevBlock;
     private long linearSampler;
     private RtMemory.Buf infoUbo;
     private RtMemory.Img history;
@@ -180,6 +185,7 @@ final class CustomRtExecutor implements AutoCloseable {
         this.usesDepth = usesAny(compiled, this.chain, CustomRtStage.B_DEPTH);
         this.usesInfo = mosaicHost && usesAny(compiled, this.chain, WORLD_INFO_BINDING);
         this.usesHistory = mosaicHost && usesAny(compiled, this.chain, HISTORY_BINDING);
+        this.usesPrev = mosaicHost && usesAny(compiled, this.chain, PREV_FRAME_BINDING);
         try {
             create(compiled, bufferCount, textureCount);
         } catch (RuntimeException | LinkageError e) {
@@ -228,7 +234,7 @@ final class CustomRtExecutor implements AutoCloseable {
 
             // A shader that never traces gets no acceleration-structure binding at all, so it also runs on devices and
             // renderers without ray tracing (raster, voxel compute).
-            int hostExtras = (usesInfo ? 1 : 0) + (usesHistory ? 1 : 0) + chain.size();
+            int hostExtras = (usesInfo ? 1 : 0) + (usesPrev ? 1 : 0) + (usesHistory ? 1 : 0) + chain.size();
             var bindings = VkDescriptorSetLayoutBinding.calloc((usesTlas ? 5 : 4) + (usesWorld ? 1 : 0) + bufferCount + textureCount + hostExtras, stack);
             int slot = 0;
             if (usesTlas) bindings.get(slot++).binding(CustomRtStage.B_SCENE)
@@ -250,6 +256,8 @@ final class CustomRtExecutor implements AutoCloseable {
             }
             if (usesInfo) bindings.get(slot++).binding(WORLD_INFO_BINDING).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
                 .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            if (usesPrev) bindings.get(slot++).binding(PREV_FRAME_BINDING).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
             if (usesHistory) bindings.get(slot++).binding(HISTORY_BINDING).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                 .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
             for (ChainPass p : chain) bindings.get(slot++).binding(p.binding()).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
@@ -268,7 +276,7 @@ final class CustomRtExecutor implements AutoCloseable {
             pipeline = createPipeline(compiled, "compute pipeline");
             for (int i = 0; i < chain.size(); i++) chainPipelines[i] = createPipeline(chain.get(i).compiled(), "pass pipeline " + i);
 
-            int uniformBuffers = 1 + (usesInfo ? 1 : 0);
+            int uniformBuffers = 1 + (usesInfo ? 1 : 0) + (usesPrev ? 1 : 0);
             int storageBuffers = usesWorld ? 1 : 0;
             int combinedImages = 2 + (usesHistory ? 1 : 0) + chain.size();
             int sampledImages = 0;
@@ -300,6 +308,8 @@ final class CustomRtExecutor implements AutoCloseable {
                     .pSetLayouts(stack.longs(setLayout)), handle), "pass descriptor set " + i);
                 chainSets[i] = handle.get(0);
             }
+            if (usesPrev) prevUbo = memory.createBuffer("customrt_prev_frame", PREV_FRAME_BYTES,
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
             if (usesInfo) infoUbo = memory.createBuffer("customrt_world_info", WORLD_INFO_BYTES,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
             frameUbo = memory.createBuffer("customrt_frame", FRAME_UBO_BYTES,
@@ -601,7 +611,7 @@ final class CustomRtExecutor implements AutoCloseable {
         List<CustomRtResources.BufferSpec> bufferSpecs = resources == null ? List.of() : resources.bufferSpecs();
         List<CustomRtResources.TextureSpec> textureSpecs = resources == null ? List.of() : resources.textureSpecs();
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            var bufferInfos = VkDescriptorBufferInfo.calloc(3 + bufferSpecs.size(), stack);
+            var bufferInfos = VkDescriptorBufferInfo.calloc(4 + bufferSpecs.size(), stack);
             bufferInfos.get(0).buffer(frameUbo.handle).offset(0).range(FRAME_UBO_BYTES);
             for (int i = 0; i < bufferSpecs.size(); i++) {
                 bufferInfos.get(1 + i).buffer(userBuffers[i].handle).offset(0).range(bufferBytes[i]);
@@ -610,6 +620,8 @@ final class CustomRtExecutor implements AutoCloseable {
             if (usesWorld) bufferInfos.get(worldInfoSlot).buffer(worldBuffer.handle).offset(0)
                 .range(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BYTES);
             if (usesInfo) bufferInfos.get(infoSlot).buffer(infoUbo.handle).offset(0).range(WORLD_INFO_BYTES);
+            int prevSlot = infoSlot + 1;
+            if (usesPrev) bufferInfos.get(prevSlot).buffer(prevUbo.handle).offset(0).range(PREV_FRAME_BYTES);
 
             var imageInfos = VkDescriptorImageInfo.calloc(4 + textureSpecs.size() + chain.size(), stack);
             imageInfos.get(0).sampler(sampler).imageView(input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
@@ -625,7 +637,7 @@ final class CustomRtExecutor implements AutoCloseable {
                 imageInfos.get(passSlot + i).sampler(linearSampler).imageView(chainImages[i].view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
             }
 
-            int count = 5 + bufferSpecs.size() + textureSpecs.size() + (usesWorld ? 1 : 0) + (usesInfo ? 1 : 0)
+            int count = 5 + bufferSpecs.size() + textureSpecs.size() + (usesWorld ? 1 : 0) + (usesInfo ? 1 : 0) + (usesPrev ? 1 : 0)
                 + (usesHistory ? 1 : 0) + chain.size();
             var writes = VkWriteDescriptorSet.calloc(count, stack);
             var as = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack).sType$Default()
@@ -654,6 +666,8 @@ final class CustomRtExecutor implements AutoCloseable {
                 .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(worldInfoSlot, 1));
             if (usesInfo) writes.get(w++).sType$Default().dstSet(dst).dstBinding(WORLD_INFO_BINDING)
                 .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(infoSlot, 1));
+            if (usesPrev) writes.get(w++).sType$Default().dstSet(dst).dstBinding(PREV_FRAME_BINDING)
+                .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(prevSlot, 1));
             if (usesHistory) writes.get(w++).sType$Default().dstSet(dst).dstBinding(HISTORY_BINDING)
                 .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(3, 1));
             for (int i = 0; i < chain.size(); i++) {
@@ -724,6 +738,15 @@ final class CustomRtExecutor implements AutoCloseable {
             ByteBuffer ubo = stack.calloc(FRAME_UBO_BYTES).order(ByteOrder.nativeOrder());
             fillFrame(ubo, frame.camera(), color.width(), color.height());
             vkCmdUpdateBuffer(cmd, frameUbo.handle, 0, ubo);
+            if (usesPrev) {
+                // last frame's camera (this frame's on the first one: no motion), then remember this frame's for the next
+                if (prevBlock == null) {
+                    prevBlock = org.lwjgl.system.MemoryUtil.memCalloc(PREV_FRAME_BYTES).order(ByteOrder.nativeOrder());
+                    copyCamera(ubo, prevBlock);
+                }
+                vkCmdUpdateBuffer(cmd, prevUbo.handle, 0, prevBlock);
+                copyCamera(ubo, prevBlock);
+            }
 
             recordUserUploads(cmd);
             recordWorldUpload(cmd, frame.camera(), volume);
@@ -869,6 +892,15 @@ final class CustomRtExecutor implements AutoCloseable {
         }
     }
 
+    /** BedrayFrame projection (0), model-view (128) and camera position (256) into BedrayPrevFrame's 0 / 64 / 128. */
+    private static void copyCamera(ByteBuffer frameBlock, ByteBuffer prev) {
+        for (int i = 0; i < 64; i += 4) {
+            prev.putFloat(i, frameBlock.getFloat(i));
+            prev.putFloat(64 + i, frameBlock.getFloat(128 + i));
+        }
+        for (int i = 0; i < 16; i += 4) prev.putFloat(128 + i, frameBlock.getFloat(256 + i));
+    }
+
     /** std140 BedrayFrame block; offsets documented in docs/CUSTOM_RT_SHADERS.md. */
     private void fillFrame(ByteBuffer b, WorldFrame.Camera camera, int w, int h) {
         camera.projection().get(0, b);
@@ -923,6 +955,10 @@ final class CustomRtExecutor implements AutoCloseable {
         }
         if (history != null) memory.destroy(history);
         if (infoUbo != null) memory.destroy(infoUbo);
+        if (prevUbo != null) memory.destroy(prevUbo);
+        prevUbo = null;
+        if (prevBlock != null) org.lwjgl.system.MemoryUtil.memFree(prevBlock);
+        prevBlock = null;
         history = null;
         infoUbo = null;
         if (rasterDistance != null) memory.destroy(rasterDistance);

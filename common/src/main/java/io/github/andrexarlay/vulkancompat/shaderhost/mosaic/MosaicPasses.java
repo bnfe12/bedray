@@ -23,7 +23,9 @@ public final class MosaicPasses {
 
     private MosaicPasses() {}
 
-    public static final int WORLD_INFO_BINDING = 16, HISTORY_BINDING = 19, FIRST_BUFFER_BINDING = 20;
+    public static final int WORLD_INFO_BINDING = 16, PREV_FRAME_BINDING = 17, HISTORY_BINDING = 19, FIRST_BUFFER_BINDING = 20;
+    /** BedrayPrevFrame (binding 17, std140): the previous frame's projection, model-view and camera position. */
+    public static final int PREV_FRAME_BYTES = 144;
 
     /** One pass: its buffer name (null for the final image), scale divisor, its graph JSON, buffer bindings it reads. */
     public record Pass(String name, int scale, String json, Set<Integer> reads, boolean history) {}
