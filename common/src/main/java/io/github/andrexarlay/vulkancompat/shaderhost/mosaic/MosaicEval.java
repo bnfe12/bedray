@@ -37,6 +37,13 @@ public final class MosaicEval {
             case "mosaic.blur.radius", "mosaic.kawase.radius" -> new double[] {1.0};
             case "mosaic.taa.blend" -> new double[] {0.9};
             case "mosaic.accumulate.frames" -> new double[] {32.0};
+            case "mosaic.accumulate.depthTolerance" -> new double[] {0.04};
+            case "mosaic.accumulate.depthToleranceBase" -> new double[] {0.08};
+            case "mosaic.atrous.planeTolerance" -> new double[] {0.04};
+            case "mosaic.atrous.planeTolerancePerBlock" -> new double[] {0.01};
+            case "mosaic.atrous.colorTolerance" -> new double[] {0.6};
+            case "mosaic.atrous.colorToleranceBase" -> new double[] {0.05};
+            case "mosaic.taa.maxBlend" -> new double[] {0.98};
             case "mosaic.atrous.step", "mosaic.atrous.edges" -> new double[] {1.0};
             case "mosaic.noise.scale", "mosaic.voronoi.scale", "mosaic.checker.scale", "mosaic.wave.scale" -> new double[] {5.0};
             case "mosaic.noise.detail", "mosaic.wave.detail" -> new double[] {2.0};

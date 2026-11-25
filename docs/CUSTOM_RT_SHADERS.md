@@ -169,7 +169,7 @@ game (slangc when installed, else GLSL through shaderc).
 
 **Loop and temporal nodes.** `mosaic.repeat` (mask = a function `vec4 f(vec4 acc, float i[, vec2 uv])` of the file,
 index = 1..64 runs, optional `init` and `uv` inputs) emits `acc = f(acc, i)` in a loop. `mosaic.taa` (mask = a Buffer
-name or none for the scene colour, input `blend`, default 0.9) blends the reprojected previous frame clamped to the
+name or none for the scene colour, inputs `blend`, default 0.9, and `maxBlend`, default 0.98) blends the reprojected previous frame clamped to the
 3x3 neighbourhood of its source.
 
 **Graph settings.** An optional `"settings": {key: [numbers]}` object sets the numbers the generated helpers use
@@ -185,7 +185,7 @@ picture is fixed inside the generator.
 
 **History buffers (feedback).** `mosaic.bufferPrev` (Buffer last frame; mask = a Buffer name, input `uv`) reads a
 Buffer as it was at the end of the previous frame, and `mosaic.accumulate` (mask = the Buffer it feeds, inputs
-`color`, `uv`, `frames` default 32) blends this frame's value into it: last frame's value at the reprojected
+`color`, `uv`, `frames` default 32, `depthTolerance` 0.04, `depthToleranceBase` 0.08) blends this frame's value into it: last frame's value at the reprojected
 position with weight `1/n`, `n` counted in alpha up to `frames`, reset off screen, on the sky, on NaN and where the
 previous ray distance there does not match this surface seen from the previous camera. Neither is an ordering
 dependency, so a Buffer may feed itself. For every Buffer read this way the plan adds a **history pass**
@@ -195,7 +195,8 @@ frame. Their bindings follow the user Buffers (names sorted; `~` sorts after let
 their numbers); Studio SPIR-V for them is `mosaic.pass.~prev.<buffer>.spv` / `mosaic.pass.~depth.spv`. Buffer
 images are kept between frames and cleared to black when they are (re)created.
 
-**Denoise.** `mosaic.atrous` (mask = a Buffer, inputs `uv`, `step` default 1, `edges` default 1; 0 = plain blur)
+**Denoise.** `mosaic.atrous` (mask = a Buffer, inputs `uv`, `step` default 1, `edges` default 1 (0 = plain blur), `planeTolerance` 0.04, `planeTolerancePerBlock`
+0.01, `colorTolerance` 0.6, `colorToleranceBase` 0.05)
 is one edge-aware a-trous step: a 5 x 5 B3 kernel with taps `step` buffer pixels apart, weighted down by the tap's
 distance from this pixel's surface plane and by its brightness difference. Chain steps 1, 2, 4 through Buffers.
 

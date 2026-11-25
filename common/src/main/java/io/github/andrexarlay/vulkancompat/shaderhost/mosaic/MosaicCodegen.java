@@ -568,7 +568,7 @@ public final class MosaicCodegen {
      * not match this surface seen from last frame's camera (disocclusion), and when it holds NaN.
      */
     private static final String GLSL_ACCUMULATE = """
-            vec4 mosaicAccumulate(sampler2D hist, sampler2D histDepth, vec4 c, vec2 uv, float frames) {
+            vec4 mosaicAccumulate(sampler2D hist, sampler2D histDepth, vec4 c, vec2 uv, float frames, float tol, float tolBase) {
                 if (any(isnan(c)) || any(isinf(c))) c = vec4(0.0);
                 float t = mosaicDepth(uv);
                 vec2 pv = mosaicReproject(uv);
@@ -576,13 +576,13 @@ public final class MosaicCodegen {
                 float expect = length(mosaicHitPos(uv) + frame.cameraPosition.xyz - prevFrame.cameraPosition.xyz);
                 float was = texture(histDepth, pv).r;
                 vec4 h = texture(hist, pv);
-                if (any(isnan(h)) || h.a < 0.5 || abs(was - expect) > 0.04 * expect + 0.08) return vec4(c.rgb, 1.0);
+                if (any(isnan(h)) || h.a < 0.5 || abs(was - expect) > tol * expect + tolBase) return vec4(c.rgb, 1.0);
                 float n = min(h.a + 1.0, max(frames, 1.0));
                 return vec4(mix(h.rgb, c.rgb, 1.0 / n), n);
             }
             """;
     private static final String SLANG_ACCUMULATE = """
-            float4 mosaicAccumulate(Sampler2D hist, Sampler2D histDepth, float4 c, float2 uv, float frames)
+            float4 mosaicAccumulate(Sampler2D hist, Sampler2D histDepth, float4 c, float2 uv, float frames, float tol, float tolBase)
             {
                 if (any(isnan(c)) || any(isinf(c))) c = float4(0.0);
                 float t = mosaicDepth(uv);
@@ -591,7 +591,7 @@ public final class MosaicCodegen {
                 float expect = length(mosaicHitPos(uv) + frame.cameraPosition.xyz - prevFrame.cameraPosition.xyz);
                 float was = histDepth.SampleLevel(pv, 0.0).r;
                 float4 h = hist.SampleLevel(pv, 0.0);
-                if (any(isnan(h)) || h.a < 0.5 || abs(was - expect) > 0.04 * expect + 0.08) return float4(c.rgb, 1.0);
+                if (any(isnan(h)) || h.a < 0.5 || abs(was - expect) > tol * expect + tolBase) return float4(c.rgb, 1.0);
                 float n = min(h.a + 1.0, max(frames, 1.0));
                 return float4(lerp(h.rgb, c.rgb, 1.0 / n), n);
             }
@@ -602,14 +602,14 @@ public final class MosaicCodegen {
      * stops; 0 = plain blur). Chain 1, 2, 4, 8 steps for a wide, sharp-edged denoise. Alpha (Accumulate's count) is kept.
      */
     private static final String GLSL_ATROUS = """
-            vec4 mosaicAtrous(sampler2D s, vec2 uv, float stp, float edges) {
+            vec4 mosaicAtrous(sampler2D s, vec2 uv, float stp, float edges, float planeTol0, float planeTolK, float colTolK, float colTol0) {
                 vec2 px = max(stp, 1.0) / vec2(textureSize(s, 0));
                 vec4 c0 = texture(s, uv);
                 float t0 = mosaicDepth(uv);
                 if (t0 >= 1.0e5) return c0;
                 vec3 p0 = mosaicHitPos(uv), n0 = mosaicNormal(uv);
                 float l0 = dot(c0.rgb, vec3(0.2126, 0.7152, 0.0722));
-                float planeTol = (0.04 + 0.01 * t0) / max(edges, 1e-3), lumTol = (0.6 * l0 + 0.05) / max(edges, 1e-3);
+                float planeTol = (planeTol0 + planeTolK * t0) / max(edges, 1e-3), lumTol = (colTolK * l0 + colTol0) / max(edges, 1e-3);
                 vec3 sum = vec3(0.0);
                 float wsum = 0.0;
                 for (int y = -2; y <= 2; y++)
@@ -632,7 +632,7 @@ public final class MosaicCodegen {
             }
             """;
     private static final String SLANG_ATROUS = """
-            float4 mosaicAtrous(Sampler2D s, float2 uv, float stp, float edges)
+            float4 mosaicAtrous(Sampler2D s, float2 uv, float stp, float edges, float planeTol0, float planeTolK, float colTolK, float colTol0)
             {
                 uint sw, sh;
                 s.GetDimensions(sw, sh);
@@ -642,7 +642,7 @@ public final class MosaicCodegen {
                 if (t0 >= 1.0e5) return c0;
                 float3 p0 = mosaicHitPos(uv), n0 = mosaicNormal(uv);
                 float l0 = dot(c0.rgb, float3(0.2126, 0.7152, 0.0722));
-                float planeTol = (0.04 + 0.01 * t0) / max(edges, 1e-3), lumTol = (0.6 * l0 + 0.05) / max(edges, 1e-3);
+                float planeTol = (planeTol0 + planeTolK * t0) / max(edges, 1e-3), lumTol = (colTolK * l0 + colTol0) / max(edges, 1e-3);
                 float3 sum = float3(0.0);
                 float wsum = 0.0;
                 for (int y = -2; y <= 2; y++)
@@ -666,7 +666,7 @@ public final class MosaicCodegen {
             """;
     /** Temporal AA: reprojected history clamped to the current 3x3 neighbourhood (no ghosting), off-screen history dropped. */
     private static final String GLSL_TAA = """
-            vec4 mosaicTaa(sampler2D s, vec2 uv, float blend) {
+            vec4 mosaicTaa(sampler2D s, vec2 uv, float blend, float maxBlend) {
                 vec2 px = 1.0 / vec2(textureSize(s, 0));
                 vec4 c = texture(s, uv), lo = c, hi = c;
                 for (int y = -1; y <= 1; y++)
@@ -678,11 +678,11 @@ public final class MosaicCodegen {
                 vec2 prev = mosaicReproject(uv);
                 if (prev.x < 0.0 || prev.y < 0.0 || prev.x > 1.0 || prev.y > 1.0) return c;
                 vec4 h = clamp(texture(bedrayHistory, prev), lo, hi);
-                return mix(c, h, clamp(blend, 0.0, 0.98));
+                return mix(c, h, clamp(blend, 0.0, maxBlend));
             }
             """;
     private static final String SLANG_TAA = """
-            float4 mosaicTaa(Sampler2D s, float2 uv, float blend)
+            float4 mosaicTaa(Sampler2D s, float2 uv, float blend, float maxBlend)
             {
                 uint w, h;
                 s.GetDimensions(w, h);
@@ -697,7 +697,7 @@ public final class MosaicCodegen {
                 float2 prev = mosaicReproject(uv);
                 if (prev.x < 0.0 || prev.y < 0.0 || prev.x > 1.0 || prev.y > 1.0) return c;
                 float4 hist = clamp(bedrayHistory.SampleLevel(prev, 0.0), lo, hi);
-                return lerp(c, hist, clamp(blend, 0.0, 0.98));
+                return lerp(c, hist, clamp(blend, 0.0, maxBlend));
             }
             """;
     private static final String SLANG_BLUR = """
@@ -1121,13 +1121,14 @@ public final class MosaicCodegen {
             case "mosaic.bufferIn" -> sl ? "bedrayBuf" + n.index() + ".SampleLevel(" + uv + ", 0.0)" : "texture(bedrayBuf" + n.index() + ", " + uv + ")";
             case "mosaic.history" -> sl ? "bedrayHistory.SampleLevel(" + uv + ", 0.0)" : "texture(bedrayHistory, " + uv + ")";
             case "mosaic.reproject" -> "mosaicReproject(" + uv + ")";
-            case "mosaic.taa" -> "mosaicTaa(" + (n.mask() == null ? "bedraySceneColor" : "bedrayBuf" + n.index()) + ", " + uv + ", " + in(p, n, "blend") + ")";
+            case "mosaic.taa" -> "mosaicTaa(" + (n.mask() == null ? "bedraySceneColor" : "bedrayBuf" + n.index()) + ", " + uv + ", " + in(p, n, "blend") + ", " + in(p, n, "maxBlend") + ")";
             case "mosaic.blur" -> "mosaicBlur(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "radius") + ")";
             case "mosaic.kawase" -> "mosaicKawase(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "radius") + ")";
             case "mosaic.bufferPrev" -> sl ? "bedrayBuf" + n.index() + ".SampleLevel(" + uv + ", 0.0)" : "texture(bedrayBuf" + n.index() + ", " + uv + ")";
             case "mosaic.accumulate" -> "mosaicAccumulate(bedrayBuf" + n.index() + ", bedrayBuf" + (n.value() != null && n.value().length > 0 ? (int) n.value()[0] : n.index())
-                + ", " + in(p, n, "color") + ", " + uv + ", " + in(p, n, "frames") + ")";
-            case "mosaic.atrous" -> "mosaicAtrous(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "step") + ", " + in(p, n, "edges") + ")";
+                + ", " + in(p, n, "color") + ", " + uv + ", " + in(p, n, "frames") + ", " + in(p, n, "depthTolerance") + ", " + in(p, n, "depthToleranceBase") + ")";
+            case "mosaic.atrous" -> "mosaicAtrous(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "step") + ", " + in(p, n, "edges") + ", "
+                + in(p, n, "planeTolerance") + ", " + in(p, n, "planeTolerancePerBlock") + ", " + in(p, n, "colorTolerance") + ", " + in(p, n, "colorToleranceBase") + ")";
             case "mosaic.rain" -> "worldInfo.weather.x";
             case "mosaic.thunder" -> "worldInfo.weather.y";
             case "mosaic.temperature" -> "worldInfo.weather.z";

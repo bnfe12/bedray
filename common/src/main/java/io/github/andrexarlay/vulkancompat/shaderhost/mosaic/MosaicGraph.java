@@ -225,10 +225,13 @@ public final class MosaicGraph {
         m.put("mosaic.history", List.of(new Port("uv", Kind.V2, false)));
         m.put("mosaic.reproject", List.of(new Port("uv", Kind.V2, false)));
         m.put("mosaic.repeat", List.of(new Port("init", Kind.V4, false), new Port("uv", Kind.V2, false)));
-        m.put("mosaic.taa", List.of(new Port("uv", Kind.V2, false), new Port("blend", Kind.F, false)));
+        m.put("mosaic.taa", List.of(new Port("uv", Kind.V2, false), new Port("blend", Kind.F, false), new Port("maxBlend", Kind.F, false)));
         m.put("mosaic.bufferPrev", List.of(new Port("uv", Kind.V2, false)));
-        m.put("mosaic.accumulate", List.of(new Port("color", Kind.V4, true), new Port("uv", Kind.V2, false), new Port("frames", Kind.F, false)));
-        m.put("mosaic.atrous", List.of(new Port("uv", Kind.V2, false), new Port("step", Kind.F, false), new Port("edges", Kind.F, false)));
+        m.put("mosaic.accumulate", List.of(new Port("color", Kind.V4, true), new Port("uv", Kind.V2, false), new Port("frames", Kind.F, false),
+            new Port("depthTolerance", Kind.F, false), new Port("depthToleranceBase", Kind.F, false)));
+        m.put("mosaic.atrous", List.of(new Port("uv", Kind.V2, false), new Port("step", Kind.F, false), new Port("edges", Kind.F, false),
+            new Port("planeTolerance", Kind.F, false), new Port("planeTolerancePerBlock", Kind.F, false), new Port("colorTolerance", Kind.F, false),
+            new Port("colorToleranceBase", Kind.F, false)));
         m.put("mat.texture", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.image", List.of(new Port("uv", Kind.V2, false)));
         m.put("mat.bsdf", List.of(new Port("baseColor", Kind.V4, false), new Port("roughness", Kind.F, false),
