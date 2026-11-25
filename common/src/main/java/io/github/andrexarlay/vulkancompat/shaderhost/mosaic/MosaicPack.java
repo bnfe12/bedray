@@ -84,6 +84,20 @@ public final class MosaicPack {
         return null;
     }
 
+    /**
+     * Every stage a module belongs to (stageOf gives the first): the path tracer's passes also run Hybrid ray effects
+     * (RtSlangPathPass with its ray flag), the display / tone passes serve both modes.
+     */
+    public static java.util.List<String> stagesOf(String path) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        String first = stageOf(path);
+        if (first != null) out.add(first);
+        if (Pattern.compile("^pathtrace/|path_trace|path_display|local_tonemap|^surface/visibility").matcher(path).find() && !out.contains("bedray.rays"))
+            out.add("bedray.rays");
+        if (Pattern.compile("^voxel/|voxel_traversal").matcher(path).find() && !out.contains("bedray.voxels")) out.add("bedray.voxels");
+        return out;
+    }
+
     public static String folder(String path) { return path.contains("/") ? path.substring(0, path.indexOf('/')) : "(root)"; }
 
     static String id(String path) { return path.replace(".slang", "").replaceAll("[^A-Za-z0-9_]", "_"); }

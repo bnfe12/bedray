@@ -156,6 +156,7 @@ class MosaicSlangGraphTest {
         java.util.List<String> sky = MosaicStageMap.modules("bedray.sky", lib);
         assertTrue(sky.contains("light/sun"), String.valueOf(sky));
         assertTrue(sky.contains("light/sky"), String.valueOf(sky));
+        assertTrue(MosaicStageMap.modules("bedray.rays", lib).contains("passes/path_trace_scene"), "Hybrid ray effects run the path trace passes");
         String json = MosaicStageMap.graph("bedray.sky", lib, java.util.Map.of("sun_size_tenths", 12.0));
         MosaicGraph.Analysis a = MosaicGraph.analyze(json);
         assertNull(a.firstError(), String.valueOf(a.problems()));
@@ -165,7 +166,7 @@ class MosaicSlangGraphTest {
         assertTrue(json.contains("12.0"), "with the current value");
         // every stage has something inside
         for (MosaicRenderer.Stage s : MosaicRenderer.stages())
-            if (!s.type().equals("bedray.rays") && !s.type().equals("bedray.output"))
+            if (!s.type().equals("bedray.output"))
                 assertTrue(!MosaicStageMap.modules(s.type(), lib).isEmpty() || !s.settings().isEmpty(), s.type());
     }
 

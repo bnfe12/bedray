@@ -25,7 +25,7 @@ public final class MosaicStageMap {
     public static List<String> modules(String stageType, MosaicSlangLib.Library lib) {
         List<String> out = new ArrayList<>();
         for (String path : new java.util.TreeSet<>(lib.sources().keySet()))
-            if (stageType.equals(MosaicPack.stageOf(path))) out.add(MosaicSlangLib.moduleId(path));
+            if (MosaicPack.stagesOf(path).contains(stageType)) out.add(MosaicSlangLib.moduleId(path));
         out.sort((a, b) -> Boolean.compare(!a.startsWith("passes/"), !b.startsWith("passes/")) * 2 + Integer.signum(a.compareTo(b)));
         return out;
     }
