@@ -510,7 +510,7 @@ public final class MosaicEffects {
             vec3 haze = mosaicSky(normalize(vec3(d.x, max(d.y, 0.02), d.z))) * tint
                 + vec3(1.0, 0.85, 0.6) * pow(max(dot(d, L), 0.0), scatterSharpness) * sunScatter * clamp(L.y * 4.0, 0.0, 1.0);
             return vec4(mix(color.rgb, haze, f), color.a);""");
-        add("Render pipeline", "vec3 proceduralSky(vec3 dir, vec3 zenithColor = vec3(0.22, 0.42, 0.85), vec3 horizonColor = vec3(0.68, 0.80, 0.96), float gradientPower = 0.6, vec3 sunsetColor = vec3(1.0, 0.45, 0.2), float sunsetHeight = 0.3, vec3 nightColor = vec3(0.01, 0.015, 0.04), float dayRise = 3, float dayOffset = 0.25, float groundDarkening = 0.4, vec3 sunColor = vec3(1.0, 0.92, 0.8), float sunSize = 0.0004, float sunBrightness = 20, float sunGlow = 0.6, float sunGlowSharpness = 32, vec3 moonColor = vec3(0.8, 0.85, 1.0), float moonSize = 0.0003, float starDensity = 0.002, float starScale = 400, float starBrightness = 0.8, float cloudCoverage = 0.45, float cloudHeight = 192, float cloudScale = 0.008, float cloudSoftness = 0.25, float cloudDetail = 4, float cloudOpacity = 0.9, vec3 cloudColor = vec3(1.0), vec3 cloudShadowColor = vec3(0.45, 0.5, 0.6), float cloudSelfShadow = 0.35, float nightCloudLevel = 0.05, vec2 windDirection = vec2(1.0, 0.3), float windSpeed = 0.01, float cloudChange = 0.02, float cloudFadeDistance = 6000)",
+        add("Render pipeline", "vec3 proceduralSky(vec3 dir, vec3 zenithColor = vec3(0.22, 0.42, 0.85), vec3 horizonColor = vec3(0.68, 0.80, 0.96), float gradientPower = 0.6, vec3 sunsetColor = vec3(1.0, 0.45, 0.2), float sunsetHeight = 0.3, float sunsetGlow = 0.9, float sunsetBelow = 0.25, float sunsetSpread = 2.5, vec3 nightColor = vec3(0.01, 0.015, 0.04), float dayRise = 2.5, float dayOffset = 0.3, float groundDarkening = 0.4, vec3 sunColor = vec3(1.0, 0.92, 0.8), float sunSize = 0.0004, float sunBrightness = 20, float sunGlow = 0.6, float sunGlowSharpness = 32, vec3 moonColor = vec3(0.8, 0.85, 1.0), float moonSize = 0.0003, float starDensity = 0.002, float starScale = 400, float starBrightness = 0.8, float cloudCoverage = 0.5, float cloudHeight = 192, float cloudScale = 0.008, float cloudSoftness = 0.18, float cloudDetail = 4, float cloudOpacity = 0.9, vec3 cloudColor = vec3(1.0), vec3 cloudShadowColor = vec3(0.45, 0.5, 0.6), float cloudSelfShadow = 0.35, float nightCloudLevel = 0.05, vec2 windDirection = vec2(1.0, 0.3), float windSpeed = 0.01, float cloudChange = 0.02, float cloudFadeDistance = 6000)",
             "Sky (procedural)", "A sky of your own in linear HDR for any direction: day gradient (zenith, horizon), sunset glow toward the sun,"
                 + " night, sun and moon discs, stars, and a cloud layer drifting with the wind (coverage, height, scale, softness, colours)."
                 + " Use it for reflections and GI misses; Sky background draws it behind the world.", """
@@ -518,12 +518,13 @@ public final class MosaicEffects {
             vec3 L = mosaicSunDir();
             float sunUp = L.y;
             float day = clamp(sunUp * dayRise + dayOffset, 0.0, 1.0);
-            float sunset = (1.0 - smoothstep(0.0, sunsetHeight, abs(sunUp))) * step(-0.2, sunUp);
+            float sunset = smoothstep(-sunsetBelow, 0.0, sunUp) * (1.0 - smoothstep(0.0, sunsetHeight, sunUp));
             float up = clamp(dir.y, 0.0, 1.0);
             vec3 dayCol = mix(horizonColor, zenithColor, pow(up, gradientPower));
-            vec3 setCol = mix(sunsetColor, zenithColor * 0.6, pow(up, gradientPower * 0.6));
             float towardSun = pow(max(dot(normalize(vec3(dir.x, 0.0, dir.z) + 1e-4), normalize(vec3(L.x, 0.0, L.z) + 1e-4)), 0.0), 2.0);
-            vec3 c = mix(dayCol, setCol, sunset * (0.4 + 0.6 * towardSun)) * day + nightColor * (1.0 - day);
+            vec3 c = dayCol * day + nightColor * (1.0 - day);
+            // sunset glow: low in the sky, strongest toward the sun, lasting while the sun is just below the horizon
+            c += sunsetColor * sunsetGlow * sunset * (0.25 + 0.75 * towardSun) * pow(1.0 - up, sunsetSpread);
             c *= mix(1.0, groundDarkening, clamp(-dir.y * 4.0, 0.0, 1.0));
             // sun and moon discs
             float sd = dot(dir, L), md = dot(dir, -L);
@@ -549,7 +550,7 @@ public final class MosaicEffects {
                 }
             }
             return c;""");
-        add("Render pipeline", "vec4 skyBackground(vec4 color, vec2 uv, vec3 zenithColor = vec3(0.22, 0.42, 0.85), vec3 horizonColor = vec3(0.68, 0.80, 0.96), float gradientPower = 0.6, vec3 sunsetColor = vec3(1.0, 0.45, 0.2), float sunsetHeight = 0.3, vec3 nightColor = vec3(0.01, 0.015, 0.04), float dayRise = 3, float dayOffset = 0.25, float groundDarkening = 0.4, vec3 sunColor = vec3(1.0, 0.92, 0.8), float sunSize = 0.0004, float sunBrightness = 20, float sunGlow = 0.6, float sunGlowSharpness = 32, vec3 moonColor = vec3(0.8, 0.85, 1.0), float moonSize = 0.0003, float starDensity = 0.002, float starScale = 400, float starBrightness = 0.8, float cloudCoverage = 0.45, float cloudHeight = 192, float cloudScale = 0.008, float cloudSoftness = 0.25, float cloudDetail = 4, float cloudOpacity = 0.9, vec3 cloudColor = vec3(1.0), vec3 cloudShadowColor = vec3(0.45, 0.5, 0.6), float cloudSelfShadow = 0.35, float nightCloudLevel = 0.05, vec2 windDirection = vec2(1.0, 0.3), float windSpeed = 0.01, float cloudChange = 0.02, float cloudFadeDistance = 6000)",
+        add("Render pipeline", "vec4 skyBackground(vec4 color, vec2 uv, vec3 zenithColor = vec3(0.22, 0.42, 0.85), vec3 horizonColor = vec3(0.68, 0.80, 0.96), float gradientPower = 0.6, vec3 sunsetColor = vec3(1.0, 0.45, 0.2), float sunsetHeight = 0.3, float sunsetGlow = 0.9, float sunsetBelow = 0.25, float sunsetSpread = 2.5, vec3 nightColor = vec3(0.01, 0.015, 0.04), float dayRise = 2.5, float dayOffset = 0.3, float groundDarkening = 0.4, vec3 sunColor = vec3(1.0, 0.92, 0.8), float sunSize = 0.0004, float sunBrightness = 20, float sunGlow = 0.6, float sunGlowSharpness = 32, vec3 moonColor = vec3(0.8, 0.85, 1.0), float moonSize = 0.0003, float starDensity = 0.002, float starScale = 400, float starBrightness = 0.8, float cloudCoverage = 0.5, float cloudHeight = 192, float cloudScale = 0.008, float cloudSoftness = 0.18, float cloudDetail = 4, float cloudOpacity = 0.9, vec3 cloudColor = vec3(1.0), vec3 cloudShadowColor = vec3(0.45, 0.5, 0.6), float cloudSelfShadow = 0.35, float nightCloudLevel = 0.05, vec2 windDirection = vec2(1.0, 0.3), float windSpeed = 0.01, float cloudChange = 0.02, float cloudFadeDistance = 6000)",
             "Sky background", "Replaces the pixels that see the sky with the procedural sky (the same inputs as Sky (procedural));"
                 + " world pixels pass through. Put it after Combine, before Atmosphere and Tone map.", """
             if (mosaicDepth(uv) < 1.0e5) return color;
@@ -558,12 +559,13 @@ public final class MosaicEffects {
             vec3 L = mosaicSunDir();
             float sunUp = L.y;
             float day = clamp(sunUp * dayRise + dayOffset, 0.0, 1.0);
-            float sunset = (1.0 - smoothstep(0.0, sunsetHeight, abs(sunUp))) * step(-0.2, sunUp);
+            float sunset = smoothstep(-sunsetBelow, 0.0, sunUp) * (1.0 - smoothstep(0.0, sunsetHeight, sunUp));
             float up = clamp(dir.y, 0.0, 1.0);
             vec3 dayCol = mix(horizonColor, zenithColor, pow(up, gradientPower));
-            vec3 setCol = mix(sunsetColor, zenithColor * 0.6, pow(up, gradientPower * 0.6));
             float towardSun = pow(max(dot(normalize(vec3(dir.x, 0.0, dir.z) + 1e-4), normalize(vec3(L.x, 0.0, L.z) + 1e-4)), 0.0), 2.0);
-            vec3 c = mix(dayCol, setCol, sunset * (0.4 + 0.6 * towardSun)) * day + nightColor * (1.0 - day);
+            vec3 c = dayCol * day + nightColor * (1.0 - day);
+            // sunset glow: low in the sky, strongest toward the sun, lasting while the sun is just below the horizon
+            c += sunsetColor * sunsetGlow * sunset * (0.25 + 0.75 * towardSun) * pow(1.0 - up, sunsetSpread);
             c *= mix(1.0, groundDarkening, clamp(-dir.y * 4.0, 0.0, 1.0));
             // sun and moon discs
             float sd = dot(dir, L), md = dot(dir, -L);

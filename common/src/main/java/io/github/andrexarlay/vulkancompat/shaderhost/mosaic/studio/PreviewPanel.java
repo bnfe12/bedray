@@ -225,7 +225,12 @@ final class PreviewPanel extends Panels.Listening {
                     if (worldView == null) {
                         var snap = PreviewWorld.load(StudioLibrary.gameDir(model));
                         worldView = PreviewWorld.View.of(snap);
-                        int ticks = Math.floorMod(Math.round(snap.timeOfDay() * 24000) + 6000, 24000);
+                        // verification aids: start time (ticks) and pitch of the preview camera
+                        Integer forcedTime = Integer.getInteger("mosaic.preview.time");
+                        String forcedPitch = System.getProperty("mosaic.preview.pitch");
+                        if (forcedTime != null) worldView = worldView.at((float) (Math.floorMod(forcedTime - 6000, 24000) / 24000.0));
+                        if (forcedPitch != null) worldView = worldView.look(0f, Float.parseFloat(forcedPitch) - worldView.pitch());
+                        int ticks = Math.floorMod(Math.round(worldView.timeOfDay() * 24000) + 6000, 24000);
                         SwingUtilities.invokeLater(() -> time.setValue(ticks));
                     }
                     wv = worldView.with(model.doc.settings, StudioUi.settings.previewLook);
