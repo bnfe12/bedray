@@ -77,6 +77,7 @@ class CustomRtContractTest {
         String source = """
             #version 460
             #extension GL_EXT_ray_query : require
+            #extension GL_EXT_samplerless_texture_functions : require
             layout(local_size_x = 8, local_size_y = 8) in;
             layout(push_constant) uniform Push { vec4 strength; float bias; } push;
             layout(set = 0, binding = 0) uniform accelerationStructureEXT scene;
@@ -85,7 +86,8 @@ class CustomRtContractTest {
             layout(set = 0, binding = 6) uniform sampler2D lut;
             layout(set = 0, binding = 7) uniform texture2D gradient;
             void main() {
-                vec4 v = params.data[0] + push.strength + texelFetch(lut, ivec2(0), 0);
+                // every binding must be used: shaderc drops unused ones from the module
+                vec4 v = params.data[0] + push.strength + texelFetch(lut, ivec2(0), 0) + texelFetch(gradient, ivec2(0), 0);
                 imageStore(bedrayOutput, ivec2(gl_GlobalInvocationID.xy), v);
             }
             """;
@@ -160,7 +162,7 @@ class CustomRtContractTest {
         var compiled = compile(Map.of(CustomRtStage.ENTRY, source), CustomRtStage.ENTRY, VulkanGlslPackCompiler.Kind.COMPUTE);
         String problem = CustomRtStage.validate(compiled);
         assertNotNull(problem);
-        assertTrue(problem.contains("binding 2 is reserved"), problem);
+        assertTrue(problem.contains("binding 2 is STORAGE_BUFFER") && problem.contains("requires COMBINED_IMAGE_SAMPLER"), problem);
     }
 
     @Test
@@ -170,7 +172,10 @@ class CustomRtContractTest {
             layout(local_size_x = 8, local_size_y = 8) in;
             layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D bedrayOutput;
             layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D scratch;
-            void main() { imageStore(bedrayOutput, ivec2(gl_GlobalInvocationID.xy), vec4(0)); }
+            void main() {
+                imageStore(scratch, ivec2(gl_GlobalInvocationID.xy), vec4(1)); // used, or shaderc drops the binding
+                imageStore(bedrayOutput, ivec2(gl_GlobalInvocationID.xy), vec4(0));
+            }
             """;
         var compiled = compile(Map.of(CustomRtStage.ENTRY, source), CustomRtStage.ENTRY, VulkanGlslPackCompiler.Kind.COMPUTE);
         String problem = CustomRtStage.validate(compiled);

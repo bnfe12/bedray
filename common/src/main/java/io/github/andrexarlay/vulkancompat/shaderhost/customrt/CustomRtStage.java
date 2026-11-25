@@ -519,6 +519,8 @@ public final class CustomRtStage {
         try {
             VkBarriers.fullMemoryBarrier(command);
             executor.timeOfDay = timeOfDay();
+            executor.depthScale = frame.camera().depthScale();
+            executor.depthBias = frame.camera().depthBias();
             if (executor.usesInfo()) fillWorldInfo(camera, executor.worldInfo);
             executor.captureRequested = StudioLink.tick(liveDir);
             executor.record(command, frame, updateWorld(frame.camera()));
@@ -542,7 +544,8 @@ public final class CustomRtStage {
             dispatches++;
             state = State.ACTIVE;
             detail = "dispatch recorded " + frame.color().width() + "x" + frame.color().height()
-                + (depth != null ? ", depth bound" : ", no depth guide") + " (unverified in-game)";
+                + (depth != null ? ", depth bound" : frame.depth() != null ? ", raster depth as ray distance" : ", no depth guide")
+                + chainSummary() + " (unverified in-game)";
         }
     }
 

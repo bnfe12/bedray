@@ -73,6 +73,17 @@ class CustomRtChainTest {
     }
 
     @Test
+    void rasterDepthPassCompilesWithItsThreeBindings() throws Exception {
+        java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler.compile(CustomRtExecutor.RASTER_DEPTH_GLSL,
+            org.lwjgl.util.shaderc.Shaderc.shaderc_compute_shader, "raster-depth");
+        SpirvReflection.Module m = SpirvReflection.reflect(spv.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN));
+        assertEquals(List.of(SpirvReflection.DescriptorKind.COMBINED_IMAGE_SAMPLER, SpirvReflection.DescriptorKind.UNIFORM_BUFFER,
+            SpirvReflection.DescriptorKind.STORAGE_IMAGE), m.bindings().stream().map(SpirvReflection.Binding::kind).toList());
+        assertTrue(m.pushConstants());
+        assertArrayEquals(new int[] {8, 8, 1}, m.localSize());
+    }
+
+    @Test
     void conflictingBindingKindsAcrossPassesAreRefused() {
         var a = new SpirvReflection.Module(SpirvReflection.Stage.COMPUTE, Set.of(),
             List.of(new SpirvReflection.Binding(0, 7, SpirvReflection.DescriptorKind.UNIFORM_BUFFER, 1, "a")), false, new int[] {8, 8, 1});

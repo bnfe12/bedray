@@ -106,6 +106,39 @@ final class CustomRtExecutor implements AutoCloseable {
     static final int HISTORY_BINDING = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.HISTORY_BINDING;
     static final int WORLD_INFO_BYTES = 64;
     /** BedrayWorldInfo for binding 16 (std140: weather rain/thunder/temperature, sky colour, fog colour, extra), set per frame. */
+    /**
+     * Raster frames: the game's depth buffer turned into the RT contract's ray distance (binding 4, 1e6 = sky) by a small
+     * host pass, so position, normal, world and material nodes work without ray tracing. Hardware depth d maps to GL
+     * window depth {@code d * depthScale + depthBias} (WorldFrame.Camera), unprojected with the frame's GL inverse
+     * projection like mosaicViewDir does.
+     */
+    static final String RASTER_DEPTH_GLSL = """
+        #version 460
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+        layout(set = 0, binding = 0) uniform sampler2D hardwareDepth;
+        layout(std140, set = 0, binding = 1) uniform BedrayFrame {
+            mat4 projection; mat4 projectionInverse; mat4 modelView; mat4 modelViewInverse;
+            vec4 cameraPosition; vec4 viewSize; vec4 timing; vec4 depthInfo;
+        } frame;
+        layout(set = 0, binding = 2, r32f) uniform writeonly image2D rayDistance;
+        layout(push_constant) uniform Map { vec4 m; } depthMap; // depthScale, depthBias
+        void main() {
+            ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+            ivec2 s = imageSize(rayDistance);
+            if (p.x >= s.x || p.y >= s.y) return;
+            float window = texelFetch(hardwareDepth, p, 0).r * depthMap.m.x + depthMap.m.y;
+            if (window >= 0.999999) { imageStore(rayDistance, p, vec4(1.0e6)); return; }
+            vec2 ndc = (vec2(p) + 0.5) / vec2(s) * 2.0 - 1.0;
+            vec4 view = frame.projectionInverse * vec4(ndc, window * 2.0 - 1.0, 1.0);
+            imageStore(rayDistance, p, vec4(length(view.xyz / view.w)));
+        }
+        """;
+    private final boolean usesDepth;
+    private long rasterSetLayout, rasterPipelineLayout, rasterPipeline, rasterPool, rasterSet, rasterSourceView;
+    private RtMemory.Img rasterDistance;
+    private boolean rasterInitialized, rasterActive;
+    /** WorldFrame.Camera depth mapping of this frame (set by the stage). */
+    float depthScale = 1f, depthBias = 0f;
     final float[] worldInfo = {0f, 0f, 0.8f, 0f, 0.47f, 0.65f, 1f, 1f, 0.75f, 0.85f, 1f, 1f, 0f, 0f, 0f, 0f};
     /** Studio link capture: small before/after images and a double-buffered host-visible readback. */
     boolean captureRequested;
@@ -144,6 +177,7 @@ final class CustomRtExecutor implements AutoCloseable {
         this.textureStagingOffset = new int[textureCount];
         this.usesTlas = usesAny(compiled, this.chain, CustomRtStage.B_SCENE);
         this.usesWorld = usesAny(compiled, this.chain, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BINDING);
+        this.usesDepth = usesAny(compiled, this.chain, CustomRtStage.B_DEPTH);
         this.usesInfo = mosaicHost && usesAny(compiled, this.chain, WORLD_INFO_BINDING);
         this.usesHistory = mosaicHost && usesAny(compiled, this.chain, HISTORY_BINDING);
         try {
@@ -393,6 +427,7 @@ final class CustomRtExecutor implements AutoCloseable {
     void invalidate() {
         boundTlas = 0L;
         boundDepthView = -1;
+        rasterSourceView = -1;
     }
 
     /**
@@ -402,8 +437,15 @@ final class CustomRtExecutor implements AutoCloseable {
     void prepare(VulkanDevice host, WorldFrame frame, long tlas, RtMemory.Img depth) {
         var color = frame.color();
         boolean extentChanged = input == null || color.width() != width || color.height() != height || color.format() != colorFormat;
-        long depthView = depth != null ? depth.view : 0L;
-        if (!extentChanged && tlas == boundTlas && depthView == boundDepthView) return;
+        // a raster frame's depth buffer becomes the ray distance guide when the shader reads depth and RT gave none
+        WorldFrame.Depth raster = depth == null && usesDepth ? frame.depth() : null;
+        long rasterView = raster != null ? raster.image().view() : 0L;
+        boolean rasterChanged = rasterView != rasterSourceView || (raster != null && (rasterDistance == null || extentChanged));
+        long depthView = depth != null ? depth.view : raster != null ? -2L : 0L;
+        if (!extentChanged && !rasterChanged && tlas == boundTlas && depthView == boundDepthView) {
+            rasterActive = raster != null;
+            return;
+        }
         host.createCommandEncoder().submit(); // queued references first, then wait: the set/images may be in flight
         int wait = vkDeviceWaitIdle(device);
         if (wait != VK_SUCCESS) throw new IllegalStateException("custom RT wait failed: VkResult " + wait);
@@ -434,10 +476,102 @@ final class CustomRtExecutor implements AutoCloseable {
             height = color.height();
             colorFormat = color.format();
         }
+        long guide = depth != null ? depth.view : 0L;
+        if (raster != null) {
+            prepareRasterDepth(raster, color.width(), color.height());
+            guide = rasterDistance.view;
+        }
+        rasterActive = raster != null;
+        rasterSourceView = rasterView;
+        depthBound = guide != 0L;
+        boundDepthGuide = guide;
         writeDescriptors();
         boundTlas = tlas;
         boundDepthView = depthView;
-        depthBound = depth != null;
+    }
+
+    private long boundDepthGuide;
+
+    /** Creates the raster depth pass once, (re)creates its r32f target at the frame size and points its set at the source. */
+    private void prepareRasterDepth(WorldFrame.Depth raster, int w, int h) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var handle = stack.mallocLong(1);
+            if (rasterPipeline == 0) {
+                var lb = VkDescriptorSetLayoutBinding.calloc(3, stack);
+                lb.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+                lb.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+                lb.get(2).binding(2).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+                check(vkCreateDescriptorSetLayout(device, VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(lb), null, handle), "raster depth layout");
+                rasterSetLayout = handle.get(0);
+                var range = VkPushConstantRange.calloc(1, stack);
+                range.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(16);
+                check(vkCreatePipelineLayout(device, VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
+                    .pSetLayouts(stack.longs(rasterSetLayout)).pPushConstantRanges(range), null, handle), "raster depth pipeline layout");
+                rasterPipelineLayout = handle.get(0);
+                ByteBuffer code;
+                try {
+                    code = io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler.compile(RASTER_DEPTH_GLSL,
+                        org.lwjgl.util.shaderc.Shaderc.shaderc_compute_shader, "mosaic-raster-depth.comp");
+                } catch (io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler.SpirvCompileException e) {
+                    throw new IllegalStateException("raster depth pass does not compile: " + e.getMessage(), e);
+                }
+                check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(code), null, handle), "raster depth module");
+                long module = handle.get(0);
+                try {
+                    var info = VkComputePipelineCreateInfo.calloc(1, stack);
+                    info.get(0).sType$Default().layout(rasterPipelineLayout);
+                    info.get(0).stage().sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(module).pName(stack.UTF8("main"));
+                    check(vkCreateComputePipelines(device, VK_NULL_HANDLE, info, null, handle), "raster depth pipeline");
+                    rasterPipeline = handle.get(0);
+                } finally {
+                    vkDestroyShaderModule(device, module, null);
+                }
+                var sizes = VkDescriptorPoolSize.calloc(3, stack);
+                sizes.get(0).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
+                sizes.get(1).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
+                sizes.get(2).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1);
+                check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(sizes), null, handle),
+                    "raster depth pool");
+                rasterPool = handle.get(0);
+                check(vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(stack).sType$Default().descriptorPool(rasterPool)
+                    .pSetLayouts(stack.longs(rasterSetLayout)), handle), "raster depth set");
+                rasterSet = handle.get(0);
+            }
+            if (rasterDistance == null || rasterDistance.width != w || rasterDistance.height != h) {
+                if (rasterDistance != null) memory.destroy(rasterDistance);
+                rasterDistance = memory.createImage("customrt_raster_distance", w, h, VK_FORMAT_R32_SFLOAT,
+                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+                rasterInitialized = false;
+            }
+            var images = VkDescriptorImageInfo.calloc(2, stack);
+            images.get(0).sampler(sampler).imageView(raster.image().view()).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            images.get(1).imageView(rasterDistance.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            var ubo = VkDescriptorBufferInfo.calloc(1, stack);
+            ubo.get(0).buffer(frameUbo.handle).offset(0).range(FRAME_UBO_BYTES);
+            var writes = VkWriteDescriptorSet.calloc(3, stack);
+            writes.get(0).sType$Default().dstSet(rasterSet).dstBinding(0).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                .descriptorCount(1).pImageInfo(images.slice(0, 1));
+            writes.get(1).sType$Default().dstSet(rasterSet).dstBinding(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                .descriptorCount(1).pBufferInfo(ubo);
+            writes.get(2).sType$Default().dstSet(rasterSet).dstBinding(2).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+                .descriptorCount(1).pImageInfo(images.slice(1, 1));
+            vkUpdateDescriptorSets(device, writes, null);
+        }
+    }
+
+    private void recordRasterDepth(VkCommandBuffer cmd, MemoryStack stack) {
+        if (!rasterActive) return;
+        if (!rasterInitialized) {
+            VkBarriers.transition(cmd, rasterDistance.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+            rasterInitialized = true;
+        }
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rasterPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rasterPipelineLayout, 0, stack.longs(rasterSet), null);
+        ByteBuffer map = stack.calloc(16).order(ByteOrder.nativeOrder());
+        map.putFloat(0, depthScale).putFloat(4, depthBias);
+        vkCmdPushConstants(cmd, rasterPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, map);
+        vkCmdDispatch(cmd, (rasterDistance.width + 7) / 8, (rasterDistance.height + 7) / 8, 1);
+        VkBarriers.fullMemoryBarrier(cmd);
     }
 
     private void checkFormats(int colorFormat) {
@@ -481,7 +615,7 @@ final class CustomRtExecutor implements AutoCloseable {
             imageInfos.get(0).sampler(sampler).imageView(input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
             imageInfos.get(1).imageView(outputView).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
             // Without a depth guide the slot holds the color copy; BedrayFrame.depthInfo.z = 0 tells the shader not to read it.
-            imageInfos.get(2).sampler(sampler).imageView(depthBound ? boundDepthView : input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            imageInfos.get(2).sampler(sampler).imageView(depthBound ? boundDepthGuide : input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
             if (usesHistory) imageInfos.get(3).sampler(linearSampler).imageView(history.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
             for (int i = 0; i < textureSpecs.size(); i++) {
                 imageInfos.get(4 + i).sampler(sampler).imageView(userTextures[i].view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
@@ -606,6 +740,7 @@ final class CustomRtExecutor implements AutoCloseable {
             vkCmdCopyImage(cmd, color.image(), VK_IMAGE_LAYOUT_GENERAL, input.image, VK_IMAGE_LAYOUT_GENERAL, copy);
             VkBarriers.fullMemoryBarrier(cmd);
 
+            recordRasterDepth(cmd, stack);
             // Buffer passes in plan order (each reads only passes before it), then the final image
             for (int i = 0; i < chain.size(); i++) {
                 int[] ls = chain.get(i).compiled().module().localSize();
@@ -790,6 +925,13 @@ final class CustomRtExecutor implements AutoCloseable {
         if (infoUbo != null) memory.destroy(infoUbo);
         history = null;
         infoUbo = null;
+        if (rasterDistance != null) memory.destroy(rasterDistance);
+        rasterDistance = null;
+        if (rasterPool != 0) vkDestroyDescriptorPool(device, rasterPool, null);
+        if (rasterPipeline != 0) vkDestroyPipeline(device, rasterPipeline, null);
+        if (rasterPipelineLayout != 0) vkDestroyPipelineLayout(device, rasterPipelineLayout, null);
+        if (rasterSetLayout != 0) vkDestroyDescriptorSetLayout(device, rasterSetLayout, null);
+        rasterPool = rasterPipeline = rasterPipelineLayout = rasterSetLayout = rasterSet = 0;
         if (linearSampler != 0) vkDestroySampler(device, linearSampler, null);
         linearSampler = 0;
         destroyCapture();
