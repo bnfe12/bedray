@@ -46,11 +46,19 @@ final class CustomRtResources {
 
     /** Builds resource specs from the reflected shader bindings and the pack's user files. Throws on a mismatch. */
     static CustomRtResources build(SpirvReflection.Module module, String root, PackView pack, Path liveRoot) {
+        return build(module, java.util.Set.of(), root, pack, liveRoot);
+    }
+
+    /**
+     * @param host bindings the host produces itself (a Mosaic graph's weather and sky, previous frame and Buffer pass
+     *             images): no pack file is read for them
+     */
+    static CustomRtResources build(SpirvReflection.Module module, java.util.Set<Integer> host, String root, PackView pack, Path liveRoot) {
         CustomRtResources res = new CustomRtResources();
         long total = 0;
         for (SpirvReflection.Binding b : module.bindings()) {
             int n = b.binding();
-            if (b.set() != 0 || n < 5) continue;
+            if (b.set() != 0 || n < 5 || host.contains(n)) continue;
             // binding 15 as a storage buffer is the host's world volume (MosaicWorld), not a pack file
             if (n == io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BINDING
                 && b.kind() == SpirvReflection.DescriptorKind.STORAGE_BUFFER) continue;

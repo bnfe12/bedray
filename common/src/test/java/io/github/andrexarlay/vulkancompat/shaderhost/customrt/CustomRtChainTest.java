@@ -1,0 +1,86 @@
+package io.github.andrexarlay.vulkancompat.shaderhost.customrt;
+
+import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvReflection;
+import io.github.andrexarlay.vulkancompat.shaderhost.glsl.VulkanGlslPackCompiler;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackSource;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.ScanLimits;
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+/** The game's multi-pass host: a Buffer graph compiles into a chain of contract-checked passes sharing one layout. */
+class CustomRtChainTest {
+
+    /** Bloom at 1/2 and 1/4, a temporal blend with the previous frame and a rain-dependent tint. */
+    static final String BLOOM_RAIN = "{\"nodes\": ["
+        + "{\"id\": \"c\", \"type\": \"mosaic.sceneColor\"},"
+        + "{\"id\": \"bright\", \"type\": \"mosaic.math\", \"mask\": \"maximum\", \"inputs\": {\"a\": \"c\"}, \"defaults\": {\"b\": [0.7]}},"
+        + "{\"id\": \"p1\", \"type\": \"mosaic.pass\", \"mask\": \"bright\", \"index\": 2, \"inputs\": {\"color\": \"bright\"}},"
+        + "{\"id\": \"uv\", \"type\": \"mosaic.uv\"},"
+        + "{\"id\": \"off\", \"type\": \"mosaic.const\", \"value\": [0.004, 0.0]},"
+        + "{\"id\": \"uvA\", \"type\": \"mosaic.add\", \"inputs\": {\"a\": \"uv\", \"b\": \"off\"}},"
+        + "{\"id\": \"uvB\", \"type\": \"mosaic.sub\", \"inputs\": {\"a\": \"uv\", \"b\": \"off\"}},"
+        + "{\"id\": \"r1\", \"type\": \"mosaic.bufferIn\", \"mask\": \"bright\", \"inputs\": {\"uv\": \"uvA\"}},"
+        + "{\"id\": \"r2\", \"type\": \"mosaic.bufferIn\", \"mask\": \"bright\", \"inputs\": {\"uv\": \"uvB\"}},"
+        + "{\"id\": \"avg\", \"type\": \"mosaic.mix\", \"inputs\": {\"a\": \"r1\", \"b\": \"r2\"}},"
+        + "{\"id\": \"p2\", \"type\": \"mosaic.pass\", \"mask\": \"blur\", \"index\": 4, \"inputs\": {\"color\": \"avg\"}},"
+        + "{\"id\": \"glow\", \"type\": \"mosaic.bufferIn\", \"mask\": \"blur\"},"
+        + "{\"id\": \"sum\", \"type\": \"mosaic.add\", \"inputs\": {\"a\": \"c\", \"b\": \"glow\"}},"
+        + "{\"id\": \"last\", \"type\": \"mosaic.history\"},"
+        + "{\"id\": \"taa\", \"type\": \"mosaic.mix\", \"inputs\": {\"a\": \"sum\", \"b\": \"last\"}},"
+        + "{\"id\": \"rain\", \"type\": \"mosaic.rain\"},"
+        + "{\"id\": \"wet\", \"type\": \"mosaic.mix\", \"inputs\": {\"a\": \"taa\", \"b\": \"c\", \"t\": \"rain\"}},"
+        + "{\"id\": \"o\", \"type\": \"mosaic.output\", \"inputs\": {\"color\": \"wet\"}}]}";
+
+    @Test
+    void bufferGraphCompilesIntoAChainTheHostAccepts() throws Exception {
+        Path pack = Files.createTempDirectory("mosaic-chain");
+        Path bedray = Files.createDirectories(pack.resolve("shaders/bedray"));
+        Files.writeString(bedray.resolve("mosaic.json"), BLOOM_RAIN, StandardCharsets.UTF_8);
+        String previous = System.getProperty("bedray.mosaic.slang");
+        System.setProperty("bedray.mosaic.slang", "off"); // the GLSL path is the one every machine has
+        try (PackSource src = PackSource.open(pack, ScanLimits.defaults())) {
+            VulkanGlslPackCompiler.Compiled last = CustomRtStage.compileStage(src, CustomRtStage.MOSAIC);
+            List<CustomRtExecutor.ChainPass> chain = CustomRtStage.pendingChain;
+            assertEquals(2, chain.size(), "bright and blur run before the final image");
+            assertEquals(2, chain.get(0).scale());
+            assertEquals(4, chain.get(1).scale());
+            assertNotEquals(chain.get(0).binding(), chain.get(1).binding());
+            assertNull(CustomRtStage.validate(last));
+            for (CustomRtExecutor.ChainPass p : chain) assertNull(CustomRtStage.validate(p.compiled()));
+
+            SpirvReflection.Module union = CustomRtStage.unionModule(last, chain);
+            Set<Integer> bound = new java.util.TreeSet<>();
+            for (SpirvReflection.Binding b : union.bindings()) bound.add(b.binding());
+            assertTrue(bound.contains(CustomRtExecutor.HISTORY_BINDING), "previous frame: " + bound);
+            assertTrue(bound.contains(CustomRtExecutor.WORLD_INFO_BINDING), "weather: " + bound);
+            assertTrue(bound.contains(chain.get(0).binding()) && bound.contains(chain.get(1).binding()), "buffers: " + bound);
+
+            // host-produced bindings never ask the pack for buffer16.bin / texture19.png / texture20.png
+            CustomRtResources res = CustomRtResources.build(union, CustomRtStage.hostBindings(true, chain), "shaders/",
+                (name, what) -> { throw new IllegalArgumentException("asked the pack for " + name); }, null);
+            assertTrue(res.bufferSpecs().isEmpty() && res.textureSpecs().isEmpty());
+        } finally {
+            if (previous == null) System.clearProperty("bedray.mosaic.slang");
+            else System.setProperty("bedray.mosaic.slang", previous);
+        }
+    }
+
+    @Test
+    void conflictingBindingKindsAcrossPassesAreRefused() {
+        var a = new SpirvReflection.Module(SpirvReflection.Stage.COMPUTE, Set.of(),
+            List.of(new SpirvReflection.Binding(0, 7, SpirvReflection.DescriptorKind.UNIFORM_BUFFER, 1, "a")), false, new int[] {8, 8, 1});
+        var b = new SpirvReflection.Module(SpirvReflection.Stage.COMPUTE, Set.of(),
+            List.of(new SpirvReflection.Binding(0, 7, SpirvReflection.DescriptorKind.STORAGE_BUFFER, 1, "b")), false, new int[] {8, 8, 1});
+        var last = new VulkanGlslPackCompiler.Compiled("a", VulkanGlslPackCompiler.Kind.COMPUTE, null, a, false);
+        var pass = new VulkanGlslPackCompiler.Compiled("b", VulkanGlslPackCompiler.Kind.COMPUTE, null, b, false);
+        assertThrows(IllegalArgumentException.class,
+            () -> CustomRtStage.unionModule(last, List.of(new CustomRtExecutor.ChainPass(pass, 1, 20))));
+    }
+}

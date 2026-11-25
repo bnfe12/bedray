@@ -31,6 +31,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -95,6 +96,12 @@ public final class CustomRtStage {
     private static final io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume worldVolume =
         new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume();
     private static MosaicWorldFeed worldFeed;
+    // Multi-pass Mosaic graphs: the Buffer passes before the final shader (empty for one pass); compileStage leaves the
+    // chain of the graph it compiled in pendingChain, adopted together with the compiled final pass.
+    private static List<CustomRtExecutor.ChainPass> chain = List.of();
+    static List<CustomRtExecutor.ChainPass> pendingChain = List.of();
+    /** True while the running stage comes from mosaic.json: bindings 16 and 19 are then produced by the host. */
+    private static boolean mosaicEntry;
     private static Object worldLevel;
 
     /** A snapshot for the Mosaic editor's Runtime window. */
@@ -120,19 +127,64 @@ public final class CustomRtStage {
 
     /** The GLSL the host compiles for a graph, with the current debug options. */
     private static String mosaicGlsl(MosaicGraph graph) {
-        MosaicCodegen.Generated g = MosaicCodegen.generate(graph, new MosaicCodegen.Options(debugPreview, debugNan, true), false);
+        // a pass of a multi-pass graph previews the node only when it holds it
+        String preview = debugPreview != null && graph.node(debugPreview) != null ? debugPreview : null;
+        MosaicCodegen.Generated g = MosaicCodegen.generate(graph, new MosaicCodegen.Options(preview, debugNan, true), false);
         lastStats = g.stats();
         return g.source();
     }
 
     /** True when the compiled shader traces the scene (binding 0): only then the hardware RT renderer is required. */
     private static boolean usesTlas() {
-        return compiled != null && compiled.module().bindings().stream().anyMatch(b -> b.set() == 0 && b.binding() == B_SCENE);
+        return usesBinding(B_SCENE);
     }
 
     private static boolean usesWorld() {
-        int w = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BINDING;
-        return compiled != null && compiled.module().bindings().stream().anyMatch(b -> b.set() == 0 && b.binding() == w);
+        return usesBinding(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BINDING);
+    }
+
+    /** True when the final shader or any Buffer pass declares set 0 {@code binding}. */
+    private static boolean usesBinding(int binding) {
+        if (compiled == null) return false;
+        if (compiled.module().bindings().stream().anyMatch(b -> b.set() == 0 && b.binding() == binding)) return true;
+        for (CustomRtExecutor.ChainPass p : chain)
+            if (p.compiled().module().bindings().stream().anyMatch(b -> b.set() == 0 && b.binding() == binding)) return true;
+        return false;
+    }
+
+    /**
+     * One reflected module for the whole chain (the pack's user resources and the descriptor layout are shared by every
+     * pass); a binding two passes declare with different kinds is refused.
+     */
+    static SpirvReflection.Module unionModule(VulkanGlslPackCompiler.Compiled last, List<CustomRtExecutor.ChainPass> passes) {
+        if (passes.isEmpty()) return last.module();
+        java.util.TreeMap<Long, SpirvReflection.Binding> all = new java.util.TreeMap<>();
+        Set<Integer> caps = new LinkedHashSet<>(last.module().capabilities());
+        boolean push = last.module().pushConstants();
+        List<SpirvReflection.Module> modules = new ArrayList<>();
+        modules.add(last.module());
+        for (CustomRtExecutor.ChainPass p : passes) modules.add(p.compiled().module());
+        for (SpirvReflection.Module m : modules) {
+            caps.addAll(m.capabilities());
+            push |= m.pushConstants();
+            for (SpirvReflection.Binding b : m.bindings()) {
+                SpirvReflection.Binding prev = all.putIfAbsent(((long) b.set() << 32) | b.binding(), b);
+                if (prev != null && (prev.kind() != b.kind() || prev.count() != b.count()))
+                    throw new IllegalArgumentException("binding " + b.binding() + " is " + prev.kind() + " in one pass and "
+                        + b.kind() + " in another");
+            }
+        }
+        return new SpirvReflection.Module(last.module().stage(), caps, new ArrayList<>(all.values()), push, last.module().localSize());
+    }
+
+    /** Bindings the host fills for a Mosaic graph: weather and sky, previous frame and the chain's Buffer images. */
+    static Set<Integer> hostBindings(boolean mosaic, List<CustomRtExecutor.ChainPass> passes) {
+        if (!mosaic) return Set.of();
+        Set<Integer> s = new LinkedHashSet<>();
+        s.add(CustomRtExecutor.WORLD_INFO_BINDING);
+        s.add(CustomRtExecutor.HISTORY_BINDING);
+        for (CustomRtExecutor.ChainPass p : passes) s.add(p.binding());
+        return s;
     }
 
     private CustomRtStage() {}
@@ -173,7 +225,7 @@ public final class CustomRtStage {
                     return;
                 }
                 try {
-                    resources = CustomRtResources.build(c.module(), root,
+                    resources = CustomRtResources.build(unionModule(c, pendingChain), hostBindings(entry.endsWith(".json"), pendingChain), root,
                         (fileName, what) -> {
                             try {
                                 return src.read(root + fileName);
@@ -187,12 +239,15 @@ public final class CustomRtStage {
                     return;
                 }
                 compiled = c;
+                chain = pendingChain;
+                mosaicEntry = entry.endsWith(".json");
                 activeMosaicGlsl = entry.endsWith(".json") ? lastCompiledMosaicGlsl : null;
                 int[] ls = c.module().localSize();
                 state = State.COMPILED;
                 detail = "compiled " + c.spirv().remaining() + " B SPIR-V, local size " + ls[0] + "x" + ls[1] + "x" + ls[2]
                     + ", bindings " + bindingNames(c.module().bindings())
                     + (entry.endsWith(".json") ? ", mosaic graph via " + lastMosaicCompiler : "")
+                    + chainSummary()
                     + resourceSummary(resources)
                     + "; waiting for a hardware RT frame";
                 LOGGER.info("[VKB-CUSTOMRT] pack=\"{}\" {}", pack, detail);
@@ -269,7 +324,7 @@ public final class CustomRtStage {
      * Compiles the stage source. A {@code mosaic.json} node graph is validated by {@link MosaicGraph} and expanded
      * by {@link MosaicCodegen} into a synthetic {@code bedray/mosaic.generated.comp}; {@code rt.comp} compiles as-is.
      */
-    private static VulkanGlslPackCompiler.Compiled compileStage(PackSource src, String entry) throws Exception {
+    static VulkanGlslPackCompiler.Compiled compileStage(PackSource src, String entry) throws Exception {
         String root = packRoot(entry);
         Set<String> entries = new LinkedHashSet<>(src.entries());
         IncludeExpander.Reader packReader = e -> {
@@ -278,9 +333,8 @@ public final class CustomRtStage {
         };
         if (entry.endsWith(".json")) {
             MosaicGraph graph = MosaicGraph.parse(packReader.read(entry));
-            if (graph.multiPass())
-                throw new IllegalArgumentException("this graph has Buffer nodes (several passes): Mosaic Studio's Preview runs it;"
-                    + " the game's multi-pass host comes in a later build");
+            pendingChain = List.of();
+            if (graph.multiPass()) return compileChain(graph, root, entries, src, packReader);
             String glsl = mosaicGlsl(graph);
             lastCompiledMosaicGlsl = glsl;
             VulkanGlslPackCompiler.Compiled slang = slangStage(graph, root, entries, src);
@@ -291,6 +345,59 @@ public final class CustomRtStage {
         }
         return VulkanGlslPackCompiler.compile(root, entry, packReader,
             VulkanGlslPackCompiler.Kind.COMPUTE, Map.of("BEDRAY_CUSTOM_RT", "1"));
+    }
+
+    /**
+     * A multi-pass graph: {@link io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses#plan} orders the Buffer
+     * passes; every pass is compiled on its own (studio SPIR-V does not cover passes, so slangc in game or GLSL) and checked
+     * against the contract. Returns the final pass; the Buffer passes are left in {@link #pendingChain}.
+     */
+    private static VulkanGlslPackCompiler.Compiled compileChain(MosaicGraph graph, String root, Set<String> entries, PackSource src,
+                                                                IncludeExpander.Reader packReader) throws Exception {
+        var plan = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.plan(graph);
+        List<CustomRtExecutor.ChainPass> passes = new ArrayList<>();
+        StringBuilder signature = new StringBuilder();
+        VulkanGlslPackCompiler.Compiled last = null;
+        for (var p : plan.passes()) {
+            String label = p.name() == null ? "final image" : "Buffer \"" + p.name() + "\"";
+            MosaicGraph pg = MosaicGraph.parse(p.json());
+            String glsl = mosaicGlsl(pg);
+            signature.append("// pass ").append(p.name()).append(" 1/").append(p.scale()).append('\n').append(glsl);
+            VulkanGlslPackCompiler.Compiled c = slangStage(pg, root, entries, src);
+            if (c == null) {
+                IncludeExpander.Reader reader = e -> e.endsWith(MOSAIC_ENTRY) ? glsl : packReader.read(e);
+                try {
+                    c = VulkanGlslPackCompiler.compile(root, root + "bedray/" + MOSAIC_ENTRY, reader,
+                        VulkanGlslPackCompiler.Kind.COMPUTE, Map.of("BEDRAY_CUSTOM_RT", "1", "BEDRAY_MOSAIC", "1"));
+                } catch (SpirvCompiler.SpirvCompileException e) {
+                    throw new IllegalArgumentException(label + " does not compile: " + flat(e.errorLog()));
+                }
+            }
+            String problem = validate(c);
+            if (problem != null) throw new IllegalArgumentException(label + ": " + problem);
+            if (p.name() == null) last = c;
+            else passes.add(new CustomRtExecutor.ChainPass(c, p.scale(), plan.bindings().get(p.name())));
+        }
+        lastCompiledMosaicGlsl = signature.toString();
+        pendingChain = List.copyOf(passes);
+        return last;
+    }
+
+    /** The generated source the host would compile for a graph (all passes for a multi-pass graph). */
+    private static String mosaicSignature(MosaicGraph graph) {
+        if (!graph.multiPass()) return mosaicGlsl(graph);
+        StringBuilder signature = new StringBuilder();
+        for (var p : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.plan(graph).passes())
+            signature.append("// pass ").append(p.name()).append(" 1/").append(p.scale()).append('\n')
+                .append(mosaicGlsl(MosaicGraph.parse(p.json())));
+        return signature.toString();
+    }
+
+    private static String chainSummary() {
+        if (chain.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder(", ").append(chain.size() + 1).append(" passes (");
+        for (CustomRtExecutor.ChainPass p : chain) sb.append("binding ").append(p.binding()).append(" 1/").append(p.scale()).append(", ");
+        return sb.append("final)").toString();
     }
 
     /** How the last mosaic graph was turned into SPIR-V: "studio SPIR-V", "slangc in game" or "GLSL (shaderc)". */
@@ -389,7 +496,7 @@ public final class CustomRtStage {
         try {
             if (executor == null) {
                 owner = device;
-                executor = new CustomRtExecutor(device.vkDevice(), compiled, resources);
+                executor = new CustomRtExecutor(device.vkDevice(), compiled, resources, chain, mosaicEntry);
             }
             // Folder-pack live editing: changed rt.push / buffer<N>.bin bytes reach the next dispatch without a restart.
             if (resources != null && resources.refresh()) {
@@ -412,6 +519,7 @@ public final class CustomRtStage {
         try {
             VkBarriers.fullMemoryBarrier(command);
             executor.timeOfDay = timeOfDay();
+            if (executor.usesInfo()) fillWorldInfo(camera, executor.worldInfo);
             executor.captureRequested = StudioLink.tick(liveDir);
             executor.record(command, frame, updateWorld(frame.camera()));
             recorded = true;
@@ -435,6 +543,33 @@ public final class CustomRtStage {
             state = State.ACTIVE;
             detail = "dispatch recorded " + frame.color().width() + "x" + frame.color().height()
                 + (depth != null ? ", depth bound" : ", no depth guide") + " (unverified in-game)";
+        }
+    }
+
+    /**
+     * BedrayWorldInfo (binding 16): rain, thunder, biome temperature at the camera, sky colour, fog colour - read the way
+     * the Iris bridge reads them ({@link io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisWorldCapture}). A value the
+     * game cannot give this frame keeps its last value.
+     */
+    private static void fillWorldInfo(CameraRenderState camera, float[] out) {
+        var mc = net.minecraft.client.Minecraft.getInstance();
+        var level = mc.level;
+        if (level == null) return;
+        try {
+            var sample = io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisWorldCapture.capture(camera).sample();
+            if (sample != null) {
+                out[0] = sample.rain();
+                System.arraycopy(sample.skyColor(), 0, out, 4, 3);
+                System.arraycopy(sample.fogColor(), 0, out, 8, 3);
+            }
+        } catch (RuntimeException ignored) {
+            // keep the last values
+        }
+        try {
+            out[1] = level.getThunderLevel(mc.getDeltaTracker().getGameTimeDeltaPartialTick(false));
+            out[2] = level.getBiome(mc.gameRenderer.mainCamera().blockPosition()).value().getBaseTemperature();
+        } catch (RuntimeException ignored) {
+            // keep the last values
         }
     }
 
@@ -525,7 +660,7 @@ public final class CustomRtStage {
                 reloadFailed(problem);
                 return;
             }
-            CustomRtResources fresh = CustomRtResources.build(c.module(), root,
+            CustomRtResources fresh = CustomRtResources.build(unionModule(c, pendingChain), hostBindings(entry.endsWith(".json"), pendingChain), root,
                 (fileName, what) -> {
                     try {
                         return src.read(root + fileName);
@@ -547,6 +682,8 @@ public final class CustomRtStage {
                 executor = null;
             }
             compiled = c;
+            chain = pendingChain;
+            mosaicEntry = entry.endsWith(".json");
             activeMosaicGlsl = entry.endsWith(".json") ? lastCompiledMosaicGlsl : null;
             lastSpirvBytes = c.spirv().remaining();
             lastReloadMillis = System.currentTimeMillis();
@@ -559,6 +696,7 @@ public final class CustomRtStage {
             detail = "recompiled " + c.spirv().remaining() + " B SPIR-V, local size " + ls[0] + "x" + ls[1] + "x" + ls[2]
                 + ", bindings " + bindingNames(c.module().bindings())
                 + (entry.endsWith(".json") ? ", mosaic graph" : "")
+                + chainSummary()
                 + resourceSummary(fresh) + ", reload #" + reloads;
             LOGGER.info("[VKB-CUSTOMRT] hot reload pack=\"{}\" {}", pack, detail);
         } catch (SpirvCompiler.SpirvCompileException e) {
@@ -574,7 +712,7 @@ public final class CustomRtStage {
     static boolean sameMosaicSource(PackSource src, String entry) {
         if (activeMosaicGlsl == null || compiled == null || broken) return false;
         try {
-            String glsl = mosaicGlsl(MosaicGraph.parse(new String(src.read(entry), StandardCharsets.UTF_8)));
+            String glsl = mosaicSignature(MosaicGraph.parse(new String(src.read(entry), StandardCharsets.UTF_8)));
             return glsl.equals(activeMosaicGlsl);
         } catch (Exception e) {
             return false; // the normal path reports the problem

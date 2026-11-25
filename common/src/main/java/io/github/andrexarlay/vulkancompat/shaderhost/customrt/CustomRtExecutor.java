@@ -33,6 +33,7 @@ import org.lwjgl.vulkan.VkWriteDescriptorSetAccelerationStructureKHR;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.lwjgl.vulkan.VK10.*;
@@ -88,6 +89,24 @@ final class CustomRtExecutor implements AutoCloseable {
     private final boolean usesTlas, usesWorld;
     private RtMemory.Buf worldBuffer;
     private long worldVersion = -1;
+    /**
+     * Multi-pass Mosaic graphs: the Buffer passes that run before the final shader, in plan order. Every pass has its own
+     * pipeline and descriptor set on the shared (union) set layout; binding 3 of a pass is its own rgba16f image, which
+     * later passes sample at the pass's binding (20+). Binding 19 is the previous final image, binding 16 weather and sky.
+     */
+    record ChainPass(VulkanGlslPackCompiler.Compiled compiled, int scale, int binding) {}
+    private final List<ChainPass> chain;
+    private final long[] chainPipelines, chainSets;
+    private final RtMemory.Img[] chainImages;
+    private final boolean usesInfo, usesHistory;
+    private long linearSampler;
+    private RtMemory.Buf infoUbo;
+    private RtMemory.Img history;
+    static final int WORLD_INFO_BINDING = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.WORLD_INFO_BINDING;
+    static final int HISTORY_BINDING = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.HISTORY_BINDING;
+    static final int WORLD_INFO_BYTES = 64;
+    /** BedrayWorldInfo for binding 16 (std140: weather rain/thunder/temperature, sky colour, fog colour, extra), set per frame. */
+    final float[] worldInfo = {0f, 0f, 0.8f, 0f, 0.47f, 0.65f, 1f, 1f, 0.75f, 0.85f, 1f, 1f, 0f, 0f, 0f, 0f};
     /** Studio link capture: small before/after images and a double-buffered host-visible readback. */
     boolean captureRequested;
     private RtMemory.Img capBefore, capAfter;
@@ -96,11 +115,25 @@ final class CustomRtExecutor implements AutoCloseable {
     private boolean capReady, capInitialized;
 
     CustomRtExecutor(VkDevice device, VulkanGlslPackCompiler.Compiled compiled, CustomRtResources resources) {
+        this(device, compiled, resources, List.of(), false);
+    }
+
+    /**
+     * @param chain      Buffer passes of a multi-pass graph, run in this order before {@code compiled} (the final image)
+     * @param mosaicHost true for a Mosaic graph: bindings 16 (weather and sky) and 19 (previous frame) are produced by the
+     *                   host instead of pack files
+     */
+    CustomRtExecutor(VkDevice device, VulkanGlslPackCompiler.Compiled compiled, CustomRtResources resources,
+                     List<ChainPass> chain, boolean mosaicHost) {
         this.device = device;
+        this.chain = List.copyOf(chain);
+        this.chainPipelines = new long[this.chain.size()];
+        this.chainSets = new long[this.chain.size()];
+        this.chainImages = new RtMemory.Img[this.chain.size()];
         this.memory = new RtMemory(device);
         this.localSize = compiled.module().localSize();
         this.resources = resources;
-        this.pushConstants = compiled.module().pushConstants();
+        this.pushConstants = compiled.module().pushConstants() || this.chain.stream().anyMatch(p -> p.compiled().module().pushConstants());
         int bufferCount = resources == null ? 0 : resources.bufferSpecs().size();
         int textureCount = resources == null ? 0 : resources.textureSpecs().size();
         this.userBuffers = new RtMemory.Buf[bufferCount];
@@ -109,8 +142,10 @@ final class CustomRtExecutor implements AutoCloseable {
         this.bufferBytes = new int[bufferCount];
         this.bufferDirty = new boolean[bufferCount];
         this.textureStagingOffset = new int[textureCount];
-        this.usesTlas = uses(compiled, CustomRtStage.B_SCENE);
-        this.usesWorld = uses(compiled, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BINDING);
+        this.usesTlas = usesAny(compiled, this.chain, CustomRtStage.B_SCENE);
+        this.usesWorld = usesAny(compiled, this.chain, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BINDING);
+        this.usesInfo = mosaicHost && usesAny(compiled, this.chain, WORLD_INFO_BINDING);
+        this.usesHistory = mosaicHost && usesAny(compiled, this.chain, HISTORY_BINDING);
         try {
             create(compiled, bufferCount, textureCount);
         } catch (RuntimeException | LinkageError e) {
@@ -122,6 +157,15 @@ final class CustomRtExecutor implements AutoCloseable {
     private static boolean uses(VulkanGlslPackCompiler.Compiled compiled, int binding) {
         return compiled.module().bindings().stream().anyMatch(b -> b.set() == 0 && b.binding() == binding);
     }
+
+    private static boolean usesAny(VulkanGlslPackCompiler.Compiled compiled, List<ChainPass> chain, int binding) {
+        if (uses(compiled, binding)) return true;
+        for (ChainPass p : chain) if (uses(p.compiled(), binding)) return true;
+        return false;
+    }
+
+    /** True when the shader reads weather and sky (binding 16): the stage then fills {@link #worldInfo} each frame. */
+    boolean usesInfo() { return usesInfo; }
 
     /** True when the shader traces the scene TLAS (only then the stage needs the hardware RT renderer). */
     boolean usesTlas() { return usesTlas; }
@@ -140,10 +184,18 @@ final class CustomRtExecutor implements AutoCloseable {
                 .addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).addressModeV(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                 .addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).maxLod(0), null, handle), "sampler");
             sampler = handle.get(0);
+            // Buffer passes and the previous frame are read with bilinear filtering (blur and bloom chains sample between
+            // texels; a 1/2 .. 1/8 buffer is upscaled smoothly), as in Mosaic Studio's GPU preview.
+            check(vkCreateSampler(device, VkSamplerCreateInfo.calloc(stack).sType$Default().magFilter(VK_FILTER_LINEAR)
+                .minFilter(VK_FILTER_LINEAR).mipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST)
+                .addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).addressModeV(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                .addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).maxLod(0), null, handle), "linear sampler");
+            linearSampler = handle.get(0);
 
             // A shader that never traces gets no acceleration-structure binding at all, so it also runs on devices and
             // renderers without ray tracing (raster, voxel compute).
-            var bindings = VkDescriptorSetLayoutBinding.calloc((usesTlas ? 5 : 4) + (usesWorld ? 1 : 0) + bufferCount + textureCount, stack);
+            int hostExtras = (usesInfo ? 1 : 0) + (usesHistory ? 1 : 0) + chain.size();
+            var bindings = VkDescriptorSetLayoutBinding.calloc((usesTlas ? 5 : 4) + (usesWorld ? 1 : 0) + bufferCount + textureCount + hostExtras, stack);
             int slot = 0;
             if (usesTlas) bindings.get(slot++).binding(CustomRtStage.B_SCENE)
                 .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
@@ -162,6 +214,12 @@ final class CustomRtExecutor implements AutoCloseable {
                 bindings.get(slot++).binding(spec.binding()).descriptorType(textureType(spec.kind()))
                     .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
             }
+            if (usesInfo) bindings.get(slot++).binding(WORLD_INFO_BINDING).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            if (usesHistory) bindings.get(slot++).binding(HISTORY_BINDING).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            for (ChainPass p : chain) bindings.get(slot++).binding(p.binding()).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                .descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
             check(vkCreateDescriptorSetLayout(device, VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings), null, handle), "set layout");
             setLayout = handle.get(0);
             var layoutInfo = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(stack.longs(setLayout));
@@ -173,22 +231,12 @@ final class CustomRtExecutor implements AutoCloseable {
             check(vkCreatePipelineLayout(device, layoutInfo, null, handle), "pipeline layout");
             pipelineLayout = handle.get(0);
 
-            check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(compiled.spirv()), null, handle),
-                "shader module");
-            long module = handle.get(0);
-            try {
-                var info = VkComputePipelineCreateInfo.calloc(1, stack);
-                info.get(0).sType$Default().layout(pipelineLayout);
-                info.get(0).stage().sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(module).pName(stack.UTF8("main"));
-                check(vkCreateComputePipelines(device, VK_NULL_HANDLE, info, null, handle), "compute pipeline");
-                pipeline = handle.get(0);
-            } finally {
-                vkDestroyShaderModule(device, module, null);
-            }
+            pipeline = createPipeline(compiled, "compute pipeline");
+            for (int i = 0; i < chain.size(); i++) chainPipelines[i] = createPipeline(chain.get(i).compiled(), "pass pipeline " + i);
 
-            int uniformBuffers = 1;
+            int uniformBuffers = 1 + (usesInfo ? 1 : 0);
             int storageBuffers = usesWorld ? 1 : 0;
-            int combinedImages = 2;
+            int combinedImages = 2 + (usesHistory ? 1 : 0) + chain.size();
             int sampledImages = 0;
             for (CustomRtResources.BufferSpec spec : bufferSpecs)
                 if (spec.kind() == SpirvReflection.DescriptorKind.UNIFORM_BUFFER) uniformBuffers++;
@@ -196,20 +244,30 @@ final class CustomRtExecutor implements AutoCloseable {
             for (CustomRtResources.TextureSpec spec : textureSpecs)
                 if (spec.kind() == SpirvReflection.DescriptorKind.SAMPLED_IMAGE) sampledImages++;
                 else combinedImages++;
-            int types = 2 + (usesTlas ? 1 : 0) + (sampledImages > 0 ? 1 : 0) + (storageBuffers > 0 ? 1 : 0);
+            // one set per pass (the final shader plus every Buffer pass), all on the same layout
+            int sets = 1 + chain.size();
+            int types = 3 + (usesTlas ? 1 : 0) + (sampledImages > 0 ? 1 : 0) + (storageBuffers > 0 ? 1 : 0);
             var sizes = VkDescriptorPoolSize.calloc(types, stack);
             int t = 0;
-            if (usesTlas) sizes.get(t++).type(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(1);
-            sizes.get(t++).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(uniformBuffers);
-            sizes.get(t++).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(combinedImages);
-            if (sampledImages > 0) sizes.get(t++).type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).descriptorCount(sampledImages);
-            if (storageBuffers > 0) sizes.get(t++).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(storageBuffers);
-            check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(sizes),
+            if (usesTlas) sizes.get(t++).type(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(sets);
+            sizes.get(t++).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(uniformBuffers * sets);
+            sizes.get(t++).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(combinedImages * sets);
+            sizes.get(t++).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(sets); // binding 3 (missing before, like storage buffers)
+            if (sampledImages > 0) sizes.get(t++).type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).descriptorCount(sampledImages * sets);
+            if (storageBuffers > 0) sizes.get(t++).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(storageBuffers * sets);
+            check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(sets).pPoolSizes(sizes),
                 null, handle), "descriptor pool");
             pool = handle.get(0);
             check(vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(stack).sType$Default().descriptorPool(pool)
                 .pSetLayouts(stack.longs(setLayout)), handle), "descriptor set");
             set = handle.get(0);
+            for (int i = 0; i < chain.size(); i++) {
+                check(vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(stack).sType$Default().descriptorPool(pool)
+                    .pSetLayouts(stack.longs(setLayout)), handle), "pass descriptor set " + i);
+                chainSets[i] = handle.get(0);
+            }
+            if (usesInfo) infoUbo = memory.createBuffer("customrt_world_info", WORLD_INFO_BYTES,
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
             frameUbo = memory.createBuffer("customrt_frame", FRAME_UBO_BYTES,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
             if (usesWorld) worldBuffer = memory.createBuffer("customrt_world",
@@ -217,6 +275,24 @@ final class CustomRtExecutor implements AutoCloseable {
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
         }
         createUserResources();
+    }
+
+    private long createPipeline(VulkanGlslPackCompiler.Compiled compiled, String what) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var handle = stack.mallocLong(1);
+            check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(compiled.spirv()), null, handle),
+                "shader module");
+            long module = handle.get(0);
+            try {
+                var info = VkComputePipelineCreateInfo.calloc(1, stack);
+                info.get(0).sType$Default().layout(pipelineLayout);
+                info.get(0).stage().sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(module).pName(stack.UTF8("main"));
+                check(vkCreateComputePipelines(device, VK_NULL_HANDLE, info, null, handle), what);
+                return handle.get(0);
+            } finally {
+                vkDestroyShaderModule(device, module, null);
+            }
+        }
     }
 
     /** Maps a reflected extra-binding kind to its descriptor type; the validator refuses anything else. */
@@ -342,6 +418,17 @@ final class CustomRtExecutor implements AutoCloseable {
             destroyCapture();
             output = memory.createImage("customrt_output", color.width(), color.height(), OUTPUT_FORMAT,
                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+            for (int i = 0; i < chain.size(); i++) {
+                if (chainImages[i] != null) memory.destroy(chainImages[i]);
+                int s = Math.max(1, chain.get(i).scale());
+                chainImages[i] = memory.createImage("customrt_pass" + chain.get(i).binding(), Math.max(1, color.width() / s),
+                    Math.max(1, color.height() / s), OUTPUT_FORMAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+            }
+            if (usesHistory) {
+                if (history != null) memory.destroy(history);
+                history = memory.createImage("customrt_history", color.width(), color.height(), OUTPUT_FORMAT,
+                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            }
             imagesInitialized = false;
             width = color.width();
             height = color.height();
@@ -368,99 +455,84 @@ final class CustomRtExecutor implements AutoCloseable {
     }
 
     private void writeDescriptors() {
-        if (resources == null) {
-            writeFixedDescriptors();
-        } else {
-            writeAllDescriptors();
-        }
-        writeWorldDescriptor();
+        writeSet(set, output.view);
+        for (int i = 0; i < chain.size(); i++) writeSet(chainSets[i], chainImages[i].view);
     }
 
-    private void writeWorldDescriptor() {
-        if (!usesWorld) return;
+    /**
+     * Every descriptor of one pass's set: the fixed contract with {@code outputView} at binding 3, the pack's user
+     * resources, and the host's world volume, weather and sky, previous frame and Buffer pass images.
+     */
+    private void writeSet(long dst, long outputView) {
+        List<CustomRtResources.BufferSpec> bufferSpecs = resources == null ? List.of() : resources.bufferSpecs();
+        List<CustomRtResources.TextureSpec> textureSpecs = resources == null ? List.of() : resources.textureSpecs();
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            var info = VkDescriptorBufferInfo.calloc(1, stack);
-            info.get(0).buffer(worldBuffer.handle).offset(0).range(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BYTES);
-            var writes = VkWriteDescriptorSet.calloc(1, stack);
-            writes.get(0).sType$Default().dstSet(set).dstBinding(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BINDING)
-                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(info);
-            vkUpdateDescriptorSets(device, writes, null);
+            var bufferInfos = VkDescriptorBufferInfo.calloc(3 + bufferSpecs.size(), stack);
+            bufferInfos.get(0).buffer(frameUbo.handle).offset(0).range(FRAME_UBO_BYTES);
+            for (int i = 0; i < bufferSpecs.size(); i++) {
+                bufferInfos.get(1 + i).buffer(userBuffers[i].handle).offset(0).range(bufferBytes[i]);
+            }
+            int worldInfoSlot = 1 + bufferSpecs.size(), infoSlot = worldInfoSlot + 1;
+            if (usesWorld) bufferInfos.get(worldInfoSlot).buffer(worldBuffer.handle).offset(0)
+                .range(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BYTES);
+            if (usesInfo) bufferInfos.get(infoSlot).buffer(infoUbo.handle).offset(0).range(WORLD_INFO_BYTES);
+
+            var imageInfos = VkDescriptorImageInfo.calloc(4 + textureSpecs.size() + chain.size(), stack);
+            imageInfos.get(0).sampler(sampler).imageView(input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            imageInfos.get(1).imageView(outputView).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            // Without a depth guide the slot holds the color copy; BedrayFrame.depthInfo.z = 0 tells the shader not to read it.
+            imageInfos.get(2).sampler(sampler).imageView(depthBound ? boundDepthView : input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            if (usesHistory) imageInfos.get(3).sampler(linearSampler).imageView(history.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            for (int i = 0; i < textureSpecs.size(); i++) {
+                imageInfos.get(4 + i).sampler(sampler).imageView(userTextures[i].view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            }
+            int passSlot = 4 + textureSpecs.size();
+            for (int i = 0; i < chain.size(); i++) {
+                imageInfos.get(passSlot + i).sampler(linearSampler).imageView(chainImages[i].view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            }
+
+            int count = 5 + bufferSpecs.size() + textureSpecs.size() + (usesWorld ? 1 : 0) + (usesInfo ? 1 : 0)
+                + (usesHistory ? 1 : 0) + chain.size();
+            var writes = VkWriteDescriptorSet.calloc(count, stack);
+            var as = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack).sType$Default()
+                .pAccelerationStructures(stack.longs(boundTlas));
+            writes.get(0).sType$Default().pNext(as.address()).dstSet(dst).dstBinding(CustomRtStage.B_SCENE)
+                .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(1);
+            writes.get(1).sType$Default().dstSet(dst).dstBinding(CustomRtStage.B_FRAME)
+                .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(0, 1));
+            writes.get(2).sType$Default().dstSet(dst).dstBinding(CustomRtStage.B_COLOR)
+                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(0, 1));
+            writes.get(3).sType$Default().dstSet(dst).dstBinding(CustomRtStage.B_OUTPUT)
+                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).pImageInfo(imageInfos.slice(1, 1));
+            writes.get(4).sType$Default().dstSet(dst).dstBinding(CustomRtStage.B_DEPTH)
+                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(2, 1));
+            int w = 5;
+            for (int i = 0; i < bufferSpecs.size(); i++) {
+                writes.get(w++).sType$Default().dstSet(dst).dstBinding(bufferSpecs.get(i).binding())
+                    .descriptorType(bufferType(bufferSpecs.get(i).kind())).descriptorCount(1).pBufferInfo(bufferInfos.slice(1 + i, 1));
+            }
+            for (int i = 0; i < textureSpecs.size(); i++) {
+                writes.get(w++).sType$Default().dstSet(dst).dstBinding(textureSpecs.get(i).binding())
+                    .descriptorType(textureType(textureSpecs.get(i).kind())).descriptorCount(1).pImageInfo(imageInfos.slice(4 + i, 1));
+            }
+            if (usesWorld) writes.get(w++).sType$Default().dstSet(dst)
+                .dstBinding(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BINDING)
+                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(worldInfoSlot, 1));
+            if (usesInfo) writes.get(w++).sType$Default().dstSet(dst).dstBinding(WORLD_INFO_BINDING)
+                .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(infoSlot, 1));
+            if (usesHistory) writes.get(w++).sType$Default().dstSet(dst).dstBinding(HISTORY_BINDING)
+                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(3, 1));
+            for (int i = 0; i < chain.size(); i++) {
+                writes.get(w++).sType$Default().dstSet(dst).dstBinding(chain.get(i).binding())
+                    .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(passSlot + i, 1));
+            }
+            vkUpdateDescriptorSets(device, withoutTlas(writes, usesTlas), null);
         }
     }
 
     /** Drops the acceleration-structure write when the shader has no TLAS binding (writes index 0 is that write). */
     private static VkWriteDescriptorSet.Buffer withoutTlas(VkWriteDescriptorSet.Buffer writes, boolean keep) {
         return keep ? writes : writes.slice(1, writes.remaining() - 1);
-    }
-
-    private void writeAllDescriptors() {
-        List<CustomRtResources.BufferSpec> bufferSpecs = resources.bufferSpecs();
-        List<CustomRtResources.TextureSpec> textureSpecs = resources.textureSpecs();
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            var bufferInfos = VkDescriptorBufferInfo.calloc(1 + bufferSpecs.size(), stack);
-            bufferInfos.get(0).buffer(frameUbo.handle).offset(0).range(FRAME_UBO_BYTES);
-            for (int i = 0; i < bufferSpecs.size(); i++) {
-                bufferInfos.get(1 + i).buffer(userBuffers[i].handle).offset(0).range(bufferBytes[i]);
-            }
-            var imageInfos = VkDescriptorImageInfo.calloc(3 + textureSpecs.size(), stack);
-            imageInfos.get(0).sampler(sampler).imageView(input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-            imageInfos.get(1).imageView(output.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-            // Without a depth guide the slot holds the color copy; BedrayFrame.depthInfo.z = 0 tells the shader not to read it.
-            imageInfos.get(2).sampler(sampler).imageView(depthBound ? boundDepthView : input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-            for (int i = 0; i < textureSpecs.size(); i++) {
-                imageInfos.get(3 + i).sampler(sampler).imageView(userTextures[i].view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-            }
-
-            var writes = VkWriteDescriptorSet.calloc(5 + bufferSpecs.size() + textureSpecs.size(), stack);
-            var as = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack).sType$Default()
-                .pAccelerationStructures(stack.longs(boundTlas));
-            writes.get(0).sType$Default().pNext(as.address()).dstSet(set).dstBinding(CustomRtStage.B_SCENE)
-                .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(1);
-            writes.get(1).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_FRAME)
-                .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfos.slice(0, 1));
-            writes.get(2).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_COLOR)
-                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(0, 1));
-            writes.get(3).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_OUTPUT)
-                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).pImageInfo(imageInfos.slice(1, 1));
-            writes.get(4).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_DEPTH)
-                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(2, 1));
-            int w = 5;
-            for (int i = 0; i < bufferSpecs.size(); i++) {
-                writes.get(w++).sType$Default().dstSet(set).dstBinding(bufferSpecs.get(i).binding())
-                    .descriptorType(bufferType(bufferSpecs.get(i).kind())).descriptorCount(1).pBufferInfo(bufferInfos.slice(1 + i, 1));
-            }
-            for (int i = 0; i < textureSpecs.size(); i++) {
-                writes.get(w++).sType$Default().dstSet(set).dstBinding(textureSpecs.get(i).binding())
-                    .descriptorType(textureType(textureSpecs.get(i).kind())).descriptorCount(1).pImageInfo(imageInfos.slice(3 + i, 1));
-            }
-            vkUpdateDescriptorSets(device, withoutTlas(writes, usesTlas), null);
-        }
-    }
-
-    /** The pre-extension descriptor write, kept for a shader with no user resources. */
-    private void writeFixedDescriptors() {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            var imageInfos = VkDescriptorImageInfo.calloc(3, stack);
-            imageInfos.get(0).sampler(sampler).imageView(input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-            imageInfos.get(1).imageView(output.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-            imageInfos.get(2).sampler(sampler).imageView(depthBound ? boundDepthView : input.view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-            var writes = VkWriteDescriptorSet.calloc(5, stack);
-            var as = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack).sType$Default()
-                .pAccelerationStructures(stack.longs(boundTlas));
-            writes.get(0).sType$Default().pNext(as.address()).dstSet(set).dstBinding(CustomRtStage.B_SCENE)
-                .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(1);
-            var frameBufferInfo = VkDescriptorBufferInfo.calloc(1, stack);
-            frameBufferInfo.get(0).buffer(frameUbo.handle).offset(0).range(FRAME_UBO_BYTES);
-            writes.get(1).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_FRAME)
-                .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(frameBufferInfo);
-            writes.get(2).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_COLOR)
-                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(0, 1));
-            writes.get(3).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_OUTPUT)
-                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).pImageInfo(imageInfos.slice(1, 1));
-            writes.get(4).sType$Default().dstSet(set).dstBinding(CustomRtStage.B_DEPTH)
-                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imageInfos.slice(2, 1));
-            vkUpdateDescriptorSets(device, withoutTlas(writes, usesTlas), null);
-        }
     }
 
     /** Records UBO update, user uploads, color copy, dispatch and the blit back into the world color. */
@@ -503,6 +575,16 @@ final class CustomRtExecutor implements AutoCloseable {
             if (!imagesInitialized) {
                 VkBarriers.transition(cmd, input.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
                 VkBarriers.transition(cmd, output.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+                for (RtMemory.Img img : chainImages)
+                    VkBarriers.transition(cmd, img.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+                if (history != null) {
+                    // the first frame's "previous frame" is black, as in the studio's preview
+                    VkBarriers.transition(cmd, history.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+                    var range = org.lwjgl.vulkan.VkImageSubresourceRange.calloc(1, stack);
+                    range.get(0).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
+                    vkCmdClearColorImage(cmd, history.image, VK_IMAGE_LAYOUT_GENERAL, org.lwjgl.vulkan.VkClearColorValue.calloc(stack), range);
+                    VkBarriers.fullMemoryBarrier(cmd);
+                }
                 imagesInitialized = true;
             }
             ByteBuffer ubo = stack.calloc(FRAME_UBO_BYTES).order(ByteOrder.nativeOrder());
@@ -511,6 +593,11 @@ final class CustomRtExecutor implements AutoCloseable {
 
             recordUserUploads(cmd);
             recordWorldUpload(cmd, frame.camera(), volume);
+            if (usesInfo) {
+                ByteBuffer info = stack.calloc(WORLD_INFO_BYTES).order(ByteOrder.nativeOrder());
+                for (int i = 0; i < 16; i++) info.putFloat(i * 4, worldInfo[i]);
+                vkCmdUpdateBuffer(cmd, infoUbo.handle, 0, info);
+            }
 
             var copy = VkImageCopy.calloc(1, stack);
             copy.get(0).srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
@@ -519,13 +606,22 @@ final class CustomRtExecutor implements AutoCloseable {
             vkCmdCopyImage(cmd, color.image(), VK_IMAGE_LAYOUT_GENERAL, input.image, VK_IMAGE_LAYOUT_GENERAL, copy);
             VkBarriers.fullMemoryBarrier(cmd);
 
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(set), null);
-            if (pushData != null) {
-                vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pushData);
+            // Buffer passes in plan order (each reads only passes before it), then the final image
+            for (int i = 0; i < chain.size(); i++) {
+                int[] ls = chain.get(i).compiled().module().localSize();
+                dispatch(cmd, stack, chainPipelines[i], chainSets[i], ls, chainImages[i].width, chainImages[i].height);
+                VkBarriers.fullMemoryBarrier(cmd);
             }
-            vkCmdDispatch(cmd, (color.width() + localSize[0] - 1) / localSize[0], (color.height() + localSize[1] - 1) / localSize[1], 1);
+            dispatch(cmd, stack, pipeline, set, localSize, color.width(), color.height());
             VkBarriers.fullMemoryBarrier(cmd);
+            if (history != null) {
+                // the final image is the next frame's "previous frame" (binding 19)
+                var keep = VkImageCopy.calloc(1, stack);
+                keep.get(0).srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+                keep.get(0).dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+                keep.get(0).extent().set(color.width(), color.height(), 1);
+                vkCmdCopyImage(cmd, output.image, VK_IMAGE_LAYOUT_GENERAL, history.image, VK_IMAGE_LAYOUT_GENERAL, keep);
+            }
 
             var blit = VkImageBlit.calloc(1, stack);
             blit.get(0).srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
@@ -535,6 +631,13 @@ final class CustomRtExecutor implements AutoCloseable {
             vkCmdBlitImage(cmd, output.image, VK_IMAGE_LAYOUT_GENERAL, color.image(), VK_IMAGE_LAYOUT_GENERAL, blit, VK_FILTER_NEAREST);
             if (captureRequested) recordCapture(cmd, stack);
         }
+    }
+
+    private void dispatch(VkCommandBuffer cmd, MemoryStack stack, long pipe, long descriptors, int[] ls, int w, int h) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptors), null);
+        if (pushData != null) vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pushData);
+        vkCmdDispatch(cmd, (w + ls[0] - 1) / ls[0], (h + ls[1] - 1) / ls[1], 1);
     }
 
     /**
@@ -677,6 +780,18 @@ final class CustomRtExecutor implements AutoCloseable {
         if (frameUbo != null) memory.destroy(frameUbo);
         if (worldBuffer != null) memory.destroy(worldBuffer);
         worldBuffer = null;
+        for (int i = 0; i < chainImages.length; i++) {
+            if (chainImages[i] != null) memory.destroy(chainImages[i]);
+            chainImages[i] = null;
+            if (chainPipelines[i] != 0) vkDestroyPipeline(device, chainPipelines[i], null);
+            chainPipelines[i] = 0;
+        }
+        if (history != null) memory.destroy(history);
+        if (infoUbo != null) memory.destroy(infoUbo);
+        history = null;
+        infoUbo = null;
+        if (linearSampler != 0) vkDestroySampler(device, linearSampler, null);
+        linearSampler = 0;
         destroyCapture();
         input = output = null;
         frameUbo = null;

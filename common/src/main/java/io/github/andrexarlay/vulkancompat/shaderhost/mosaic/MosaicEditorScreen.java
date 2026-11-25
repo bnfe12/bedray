@@ -58,12 +58,13 @@ public final class MosaicEditorScreen extends Screen {
             case V2 -> 0xFF6FD2A0;
             case V3 -> 0xFFE0B45C;
             case V4 -> 0xFFB48CF0;
+            case S -> 0xFF5CC8E0; // a Slang value of Bedray's pack (only its own type connects)
         };
     }
 
     private static String kindName(Kind k) {
         if (k == null) return "any";
-        return switch (k) { case F -> "float"; case V2 -> "vec2"; case V3 -> "vec3"; case V4 -> "vec4"; };
+        return switch (k) { case F -> "float"; case V2 -> "vec2"; case V3 -> "vec3"; case V4 -> "vec4"; case S -> "slang"; };
     }
 
     private static final Pattern NODE_IN_ERROR = Pattern.compile("node (\\w+)");

@@ -152,13 +152,22 @@ variants, denoisers), let Mosaic shader graphs plug in as stages, expose per-pas
 
 ## Wishlist from the owner (2026-11-24) - not done yet, in rough priority
 
-1. **(Started)** Multi-pass graphs exist: Buffer (`mosaic.pass`, name + scale 1/2/4/8), Read buffer (`mosaic.bufferIn`, any
-   uv), Previous frame (`mosaic.history`), Rain / Thunder / Temperature / Sky / Fog colour (binding 16 `BedrayWorldInfo`);
-   `MosaicPasses.plan` orders passes and emits a standalone graph per pass (bindings 19 history, 20+ buffers); the
-   studio compiles every pass and the GPU preview runs the chain with history. **Missing: the game host**
-   (`CustomRtStage` refuses multi-pass graphs with a clear message): per-pass pipelines and images in
-   `CustomRtExecutor`, a history copy, and filling binding 16 from the client level (rain, thunder, biome temperature,
-   sky / fog colour). Still wanted on top: depth-aware passes, mip chains, loops / kernels.
+1. **(Game host done 2026-11-25, compile- and shaderc-verified, not run on a GPU)** Multi-pass graphs: Buffer
+   (`mosaic.pass`, name + scale 1/2/4/8), Read buffer (`mosaic.bufferIn`, any uv), Previous frame (`mosaic.history`),
+   Rain / Thunder / Temperature / Sky / Fog colour (binding 16 `BedrayWorldInfo`); `MosaicPasses.plan` orders passes and
+   emits a standalone graph per pass (bindings 19 history, 20+ buffers); the studio compiles every pass and the GPU
+   preview runs the chain with history. **Game side**: `CustomRtStage.compileChain` compiles every pass (slangc in game or
+   GLSL; studio SPIR-V covers single-pass graphs only) and contract-checks each; `unionModule` merges their bindings
+   (a kind conflict is refused) for the pack resources and one shared set layout; `CustomRtResources.build(.., host, ..)`
+   skips 16 / 19 / buffer bindings of a Mosaic graph (they are host-produced, also for single-pass graphs with weather or
+   Previous frame, which used to demand buffer16.bin / texture19.png). `CustomRtExecutor`: one pipeline + descriptor set
+   per pass, rgba16f image per Buffer at 1/scale, bilinear sampler for buffers and history, history cleared to black and
+   copied from the final output each frame, binding 16 filled per frame by `CustomRtStage.fillWorldInfo` (IrisWorldCapture
+   rain / sky / fog, `getThunderLevel`, biome base temperature at the camera). Pool now also reserves storage-image
+   descriptors (binding 3 was never counted). Test: `customrt/CustomRtChainTest`. **Verify on the RTX PC**: blur and
+   bloom look as in the studio preview, history orientation, cost per pass. Still wanted on top: depth-aware passes,
+   mip chains, loops / kernels, studio SPIR-V for every pass.
+   Note: 4 tests of `CustomRtContractTest` already failed before this change (example rt.comp / fixture drift).
    Original wish: **Node editor strong enough for a Complementary-class shader**: multi-pass graphs (named buffers / passes, previous
    frame for temporal effects, mip / blur / bloom chains, shadow-like passes), weather / time / biome inputs, loops or
    kernel nodes. Ties into "renderer passes as nodes" (item 3 above).
