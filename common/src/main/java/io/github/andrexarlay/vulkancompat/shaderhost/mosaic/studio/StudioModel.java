@@ -962,7 +962,7 @@ final class StudioModel {
                         MosaicGraph pg = MosaicGraph.analyze(p.json()).graph();
                         if (pg == null) return new MosaicShaderCheck.Result(false, 0, 0,
                             List.of(new MosaicShaderCheck.Error(0, "pass " + p.name() + " is not a valid graph", null, null, 0)), "");
-                        MosaicShaderCheck.Result r = MosaicShaderCheck.compile(MosaicCodegen.generate(pg, MosaicCodegen.Options.DEFAULT, false));
+                        MosaicShaderCheck.Result r = MosaicShaderCheck.compile(MosaicCodegen.generate(pg, MosaicCodegen.Options.PREVIEW, false));
                         if (!r.ok()) return r;
                         runs.add(new GpuPreview.PassRun(r.spirv(), p.scale(), p.name() == null ? -1 : pl.bindings().get(p.name()),
                             pl.after().contains(p)));
@@ -992,6 +992,7 @@ final class StudioModel {
         if (hit != null) {
             compile = hit;
             compiling = false;
+            previewRays();
             if (live && doc.dirty && doc.file != null) save(false);
             fire();
             return;
@@ -1010,11 +1011,31 @@ final class StudioModel {
                     return;
                 }
                 ProjectStore.store(doc, g.source(), compile);
+                previewRays();
                 if (compile.ok() && live && doc.dirty && doc.file != null) save(false);
                 fire();
             }
         };
         worker.execute();
+    }
+
+    /**
+     * A single-pass graph whose function nodes trace rays (RT renderer pieces, RT AO, RT reflections): the preview has no
+     * acceleration structure, so it runs a variant whose rays walk the world volume (Options.PREVIEW).
+     */
+    private void previewRays() {
+        MosaicGraph graph = analysis.graph();
+        if (graph == null || !graph.needsRay() && !generated.source().contains("mosaicTrace(") && !generated.source().contains("mosaicShadow(")) return;
+        Thread t = new Thread(() -> {
+            MosaicShaderCheck.Result r = MosaicShaderCheck.compile(MosaicCodegen.generate(graph, MosaicCodegen.Options.PREVIEW, false));
+            if (r.ok()) javax.swing.SwingUtilities.invokeLater(() -> {
+                if (analysis.graph() != graph) return;
+                passRuns = List.of(new GpuPreview.PassRun(r.spirv(), 1, -1));
+                fire();
+            });
+        }, "mosaic-preview-rays");
+        t.setDaemon(true);
+        t.start();
     }
 
     /** Problems from the analyzer plus compiler errors mapped to nodes. */

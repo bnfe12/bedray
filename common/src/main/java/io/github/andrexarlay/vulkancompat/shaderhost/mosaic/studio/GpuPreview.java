@@ -1,6 +1,8 @@
 package io.github.andrexarlay.vulkancompat.shaderhost.mosaic.studio;
 
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvReflection;
+import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicCodegen;
+import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicShaderCheck;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -149,13 +151,31 @@ final class GpuPreview implements AutoCloseable {
         Img input, depth, one, history;
         final List<Prepared> passes = new ArrayList<>();
         boolean historyFresh = true;
+        long nearest;
+        /** The previous run's camera (BedrayPrevFrame, binding 17), shared by every pass and rewritten each run. */
+        Buf prev;
+        ByteBuffer lastCamera;
+        // preview world: G-buffer pass (scene colour, ray distance) over the world volume
+        boolean world;
+        Buf worldBuf;
+        Img scene, dist, atlas;
+        long gbModule, gbSetLayout, gbLayout, gbPipeline, gbPool, gbSet;
+        boolean gbFresh = true;
+        PreviewWorld.View lastView;
 
         void destroy() {
             vkDeviceWaitIdle(device);
             for (Prepared p : passes) p.destroy();
             if (sampler != 0) vkDestroySampler(device, sampler, null);
-            for (Buf b : new Buf[] {ubo, upload, readback}) free(b);
-            for (Img i : new Img[] {input, depth, one, history}) free(i);
+            if (nearest != 0) vkDestroySampler(device, nearest, null);
+            if (gbPipeline != 0) vkDestroyPipeline(device, gbPipeline, null);
+            if (gbLayout != 0) vkDestroyPipelineLayout(device, gbLayout, null);
+            if (gbPool != 0) vkDestroyDescriptorPool(device, gbPool, null);
+            if (gbSetLayout != 0) vkDestroyDescriptorSetLayout(device, gbSetLayout, null);
+            if (gbModule != 0) vkDestroyShaderModule(device, gbModule, null);
+            if (lastCamera != null) MemoryUtil.memFree(lastCamera);
+            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf}) free(b);
+            for (Img i : new Img[] {input, depth, one, history, scene, dist, atlas}) free(i);
         }
     }
 
@@ -242,27 +262,71 @@ final class GpuPreview implements AutoCloseable {
      * the previous frame (binding 19) of the next run. Throws when a shader needs the game's scene (ray tracing).
      */
     synchronized BufferedImage runChain(List<PassRun> runs, BufferedImage input, float time, int frame, Extras extras) {
-        int w = input.getWidth(), h = input.getHeight();
-        int key = java.util.Objects.hash(w, h, runs.stream().map(r -> Arrays.hashCode(r.spirv()) * 31 + r.scale() * 7 + r.binding() + (r.after() ? 1 << 20 : 0)).toList());
+        return runChain(runs, input, time, frame, extras, null);
+    }
+
+    /** Preview world size: the G-buffer and every pass run at this resolution. */
+    static final int WORLD_W = 640, WORLD_H = 360;
+
+    /**
+     * With a {@code view}, the frame comes from the preview world instead of a picture: a G-buffer pass renders its blocks
+     * (textures, the game's light map) into the scene colour (binding 2) and the ray distance (4), the world volume is
+     * binding 15 and the camera moves between runs (binding 17 holds the previous one), so the graph sees a real scene.
+     */
+    synchronized BufferedImage runChain(List<PassRun> runs, BufferedImage input, float time, int frame, Extras extras, PreviewWorld.View view) {
+        int w = view != null ? WORLD_W : input.getWidth(), h = view != null ? WORLD_H : input.getHeight();
+        int key = java.util.Objects.hash(view != null, w, h, runs.stream().map(r -> Arrays.hashCode(r.spirv()) * 31 + r.scale() * 7 + r.binding() + (r.after() ? 1 << 20 : 0)).toList());
         if (chain == null || chain.key != key) {
             if (chain != null) chain.destroy();
             chain = null;
-            chain = build(runs, key, w, h, extras);
+            chain = build(runs, key, w, h, extras, view);
         }
         Chain c = chain;
-        writeFrame(c.ubo.mapped(), w, h, time, frame);
-        int[] px = input.getRGB(0, 0, w, h, null, 0, w);
-        for (int y = 0; y < h; y++) // bottom-up like the game's world target (GL origin)
-            for (int x = 0; x < w; x++) {
-                int col = px[(h - 1 - y) * w + x];
-                MemoryUtil.memPutInt(c.upload.mapped() + ((long) y * w + x) * 4, (col & 0xFF00FF00) | (col >> 16 & 0xFF) | (col & 0xFF) << 16);
+        writeFrame(c.ubo.mapped(), w, h, time, frame, view);
+        // last run's camera for reprojection (Accumulate, TAA), this run's for the next
+        ByteBuffer cam = MemoryUtil.memByteBuffer(c.ubo.mapped(), 320);
+        if (c.lastCamera == null) {
+            c.lastCamera = MemoryUtil.memAlloc(144);
+            copyCamera(cam, c.lastCamera);
+        }
+        MemoryUtil.memCopy(MemoryUtil.memAddress(c.lastCamera), c.prev.mapped(), 144);
+        copyCamera(cam, c.lastCamera);
+        if (view != null) {
+            if (c.lastView == null || c.lastView.world() != view.world())
+                view.world().writeBuffer(MemoryUtil.memByteBuffer(c.worldBuf.mapped(), (int) c.worldBuf.size()), view.x(), view.y(), view.z());
+            else { // the camera moved: only the camera-relative header changes
+                ByteBuffer hb = MemoryUtil.memByteBuffer(c.worldBuf.mapped(), 48).order(ByteOrder.LITTLE_ENDIAN);
+                int fx = (int) Math.floor(view.x()), fy = (int) Math.floor(view.y()), fz = (int) Math.floor(view.z());
+                hb.putInt(0, view.world().ox() - fx).putInt(4, view.world().oy() - fy).putInt(8, view.world().oz() - fz);
+                hb.putFloat(16, (float) (view.x() - fx)).putFloat(20, (float) (view.y() - fy)).putFloat(24, (float) (view.z() - fz));
             }
+            c.lastView = view;
+        } else {
+            int[] px = input.getRGB(0, 0, w, h, null, 0, w);
+            for (int y = 0; y < h; y++) // bottom-up like the game's world target (GL origin)
+                for (int x = 0; x < w; x++) {
+                    int col = px[(h - 1 - y) * w + x];
+                    MemoryUtil.memPutInt(c.upload.mapped() + ((long) y * w + x) * 4, (col & 0xFF00FF00) | (col >> 16 & 0xFF) | (col & 0xFF) << 16);
+                }
+        }
         try (MemoryStack s = MemoryStack.stackPush()) {
             vkResetCommandBuffer(cmd, 0);
             vkBeginCommandBuffer(cmd, VkCommandBufferBeginInfo.calloc(s).sType$Default().flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
-            barrier(s, c.input.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            copyIn(s, c.upload, c.input);
-            barrier(s, c.input.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            if (c.world) {
+                int from = c.gbFresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                barrier(s, c.scene.image(), from, VK_IMAGE_LAYOUT_GENERAL);
+                barrier(s, c.dist.image(), from, VK_IMAGE_LAYOUT_GENERAL);
+                c.gbFresh = false;
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, c.gbPipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, c.gbLayout, 0, s.longs(c.gbSet), null);
+                vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+                barrier(s, c.scene.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                barrier(s, c.dist.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            } else {
+                barrier(s, c.input.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                copyIn(s, c.upload, c.input);
+                barrier(s, c.input.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            }
             if (c.historyFresh) {
                 barrier(s, c.history.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
                 VkClearColorValue zero = VkClearColorValue.calloc(s);
@@ -367,7 +431,80 @@ final class GpuPreview implements AutoCloseable {
         free(staging);
     }
 
-    private Chain build(List<PassRun> runs, int key, int w, int h, Extras extras) {
+    private static void copyCamera(ByteBuffer frameBlock, ByteBuffer into) {
+        MemoryUtil.memCopy(MemoryUtil.memAddress(frameBlock), MemoryUtil.memAddress(into), 64);             // projection
+        MemoryUtil.memCopy(MemoryUtil.memAddress(frameBlock) + 128, MemoryUtil.memAddress(into) + 64, 64);   // model-view
+        MemoryUtil.memCopy(MemoryUtil.memAddress(frameBlock) + 256, MemoryUtil.memAddress(into) + 128, 16);  // camera position
+    }
+
+    private static byte[] gbufferSpirv;
+
+    private static synchronized byte[] gbufferSpirv() {
+        if (gbufferSpirv != null) return gbufferSpirv;
+        MosaicShaderCheck.Result r = MosaicShaderCheck.compile(new MosaicCodegen.Generated(GBUFFER_GLSL, List.of(), null));
+        if (!r.ok()) throw new IllegalStateException("preview world shader: " + r.errors());
+        return gbufferSpirv = r.spirv();
+    }
+
+    /** The world's G-buffer pass: bindings 1 frame, 15 world volume, 6 block atlas, 3 scene colour out, 7 ray distance out. */
+    private void prepareGbuffer(Chain c, PreviewWorld.View view) {
+        byte[] spirv = gbufferSpirv();
+        int[] atlas = view.atlas();
+        c.atlas = image(PreviewWorld.TILES * 16, 16, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        int[] rgba = new int[atlas.length];
+        for (int i = 0; i < atlas.length; i++) rgba[i] = (atlas[i] & 0xFF00FF00) | (atlas[i] >> 16 & 0xFF) | (atlas[i] & 0xFF) << 16;
+        fill(c.atlas, rgba, 4);
+        try (MemoryStack s = MemoryStack.stackPush()) {
+            LongBuffer lp = s.mallocLong(1);
+            ByteBuffer code = s.malloc(spirv.length);
+            code.put(spirv).flip();
+            check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(code), null, lp), "world shader module");
+            c.gbModule = lp.get(0);
+            int[][] binds = {{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, {15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}};
+            VkDescriptorSetLayoutBinding.Buffer lb = VkDescriptorSetLayoutBinding.calloc(binds.length, s);
+            for (int i = 0; i < binds.length; i++)
+                lb.get(i).binding(binds[i][0]).descriptorType(binds[i][1]).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            check(vkCreateDescriptorSetLayout(device, VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(lb), null, lp), "world set layout");
+            c.gbSetLayout = lp.get(0);
+            check(vkCreatePipelineLayout(device, VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(c.gbSetLayout)), null, lp),
+                "world pipeline layout");
+            c.gbLayout = lp.get(0);
+            VkComputePipelineCreateInfo.Buffer cpi = VkComputePipelineCreateInfo.calloc(1, s);
+            cpi.get(0).sType$Default().layout(c.gbLayout).stage().sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(c.gbModule).pName(s.UTF8("main"));
+            check(vkCreateComputePipelines(device, VK_NULL_HANDLE, cpi, null, lp), "world pipeline");
+            c.gbPipeline = lp.get(0);
+            VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(4, s);
+            sizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
+            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1);
+            sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
+            sizes.get(3).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(2);
+            check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(sizes), null, lp), "world pool");
+            c.gbPool = lp.get(0);
+            check(vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(c.gbPool)
+                .pSetLayouts(s.longs(c.gbSetLayout)), lp), "world set");
+            c.gbSet = lp.get(0);
+            VkWriteDescriptorSet.Buffer wr = VkWriteDescriptorSet.calloc(5, s);
+            VkDescriptorBufferInfo.Buffer ub = VkDescriptorBufferInfo.calloc(1, s);
+            ub.get(0).buffer(c.ubo.handle()).offset(0).range(c.ubo.size());
+            VkDescriptorBufferInfo.Buffer wb = VkDescriptorBufferInfo.calloc(1, s);
+            wb.get(0).buffer(c.worldBuf.handle()).offset(0).range(c.worldBuf.size());
+            VkDescriptorImageInfo.Buffer at = VkDescriptorImageInfo.calloc(1, s);
+            at.get(0).sampler(c.nearest).imageView(c.atlas.view()).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            VkDescriptorImageInfo.Buffer so = VkDescriptorImageInfo.calloc(1, s);
+            so.get(0).imageView(c.scene.view()).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            VkDescriptorImageInfo.Buffer dout = VkDescriptorImageInfo.calloc(1, s);
+            dout.get(0).imageView(c.dist.view()).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            wr.get(0).sType$Default().dstSet(c.gbSet).dstBinding(1).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).pBufferInfo(ub);
+            wr.get(1).sType$Default().dstSet(c.gbSet).dstBinding(15).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(wb);
+            wr.get(2).sType$Default().dstSet(c.gbSet).dstBinding(6).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(at);
+            wr.get(3).sType$Default().dstSet(c.gbSet).dstBinding(3).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(so);
+            wr.get(4).sType$Default().dstSet(c.gbSet).dstBinding(7).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(dout);
+            vkUpdateDescriptorSets(device, wr, null);
+        }
+    }
+
+    private Chain build(List<PassRun> runs, int key, int w, int h, Extras extras, PreviewWorld.View view) {
         Chain c = new Chain();
         c.key = key;
         c.w = w;
@@ -394,7 +531,20 @@ final class GpuPreview implements AutoCloseable {
                 .addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).addressModeV(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                 .addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).maxLod(0), null, lp), "sampler");
             c.sampler = lp.get(0);
+            // the scene colour and the ray distance are read unfiltered, as the game binds them
+            check(vkCreateSampler(device, VkSamplerCreateInfo.calloc(s).sType$Default().magFilter(VK_FILTER_NEAREST).minFilter(VK_FILTER_NEAREST)
+                .addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).addressModeV(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                .addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).maxLod(0), null, lp), "nearest sampler");
+            c.nearest = lp.get(0);
+            c.prev = buffer(144, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            if (view != null) {
+                c.world = true;
+                c.worldBuf = buffer(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                c.scene = image(w, h, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+                c.dist = image(w, h, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+            }
         }
+        if (view != null) prepareGbuffer(c, view);
         // outputs first, so every pass can bind the buffers of the passes before it
         java.util.Map<Integer, Img> buffers = new java.util.HashMap<>();
         for (PassRun r : runs) {
@@ -469,7 +619,8 @@ final class GpuPreview implements AutoCloseable {
                 wr.get(0).sType$Default().dstSet(p.set).dstBinding(b.binding()).descriptorCount(1).descriptorType(vkType(b.kind()));
                 switch (vkType(b.kind())) {
                     case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER -> {
-                        Buf buf = b.binding() == 1 ? c.ubo : extraBuffer(c, p, b, extras);
+                        Buf buf = b.binding() == 1 ? c.ubo : b.binding() == 17 ? c.prev : b.binding() == 15 && c.world ? c.worldBuf
+                            : extraBuffer(c, p, b, extras);
                         VkDescriptorBufferInfo.Buffer bi = VkDescriptorBufferInfo.calloc(1, s);
                         bi.get(0).buffer(buf.handle()).offset(0).range(buf.size());
                         wr.get(0).pBufferInfo(bi);
@@ -480,10 +631,11 @@ final class GpuPreview implements AutoCloseable {
                         wr.get(0).pImageInfo(ii);
                     }
                     default -> {
-                        Img img = b.binding() == 2 ? c.input : b.binding() == 4 ? c.depth : b.binding() == 19 ? c.history
-                            : buffers.getOrDefault(b.binding(), c.one);
+                        Img img = b.binding() == 2 ? (c.world ? c.scene : c.input) : b.binding() == 4 ? (c.world ? c.dist : c.depth)
+                            : b.binding() == 19 ? c.history : buffers.getOrDefault(b.binding(), c.one);
                         VkDescriptorImageInfo.Buffer ii = VkDescriptorImageInfo.calloc(1, s);
-                        ii.get(0).sampler(c.sampler).imageView(img.view()).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                        ii.get(0).sampler(b.binding() == 2 || b.binding() == 4 ? c.nearest : c.sampler).imageView(img.view())
+                            .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                         wr.get(0).pImageInfo(ii);
                     }
                 }
@@ -496,11 +648,11 @@ final class GpuPreview implements AutoCloseable {
     private Buf extraBuffer(Chain c, Prepared p, SpirvReflection.Binding b, Extras extras) {
         Buf buf;
         if (b.binding() == 15) {
-            int cells = 48 * 32 * 48;
+            int cells = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.CELLS;
             buf = buffer(48 + cells * 2L, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-            MemoryUtil.memPutInt(buf.mapped() + 32, 48);
-            MemoryUtil.memPutInt(buf.mapped() + 36, 32);
-            MemoryUtil.memPutInt(buf.mapped() + 40, 48);
+            MemoryUtil.memPutInt(buf.mapped() + 32, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.SX);
+            MemoryUtil.memPutInt(buf.mapped() + 36, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.SY);
+            MemoryUtil.memPutInt(buf.mapped() + 40, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.SZ);
             for (int i = 0; i < cells; i++) MemoryUtil.memPutShort(buf.mapped() + 48 + i * 2L, (short) (15 << 12)); // air, full sky light
         } else if (b.binding() == io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BINDING) { // height field: none in the preview (no far shadows)
             buf = buffer(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -539,20 +691,144 @@ final class GpuPreview implements AutoCloseable {
         };
     }
 
-    /** The 320-byte frame block: a camera at the origin looking along -Z, 70 degrees, noon. */
-    private static void writeFrame(long at, int w, int h, float time, int frame) {
+    private static void writeFrame(long at, int w, int h, float time, int frame) { writeFrame(at, w, h, time, frame, null); }
+
+    /**
+     * The 320-byte frame block. Without a view: a camera at the origin looking along -Z, 70 degrees, noon, no depth.
+     * With one: the game's camera (rotation-only model-view, yaw + 180 about Y after pitch about X, positions camera
+     * relative), its world position, the time of day and depth available.
+     */
+    private static void writeFrame(long at, int w, int h, float time, int frame, PreviewWorld.View v) {
         org.joml.Matrix4f proj = new org.joml.Matrix4f().perspective((float) Math.toRadians(70), w / (float) h, 0.05f, 1024f);
-        org.joml.Matrix4f view = new org.joml.Matrix4f();
+        org.joml.Matrix4f view = v == null ? new org.joml.Matrix4f()
+            : new org.joml.Matrix4f().rotateX((float) Math.toRadians(v.pitch())).rotateY((float) Math.toRadians(v.yaw() + 180f));
         ByteBuffer b = MemoryUtil.memByteBuffer(at, 320).order(ByteOrder.LITTLE_ENDIAN);
         proj.get(0, b);
         new org.joml.Matrix4f(proj).invert().get(64, b);
         view.get(128, b);
         new org.joml.Matrix4f(view).invert().get(192, b);
-        b.putFloat(256, 0f).putFloat(260, 64f).putFloat(264, 0f).putFloat(268, 0f);
+        if (v == null) b.putFloat(256, 0f).putFloat(260, 64f).putFloat(264, 0f).putFloat(268, 0f);
+        else b.putFloat(256, (float) v.x()).putFloat(260, (float) v.y()).putFloat(264, (float) v.z()).putFloat(268, 0f);
         b.putFloat(272, w).putFloat(276, h).putFloat(280, 1f / w).putFloat(284, 1f / h);
-        b.putFloat(288, time % 3600f).putFloat(292, 1f / 30f).putFloat(296, frame).putFloat(300, 0f);
-        b.putFloat(304, 0.05f).putFloat(308, 1024f).putFloat(312, 0f).putFloat(316, 0f);
+        b.putFloat(288, time % 3600f).putFloat(292, 1f / 30f).putFloat(296, frame).putFloat(300, v == null ? 0f : v.timeOfDay());
+        b.putFloat(304, 0.05f).putFloat(308, 1024f).putFloat(312, v == null ? 0f : 1f).putFloat(316, 0f);
     }
+
+    /** The preview world's G-buffer: voxel rays through the world volume, block textures, the game's light map. */
+    static final String GBUFFER_GLSL = """
+        #version 460
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+        layout(std140, set = 0, binding = 1) uniform BedrayFrame {
+            mat4 projection; mat4 projectionInverse; mat4 modelView; mat4 modelViewInverse;
+            vec4 cameraPosition; vec4 viewSize; vec4 timing; vec4 depthInfo;
+        } frame;
+        layout(std430, set = 0, binding = 15) readonly buffer BedrayWorld { ivec4 originRel; vec4 camFrac; ivec4 size; uint cells[]; } world;
+        layout(set = 0, binding = 6) uniform sampler2D atlas;
+        layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D sceneOut;
+        layout(set = 0, binding = 7, r32f) uniform writeonly image2D distOut;
+        
+        const float TILES = 18.0;
+        bool inside(ivec3 c) {
+            ivec3 p = c - world.originRel.xyz;
+            return all(greaterThanEqual(p, ivec3(0))) && all(lessThan(p, world.size.xyz));
+        }
+        uint cellAt(ivec3 c) {
+            ivec3 p = c - world.originRel.xyz;
+            if (any(lessThan(p, ivec3(0))) || any(greaterThanEqual(p, world.size.xyz))) return 0xF000u;
+            int i = (p.y * world.size.z + p.z) * world.size.x + p.x;
+            return (world.cells[i >> 1] >> uint((i & 1) * 16)) & 0xFFFFu;
+        }
+        vec3 sunDir() { float a = frame.timing.w * 6.2831853; return normalize(vec3(-sin(a), cos(a), 0.25)); }
+        vec3 sky(vec3 dir) {
+            vec3 sun = sunDir();
+            float day = clamp(sun.y * 2.0 + 0.3, 0.05, 1.0);
+            vec3 c = mix(vec3(0.70, 0.80, 0.95), vec3(0.25, 0.45, 0.85), clamp(dir.y, 0.0, 1.0)) * day;
+            c += vec3(1.0, 0.9, 0.7) * pow(max(dot(dir, sun), 0.0), 256.0) * 4.0 * day;
+            c += vec3(0.8, 0.85, 1.0) * pow(max(dot(dir, -sun), 0.0), 900.0) * 2.0 * (1.0 - day); // the moon
+            return c;
+        }
+        vec3 viewDir(vec2 uv) {
+            vec4 v = frame.projectionInverse * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+            return normalize((frame.modelViewInverse * vec4(normalize(v.xyz / v.w), 0.0)).xyz);
+        }
+        int tileOf(uint m, vec3 n) {
+            if (m == 4u) return n.y > 0.5 ? 15 : (n.y < -0.5 ? 16 : 4);
+            if (m == 7u && abs(n.y) > 0.5) return 17;
+            return int(m);
+        }
+        vec4 texel(int tile, vec3 q, vec3 n) {
+            vec2 f = abs(n.x) > 0.5 ? vec2(q.z * -n.x, q.y) : abs(n.y) > 0.5 ? vec2(q.x, q.z) : vec2(q.x * n.z, q.y);
+            f = fract(f);
+            return textureLod(atlas, vec2((float(tile) + clamp(f.x, 0.002, 0.998)) / TILES, clamp(f.y, 0.002, 0.998)), 0.0);
+        }
+        // the game's light map: sky light by the time of day, warm block light, the classic per-face shading
+        vec3 light(uint front, vec3 n) {
+            float s = float((front >> 12) & 15u) / 15.0, b = float((front >> 8) & 15u) / 15.0;
+            float day = clamp(sunDir().y * 2.5 + 0.55, 0.12, 1.0);
+            float sl = s / (4.0 - 3.0 * s) * day, bl = b / (4.0 - 3.0 * b);
+            vec3 l = max(vec3(sl), vec3(1.0, 0.86, 0.66) * bl * 1.1) + 0.03;
+            float face = n.y > 0.5 ? 1.0 : (n.y < -0.5 ? 0.5 : (abs(n.x) > 0.5 ? 0.6 : 0.8));
+            return min(l, vec3(1.0)) * face;
+        }
+        void main() {
+            ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+            ivec2 size = imageSize(sceneOut);
+            if (px.x >= size.x || px.y >= size.y) return;
+            vec2 uv = (vec2(px) + 0.5) / vec2(size);
+            vec3 d = viewDir(uv);
+            vec3 o = world.camFrac.xyz;
+            ivec3 cell = ivec3(floor(o));
+            ivec3 stp = ivec3(sign(d));
+            vec3 delta = vec3(abs(d.x) > 1e-6 ? 1.0 / abs(d.x) : 1e30, abs(d.y) > 1e-6 ? 1.0 / abs(d.y) : 1e30, abs(d.z) > 1e-6 ? 1.0 / abs(d.z) : 1e30);
+            vec3 f = o - vec3(cell);
+            vec3 nextT = vec3(d.x > 0.0 ? 1.0 - f.x : f.x, d.y > 0.0 ? 1.0 - f.y : f.y, d.z > 0.0 ? 1.0 - f.z : f.z) * delta;
+            vec3 acc = vec3(0.0);
+            float trans = 1.0, depth = 1.0e6;
+            uint prev = cellAt(cell) & 0xFFu;
+            bool entered = inside(cell);
+            for (int i = 0; i < 320; i++) {
+                float t;
+                vec3 n;
+                ivec3 back = cell;
+                if (nextT.x <= nextT.y && nextT.x <= nextT.z) { t = nextT.x; cell.x += stp.x; nextT.x += delta.x; n = vec3(-float(stp.x), 0.0, 0.0); }
+                else if (nextT.y <= nextT.z) { t = nextT.y; cell.y += stp.y; nextT.y += delta.y; n = vec3(0.0, -float(stp.y), 0.0); }
+                else { t = nextT.z; cell.z += stp.z; nextT.z += delta.z; n = vec3(0.0, 0.0, -float(stp.z)); }
+                if (t > 256.0) break;
+                bool in_ = inside(cell);
+                if (!in_) { if (entered) break; else continue; }
+                entered = true;
+                uint c = cellAt(cell), m = c & 0xFFu;
+                if (m == 0u) { prev = 0u; continue; }
+                uint front = cellAt(back);
+                vec3 q = o + d * t;
+                vec4 tx = texel(tileOf(m, n), q, n);
+                if (m == 1u) {
+                    if (prev == 1u) continue;
+                    prev = 1u;
+                    depth = min(depth, t);
+                    vec3 w = tx.rgb * light(front, n) + sky(reflect(d, n)) * 0.25;
+                    acc += trans * 0.55 * w;
+                    trans *= 0.45;
+                    continue;
+                }
+                prev = m;
+                if ((m == 5u || m == 6u || m == 11u) && tx.a < 0.5) continue; // cutout leaves, plants, glass
+                vec3 col = (m == 2u || m == 13u) ? tx.rgb : tx.rgb * light(front, n);
+                depth = min(depth, t);
+                if (m == 11u || m == 10u) {
+                    acc += trans * 0.35 * col;
+                    trans *= 0.65;
+                    continue;
+                }
+                acc += trans * col;
+                trans = 0.0;
+                break;
+            }
+            if (trans > 0.0) acc += trans * sky(d);
+            imageStore(sceneOut, px, vec4(acc, 1.0));
+            imageStore(distOut, px, vec4(depth));
+        }
+        """;
 
     @Override public synchronized void close() {
         if (chain != null) chain.destroy();

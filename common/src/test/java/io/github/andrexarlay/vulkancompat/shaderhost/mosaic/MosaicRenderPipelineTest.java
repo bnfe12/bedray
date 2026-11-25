@@ -86,6 +86,22 @@ class MosaicRenderPipelineTest {
     }
 
     @Test
+    void studioPreviewCompilesEveryTemplateWithoutTheAccelerationStructure() {
+        List<String> failures = new ArrayList<>();
+        for (MosaicTemplates.Template t : MosaicTemplates.all()) {
+            MosaicGraph g = MosaicGraph.parse(t.json());
+            List<String> jsons = g.multiPass() ? MosaicPasses.plan(g).all().stream().map(MosaicPasses.Pass::json).toList() : List.of(t.json());
+            for (String j : jsons) {
+                MosaicCodegen.Generated gen = MosaicCodegen.generate(MosaicGraph.parse(j), MosaicCodegen.Options.PREVIEW, false);
+                if (gen.source().contains("accelerationStructureEXT")) failures.add(t.name() + ": still declares the TLAS");
+                MosaicShaderCheck.Result r = MosaicShaderCheck.compile(gen);
+                if (!r.ok()) failures.add(t.name() + ": " + r.errors());
+            }
+        }
+        assertTrue(failures.isEmpty(), String.valueOf(failures));
+    }
+
+    @Test
     void everyRenderPipelineFunctionCompilesAlone() {
         List<String> failures = new ArrayList<>();
         java.nio.file.Path slangc = MosaicSlang.locate(System.getProperty("mosaic.slangc"));

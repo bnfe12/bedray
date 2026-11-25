@@ -247,7 +247,7 @@ public final class MosaicEffects {
             if (dot(n, L) > 0.0) {
                 vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * (0.03 + t * 0.004);
                 float h = mosaicVoxelTrace(p, L, maxDistance, n2, m2);
-                lit = h >= 0.35 ? 0.0 : mosaicFarShadow(p, L, t > 20.0 ? 1.5 : 20.0, 192.0);
+                lit = h >= 0.35 ? 0.0 : mosaicFarShadow(p, L, t > 40.0 ? 1.5 : 40.0, 192.0);
             }
             float k = darkness * strength * clamp(mosaicHitSkyLight(uv), 0.0, 1.0);
             return vec4(color.rgb * mix(1.0 - k, 1.0, lit), color.a);""");
@@ -404,7 +404,7 @@ public final class MosaicEffects {
             float h = mosaicVoxelTrace(p, L, maxDistance, n2, m2);
             if (h >= 0.35) return 0.0;
             // past the world volume: hills and trees of the height field (near pixels start where the volume ends)
-            return mosaicFarShadow(p, L, t > 20.0 ? 1.5 : 20.0, 192.0);""");
+            return mosaicFarShadow(p, L, t > 40.0 ? 1.5 : 40.0, 192.0);""");
         add("Shading", "float voxelDistance(vec3 origin, vec3 dir, float maxDistance = 96)", "Voxel distance",
             "Distance along a ray to the first solid block of the world volume (-1 = none).", """
             vec3 n;
@@ -426,7 +426,7 @@ public final class MosaicEffects {
             float lm = max(max(sky * day, lamp), 0.05);
             lm = pow(lm, 1.4) * 0.92 + 0.08;
             return clamp(c / lm, vec3(0.0), vec3(1.0)) * brightness;""");
-        add("Render pipeline", "vec3 sunLight(vec3 position, vec3 normal, float shadows = 1, float intensity = 3)", "Sun & moon light",
+        add("Render pipeline", "vec3 sunLight(vec3 position, vec3 normal, float shadows = 1, float intensity = 2.2)", "Sun & moon light",
             "Direct light of the sun (the moon at night: dim and blue) on a surface, with shadows traced through the world volume"
                 + " and the height field for far hills. Warm at sunrise and sunset. position and normal from the G-buffer nodes.", """
             vec3 L = mosaicSunDir();
@@ -441,7 +441,7 @@ public final class MosaicEffects {
                 float d = length(position);
                 vec3 p = position + normal * (0.03 + d * 0.004);
                 float h = mosaicVoxelTrace(p, L, 64.0, n2, m2);
-                vis = h >= 0.35 ? 0.0 : mosaicFarShadow(p, L, d > 20.0 ? 1.5 : 20.0, 192.0);
+                vis = h >= 0.35 ? 0.0 : mosaicFarShadow(p, L, d > 40.0 ? 1.5 : 40.0, 192.0);
             }
             vec3 col = mix(vec3(1.0, 0.45, 0.18), vec3(1.0, 0.95, 0.88), smoothstep(0.0, 0.35, L.y));
             col = mix(col, vec3(0.32, 0.4, 0.62) * 0.06, moon);
@@ -453,7 +453,7 @@ public final class MosaicEffects {
         add("Render pipeline", "vec3 torchLight(float blockLight, vec3 tint = vec3(1.0, 0.6, 0.3), float intensity = 2)", "Block light",
             "Light of torches, lamps and lava from the block light level (0..1, Block light node), in the colour you pick.", """
             return tint * pow(clamp(blockLight, 0.0, 1.0), 2.5) * intensity;""");
-        add("Render pipeline", "vec4 diffuseGI(vec3 position, vec3 normal, float bounces = 1, float maxDistance = 24, float sunStrength = 3, float skyStrength = 1)",
+        add("Render pipeline", "vec4 diffuseGI(vec3 position, vec3 normal, float bounces = 1, float maxDistance = 24, float sunStrength = 2.2, float skyStrength = 1)",
             "Diffuse GI (voxel paths)", "Light arriving at a surface from everywhere, one random path per pixel and frame through the"
                 + " world volume: sky through openings, sun bounced off lit blocks, torch light and glowing blocks. Noisy by design:"
                 + " Accumulate into a Buffer (1/2 size) and Denoise it, then add it to the light. No ray tracing hardware needed.", """
@@ -549,7 +549,7 @@ public final class MosaicEffects {
             }
             float fres = 0.02 + 0.98 * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
             return vec4(mix(color.rgb, refl, clamp(fres * strength, 0.0, 1.0)), color.a);""");
-        add("Render pipeline", "vec3 sunLightRT(vec3 position, vec3 normal, float intensity = 3)", "Sun & moon light (RT)",
+        add("Render pipeline", "vec3 sunLightRT(vec3 position, vec3 normal, float intensity = 2.2)", "Sun & moon light (RT)",
             "Sun & moon light with an exact shadow ray through the real scene geometry (hardware ray tracing: an RTX-class GPU).", """
             vec3 L = mosaicSunDir();
             float moon = L.y < 0.0 ? 1.0 : 0.0;
@@ -560,7 +560,7 @@ public final class MosaicEffects {
             vec3 col = mix(vec3(1.0, 0.45, 0.18), vec3(1.0, 0.95, 0.88), smoothstep(0.0, 0.35, L.y));
             col = mix(col, vec3(0.32, 0.4, 0.62) * 0.06, moon);
             return col * ndl * vis * intensity * smoothstep(0.0, 0.08, L.y);""");
-        add("Render pipeline", "vec4 diffuseGIRT(vec3 position, vec3 normal, float maxDistance = 64, float sunStrength = 3, float skyStrength = 1)",
+        add("Render pipeline", "vec4 diffuseGIRT(vec3 position, vec3 normal, float maxDistance = 64, float sunStrength = 2.2, float skyStrength = 1)",
             "Diffuse GI (RT)", "One-bounce light from a hardware ray per pixel and frame through the real scene geometry; the hit is shaded"
                 + " with the world volume's block colour, a shadow ray toward the sun and its sky light. Accumulate and Denoise it like"
                 + " Diffuse GI. Needs hardware ray tracing.", """

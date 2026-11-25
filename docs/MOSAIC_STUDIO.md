@@ -25,6 +25,21 @@ to Minecraft, or without it.
 | **Result** | The frame of the running game before and after the shader, side by side, split, or against an earlier step; record GIF / MP4, save frames. |
 | **Workflow** | Document tabs, Blender-like areas you can split, pop out and dock back, rebindable keys (also on the Russian layout), themes including OLED black, named undo history per tab. |
 
+## Preview world
+
+The Preview renders the open graph over a **real scene**, not a picture: the blocks around the player when the game
+opened Studio (J), or a built-in landscape (hills, a lake, a forest, a stone house with glass and torches, lava) until
+then. A G-buffer pass draws the blocks with Minecraft's textures and light map and gives the graph the same inputs as
+the game: scene colour, ray distance (so position, normal, material and light nodes work), the 96 x 48 x 96 world
+volume, the camera and the previous camera (Accumulate, TAA). Drag to look around, the wheel or W A S D / Space /
+Shift to fly, the Time slider for the time of day. Graphs that trace rays (Trace / Shadow ray nodes, RT functions) run
+in the preview with their rays walking the world volume; in the game they use the hardware rays.
+
+File contract: when J opens Studio the game writes `<game>/bedray-studio/preview-world.bin` (little endian: int magic
+`0x3157534D`, int size x / y / z, int origin x / y / z (absolute blocks), double camera x / y / z, float yaw, pitch
+(Minecraft degrees), time of day (0 noon, 0.25 sunset); cells from byte 64, one 16-bit cell per block, x fastest, then z,
+then y, cell = material | blockLight << 8 | skyLight << 12). "Reload world" reads it again.
+
 ## A renderer of your own
 
 The main workspace is the **Render graph**: the frame as nodes. Bedray's own renderer is one ready-made node of it,

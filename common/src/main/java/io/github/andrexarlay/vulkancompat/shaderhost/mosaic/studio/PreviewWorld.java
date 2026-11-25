@@ -1,0 +1,273 @@
+package io.github.andrexarlay.vulkancompat.shaderhost.mosaic.studio;
+
+import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld;
+import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Material;
+
+import java.awt.image.BufferedImage;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayDeque;
+
+/**
+ * The preview world: real blocks the preview renders and the graph lights - the place the player stood when the game
+ * opened Studio ({@code bedray-studio/preview-world.bin}), or a built-in landscape (terrain, a lake, trees, a stone house
+ * with a glass window, torches and a lava pool) with sky and block light spread like the game's. It feeds the preview's
+ * G-buffer pass (scene colour, ray distance) and the world volume (binding 15), so position, normal, material, light,
+ * shadow and GI nodes all see a real scene.
+ */
+final class PreviewWorld {
+
+    private PreviewWorld() {}
+
+    static final int SX = MosaicWorld.SX, SY = MosaicWorld.SY, SZ = MosaicWorld.SZ;
+
+    /** The game's capture when there is one, else the built-in landscape. */
+    static MosaicWorld.Snapshot load(Path gameDir) {
+        if (gameDir != null) {
+            try {
+                Path f = gameDir.resolve("bedray-studio").resolve("preview-world.bin");
+                if (Files.isRegularFile(f)) {
+                    MosaicWorld.Snapshot s = MosaicWorld.Snapshot.read(Files.readAllBytes(f));
+                    if (s != null) return s;
+                }
+            } catch (Exception ignored) {
+                // unreadable capture: the built-in world
+            }
+        }
+        return demo();
+    }
+
+    static boolean fromGame(MosaicWorld.Snapshot s) { return s != DEMO; }
+
+    private static MosaicWorld.Snapshot DEMO;
+
+    // ------------------------------------------------------------------ built-in landscape
+
+    static synchronized MosaicWorld.Snapshot demo() {
+        if (DEMO != null) return DEMO;
+        int ox = 0, oy = 48, oz = 0;
+        Material[] m = new Material[SX * SY * SZ];
+        java.util.Arrays.fill(m, Material.AIR);
+        int water = 62 - oy;
+        int[][] height = new int[SX][SZ];
+        for (int x = 0; x < SX; x++)
+            for (int z = 0; z < SZ; z++) {
+                double h = 64 + 4.5 * Math.sin(x * 0.09) * Math.cos(z * 0.07) + 2.5 * Math.sin((x + z) * 0.05 + 1.3)
+                    + 1.2 * Math.cos(x * 0.21 - z * 0.17) + Math.max(0, 9 - Math.hypot(x - 78, z - 20) * 0.45) * 1.6;
+                double lake = Math.hypot(x - 30, z - 58);
+                if (lake < 15) h -= (15 - lake) * 0.6;
+                height[x][z] = (int) Math.round(h) - oy;
+            }
+        for (int x = 0; x < SX; x++)
+            for (int z = 0; z < SZ; z++) {
+                int top = height[x][z];
+                for (int y = 0; y < SY; y++) {
+                    Material v = Material.AIR;
+                    if (y < top - 3) v = Material.STONE;
+                    else if (y < top) v = top <= water + 1 ? Material.SAND : Material.DIRT;
+                    else if (y == top) v = top <= water + 1 ? Material.SAND : Material.DIRT;
+                    else if (y <= water) v = Material.WATER;
+                    m[idx(x, y, z)] = v;
+                }
+            }
+        // trees
+        java.util.List<int[]> trees = new java.util.ArrayList<>();
+        for (int gx = 4; gx < SX - 4; gx += 9)
+            for (int gz = 4; gz < SZ - 4; gz += 9) {
+                int hsh = (gx * 73856093) ^ (gz * 19349663);
+                if (Math.floorMod(hsh, 5) > 1) continue;
+                trees.add(new int[] {gx + Math.floorMod(hsh >> 4, 5) - 2, gz + Math.floorMod(hsh >> 8, 5) - 2});
+            }
+        for (int[] t : trees) {
+            int x = t[0], z = t[1], base = height[x][z] + 1;
+            if (Math.abs(x - 59) < 7 && Math.abs(z - 33) < 7 || Math.hypot(x - 44, z - 92) < 10) continue; // the house, the view
+            if (base <= water + 1) continue;
+            for (int y = 0; y < 5; y++) set(m, x, base + y, z, Material.WOOD);
+            for (int dx = -2; dx <= 2; dx++)
+                for (int dz = -2; dz <= 2; dz++)
+                    for (int dy = 3; dy <= 6; dy++) {
+                        int r = dy >= 5 ? 1 : 2;
+                        if (Math.abs(dx) > r || Math.abs(dz) > r || (Math.abs(dx) == 2 && Math.abs(dz) == 2)) continue;
+                        if (get(m, x + dx, base + dy, z + dz) == Material.AIR) set(m, x + dx, base + dy, z + dz, Material.LEAVES);
+                    }
+        }
+        // a stone house with a glass window, a torch inside and one at the door
+        int hx = 56, hz = 30, hb = 0;
+        for (int x = hx; x < hx + 7; x++) for (int z = hz; z < hz + 6; z++) hb = Math.max(hb, height[x][z] + 1);
+        for (int x = hx; x < hx + 7; x++)
+            for (int z = hz; z < hz + 6; z++) {
+                for (int y = height[x][z] + 1; y < hb; y++) set(m, x, y, z, Material.STONE);
+                for (int y = hb; y < hb + 5; y++) {
+                    boolean wall = x == hx || x == hx + 6 || z == hz || z == hz + 5;
+                    boolean roof = y == hb + 4;
+                    set(m, x, y, z, roof || wall ? Material.OTHER : Material.AIR);
+                }
+            }
+        set(m, hx + 3, hb, hz + 5, Material.AIR);
+        set(m, hx + 3, hb + 1, hz + 5, Material.AIR);
+        set(m, hx + 1, hb + 2, hz + 5, Material.GLASS);
+        set(m, hx + 5, hb + 2, hz + 5, Material.GLASS);
+        set(m, hx + 6, hb + 2, hz + 2, Material.GLASS);
+        set(m, hx + 1, hb + 1, hz + 1, Material.LIGHT);
+        set(m, hx + 2, hb + 1, hz + 6, Material.LIGHT);
+        // lava pool, an iron block and a snowy stone pillar
+        for (int x = 64; x < 67; x++) for (int z = 56; z < 59; z++) set(m, x, height[x][z], z, Material.LAVA);
+        set(m, 50, height[50][44] + 1, 44, Material.METAL);
+        for (int y = 1; y < 6; y++) set(m, 18, height[18][30] + y, 30, Material.STONE);
+        set(m, 18, height[18][30] + 6, 30, Material.SNOW);
+        short[] cells = light(m);
+        DEMO = new MosaicWorld.Snapshot(ox, oy, oz, cells, ox + 44.5, oy + height[44][92] + 9.6, oz + 92.5, 160f, 20f, 0.06f);
+        return DEMO;
+    }
+
+    private static int idx(int x, int y, int z) { return (y * SZ + z) * SX + x; }
+
+    private static void set(Material[] m, int x, int y, int z, Material v) {
+        if (x >= 0 && y >= 0 && z >= 0 && x < SX && y < SY && z < SZ) m[idx(x, y, z)] = v;
+    }
+
+    private static Material get(Material[] m, int x, int y, int z) {
+        return x >= 0 && y >= 0 && z >= 0 && x < SX && y < SY && z < SZ ? m[idx(x, y, z)] : Material.AIR;
+    }
+
+    /** Light passes through air, plants, glass; water and leaves dim it by one more per block; solids stop it. */
+    static boolean opaque(Material v) {
+        return switch (v) {
+            case AIR, PLANT, GLASS, WATER, LEAVES, ICE -> false;
+            default -> true;
+        };
+    }
+
+    private static int extraLoss(Material v) { return v == Material.WATER || v == Material.LEAVES ? 1 : 0; }
+
+    /** Sky light falls straight down at 15 and spreads sideways losing one per block; block light spreads from emitters. */
+    static short[] light(Material[] m) {
+        int n = m.length;
+        int[] sky = new int[n], block = new int[n];
+        ArrayDeque<Integer> q = new ArrayDeque<>();
+        for (int x = 0; x < SX; x++)
+            for (int z = 0; z < SZ; z++) {
+                int l = 15;
+                for (int y = SY - 1; y >= 0; y--) {
+                    Material v = m[idx(x, y, z)];
+                    if (opaque(v)) break;
+                    l = Math.max(0, l - extraLoss(v));
+                    sky[idx(x, y, z)] = l;
+                    q.add(idx(x, y, z));
+                }
+            }
+        spread(m, sky, q);
+        for (int i = 0; i < n; i++)
+            if (m[i] == Material.LIGHT || m[i] == Material.LAVA) {
+                block[i] = m[i] == Material.LIGHT ? 14 : 15;
+                q.add(i);
+            }
+        spread(m, block, q);
+        short[] out = new short[n];
+        for (int i = 0; i < n; i++) {
+            // solid blocks report the light of the air next to them the way shaders read it (the cell in front of a face)
+            out[i] = (short) MosaicWorld.cell(m[i], block[i], sky[i]);
+        }
+        return out;
+    }
+
+    private static void spread(Material[] m, int[] level, ArrayDeque<Integer> q) {
+        int[] d = {1, -1, SX, -SX, SX * SZ, -SX * SZ};
+        while (!q.isEmpty()) {
+            int i = q.poll();
+            int l = level[i];
+            if (l <= 1) continue;
+            int x = i % SX, z = (i / SX) % SZ, y = i / (SX * SZ);
+            for (int k = 0; k < 6; k++) {
+                int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), nz = z + (k == 2 ? 1 : k == 3 ? -1 : 0), ny = y + (k == 4 ? 1 : k == 5 ? -1 : 0);
+                if (nx < 0 || ny < 0 || nz < 0 || nx >= SX || ny >= SY || nz >= SZ) continue;
+                int j = i + d[k];
+                if (opaque(m[j])) continue;
+                int nl = l - 1 - extraLoss(m[j]);
+                if (nl > level[j]) {
+                    level[j] = nl;
+                    q.add(j);
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ block textures
+
+    /** Atlas tiles: material classes 0..14 (side faces), then grass top, dirt, log top. */
+    static final int TILES = 18;
+    private static int[] ATLAS;
+
+    /** 16 x 16 tiles in one row (RGBA, alpha kept for cutouts), from the newest Minecraft jar; flat colours without one. */
+    static synchronized int[] atlas() {
+        if (ATLAS != null) return ATLAS;
+        String[] names = {null, "water_still", "lava_still", "stone", "grass_block_side", "oak_leaves", "short_grass", "oak_log", "sand",
+            "snow", "ice", "glass", "iron_block", "glowstone", "stone_bricks", "grass_block_top", "dirt", "oak_log_top"};
+        int[] tints = {0, 0x3F76E4, 0, 0, 0, 0x59AE30, 0x7CBD6B, 0, 0, 0, 0, 0, 0, 0, 0, 0x7CBD6B, 0, 0};
+        int[] flat = {0, 0x2F5FA8, 0xFF7A1A, 0x7F7F80, 0x6A8F3E, 0x3F7A26, 0x5D9B3E, 0x6B5130, 0xDBCFA0, 0xF4F8FA, 0x9ABCF4,
+            0xD8E6EC, 0xC8C8CC, 0xF2D27A, 0x7A7A7C, 0x6FA544, 0x86603E, 0xA8885A};
+        int[] out = new int[TILES * 16 * 16];
+        StudioLibrary.Source jar = StudioLibrary.vanillaJars().stream().findFirst().orElse(null);
+        for (int t = 0; t < TILES; t++) {
+            BufferedImage img = jar == null || names[t] == null ? null
+                : StudioLibrary.image(jar, "assets/minecraft/textures/block/" + names[t] + ".png");
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++) {
+                    int argb;
+                    if (img != null) {
+                        int sx = x * img.getWidth() / 16, sy = y * Math.min(img.getWidth(), img.getHeight()) / 16; // animated: first frame
+                        argb = img.getRGB(sx, sy);
+                        if (t == 4) { // grass side: grey overlay band tinted green over the dirt
+                            int a = argb >>> 24;
+                            argb = a == 0 ? 0 : argb;
+                        }
+                        if (tints[t] != 0) argb = tint(argb, tints[t]);
+                    } else argb = 0xFF000000 | flat[t];
+                    if (t == 4 && img != null) {
+                        BufferedImage over = StudioLibrary.image(jar, "assets/minecraft/textures/block/grass_block_side_overlay.png");
+                        if (over != null) {
+                            int o = over.getRGB(x * over.getWidth() / 16, y * over.getHeight() / 16);
+                            if ((o >>> 24) > 128) argb = tint(o, 0x7CBD6B);
+                        }
+                    }
+                    // stored bottom-up per tile row so v = 0 is the bottom of the texture
+                    out[(15 - y) * TILES * 16 + t * 16 + x] = argb;
+                }
+        }
+        ATLAS = out;
+        return out;
+    }
+
+    private static int tint(int argb, int rgb) {
+        int r = ((argb >> 16) & 255) * ((rgb >> 16) & 255) / 255, g = ((argb >> 8) & 255) * ((rgb >> 8) & 255) / 255,
+            b = (argb & 255) * (rgb & 255) / 255;
+        return (argb & 0xFF000000) | r << 16 | g << 8 | b;
+    }
+
+    // ------------------------------------------------------------------ the preview camera
+
+    /** Where the preview looks from: absolute position, Minecraft yaw / pitch in degrees, time of day (0 noon). */
+    record View(MosaicWorld.Snapshot world, double x, double y, double z, float yaw, float pitch, float timeOfDay, int[] atlas) {
+        static View of(MosaicWorld.Snapshot s) {
+            return new View(s, s.camX(), s.camY(), s.camZ(), s.yaw(), s.pitch(), s.timeOfDay(), PreviewWorld.atlas());
+        }
+
+        View look(float dYaw, float dPitch) {
+            return new View(world, x, y, z, yaw + dYaw, Math.max(-89f, Math.min(89f, pitch + dPitch)), timeOfDay, atlas);
+        }
+
+        /** Moves along the view direction (forward > 0), staying inside the volume. */
+        View move(double forward, double right, double up) {
+            double ry = Math.toRadians(yaw), rp = Math.toRadians(pitch);
+            double fx = -Math.sin(ry) * Math.cos(rp), fy = -Math.sin(rp), fz = Math.cos(ry) * Math.cos(rp);
+            double rx = -Math.cos(ry), rz = -Math.sin(ry);
+            double nx = x + fx * forward + rx * right, ny = y + fy * forward + up, nz = z + fz * forward + rz * right;
+            nx = Math.max(world.ox() + 0.5, Math.min(world.ox() + SX - 0.5, nx));
+            ny = Math.max(world.oy() + 0.5, Math.min(world.oy() + SY + 16, ny));
+            nz = Math.max(world.oz() + 0.5, Math.min(world.oz() + SZ - 0.5, nz));
+            return new View(world, nx, ny, nz, yaw, pitch, timeOfDay, atlas);
+        }
+
+        View at(float tod) { return new View(world, x, y, z, yaw, pitch, tod, atlas); }
+    }
+}

@@ -43,7 +43,7 @@ final class Panels {
         LIBRARY("Library", "Data", "Textures from Minecraft, resource packs and the project; drag or double-click"),
         MATERIAL("Material", "Main", "The material on a lit block and each baked map"),
         BROWSER("Shader browser", "Data", "Shader packs of the game: Mosaic graphs and Iris packs, import / export"),
-        PREVIEW("Preview", "Main", "The shader run by the studio on the GPU over a game frame, a test scene or a picture"),
+        PREVIEW("Preview", "Main", "The graph run by the studio on the GPU over a real scene: the preview world (yours from the game, or built in) or the game's last frame"),
         CONFIG("Config", "Game", "Every public number of the renderer graph in one place: edit, copy, save, send with priority"),
         GUIDE("Guide", "Diagnostics", "How the editor works, from the first node to a Bedray pass rewritten in nodes");
 

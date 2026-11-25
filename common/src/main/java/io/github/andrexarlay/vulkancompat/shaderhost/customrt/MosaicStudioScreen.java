@@ -19,6 +19,7 @@ public final class MosaicStudioScreen extends Screen {
     /** Opens Studio on the active folder pack (or Studio's start page) and this screen behind it. */
     public static StudioLauncher.Result open() {
         Minecraft mc = Minecraft.getInstance();
+        captureWorld(mc);
         java.nio.file.Path graph = CustomRtStage.editableMosaicPath();
         StudioLauncher.onHidden(() -> mc.execute(() -> {
             if (mc.gui.screen() instanceof MosaicStudioScreen) mc.gui.setScreen(null);
@@ -27,6 +28,27 @@ public final class MosaicStudioScreen extends Screen {
             mc.gameDirectory.toPath(), gameWindow(mc));
         if (r != StudioLauncher.Result.FAILED) mc.gui.setScreen(new MosaicStudioScreen());
         return r;
+    }
+
+    /**
+     * The blocks around the player (the 96 x 48 x 96 world volume: material classes, sky and block light), the camera and
+     * the time of day, for Studio's preview world: graphs are previewed on the place the player stands in.
+     */
+    static void captureWorld(Minecraft mc) {
+        var level = mc.level;
+        var player = mc.player;
+        if (level == null || player == null) return;
+        try {
+            var volume = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Volume();
+            double x = player.getX(), y = player.getEyeY(), z = player.getZ();
+            volume.update(new MosaicWorldFeed(level), x, y, z, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.CELLS);
+            float tod = (float) (Math.floorMod(level.getDefaultClockTime() - 6000L, 24000L) / 24000.0);
+            java.nio.file.Path dir = java.nio.file.Files.createDirectories(mc.gameDirectory.toPath().resolve("bedray-studio"));
+            java.nio.file.Files.write(dir.resolve("preview-world.bin"),
+                volume.snapshot(x, y, z, player.getYRot(), player.getXRot(), tod).toBytes());
+        } catch (java.io.IOException | RuntimeException e) {
+            org.slf4j.LoggerFactory.getLogger("bedray").warn("[mosaic-studio] could not save the preview world: {}", e.toString());
+        }
     }
 
     /** The game window's native handle (Win32 HWND through SDL), 0 when there is none. */

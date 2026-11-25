@@ -18,12 +18,12 @@ public final class MosaicWorld {
     private MosaicWorld() {}
 
     public static final int BINDING = 15;
-    public static final int SX = 48, SY = 32, SZ = 48;
+    public static final int SX = 96, SY = 48, SZ = 96;
     public static final int CELLS = SX * SY * SZ;
     public static final int HEADER_BYTES = 48;
     public static final int BYTES = HEADER_BYTES + CELLS * 2;
     /** Recenter when the camera drifts this many blocks from the volume center on any axis. */
-    public static final int RECENTER = 8;
+    public static final int RECENTER = 16;
 
     /** Material classes, by id. The ids are part of the shader contract: never renumber. */
     public enum Material {
@@ -52,6 +52,56 @@ public final class MosaicWorld {
     @FunctionalInterface
     public interface Sampler {
         int sample(int x, int y, int z);
+    }
+
+    /**
+     * A frozen volume and the camera that saw it: the game writes one ({@code bedray-studio/preview-world.bin}) when
+     * Mosaic Studio opens, and Studio's preview renders and lights it like the game. Positions are absolute blocks;
+     * yaw / pitch in Minecraft's degrees; time of day as the shaders take it (0 noon, 0.25 sunset, 0.5 midnight).
+     */
+    public record Snapshot(int ox, int oy, int oz, short[] cells, double camX, double camY, double camZ, float yaw, float pitch,
+                           float timeOfDay) {
+        public static final int MAGIC = 0x3157534D; // "MSW1"
+        public static final int HEADER = 64;
+
+        public int get(int x, int y, int z) {
+            int lx = x - ox, ly = y - oy, lz = z - oz;
+            if (lx < 0 || ly < 0 || lz < 0 || lx >= SX || ly >= SY || lz >= SZ) return 0;
+            return cells[(ly * SZ + lz) * SX + lx] & 0xFFFF;
+        }
+
+        public byte[] toBytes() {
+            ByteBuffer b = ByteBuffer.allocate(HEADER + CELLS * 2).order(ByteOrder.LITTLE_ENDIAN);
+            b.putInt(MAGIC).putInt(SX).putInt(SY).putInt(SZ).putInt(ox).putInt(oy).putInt(oz);
+            b.putDouble(camX).putDouble(camY).putDouble(camZ).putFloat(yaw).putFloat(pitch).putFloat(timeOfDay);
+            b.position(HEADER);
+            for (short c : cells) b.putShort(c);
+            return b.array();
+        }
+
+        /** Null when the bytes are not a snapshot of this volume size. */
+        public static Snapshot read(byte[] data) {
+            if (data == null || data.length != HEADER + CELLS * 2) return null;
+            ByteBuffer b = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+            if (b.getInt() != MAGIC || b.getInt() != SX || b.getInt() != SY || b.getInt() != SZ) return null;
+            int ox = b.getInt(), oy = b.getInt(), oz = b.getInt();
+            double x = b.getDouble(), y = b.getDouble(), z = b.getDouble();
+            float yaw = b.getFloat(), pitch = b.getFloat(), tod = b.getFloat();
+            short[] cells = new short[CELLS];
+            b.position(HEADER);
+            for (int i = 0; i < CELLS; i++) cells[i] = b.getShort();
+            return new Snapshot(ox, oy, oz, cells, x, y, z, yaw, pitch, tod);
+        }
+
+        /** The storage-buffer contents for a camera at (x, y, z): the 48-byte header of {@link Volume#writeHeader}, then cells. */
+        public void writeBuffer(ByteBuffer b, double x, double y, double z) {
+            b.order(ByteOrder.LITTLE_ENDIAN);
+            int fx = (int) Math.floor(x), fy = (int) Math.floor(y), fz = (int) Math.floor(z);
+            b.putInt(0, ox - fx).putInt(4, oy - fy).putInt(8, oz - fz).putInt(12, 1);
+            b.putFloat(16, (float) (x - fx)).putFloat(20, (float) (y - fy)).putFloat(24, (float) (z - fz)).putFloat(28, 0f);
+            b.putInt(32, SX).putInt(36, SY).putInt(40, SZ).putInt(44, 0);
+            for (int i = 0; i < CELLS; i++) b.putShort(HEADER_BYTES + i * 2, cells[i]);
+        }
     }
 
     /** The CPU copy of the volume, refreshed incrementally. Not thread-safe: use from the render thread. */
@@ -127,6 +177,11 @@ public final class MosaicWorld {
             oz = nz;
             // the overlap stays valid; the new margin fills as the cursor sweeps
             scannedSincePlace = Math.min(scannedSincePlace, CELLS / 2);
+        }
+
+        /** A frozen copy with the camera that saw it (see {@link Snapshot}). */
+        public Snapshot snapshot(double camX, double camY, double camZ, float yaw, float pitch, float timeOfDay) {
+            return new Snapshot(ox, oy, oz, cells.clone(), camX, camY, camZ, yaw, pitch, timeOfDay);
         }
 
         /** The 48-byte header for this frame's camera. */

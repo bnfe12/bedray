@@ -28,8 +28,15 @@ public final class MosaicCodegen {
     private MosaicCodegen() {}
 
     /** Emission switches: debug preview of one node, NaN/Inf highlighting, optimization. */
-    public record Options(String previewNode, boolean nanCheck, boolean optimize) {
-        public static final Options DEFAULT = new Options(null, false, true);
+    public record Options(String previewNode, boolean nanCheck, boolean optimize, boolean voxelRays) {
+        public static final Options DEFAULT = new Options(null, false, true, false);
+        /**
+         * Studio's preview: no acceleration structure there, so the ray helpers of function nodes (mosaicTrace,
+         * mosaicShadow) walk the world volume instead; graphs with Trace / Shadow ray nodes still need the game.
+         */
+        public static final Options PREVIEW = new Options(null, false, true, true);
+
+        public Options(String previewNode, boolean nanCheck, boolean optimize) { this(previewNode, nanCheck, optimize, false); }
     }
 
     /** Lines {@code first..last} (1-based, inclusive) belong to a node or to a user function's body. */
@@ -58,6 +65,8 @@ public final class MosaicCodegen {
         final Map<String, String> alias = new HashMap<>();      // merged id -> surviving id
         final Map<String, double[]> folded = new HashMap<>();   // id -> constant value
         final Set<String> functions = new LinkedHashSet<>();    // used user functions
+        /** Studio preview: Trace / Shadow ray nodes and the ray helpers walk the world volume (Options.voxelRays). */
+        boolean voxelRays;
         String root;                                            // id whose value is stored ("" = none)
         String rootRef;
         MosaicGraph graph;
@@ -154,7 +163,13 @@ public final class MosaicCodegen {
     /** Which bindings and helpers the emitted code needs. */
     private record Needs(boolean ray, boolean scene, boolean depth, boolean world, boolean buffer, boolean lut, int maxPush, boolean noise,
                          java.util.Set<Integer> buffers, boolean history, boolean worldInfo, boolean blur, boolean prev, boolean taa, boolean height,
-                         boolean accumulate, boolean atrous) {}
+                         boolean accumulate, boolean atrous, boolean voxelRays) {
+        /** Ray helpers on the world volume instead of the acceleration structure (Options.voxelRays). */
+        Needs voxel() {
+            return new Needs(false, scene, depth, true, buffer, lut, maxPush, noise, buffers, history, worldInfo, blur, prev, taa, height,
+                accumulate, atrous, true);
+        }
+    }
 
     private static final String[] NOISE_HELPERS = {"mosaicNoise(", "mosaicNoiseColor(", "mosaicVoronoi(", "mosaicHash31(", "mosaicHash33(",
         "mosaicChecker(", "mosaicWave(", "mosaicGradient(", "mosaicFbm(", "mosaicGradNoise("};
@@ -228,7 +243,7 @@ public final class MosaicCodegen {
             noise |= mentions(body, NOISE_HELPERS);
             height |= body.contains("mosaicHeightAt(") || body.contains("mosaicFarShadow(");
         }
-        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur, prev, taa, height, accumulate, atrous);
+        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur, prev, taa, height, accumulate, atrous, false);
     }
 
     /** Header of a stats comment so authors see what the optimizer did. */
@@ -263,6 +278,10 @@ public final class MosaicCodegen {
         Plan p = plan(g, o);
         p.slang = slang;
         Needs nd = needs(g, p);
+        if (o.voxelRays() && nd.ray()) {
+            nd = nd.voxel();
+            p.voxelRays = true;
+        }
         Stats st = stats(g, p);
         Out out = new Out();
         if (slang) slangHeader(out, nd, st);
@@ -401,6 +420,12 @@ public final class MosaicCodegen {
         if (nd.accumulate()) o.a(GLSL_ACCUMULATE);
         if (nd.atrous()) o.a(GLSL_ATROUS);
         if (nd.height()) o.a(MosaicHeight.GLSL);
+        if (nd.voxelRays()) o.a("""
+            // preview: rays walk the world volume (no acceleration structure in Studio)
+            const vec3 MOSAIC_SKY_DIRECTION = vec3(0.32, 0.90, 0.28);
+            float mosaicTrace(vec3 origin, vec3 dir, float tMax) { vec3 n; float m; return mosaicVoxelTrace(origin, dir, tMax, n, m); }
+            float mosaicShadow(vec3 origin, vec3 dir) { vec3 n; float m; return mosaicVoxelTrace(origin, dir, 96.0, n, m) < 0.0 ? 1.0 : 0.0; }
+            """);
         if (nd.ray()) o.a("""
             const uint MOSAIC_CULL_MASK = 0x01u; // section geometry
             const vec3 MOSAIC_SKY_DIRECTION = vec3(0.32, 0.90, 0.28); // shadow-node default
@@ -1371,6 +1396,20 @@ public final class MosaicCodegen {
         String dir = "(" + inOr(p, n, "direction", "mosaicViewDir(m_uv)") + ")";
         String tMax = inOr(p, n, "tMax", "512.0");
         String id = "g_" + n.id();
+        if (p.voxelRays) { // preview: the ray walks the world volume; prim = the material class it hit
+            String v3 = sl ? "float3" : "vec3";
+            o.a(String.format("""
+
+                    %5$s %1$s_n;
+                    float %1$s_m;
+                    float %1$s = mosaicVoxelTrace(%2$s, normalize(%3$s), min(%4$s, 192.0), %1$s_n, %1$s_m);
+                    float %1$s_hit = %1$s >= 0.0 ? 1.0 : 0.0;
+                    %5$s %1$s_pos = %2$s + %3$s * max(%1$s, 0.0);
+                    float %1$s_inst = 0.0;
+                    float %1$s_prim = %1$s_m;
+                """, id, origin, dir, tMax, v3));
+            return;
+        }
         if (sl) {
             o.a(String.format("""
 
@@ -1484,6 +1523,11 @@ public final class MosaicCodegen {
         if (nd.accumulate()) o.a(SLANG_ACCUMULATE);
         if (nd.atrous()) o.a(SLANG_ATROUS);
         if (nd.height()) o.a(MosaicHeight.SLANG);
+        if (nd.voxelRays()) o.a("""
+            static const float3 MOSAIC_SKY_DIRECTION = float3(0.32, 0.90, 0.28);
+            float mosaicTrace(float3 origin, float3 dir, float tMax) { float3 n; float m; return mosaicVoxelTrace(origin, dir, tMax, n, m); }
+            float mosaicShadow(float3 origin, float3 dir) { float3 n; float m; return mosaicVoxelTrace(origin, dir, 96.0, n, m) < 0.0 ? 1.0 : 0.0; }
+            """);
         if (nd.ray()) o.a("""
             static const uint MOSAIC_CULL_MASK = 0x01; // section geometry
             static const float3 MOSAIC_SKY_DIRECTION = float3(0.32, 0.90, 0.28); // shadow-node default

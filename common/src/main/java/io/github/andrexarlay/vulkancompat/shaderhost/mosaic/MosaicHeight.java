@@ -6,7 +6,7 @@ import java.nio.ByteOrder;
 /**
  * The height field a Mosaic shader can read for distant shadows: for every column of a 256 x 256 square around the camera,
  * the height above the highest block that blocks motion (leaves included), as the game's MOTION_BLOCKING heightmap gives
- * it. The world volume ({@link MosaicWorld}) covers 48 x 32 x 48 blocks in detail; shadow rays that leave it continue over
+ * it. The world volume ({@link MosaicWorld}) covers 96 x 48 x 96 blocks in detail; shadow rays that leave it continue over
  * this field ({@code mosaicFarShadow}), so hills and trees far away still cast shadows.
  * <p>
  * Buffer layout (std430, binding {@link #BINDING}): {@code ivec4 originRel} (x: origin x - floor(camera x), y: origin z -

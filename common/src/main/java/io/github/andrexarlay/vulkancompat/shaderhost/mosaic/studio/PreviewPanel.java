@@ -11,26 +11,31 @@ import java.nio.file.Path;
 import static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.studio.StudioUi.*;
 
 /**
- * Preview: the shader of the open graph run by the studio itself on the GPU, over the game's last frame, a built-in test
- * scene or any picture, animated. Independent of the game (Result shows the game's own render).
+ * Preview: the open graph run by the studio itself on the GPU over a real scene - the preview world (the blocks around
+ * the player when the game opened Studio, or a built-in landscape) rendered with depth, normals, materials and light, a
+ * camera you fly with the mouse (drag to look, wheel to move, W A S D / Space / Shift when the view has focus) and the
+ * time of day on a slider - or over the game's last frame. Independent of the game (Result shows the game's own render).
  */
 final class PreviewPanel extends Panels.Listening {
 
-    enum Source { GAME, SCENE, IMAGE }
+    enum Source { WORLD, GAME }
 
     private static GpuPreview gpu;
     private static String gpuError;
 
     final JPanel root = new JPanel(new BorderLayout());
     final StudioWidgets.Segmented<Source> source = new StudioWidgets.Segmented<Source>()
-        .add(Source.GAME, "Game frame", StudioWidgets.glyph("vanilla", new Color(0x7FB069)), "The last frame the game sent (before the shader)")
-        .add(Source.SCENE, "Test scene", StudioWidgets.glyph("shader", new Color(0x5AA0E0)), "A built-in scene: sky, sun, water, blocks")
-        .add(Source.IMAGE, "Image", StudioWidgets.glyph("frame", null), "Any picture or screenshot");
+        .add(Source.WORLD, "World", StudioWidgets.glyph("vanilla", new Color(0x7FB069)),
+            "Real blocks with depth, normals, materials and light: where you stood when the game opened Studio, or a built-in landscape."
+                + " Drag to look around, wheel to move, W A S D / Space / Shift to fly.")
+        .add(Source.GAME, "Game frame", StudioWidgets.glyph("frame", null), "The last frame the game sent (a picture: no depth or world data)");
+    final JSlider time = new JSlider(0, 24000, 6000);
+    volatile PreviewWorld.View worldView;
+    private Point dragFrom;
     final JLabel info = label("", FAINT);
     final JComponent view;
     volatile BufferedImage shown;
     volatile String message = "Starting the GPU...";
-    BufferedImage picked;
     volatile boolean playing = true;
     private final Thread worker;
     private volatile boolean alive = true;
@@ -44,11 +49,8 @@ final class PreviewPanel extends Panels.Listening {
         JPanel bar = new JPanel(new BorderLayout(6, 0));
         bar.setBackground(PANEL2);
         bar.setBorder(new EmptyBorder(5, 6, 5, 6));
-        source.select(m.liveBefore != null ? 0 : 1);
-        source.onChange(s -> {
-            if (s == Source.IMAGE && picked == null) pickImage();
-            lastKey = null;
-        });
+        source.select(0);
+        source.onChange(s -> lastKey = null);
         bar.add(source, BorderLayout.CENTER);
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         right.setOpaque(false);
@@ -58,7 +60,21 @@ final class PreviewPanel extends Panels.Listening {
             play.setText(playing ? "Pause" : "Play");
         });
         right.add(play);
-        right.add(button("Image...", "Preview over a picture of your own", this::pickImage));
+        time.setOpaque(false);
+        time.setPreferredSize(new Dimension(110, 22));
+        time.setToolTipText("Time of day: 0 sunrise, 6000 noon, 12000 sunset, 18000 midnight (Minecraft ticks)");
+        time.addChangeListener(e -> {
+            PreviewWorld.View v = worldView;
+            if (v != null) worldView = v.at((float) (Math.floorMod(time.getValue() - 6000, 24000) / 24000.0));
+            lastKey = null;
+        });
+        JLabel tl = label("Time", FAINT);
+        right.add(tl);
+        right.add(time);
+        right.add(button("Reload world", "Load the world again (the game saves the place you stand on each time it opens Studio)", () -> {
+            worldView = null;
+            lastKey = null;
+        }));
         bar.add(right, BorderLayout.EAST);
         root.add(bar, BorderLayout.NORTH);
         view = new JComponent() {
@@ -85,28 +101,56 @@ final class PreviewPanel extends Panels.Listening {
             }
         };
         root.add(view, BorderLayout.CENTER);
+        view.setFocusable(true);
+        java.awt.event.MouseAdapter fly = new java.awt.event.MouseAdapter() {
+            @Override public void mousePressed(java.awt.event.MouseEvent e) {
+                dragFrom = e.getPoint();
+                view.requestFocusInWindow();
+            }
+            @Override public void mouseDragged(java.awt.event.MouseEvent e) {
+                PreviewWorld.View v = worldView;
+                if (v == null || dragFrom == null) return;
+                worldView = v.look((e.getX() - dragFrom.x) * 0.3f, (e.getY() - dragFrom.y) * 0.3f);
+                dragFrom = e.getPoint();
+                lastKey = null;
+            }
+            @Override public void mouseWheelMoved(java.awt.event.MouseWheelEvent e) {
+                PreviewWorld.View v = worldView;
+                if (v == null) return;
+                worldView = v.move(-e.getPreciseWheelRotation() * 1.5, 0, 0);
+                lastKey = null;
+            }
+        };
+        view.addMouseListener(fly);
+        view.addMouseMotionListener(fly);
+        view.addMouseWheelListener(fly);
+        view.addKeyListener(new java.awt.event.KeyAdapter() {
+            @Override public void keyPressed(java.awt.event.KeyEvent e) {
+                PreviewWorld.View v = worldView;
+                if (v == null) return;
+                double s = e.isControlDown() ? 2.0 : 0.6;
+                PreviewWorld.View n = switch (e.getKeyCode()) {
+                    case java.awt.event.KeyEvent.VK_W, java.awt.event.KeyEvent.VK_UP -> v.move(s, 0, 0);
+                    case java.awt.event.KeyEvent.VK_S, java.awt.event.KeyEvent.VK_DOWN -> v.move(-s, 0, 0);
+                    case java.awt.event.KeyEvent.VK_A, java.awt.event.KeyEvent.VK_LEFT -> v.move(0, -s, 0);
+                    case java.awt.event.KeyEvent.VK_D, java.awt.event.KeyEvent.VK_RIGHT -> v.move(0, s, 0);
+                    case java.awt.event.KeyEvent.VK_SPACE -> v.move(0, 0, s);
+                    case java.awt.event.KeyEvent.VK_SHIFT -> v.move(0, 0, -s);
+                    default -> null;
+                };
+                if (n != null) {
+                    worldView = n;
+                    lastKey = null;
+                    e.consume();
+                }
+            }
+        });
         info.setFont(UI_S);
         info.setBorder(new EmptyBorder(3, 8, 3, 8));
         root.add(info, BorderLayout.SOUTH);
         worker = new Thread(this::loop, "mosaic-gpu-preview");
         worker.setDaemon(true);
         worker.start();
-    }
-
-    private void pickImage() {
-        JFileChooser fc = new JFileChooser();
-        fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Images", "png", "jpg", "jpeg", "bmp"));
-        if (fc.showOpenDialog(root) != JFileChooser.APPROVE_OPTION) return;
-        try {
-            BufferedImage img = ImageIO.read(fc.getSelectedFile());
-            if (img != null) {
-                picked = fit(img, 960);
-                source.select(2);
-                lastKey = null;
-            }
-        } catch (Exception e) {
-            model.say("Could not read the picture: " + e.getMessage(), BAD);
-        }
     }
 
     static BufferedImage fit(BufferedImage img, int maxW) {
@@ -119,42 +163,6 @@ final class PreviewPanel extends Panels.Listening {
         return out;
     }
 
-    private static BufferedImage scene;
-
-    /** A small daylight scene: sky with sun, hills, water, grass and a few blocks. */
-    static synchronized BufferedImage testScene() {
-        if (scene != null) return scene;
-        int w = 640, h = 360;
-        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = img.createGraphics();
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setPaint(new GradientPaint(0, 0, new Color(0x4F86D9), 0, h * 0.6f, new Color(0xCFE3FF)));
-        g.fillRect(0, 0, w, h);
-        g.setPaint(new RadialGradientPaint(new Point(470, 70), 90, new float[] {0f, 0.2f, 1f},
-            new Color[] {new Color(255, 250, 220), new Color(255, 236, 180, 200), new Color(255, 236, 180, 0)}));
-        g.fillOval(380, -20, 180, 180);
-        g.setColor(new Color(0x7E9CB8));
-        g.fillPolygon(new int[] {0, 120, 260, 400, 520, 640, 640, 0}, new int[] {210, 160, 195, 150, 185, 165, 230, 230}, 8);
-        g.setColor(new Color(0x3F6FA8));
-        g.fillRect(0, 225, w, 40);
-        g.setColor(new Color(255, 255, 255, 70));
-        for (int i = 0; i < 40; i++) g.fillRect((i * 97) % w, 230 + (i * 13) % 30, 18, 2);
-        g.setColor(new Color(0x5D8C3A));
-        g.fillRect(0, 262, w, h - 262);
-        g.setColor(new Color(0x4E7A30));
-        for (int x = 0; x < w; x += 16) for (int y = 262; y < h; y += 16) if (((x + y) / 16) % 3 == 0) g.fillRect(x, y, 16, 16);
-        int[][] blocks = {{90, 214, 0x8A6A4A}, {106, 214, 0x8A6A4A}, {98, 198, 0x6B8F3A}, {420, 230, 0x9A9A9A}, {436, 230, 0x9A9A9A}, {436, 214, 0xE8C14A}};
-        for (int[] b : blocks) {
-            g.setColor(new Color(b[2]));
-            g.fillRect(b[0], b[1] + 32, 16, 16);
-            g.setColor(new Color(b[2]).darker());
-            g.drawRect(b[0], b[1] + 32, 15, 15);
-        }
-        g.dispose();
-        scene = img;
-        return img;
-    }
-
     private void loop() {
         while (alive) {
             try {
@@ -164,11 +172,17 @@ final class PreviewPanel extends Panels.Listening {
                 }
                 var c = model.compile;
                 Source s = source.getSelectedItem();
-                BufferedImage input = switch (s) {
-                    case GAME -> model.liveBefore != null ? fit(model.liveBefore, 960) : null;
-                    case IMAGE -> picked;
-                    default -> testScene();
-                };
+                PreviewWorld.View wv = null;
+                BufferedImage input = null;
+                if (s == Source.WORLD) {
+                    if (worldView == null) {
+                        var snap = PreviewWorld.load(StudioLibrary.gameDir(model));
+                        worldView = PreviewWorld.View.of(snap);
+                        int ticks = Math.floorMod(Math.round(snap.timeOfDay() * 24000) + 6000, 24000);
+                        SwingUtilities.invokeLater(() -> time.setValue(ticks));
+                    }
+                    wv = worldView;
+                } else input = model.liveBefore != null ? fit(model.liveBefore, 960) : null;
                 if (model.rendererDoc()) {
                     show(null, "Renderer graphs set up Bedray itself: they apply in the game (Result shows its frames)");
                     Thread.sleep(400);
@@ -179,8 +193,8 @@ final class PreviewPanel extends Panels.Listening {
                     Thread.sleep(400);
                     continue;
                 }
-                if (input == null) {
-                    show(null, s == Source.GAME ? "No game frame yet: use Test scene, or run the game with this pack" : "Choose an image");
+                if (input == null && wv == null) {
+                    show(null, "No game frame yet: use World, or run the game with this pack");
                     Thread.sleep(300);
                     continue;
                 }
@@ -196,7 +210,8 @@ final class PreviewPanel extends Panels.Listening {
                     continue;
                 }
                 var runs = model.passRuns;
-                Object key = java.util.List.of(System.identityHashCode(c), System.identityHashCode(input), s, System.identityHashCode(runs));
+                Object key = java.util.List.of(System.identityHashCode(c), System.identityHashCode(input), s, System.identityHashCode(runs),
+                    System.identityHashCode(wv));
                 if (!playing && key.equals(lastKey)) {
                     Thread.sleep(120);
                     continue;
@@ -220,7 +235,8 @@ final class PreviewPanel extends Panels.Listening {
                 BufferedImage out;
                 try {
                     float t = (System.nanoTime() - start) / 1e9f;
-                    out = runs != null ? gpu.runChain(runs, input, t, frame++, extras()) : gpu.run(c.spirv(), input, t, frame++, extras());
+                    var list = runs != null ? runs : java.util.List.of(new GpuPreview.PassRun(c.spirv(), 1, -1));
+                    out = gpu.runChain(list, input, t, frame++, extras(), wv);
                 } catch (UnsupportedOperationException e) {
                     show(null, e.getMessage());
                     Thread.sleep(500);
@@ -229,8 +245,10 @@ final class PreviewPanel extends Panels.Listening {
                 long ms = (System.nanoTime() - t0) / 1_000_000;
                 show(out, null);
                 int passes = runs == null ? 1 : runs.size();
+                String where = wv == null ? "game frame (no depth)" : PreviewWorld.fromGame(wv.world())
+                    ? "world from the game" : "built-in world (open Studio from the game for yours)";
                 SwingUtilities.invokeLater(() -> info.setText(gpu.deviceName + "   -   " + out.getWidth() + "x" + out.getHeight() + "   -   "
-                    + (passes > 1 ? passes + " passes, " : "") + ms + " ms"));
+                    + (passes > 1 ? passes + " passes, " : "") + ms + " ms   -   " + where));
                 Thread.sleep(Math.max(15, 50 - ms));
             } catch (InterruptedException e) {
                 return;

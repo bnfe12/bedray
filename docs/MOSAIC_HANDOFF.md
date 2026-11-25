@@ -46,7 +46,7 @@ Core (pure Java, `shaderhost/mosaic`):
 * `MosaicEval` - CPU twins of pure nodes (folding). **Noise has no CPU twin yet** (needed for material baking).
 * `MosaicFunction` (user nodes, GLSL-like signature), `MosaicEffects` (built-in effect/rendering/shading library,
   each a readable function), `MosaicTemplates`, `MosaicShaderCheck` (host-identical shaderc compile + error mapping,
-  returns SPIR-V), `MosaicWorld` (world volume: 48x32x48 cells, 16 bit = material | blockLight<<8 | skyLight<<12,
+  returns SPIR-V), `MosaicWorld` (world volume: 96x48x96 cells, 16 bit = material | blockLight<<8 | skyLight<<12,
   binding **15**, header ivec4 originRel / vec4 camFrac / ivec4 size), `MosaicArrange`, `MosaicCatalog`, keymap/prefs
   of the in-game screen.
 
