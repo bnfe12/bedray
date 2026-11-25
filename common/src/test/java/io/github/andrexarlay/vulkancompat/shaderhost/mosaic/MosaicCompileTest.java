@@ -42,7 +42,7 @@ class MosaicCompileTest {
                 case V4 -> "color";
                 case V2 -> "uv";
                 case V3 -> "rgb";
-                case F -> "half";
+                case F, S -> "half";
             };
             inputs.append('"').append(p.name()).append("\": \"").append(src).append('"');
         }

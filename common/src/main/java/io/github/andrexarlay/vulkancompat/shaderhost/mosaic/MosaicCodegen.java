@@ -294,6 +294,7 @@ public final class MosaicCodegen {
             case V3 -> v4 + "(" + expr + ", 1.0)";
             case V2 -> v4 + "(" + expr + ", 0.0, 1.0)";
             case F -> v4 + "(" + v3 + "(" + expr + "), 1.0)";
+            case S -> throw new IllegalStateException("a Slang value cannot be shown as a colour");
         };
     }
 

@@ -33,13 +33,15 @@ public final class MosaicGraph {
 
     /** Port data kinds, ordered so {@code ordinal()} compares width. */
     public enum Kind {
-        F, V2, V3, V4;
+        F, V2, V3, V4,
+        /** A Slang value that is not a float vector (a struct such as SurfaceHit, a matrix, a call token): connects only to its own type. */
+        S;
 
-        public int size() { return ordinal() + 1; }
+        public int size() { return this == S ? 0 : ordinal() + 1; }
 
-        public String glsl() { return switch (this) { case F -> "float"; case V2 -> "vec2"; case V3 -> "vec3"; case V4 -> "vec4"; }; }
+        public String glsl() { return switch (this) { case F -> "float"; case V2 -> "vec2"; case V3 -> "vec3"; case V4 -> "vec4"; case S -> "void"; }; }
 
-        public String slang() { return switch (this) { case F -> "float"; case V2 -> "float2"; case V3 -> "float3"; case V4 -> "float4"; }; }
+        public String slang() { return switch (this) { case F -> "float"; case V2 -> "float2"; case V3 -> "float3"; case V4 -> "float4"; case S -> "void"; }; }
 
         public static Kind ofSize(int n) { return values()[Math.clamp(n, 1, 4) - 1]; }
 
@@ -70,7 +72,9 @@ public final class MosaicGraph {
     }
 
     /** One port of one node type. */
-    public record Port(String name, Kind kind, boolean required) {}
+    public record Port(String name, Kind kind, boolean required, String slangType) {
+        public Port(String name, Kind kind, boolean required) { this(name, kind, required, null); }
+    }
 
     public enum Severity { ERROR, WARNING, HINT }
 
@@ -151,10 +155,14 @@ public final class MosaicGraph {
 
     /** The output node of a shader graph ({@code mosaic.output}) or of a material graph ({@code mat.output}). */
     public static boolean isOutput(String type) {
-        return type.equals("mosaic.output") || type.equals("mat.output") || type.equals(MosaicRenderer.OUTPUT) || type.equals("slang.pack");
+        return type.equals("mosaic.output") || type.equals("mat.output") || type.equals(MosaicRenderer.OUTPUT) || type.equals("slang.pack")
+            || type.equals(MosaicSlangGraph.RESULT);
     }
 
     /** The Slang pack map (output {@code slang.pack}): a view of Bedray's modules, never compiled. */
+    /** A Bedray function graph (output {@code slang.result}): compiles to a Slang function, not a pass. */
+    public boolean isFunctionGraph() { return node(outputId) != null && node(outputId).type().equals(MosaicSlangGraph.RESULT); }
+
     public boolean isPackMap() { return node(outputId) != null && node(outputId).type().equals("slang.pack"); }
 
     /** A renderer graph (output {@code bedray.output}): Bedray's own stages and settings, never compiled into a shader. */
@@ -252,12 +260,21 @@ public final class MosaicGraph {
 
     /** Extra named outputs of a node type, in socket order (the primary output has no name). */
     public static List<String> namedOutputs(String type) {
+        if (MosaicSlangGraph.handles(type)) {
+            List<String> out = new ArrayList<>();
+            for (MosaicSlangGraph.SPort p : MosaicSlangGraph.outputs(type, null)) if (!p.name().isEmpty()) out.add(p.name());
+            return out;
+        }
         Map<String, Kind> m = NAMED.get(type);
         return m == null ? List.of() : List.copyOf(m.keySet());
     }
 
     /** Kind of a named output, or null when the type has no such output. */
     public static Kind outputKind(String type, String name) {
+        if (MosaicSlangGraph.handles(type)) {
+            MosaicSlangGraph.SPort p = MosaicSlangGraph.output(type, null, name);
+            return p == null ? null : p.kind();
+        }
         Map<String, Kind> m = NAMED.get(type);
         return m == null ? null : m.get(name);
     }
@@ -288,13 +305,18 @@ public final class MosaicGraph {
             for (MosaicFunction.Param p : f.params()) out.add(new Port(p.name(), p.kind(), p.required()));
             return out;
         }
+        if (MosaicSlangGraph.handles(type)) {
+            List<Port> out = new ArrayList<>();
+            for (MosaicSlangGraph.SPort p : MosaicSlangGraph.inputs(type, null)) out.add(p.port());
+            return out;
+        }
         return portsOf(type);
     }
 
     /** All built-in node types for editors and catalogs. */
     public static Set<String> knownTypes() { return KNOWN; }
 
-    public static boolean isKnown(String type) { return KNOWN.contains(type); }
+    public static boolean isKnown(String type) { return KNOWN.contains(type) || MosaicSlangGraph.handles(type) && MosaicSlangGraph.isKnown(type); }
 
     /** Node types whose single input passes any numeric kind through unchanged (scalar-safe GLSL unaries). */
     private static final Set<String> PASS_THROUGH = Set.of(
@@ -427,9 +449,10 @@ public final class MosaicGraph {
             String outType = outputId == null ? null : nodes.get(outputId).type();
             boolean renderer = MosaicRenderer.OUTPUT.equals(outType);
             for (Node n : nodes.values()) {
-                if (renderer && !n.type().startsWith("bedray.") && !n.type().equals("mosaic.reroute"))
+                boolean stage = MosaicRenderer.stage(n.type()) != null || n.type().equals(MosaicRenderer.OUTPUT);
+                if (renderer && !stage && !n.type().equals("mosaic.reroute") && !MosaicFunction.isFunctionType(n.type()))
                     error(n.id(), null, "node " + n.id() + " (" + n.type() + ") is a shader node: a renderer graph wires Bedray's stages", Fix.DELETE_NODE);
-                if (!renderer && outType != null && n.type().startsWith("bedray."))
+                if (!renderer && outType != null && stage)
                     error(n.id(), null, "node " + n.id() + " is a Bedray renderer stage: it belongs to the Renderer workspace", Fix.DELETE_NODE);
             }
             if (renderer) checkRenderer();
@@ -629,7 +652,7 @@ public final class MosaicGraph {
                 error(id, null, "node " + id + ": needs a string field type", Fix.NONE);
                 type = "?";
                 ok = false;
-            } else if (MosaicFunction.isFunctionType(type) ? !functions.containsKey(MosaicFunction.nameOf(type)) : !KNOWN.contains(type)) {
+            } else if (MosaicFunction.isFunctionType(type) ? !functions.containsKey(MosaicFunction.nameOf(type)) : !isKnown(type)) {
                 error(id, null, "node " + id + ": unknown type " + type
                     + (MosaicFunction.isFunctionType(type) ? " (no function " + MosaicFunction.nameOf(type) + " in this file)" : ""),
                     Fix.DELETE_NODE);
@@ -875,6 +898,11 @@ public final class MosaicGraph {
                 case "mosaic.mix", "mosaic.clamp", "mosaic.neg", "mosaic.floor", "mosaic.fract", "mosaic.sqrt",
                      "mosaic.exp", "mosaic.abs", "mosaic.saturate", "mosaic.normalize" -> operand(n, "a", visiting);
                 default -> {
+                    if (MosaicSlangGraph.handles(n.type())) {
+                        for (String port : n.inputs().keySet()) operand(n, port, visiting);
+                        List<MosaicSlangGraph.SPort> outs = MosaicSlangGraph.outputs(n.type(), n.mask());
+                        yield outs.isEmpty() ? Kind.S : outs.get(0).kind();
+                    }
                     if (MosaicFunction.isFunctionType(n.type())) {
                         MosaicFunction f = functions.get(MosaicFunction.nameOf(n.type()));
                         // touch inputs so their own problems are found; the output kind comes from the signature
@@ -944,8 +972,25 @@ public final class MosaicGraph {
                 }
             }
             if (s == null) return; // unknown upstream: its own problem is already reported
-            Kind want = acceptedKind(n.type(), port, functions);
-            if (isOutput(n.type()) || n.type().equals("mosaic.pass")) {
+            MosaicSlangGraph.SPort slangIn = MosaicSlangGraph.handles(n.type()) ? MosaicSlangGraph.input(n.type(), n.mask(), port) : null;
+            if (s == Kind.S || slangIn != null && slangIn.kind() == Kind.S) {
+                String have = MosaicSlangGraph.handles(source.type())
+                    ? java.util.Optional.ofNullable(MosaicSlangGraph.output(source.type(), source.mask(), parts[1])).map(MosaicSlangGraph.SPort::slangType).orElse("?")
+                    : s.slang();
+                MosaicSlangGraph.SPort in = MosaicSlangGraph.handles(n.type()) ? MosaicSlangGraph.input(n.type(), n.mask(), port) : null;
+                String wantType = in == null ? null : in.slangType();
+                if (wantType == null) {
+                    error(n.id(), port, "node " + n.id() + ": port " + port + " takes a number, found a Slang " + have
+                        + " (break it into fields first)", Fix.CONVERT);
+                } else if (!wantType.equals(have)) {
+                    error(n.id(), port, "node " + n.id() + ": port " + port + " takes " + wantType + ", found " + have, Fix.CONVERT);
+                }
+                return;
+            }
+            Kind want = slangIn != null ? slangIn.kind() : acceptedKind(n.type(), port, functions);
+            if (n.type().equals(MosaicSlangGraph.RESULT) || n.type().equals(MosaicSlangGraph.OUT)) {
+                // a function graph converts numbers to the declared type (float -> float3 splats, vectors pad or cut)
+            } else if (isOutput(n.type()) || n.type().equals("mosaic.pass")) {
                 // float, vec2, vec3 and vec4 all widen to the stored color
             } else if (want != null && s != want) {
                 error(n.id(), port, "node " + n.id() + ": port " + port + " takes " + label(want) + ", found "
@@ -1069,7 +1114,8 @@ public final class MosaicGraph {
     }
 
     private static String label(Kind k) {
-        return switch (k) { case F -> "a float"; case V2 -> "a vec2"; case V3 -> "a vec3"; case V4 -> "a vec4"; };
+        if (k == Kind.S) return "a Slang value";
+        return switch (k) { case F -> "a float"; case V2 -> "a vec2"; case V3 -> "a vec3"; case V4 -> "a vec4"; case S -> "a Slang value"; };
     }
 
     // ------------------------------------------------------------------ order
