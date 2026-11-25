@@ -214,6 +214,22 @@ public final class MosaicEffects {
             vec3 c = albedo * light;
             if (m == 2.0 || m == 13.0) c += albedo * 1.5;
             return vec4(c, 1.0);""");
+        add("Rendering", "vec4 voxelSunShadow(vec4 color, vec2 uv, float darkness = 0.55, float maxDistance = 64)",
+            "Sun shadows (voxels)", "Shadows of the sun (the moon at night) traced through the world volume on top of"
+                + " the image: works with every renderer, no ray tracing hardware needed. Caves keep their own darkness.", """
+            float t = mosaicDepth(uv);
+            if (t >= 1.0e5) return color;
+            vec3 n = mosaicNormal(uv), n2;
+            float m2;
+            vec3 L = mosaicSunDir();
+            if (L.y < 0.0) L = -L;
+            float lit = 0.0;
+            if (dot(n, L) > 0.0) {
+                vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * 0.02;
+                lit = mosaicVoxelTrace(p, L, maxDistance, n2, m2) < 0.0 ? 1.0 : 0.0;
+            }
+            float k = darkness * clamp(mosaicHitSkyLight(uv), 0.0, 1.0);
+            return vec4(color.rgb * mix(1.0 - k, 1.0, lit), color.a);""");
         add("Rendering", "vec4 pathTraceGI(vec4 color, vec2 uv, float samples = 2, float bounces = 2, float strength = 1, float maxDistance = 32)",
             "Path-traced GI", "Bounces light through the world volume (voxel paths with sun, sky and torches) and adds"
                 + " it to the image. Noisy: more samples cost more.", """
@@ -304,6 +320,18 @@ public final class MosaicEffects {
             return mosaicSky(normalize(dir));""");
         add("Shading", "vec3 materialColor(float material)", "Material color", "Typical color of a material class.", """
             return mosaicAlbedo(material);""");
+        add("Shading", "float sunVisibility(vec2 uv, float maxDistance = 64)", "Sun visibility (voxels)",
+            "1 where the sun (the moon at night) reaches the pixel's surface, 0 in shadow: a ray through the world"
+                + " volume, so it works without hardware ray tracing (raster depth included).", """
+            float t = mosaicDepth(uv);
+            if (t >= 1.0e5) return 1.0;
+            vec3 n = mosaicNormal(uv), n2;
+            float m2;
+            vec3 L = mosaicSunDir();
+            if (L.y < 0.0) L = -L;
+            if (dot(n, L) <= 0.0) return 0.0;
+            vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * 0.02;
+            return mosaicVoxelTrace(p, L, maxDistance, n2, m2) < 0.0 ? 1.0 : 0.0;""");
         add("Shading", "float voxelDistance(vec3 origin, vec3 dir, float maxDistance = 96)", "Voxel distance",
             "Distance along a ray to the first solid block of the world volume (-1 = none).", """
             vec3 n;

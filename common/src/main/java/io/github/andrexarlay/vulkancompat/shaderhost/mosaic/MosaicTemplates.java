@@ -67,6 +67,8 @@ public final class MosaicTemplates {
         ALL.add(new Template("Winter", "World", "Snow sparkle and cold fog.", chain("snowSparkle", "depthFog")));
         ALL.add(new Template("Ray-traced sky shadow", "Ray tracing", "One ray per pixel toward the sky darkens"
             + " covered areas.", chain("skyShadow")));
+        ALL.add(new Template("Sun shadows (no RT)", "Rendering", "Sun and moon shadows traced through the world volume over"
+            + " the game's own image, with a grade: shadows on any GPU.", chain("voxelSunShadow", "colorGrade")));
         ALL.add(new Template("Voxel world", "Rendering", "Draws the world volume by itself: works with every renderer,"
             + " no ray tracing hardware needed.", chain("voxelRender")));
         ALL.add(new Template("Voxel path-traced GI", "Rendering", "Light bounces between blocks on top of the image.",
