@@ -217,6 +217,13 @@ public final class StudioSettings {
     /** Saved preview cameras: name -> x, y, z, yaw, pitch, time of day (0 noon). Keys 1..9 recall them. */
     public java.util.Map<String, double[]> previewViews = new java.util.LinkedHashMap<>();
 
+    /** The start screen (projects) when Studio starts without a file. */
+    public boolean showStartScreen = true;
+    /** Where new projects go when the game folder is unknown (empty: ~/.bedray/projects). */
+    public String projectsDir = "";
+    /** Author written into new projects' cards. */
+    public String projectAuthor = "";
+
     /** Last files of each workspace. */
     public String lastShader = "", lastMaterial = "";
     /** What an AI agent may do through the mosaic command (Settings > Agent). Off until the user turns it on. */
@@ -312,6 +319,8 @@ public final class StudioSettings {
         previewDaySpeed = Math.clamp(previewDaySpeed, 0, 2400);
         if (previewViews == null) previewViews = new java.util.LinkedHashMap<>();
         if (previewWorld == null) previewWorld = "";
+        if (projectsDir == null) projectsDir = "";
+        if (projectAuthor == null) projectAuthor = "";
         previewFarSize = Math.clamp(previewFarSize, 0, 1024);
         previewBiomeTemperature = Math.clamp(previewBiomeTemperature, -1.0, 2.0);
         previewBiomeDownfall = Math.clamp(previewBiomeDownfall, 0.0, 1.0);

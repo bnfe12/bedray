@@ -146,7 +146,8 @@ final class ShaderBrowser extends Panels.Listening {
             Path graph = p.resolve("shaders/bedray/mosaic.json");
             if (Files.exists(graph)) {
                 Path studio = p.resolve("shaders/bedray/.studio");
-                Path thumb = Files.exists(studio.resolve("after.png")) ? studio.resolve("after.png") : null;
+                Path thumb = Files.exists(p.resolve("pack.png")) ? p.resolve("pack.png") : Files.exists(studio.resolve("thumbnail.png"))
+                    ? studio.resolve("thumbnail.png") : Files.exists(studio.resolve("after.png")) ? studio.resolve("after.png") : null;
                 return new Pack(name, p, Kind.MOSAIC, graph, thumb);
             }
             if (Files.isDirectory(p.resolve("shaders"))) return new Pack(name, p, Kind.IRIS, null, null);

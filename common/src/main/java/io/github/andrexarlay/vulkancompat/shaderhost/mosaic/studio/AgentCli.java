@@ -110,6 +110,12 @@ public final class AgentCli {
           mosaic mute <graph.json> <id> [true|false]
           mosaic arrange <graph.json>
           mosaic bake <material.mosaic.json> <texture.png> <out-folder>   LabPBR _s / _n (+ colour)
+        Projects (a shader pack folder with its card: name, description, picture, GitHub)
+          mosaic project new <folder> [--name N] [--description D] [--template T] [--github [--license MIT]]
+          mosaic project list | info <folder> | card <folder> [--name ..] [--description ..] [--picture file.png] [--version ..] [--github url]
+          mosaic project github <folder> [--license L] [--overwrite]   README, release workflow, .gitignore, licence
+          mosaic project refresh <folder>             git pull and the description / topics from GitHub
+          mosaic project clone <owner/repo> <into>    a Mosaic project from GitHub (publishing: Studio > File > This project)
         Rendering and Bedray hooks (for people and agents)
           mosaic render <graph.json> <out.png> [--time ticks] [--pitch deg] [--yaw deg] [--pos x,y,z] [--size WxH] [--frames N] [--world file|save folder] [--profile]
                                                      the graph over the preview world, headless, to a PNG
@@ -184,6 +190,9 @@ public final class AgentCli {
                 if (json) out.println(GSON.toJson(rows));
                 else for (Map<String, Object> r : rows) out.println(r.get("type") + "  (" + r.get("label") + ", " + r.get("category") + ")  " + r.get("ports"));
                 return 0;
+            }
+            case "project" -> {
+                return project(a);
             }
             case "graph-settings" -> {
                 return graphSettings(a);
@@ -415,6 +424,89 @@ public final class AgentCli {
         for (String m : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.check(d.settings)) out.println("warning: " + m);
         say(s.key() + " = " + nums(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(d.settings, s)));
         return 0;
+    }
+
+    /** mosaic project new|info|card|github|publish|refresh|clone ... */
+    private int project(List<String> a) throws Exception {
+        String sub = a.size() > 1 ? a.get(1) : "";
+        switch (sub) {
+            case "new" -> {
+                need(Need.GRAPHS);
+                if (a.size() < 3) return usage();
+                Path dir = Path.of(a.get(2));
+                String tname = opt(a, "--template", "Minecraft by parts");
+                var t = MosaicTemplates.all().stream().filter(x -> x.name().equalsIgnoreCase(tname)).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("no template " + tname));
+                ProjectInfo p = ProjectInfo.create(dir, opt(a, "--name", dir.getFileName().toString()), opt(a, "--description", ""), t.json());
+                p.author = opt(a, "--author", settings.projectAuthor);
+                p.save();
+                if (a.contains("--github")) ProjectGit.prepare(p, opt(a, "--license", null), false);
+                say("created project " + p.name + " in " + dir);
+                return 0;
+            }
+            case "info" -> {
+                need(Need.READ);
+                ProjectInfo p = ProjectInfo.load(Path.of(a.get(2)));
+                if (json) out.println(GSON.toJson(p.summary()));
+                else p.summary().forEach((k, v) -> out.println(k + ": " + v));
+                return 0;
+            }
+            case "list" -> {
+                need(Need.READ);
+                StudioUi.settings = settings;
+                Path gd = settings.gameDir == null || settings.gameDir.isBlank() ? null : Path.of(settings.gameDir);
+                var ps = ProjectInfo.known(gd);
+                if (json) out.println(GSON.toJson(ps.stream().map(ProjectInfo::summary).toList()));
+                else for (ProjectInfo p : ps) out.println(p.name + "  -  " + p.dir + (p.description.isBlank() ? "" : "\n    " + p.description));
+                return 0;
+            }
+            case "card" -> {
+                need(Need.GRAPHS);
+                ProjectInfo p = ProjectInfo.load(Path.of(a.get(2)));
+                for (String k : List.of("name", "description", "author", "version", "github", "license")) {
+                    String v = opt(a, "--" + k, null);
+                    if (v == null) continue;
+                    switch (k) {
+                        case "name" -> p.name = v;
+                        case "description" -> p.description = v;
+                        case "author" -> p.author = v;
+                        case "version" -> p.version = v;
+                        case "github" -> p.github = v;
+                        default -> p.license = v;
+                    }
+                }
+                String pic = opt(a, "--picture", null);
+                if (pic != null) {
+                    java.awt.image.BufferedImage img = ImageIO.read(Path.of(pic).toFile());
+                    if (img == null) throw new IllegalArgumentException("cannot read " + pic);
+                    p.setPicture(img);
+                }
+                p.save();
+                say("card of " + p.name + " saved");
+                return 0;
+            }
+            case "github" -> {
+                need(Need.GRAPHS);
+                ProjectInfo p = ProjectInfo.load(Path.of(a.get(2)));
+                for (Path w : ProjectGit.prepare(p, opt(a, "--license", null), a.contains("--overwrite"))) out.println("wrote " + w);
+                return 0;
+            }
+            case "refresh" -> {
+                need(Need.GRAPHS);
+                ProjectGit.refresh(ProjectInfo.load(Path.of(a.get(2))), out::println);
+                return 0;
+            }
+            case "clone" -> {
+                need(Need.GRAPHS);
+                if (a.size() < 4) return usage();
+                ProjectInfo p = ProjectGit.cloneInto(a.get(2), Path.of(a.get(3)), out::println);
+                say("cloned " + p.name + " into " + p.dir);
+                return 0;
+            }
+            default -> {
+                return usage();
+            }
+        }
     }
 
     private static String nums(double[] v) {

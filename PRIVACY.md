@@ -34,8 +34,12 @@ Scrubbing is automatic but not perfect: read the report before posting and remov
 
 ## Mosaic Studio
 
-Mosaic Studio, the node editor app, makes **no network requests**. It has no telemetry, no account and no update check.
+Mosaic Studio, the node editor app, makes **no network requests on its own**. It has no telemetry, no account and no update
+check. Only the GitHub actions you start yourself (File > This project > Publish to / Update from GitHub, Clone from
+GitHub on the start screen, `mosaic project clone / refresh`) reach the network: they run your own `git` and `gh`, and
+Update reads the public description and topics of the project's repository (api.github.com) when `gh` is not installed.
 
+* **Reads** your worlds when you pick one in Preview > World (region files of the save, read only).
 * **Reads** (never changes): Minecraft launcher folders (official launcher, Prism / MultiMC / PolyMC, CurseForge, Modrinth App,
   ATLauncher, GDLauncher) and Gradle caches, to list game instances, client jars, resource packs and mods for the texture
   library. Only file names, versions and the textures you open are read.

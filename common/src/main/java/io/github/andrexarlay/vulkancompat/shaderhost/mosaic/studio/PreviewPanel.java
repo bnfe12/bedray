@@ -548,6 +548,22 @@ final class PreviewPanel extends Panels.Listening {
             model.say("Copied the preview frame (" + img.getWidth() + "x" + img.getHeight() + ")", MUTED);
         });
         m.add(copy);
+        JMenuItem proj = new JMenuItem("Use as the project picture");
+        proj.addActionListener(e -> {
+            java.nio.file.Path pack = ProjectInfo.packOf(model.doc.file);
+            BufferedImage img = shown;
+            if (pack == null || img == null) {
+                model.say("Open a project (a pack's mosaic.json) to give it a picture", WARN);
+                return;
+            }
+            try {
+                ProjectInfo.load(pack).setPicture(img);
+                model.say("The project picture is now this frame (pack.png)", OK);
+            } catch (Exception ex) {
+                model.say("Could not save the picture: " + ex.getMessage(), BAD);
+            }
+        });
+        m.add(proj);
         m.addSeparator();
         JMenuItem keep = new JMenuItem("Keep as A (compare)");
         keep.addActionListener(e -> keepReference());
@@ -843,7 +859,11 @@ final class PreviewPanel extends Panels.Listening {
         return extras;
     }
 
+    /** The last frame any preview drew (File > This project > Use the preview frame as the project picture, thumbnails). */
+    static volatile BufferedImage lastFrame;
+
     private void show(BufferedImage img, String msg) {
+        if (img != null) lastFrame = img;
         shown = img;
         message = msg;
         SwingUtilities.invokeLater(view::repaint);

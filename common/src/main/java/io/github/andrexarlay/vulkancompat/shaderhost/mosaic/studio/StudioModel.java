@@ -916,6 +916,24 @@ final class StudioModel {
         settle.restart();
     }
 
+    /** A project without a picture gets the preview's last frame as its thumbnail (.studio/thumbnail.png), once a minute at most. */
+    private long thumbAt;
+
+    private void thumbnail() {
+        java.awt.image.BufferedImage img = PreviewPanel.lastFrame;
+        Path pack = ProjectInfo.packOf(doc.file);
+        if (img == null || pack == null || System.currentTimeMillis() - thumbAt < 60_000) return;
+        if (Files.exists(pack.resolve("pack.png"))) return;
+        thumbAt = System.currentTimeMillis();
+        try {
+            Path t = pack.resolve("shaders/bedray/.studio/thumbnail.png");
+            Files.createDirectories(t.getParent());
+            ImageIO.write(PreviewPanel.fit(img, 480), "png", t.toFile());
+        } catch (Exception ignored) {
+            // a thumbnail is a convenience
+        }
+    }
+
     /** File > Open recent and the command palette list this file first. */
     void rememberRecent(Path p) {
         if (StudioUi.settings == null || p == null) return;
@@ -1583,6 +1601,7 @@ final class StudioModel {
                 say("Saved " + doc.file, StudioUi.OK);
                 rememberRecent(doc.file);
             } else fire();
+            thumbnail();
             return true;
         } catch (Exception e) {
             say("Save failed: " + e.getMessage(), StudioUi.BAD);

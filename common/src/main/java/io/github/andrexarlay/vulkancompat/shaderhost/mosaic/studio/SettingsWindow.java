@@ -370,6 +370,21 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.row("Minimap width", "Pixels at most (and a third of the canvas)", slider(80, 600, draft.minimapWidth, v -> draft.minimapWidth = v));
         f.row("Minimap height", null, slider(50, 400, draft.minimapHeight, v -> draft.minimapHeight = v));
         f.wide(check("Fit the view to the graph when a graph or template is opened", draft.fitOnOpen, v -> draft.fitOnOpen = v));
+        f.section("Projects");
+        f.wide(check("Start on the projects screen (when Studio opens without a file)", draft.showStartScreen, v -> draft.showStartScreen = v));
+        JTextField author = field(draft.projectAuthor);
+        author.getDocument().addDocumentListener(onText(() -> {
+            draft.projectAuthor = author.getText().trim();
+            changed();
+        }));
+        f.row("Author", "Written into the card of new projects (and their README / licence)", author);
+        JTextField pdir = field(draft.projectsDir);
+        pdir.setToolTipText(ProjectInfo.projectsHome().toString());
+        pdir.getDocument().addDocumentListener(onText(() -> {
+            draft.projectsDir = pdir.getText().trim();
+            changed();
+        }));
+        f.row("Projects folder", "Where new projects go when the game folder is unknown (empty: ~/.bedray/projects)", pdir);
         f.section("Compiling");
         f.row("Compile after an edit (ms)", "Pause after the last change before the graph is compiled, saved and sent to the game",
             slider(100, 3000, draft.compileDelayMs, v -> draft.compileDelayMs = v));

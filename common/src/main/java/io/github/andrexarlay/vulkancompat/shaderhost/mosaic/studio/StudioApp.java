@@ -286,6 +286,32 @@ final class StudioApp {
             run(StudioKeys.Action.SAVE);
             if (model.doc.file == null) model.doc.file = keep;
         }));
+        f.add(item("Projects (start screen)...", () -> new StartScreen(p -> { if (p != null) openFile(p); }, false).setVisible(true)));
+        f.add(item("New project...", () -> {
+            Path dir = StartScreen.newProjectDialog(main, projectHome());
+            if (dir != null) openFile(ProjectInfo.graphOf(dir));
+        }));
+        JMenu project = menu("This project");
+        project.add(item("Project card (name, description, picture)...", () -> withProject(p -> StartScreen.editCard(main, p))));
+        project.add(item("Use the preview frame as the project picture", () -> withProject(p -> {
+            java.awt.image.BufferedImage img = PreviewPanel.lastFrame;
+            if (img == null) {
+                model.say("No preview frame yet: open the Preview first", WARN);
+                return;
+            }
+            try {
+                p.setPicture(img);
+                model.say("The project picture is pack.png in " + p.dir, OK);
+            } catch (Exception e) {
+                model.say("Could not save the picture: " + e.getMessage(), BAD);
+            }
+        })));
+        project.addSeparator();
+        project.add(item("Prepare for GitHub...", () -> withProject(p -> StartScreen.prepareDialog(main, p))));
+        project.add(item("Publish to GitHub...", () -> withProject(p -> StartScreen.publishDialog(main, p, null))));
+        project.add(item("Update from GitHub", () -> withProject(p -> StartScreen.runLogged(main, "Update from GitHub", out -> ProjectGit.refresh(p, out),
+            () -> openFile(ProjectInfo.graphOf(p.dir))))));
+        f.add(project);
         f.add(item("Export generated shader...", this::exportCode));
         f.add(item("Run Minecraft with this pack", this::runGame));
         f.addSeparator();
@@ -427,6 +453,21 @@ final class StudioApp {
             && dir.getParent().getParent() != null && dir.getParent().getParent().getFileName() != null)
             return name + "  -  " + dir.getParent().getParent().getFileName();
         return name + (dir != null && dir.getFileName() != null ? "  -  " + dir.getFileName() : "");
+    }
+
+    /** The project the open graph belongs to (its pack folder), or a message. */
+    private void withProject(java.util.function.Consumer<ProjectInfo> job) {
+        Path pack = ProjectInfo.packOf(model.doc.file);
+        if (pack == null) {
+            model.say("This graph is not in a project folder (<pack>/shaders/bedray/mosaic.json): File > New project... makes one", WARN);
+            return;
+        }
+        job.accept(ProjectInfo.load(pack));
+    }
+
+    private Path projectHome() {
+        Path g = StudioLibrary.gameDir(model);
+        return g != null ? g.resolve("shaderpacks") : ProjectInfo.projectsHome();
     }
 
     void openFile(Path p) {
@@ -1369,6 +1410,21 @@ final class StudioApp {
         UIManager.setLookAndFeel(UIManager.getCrossPlatformLookAndFeelClassName());
         StudioSettings s = StudioSettings.load();
         StudioUi.apply(s);
+        if (args.length == 0 && s.showStartScreen && !embedded() && System.getProperty("mosaic.selfshot") == null) {
+            SwingUtilities.invokeLater(() -> new StartScreen(graph -> {
+                try {
+                    start(graph == null ? new String[0] : new String[] {graph.toString()}, s);
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            }).setVisible(true));
+            return;
+        }
+        start(args, s);
+    }
+
+    /** Opens the editor on a graph (a file, a pack folder) or, without one, on an untitled graph by parts. */
+    private static void start(String[] args, StudioSettings s) throws Exception {
         MosaicDocument doc;
         if (args.length > 0) {
             Path p = Path.of(args[0]);
@@ -1377,7 +1433,7 @@ final class StudioApp {
             doc.file = p;
         } else {
             Path tmp = Files.createTempFile("mosaic-start", ".json");
-            Files.writeString(tmp, MosaicTemplates.all().stream().filter(t -> t.name().equals("Realistic water")).findFirst().orElseThrow().json());
+            Files.writeString(tmp, MosaicTemplates.all().stream().filter(t -> t.name().equals("Minecraft by parts")).findFirst().orElseThrow().json());
             doc = MosaicDocument.load(tmp);
             doc.file = null;
             doc.dirty = false;

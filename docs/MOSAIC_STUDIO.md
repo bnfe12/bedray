@@ -30,6 +30,26 @@ to Minecraft, or without it.
 A node with more than six inputs shows only the required, wired and changed ones; the rest are edited in Properties
 ("+N more" on the node). Ctrl+H (or the right-click menu) shows every input of the selected nodes, to wire one.
 
+## Projects and GitHub
+
+Studio starts on the **projects screen** (Settings > Editor > Projects turns it off): a card per project with its
+picture, name and description - the game's shader packs with a Mosaic graph, your projects folder and recent ones - a
+search, **New project** (name, description, template, picture, licence, GitHub files), **Open**, **Clone from GitHub**
+and **Empty graph**. Right click a card: set the picture, edit the card, prepare / publish / update on GitHub, show the
+folder. File > Projects brings the screen back, File > This project works on the open one.
+
+A project is a shader pack folder: `shaders/bedray/mosaic.json`, its card `mosaic-project.json` (name, description,
+author, version, GitHub address, licence, tags) and its picture `pack.png` (Preview > Image > Use as the project picture,
+or a thumbnail of the preview is kept until you choose one).
+
+- **Prepare for GitHub** writes README.md (picture, description, install, release), .gitignore, the licence you choose
+  and `.github/workflows/release.yml`: pushing a tag such as `v1.0.0` zips the pack and attaches it to a release.
+- **Publish to GitHub** (git and the GitHub CLI `gh`): git init, commit, `gh repo create --source . --push` as a
+  private or public repository of your account.
+- **Update from GitHub**: `git pull`, then the repository's description, topics and owner into the card. **Clone from
+  GitHub** does the same for a repository you name.
+- Agents: `mosaic project new | list | info | card | github | refresh | clone`.
+
 ## Scene: the parts of Minecraft's picture
 
 The **Scene** panel shows the graph the way Blender's outliner shows a scene: groups (the graph's frames, like
