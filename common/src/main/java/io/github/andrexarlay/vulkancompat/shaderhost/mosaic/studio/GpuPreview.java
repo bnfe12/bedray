@@ -1018,9 +1018,14 @@ final class GpuPreview implements AutoCloseable {
         // the game's light map: sky light by the time of day, coloured block light, per-face shading (all from the look)
         float curve(float l) { return l / ((1.0 + pw_lightCurve) - pw_lightCurve * l); }
         float g_day = 1.0; // daylight of this frame, set once at the start of main()
+        // the game's brightness option (Moody 0 .. Bright 1): lifts the dark end of the light map
+        float bright(float l) { return mix(l, 1.0 - pow(1.0 - l, 4.0), pw_brightness); }
         vec3 lightOf(uint front) {
             float s = float((front >> 12) & 15u) / 15.0, b = float((front >> 8) & 15u) / 15.0;
-            return min(max(vec3(curve(s) * g_day), pw_blockColor * curve(b) * pw_blockBoost) + pw_ambient, vec3(1.0));
+            // sky light turns bluish as the day fades, like the game's light map at night
+            vec3 skyTint = mix(pw_nightSkyColor, vec3(1.0), smoothstep(pw_nightLevel, 1.0, g_day));
+            vec3 l = max(vec3(bright(curve(s) * g_day)) * skyTint, pw_blockColor * bright(curve(b)) * pw_blockBoost);
+            return min(l + pw_ambient, vec3(1.0));
         }
         float faceShade(vec3 n) {
             float ax = abs(n.x), ay = abs(n.y), az = abs(n.z);
