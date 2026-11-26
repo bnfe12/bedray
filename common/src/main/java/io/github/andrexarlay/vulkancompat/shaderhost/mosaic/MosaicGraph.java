@@ -1187,6 +1187,14 @@ public final class MosaicGraph {
                 if (n != null && (n.type().equals("mosaic.trace") || n.type().equals("mosaic.shadow"))) rays++;
             }
             for (String m : MosaicSettings.check(graphSettings)) warn(null, m, Fix.NONE);
+            // a Minecraft part told to use its look input, with nothing wired into it: the part fades towards black
+            for (Node n : nodes.values()) {
+                if (!n.type().startsWith("fn.part") || n.inputs().containsKey("look")) continue;
+                double[] amount = n.defaultOf("lookAmount");
+                if (amount != null && amount.length > 0 && amount[0] > 0)
+                    warn(n.id(), "node " + n.id() + ": lookAmount is " + amount[0] + " but nothing is wired into look, so the part fades towards"
+                        + " black: wire your shader for the part into look, or set lookAmount to 0", Fix.CONNECT);
+            }
             if (rays > 3)
                 warn(null, rays + " ray queries per pixel: each one traces the whole scene, expect a large frame cost",
                     Fix.NONE);
