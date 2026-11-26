@@ -118,7 +118,10 @@ final class StudioLibrary {
                 Path jar = d.resolve(d.getFileName() + ".jar");
                 if (Files.isRegularFile(jar) && versionKey(d.getFileName().toString()) > 0) found.putIfAbsent(d.getFileName().toString(), jar);
             });
-        for (Path r : launcherRoots("PrismLauncher", "PrismLauncher", "PrismLauncher"))
+        // Prism and its forks (Freesm, PolyMC, MultiMC) keep client jars in the same maven layout
+        List<Path> prismLike = new ArrayList<>();
+        for (String l : new String[] {"PrismLauncher", "FreesmLauncher", "PolyMC", "MultiMC"}) prismLike.addAll(launcherRoots(l, l, l));
+        for (Path r : prismLike)
             each(r.resolve("libraries/com/mojang/minecraft"), d -> {
                 Path jar = d.resolve("minecraft-" + d.getFileName() + "-client.jar");
                 if (Files.isRegularFile(jar)) found.putIfAbsent(d.getFileName().toString(), jar);
@@ -168,6 +171,8 @@ final class StudioLibrary {
     static List<Path> libraryRoots(Path clientJar) {
         List<Path> roots = new ArrayList<>();
         for (Path r : launcherRoots("PrismLauncher", "PrismLauncher", "PrismLauncher")) roots.add(r.resolve("libraries"));
+        for (Path r : launcherRoots("FreesmLauncher", "FreesmLauncher", "FreesmLauncher")) roots.add(r.resolve("libraries"));
+        for (Path r : launcherRoots("PolyMC", "PolyMC", "PolyMC")) roots.add(r.resolve("libraries"));
         for (Path r : launcherRoots("MultiMC", "MultiMC", "multimc")) roots.add(r.resolve("libraries"));
         for (Path r : launcherRoots(".minecraft", "minecraft", "../../.minecraft")) roots.add(r.resolve("libraries"));
         roots.add(home().resolve(".minecraft/libraries"));

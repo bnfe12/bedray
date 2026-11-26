@@ -825,18 +825,30 @@ final class PreviewBlocks {
         "minecraft:trapped_chest", new String[] {"minecraft:chest#main", "minecraft:entity/chest/trapped"},
         "minecraft:ender_chest", new String[] {"minecraft:chest#main", "minecraft:entity/chest/ender"},
         "minecraft:copper_chest", new String[] {"minecraft:chest#main", "minecraft:entity/chest/copper"},
-        "minecraft:bell", new String[] {"minecraft:bell#main", "minecraft:entity/bell/bell_body"});
+        "minecraft:bell", new String[] {"minecraft:bell#main", "minecraft:entity/bell/bell_body"},
+        // pairs of layer and texture: the decorated pot is a base and its sides
+        "minecraft:decorated_pot", new String[] {"minecraft:decorated_pot_base#main", "minecraft:entity/decorated_pot/decorated_pot_base",
+            "minecraft:decorated_pot_sides#main", "minecraft:entity/decorated_pot/decorated_pot_side"});
+
+    /** The entity-model blocks by name, coloured shulker boxes included. */
+    private static String[] blockEntity(String block) {
+        String[] be = BLOCK_ENTITIES.get(block);
+        if (be != null) return be;
+        return null; // a closed shulker box is a full cube with its own texture: the cube path draws it as the game does
+    }
 
     /** A chest or bell of the world drawn by its entity model, turned to its facing (south: as exported). */
     static List<Q> blockEntityQuads(String state, Map<String, double[]> layers, List<Pack> packs) {
-        String[] be = BLOCK_ENTITIES.get(baseName(state));
+        String[] be = blockEntity(baseName(state));
         if (be == null) return null;
-        double[] v = layers.get(be[0]);
-        if (v == null || image(packs, be[1]) == null) return null;
         String facing = props(state).getOrDefault("facing", "south");
         double deg = switch (facing) { case "west" -> 90; case "north" -> 180; case "east" -> 270; default -> 0; };
         double r = Math.toRadians(-deg), c = Math.cos(r), s = Math.sin(r);
         List<Q> out = new ArrayList<>();
+        for (int l = 0; l + 1 < be.length; l += 2) {
+        double[] v = layers.get(be[l]);
+        String texture = be[l + 1];
+        if (v == null || image(packs, texture) == null) return null;
         for (int i = 0; i + 19 < v.length; i += 20) {
             double[][] p = new double[4][], uv = new double[4][];
             for (int k = 0; k < 4; k++) {
@@ -846,7 +858,16 @@ final class PreviewBlocks {
                 uv[k] = new double[] {v[o + 3], v[o + 4]};
             }
             out.add(new Q(p[0], sub(p[1], p[0]), sub(p[3], p[0]), uv[0], new double[] {uv[1][0] - uv[0][0], uv[1][1] - uv[0][1]},
-                new double[] {uv[3][0] - uv[0][0], uv[3][1] - uv[0][1]}, be[1], 0));
+                new double[] {uv[3][0] - uv[0][0], uv[3][1] - uv[0][1]}, texture, 0));
+        }
+        }
+        // models exported around another pivot (the shulker box sits half a block up): rest them on the cell's floor
+        double low = Double.MAX_VALUE;
+        for (Q q : out) low = Math.min(low, Math.min(q.p0()[1], Math.min(q.p0()[1] + q.e1()[1], Math.min(q.p0()[1] + q.e2()[1], q.p0()[1] + q.e1()[1] + q.e2()[1]))));
+        if (low > 0.01 && low < 1.5) {
+            List<Q> moved = new ArrayList<>();
+            for (Q q : out) moved.add(new Q(new double[] {q.p0()[0], q.p0()[1] - low, q.p0()[2]}, q.e1(), q.e2(), q.uv0(), q.du(), q.dv(), q.texture(), q.tint()));
+            out = moved;
         }
         return out;
     }
@@ -886,7 +907,7 @@ final class PreviewBlocks {
                 biomeCols[i * 4 + 3] = c[3]; // temperature x 1000 + 10000: snow instead of rain below 0.15
             }
         }
-        boolean blockEntities = t != null && t.names().stream().anyMatch(n -> BLOCK_ENTITIES.containsKey(baseName(n)));
+        boolean blockEntities = t != null && t.names().stream().anyMatch(n -> blockEntity(baseName(n)) != null);
         Map<String, double[]> layers = ents.isEmpty() && !blockEntities ? Map.of() : BlockModels.entityLayers(gameDir);
         if ((!ents.isEmpty() || blockEntities) && layers.isEmpty() && !exportAsked) {
             exportAsked = true;

@@ -218,6 +218,17 @@ final class PreviewWorld {
                 set(m, x, top + 1, z, Material.PLANT);
                 plants.put((long) idx(x, top + 1, z), flora[Math.floorMod(hsh >> 5, flora.length)]);
             }
+        // in front of the house: a bed, a sign, a decorated pot, a shulker box and a lantern - blocks the game draws by models
+        String[][] yard = {{"1", "7", "minecraft:oak_sign[rotation=8]"}, {"5", "7", "minecraft:decorated_pot[facing=south]"},
+            {"6", "7", "minecraft:red_bed[facing=north,part=head]"}, {"6", "8", "minecraft:red_bed[facing=north,part=foot]"},
+            {"0", "7", "minecraft:barrel[facing=up]"}, {"4", "8", "minecraft:purple_shulker_box[facing=up]"}, {"2", "8", "minecraft:lantern[hanging=false]"}};
+        for (String[] y : yard) {
+            int x = hx + Integer.parseInt(y[0]), z = hz + Integer.parseInt(y[1]);
+            int top = height[x][z] + 1;
+            if (top >= SY) continue;
+            set(m, x, top, z, Material.PLANT);
+            plants.put((long) idx(x, top, z), y[2]);
+        }
         short[] cells = light(m);
         DEMO = demoFar(new MosaicWorld.Snapshot(SX, SY, SZ, ox, oy, oz, cells, ox + 44.5, oy + height[44][92] + 9.6, oz + 92.5, 160f, 20f, 0.06f));
         // real block names, so the built-in world is drawn with each block's own textures and models
