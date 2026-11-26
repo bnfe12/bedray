@@ -946,6 +946,45 @@ final class StartScreen extends JFrame {
         item(m, "Edit the card (name, description, author, version)...", () -> {
             if (editCard(this, p)) reload();
         });
+        item(m, "Rename...", () -> {
+            String n = JOptionPane.showInputDialog(this, "New name", p.name);
+            if (n == null || n.isBlank()) return;
+            try {
+                p.name = n.trim();
+                p.save();
+                Path target = p.dir.resolveSibling(n.trim().replaceAll("[\\\\/:*?\"<>|]+", "_"));
+                if (!Files.exists(target)) Files.move(p.dir, target);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Could not rename: " + ex.getMessage());
+            }
+            reload();
+        });
+        item(m, "Duplicate...", () -> {
+            String n = JOptionPane.showInputDialog(this, "Name of the copy", p.name + " copy");
+            if (n == null || n.isBlank()) return;
+            Path target = p.dir.resolveSibling(n.trim().replaceAll("[\\\\/:*?\"<>|]+", "_"));
+            if (Files.exists(target)) {
+                JOptionPane.showMessageDialog(this, "There is already a folder " + target.getFileName());
+                return;
+            }
+            try (var walk = Files.walk(p.dir)) {
+                for (Path f : walk.toList()) {
+                    Path rel = p.dir.relativize(f);
+                    if (rel.toString().startsWith(".git")) continue; // a copy is a new project, not the same repository
+                    Path to = target.resolve(rel.toString());
+                    if (Files.isDirectory(f)) Files.createDirectories(to);
+                    else Files.copy(f, to);
+                }
+                ProjectInfo copy = ProjectInfo.load(target);
+                copy.name = n.trim();
+                copy.github = "";
+                copy.created = java.time.LocalDate.now().toString();
+                copy.save();
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Could not copy: " + ex.getMessage());
+            }
+            reload();
+        });
         m.addSeparator();
         item(m, "Prepare for GitHub (README, workflow, licence)...", () -> {
             prepareDialog(this, p);
