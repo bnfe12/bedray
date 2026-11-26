@@ -514,7 +514,9 @@ final class GpuPreview implements AutoCloseable {
         boolean blocks = view.blocks() != null, mesh = view.atlas().hasMesh();
         return GBUFFER_GLSL.replace("%CONSTANTS%", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.constants(view.graphSettings(), false)
             + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\nconst bool HAS_MESH = " + mesh + ";\nconst bool HAS_BIOMES = " + view.atlas().hasBiomes() + ";\n" + cloudConstants(view.atlas().cloudRect())
-            + rainConstants(view.atlas().rain(), PreviewWorld.weatherOf(view.world())));
+            + rainConstants(view.atlas().rain(), PreviewWorld.weatherOf(view.world()))
+            + "const bool HAS_SNOW_TEX = " + (view.atlas().snow() != null) + ";\nconst vec4 SNOW_RECT = " + (view.atlas().snow() == null ? "vec4(0.0)"
+            : "vec4(" + view.atlas().snow()[0] + ".0, " + view.atlas().snow()[1] + ".0, " + view.atlas().snow()[2] + ".0, " + view.atlas().snow()[3] + ".0)") + ";\n");
     }
 
     /** The snapshot with the G-buffer's flags in the spare material bits: 0x80 quads in this cell, 0x40 a block drawn by its model. */
@@ -1212,7 +1214,13 @@ final class GpuPreview implements AutoCloseable {
             if (trans > 0.0) acc += trans * skyCol;
             acc *= 1.0 - rain * pw_rainDarken;
             // the game's rain: its texture on cylinders around the camera, falling
-            if (rain > 0.0 && HAS_RAIN_TEX) {
+            // cold biome at the camera: snow (slow, white) instead of rain, like the game
+            bool snowing = false;
+            if (HAS_BIOMES && HAS_SNOW_TEX) {
+                ivec3 cp = clamp(ivec3(floor(o)) - world.originRel.xyz, ivec3(0), world.size.xyz - 1);
+                snowing = float(int(biomes.c[cp.z * world.size.x + cp.x].w) - 10000) / 1000.0 < pw_snowTemperature;
+            }
+            if (rain > 0.0 && (HAS_RAIN_TEX || snowing)) {
                 vec2 dh = d.xz;
                 float dl = length(dh);
                 for (int k = 0; k < 4 && dl > 1e-4; k++) {
@@ -1222,10 +1230,12 @@ final class GpuPreview implements AutoCloseable {
                     vec3 hp = d * tr;
                     float ang = atan(hp.z, hp.x);
                     // one quarter of the texture's width per block of arc and per 4 blocks of height, like the game's rain quads
-                    vec2 ruv = vec2(fract(ang * rad * 0.25 + float(k) * 0.37),
-                        fract((hp.y + frame.cameraPosition.y) * 0.25 + frame.timing.x * pw_rainSpeed + float(k) * 0.21));
-                    vec4 rt = textureLod(atlas, (RAIN_RECT.xy + ruv * RAIN_RECT.zw) / vec2(textureSize(atlas, 0)), 0.0);
-                    acc = mix(acc, rt.rgb * vec3(0.8, 0.85, 0.95), rt.a * pw_rainOpacity * rain);
+                    float speed = snowing ? pw_rainSpeed * pw_snowSpeed : pw_rainSpeed;
+                    vec2 ruv = vec2(fract(ang * rad * 0.25 + float(k) * 0.37 + (snowing ? sin(frame.timing.x * 0.7 + float(k)) * 0.05 : 0.0)),
+                        fract((hp.y + frame.cameraPosition.y) * 0.25 + frame.timing.x * speed + float(k) * 0.21));
+                    vec4 rect = snowing ? SNOW_RECT : RAIN_RECT;
+                    vec4 rt = textureLod(atlas, (rect.xy + ruv * rect.zw) / vec2(textureSize(atlas, 0)), 0.0);
+                    acc = mix(acc, snowing ? rt.rgb : rt.rgb * vec3(0.8, 0.85, 0.95), rt.a * pw_rainOpacity * rain);
                 }
             }
             // the game's distance fog towards the sky colour at the horizon

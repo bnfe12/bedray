@@ -37,10 +37,10 @@ final class PreviewBlocks {
      * edge 1, edge 2 in volume cells with the atlas rect packed in their w; uv origin and edges; rect height, flags) and per
      * cell (start << 8 | count) into the quad id list that follows the cells.
      */
-    record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh, int[] biome, int[] clouds, int[] rain) {
-        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null, null, null, null); }
+    record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh, int[] biome, int[] clouds, int[] rain, int[] snow) {
+        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null, null, null, null, null); }
 
-        Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) { this(argb, w, h, info, signature, quads, mesh, null, null, null); }
+        Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) { this(argb, w, h, info, signature, quads, mesh, null, null, null, null); }
 
         /** The rect (x, y, w, h) of the game's clouds.png in the atlas, or null. */
         int[] cloudRect() { return clouds; }
@@ -458,7 +458,7 @@ final class PreviewBlocks {
             if (modifier.equals("swamp")) g = 0x6A7039;
             else if (modifier.equals("dark_forest")) g = ((g & 0xFEFEFE) + 0x28340A) >> 1;
             int f = foliage != null ? foliage : colormap(packs, "minecraft:colormap/foliage", temp, down, 0x77AB2F);
-            return new int[] {g, f, water != null ? water : 0x3F76E4};
+            return new int[] {g, f, water != null ? water : 0x3F76E4, (int) Math.round(temp * 1000) + 10000};
         });
     }
 
@@ -816,6 +816,7 @@ final class PreviewBlocks {
                 biomeCols[i * 4] = c[0];
                 biomeCols[i * 4 + 1] = c[1];
                 biomeCols[i * 4 + 2] = c[2];
+                biomeCols[i * 4 + 3] = c[3]; // temperature x 1000 + 10000: snow instead of rain below 0.15
             }
         }
         boolean blockEntities = t != null && t.names().stream().anyMatch(n -> BLOCK_ENTITIES.containsKey(baseName(n)));
@@ -866,6 +867,16 @@ final class PreviewBlocks {
             pixels.add(px);
             cloudRect = new int[] {0, 0, cw, ch};
             placed.add(cloudRect);
+        }
+        int[] snowRect = null;
+        BufferedImage snowImg = image(packs, "minecraft:environment/snow");
+        if (snowImg != null) {
+            int sw = Math.min(64, snowImg.getWidth()), sh = Math.min(256, snowImg.getHeight());
+            int[] px = new int[sw * sh];
+            for (int yy = 0; yy < sh; yy++) for (int xx = 0; xx < sw; xx++) px[yy * sw + xx] = snowImg.getRGB(xx * snowImg.getWidth() / sw, yy * snowImg.getHeight() / sh);
+            pixels.add(px);
+            snowRect = new int[] {0, 0, sw, sh};
+            placed.add(snowRect);
         }
         int[] rainRect = null;
         BufferedImage rainImg = image(packs, "minecraft:environment/rain");
@@ -954,7 +965,7 @@ final class PreviewBlocks {
         }
         for (int k = 0; k < cellQuads.size(); k++) mesh[cells + k] = cellQuads.get(k)[1];
         perColumnTint = false;
-        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh, biomeCols, cloudRect, rainRect);
+        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh, biomeCols, cloudRect, rainRect, snowRect);
         if (CACHE.size() > 4) CACHE.clear();
         CACHE.put(sig, a);
         return a;

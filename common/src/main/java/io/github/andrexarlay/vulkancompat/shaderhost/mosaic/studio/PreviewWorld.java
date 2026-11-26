@@ -483,6 +483,8 @@ final class PreviewWorld {
         look("rainOpacity", "Rain opacity", "How strongly the falling rain shows.", 0.55),
         look("rainSpeed", "Rain speed", "How fast the rain falls (texture lengths per second).", 1.6),
         look("rainDarken", "Rain darkening", "How much rain darkens the sky and the daylight (the game: about 0.75 of the light).", 0.25),
+        look("snowTemperature", "Snow below temperature", "Biome temperature under which it snows instead of raining (the game: 0.15).", 0.15),
+        look("snowSpeed", "Snow speed", "How fast snow falls compared to rain.", 0.15),
         look("animate", "Animated textures", "1: water, lava, fire, sea lanterns... play their animations like the game; 0: the first frame.", 1),
         look("models", "Block models and entities", "1: stairs, slabs, torches, flowers, fences... and the world's entities drawn by their models; 0: cubes.", 1));
 
