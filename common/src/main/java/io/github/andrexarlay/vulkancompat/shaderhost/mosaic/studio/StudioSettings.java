@@ -183,6 +183,9 @@ public final class StudioSettings {
     /** When the studio window is not the active one, the preview draws one frame every {@link #previewBackgroundMs}. */
     public boolean previewIdleInBackground = true;
     public int previewBackgroundMs = 2000;   // 250..30000
+    /** Seconds without a change (camera, graph, look) after which the preview slows to {@link #previewIdleFps} (0: never). */
+    public int previewIdleSeconds = 8;       // 0..300
+    public int previewIdleFps = 2;           // 1..30
     /** Shortest pause between two preview frames (ms). */
     public int previewMinPauseMs = 5;        // 0..1000
     /** Compare > Difference: how many times the difference is brightened. */
@@ -308,6 +311,8 @@ public final class StudioSettings {
         previewGpuShare = Math.clamp(previewGpuShare, 10, 100);
         previewBackgroundMs = Math.clamp(previewBackgroundMs, 250, 30000);
         previewMinPauseMs = Math.clamp(previewMinPauseMs, 0, 1000);
+        previewIdleSeconds = Math.clamp(previewIdleSeconds, 0, 300);
+        previewIdleFps = Math.clamp(previewIdleFps, 1, 30);
         previewDiffGain = Math.clamp(previewDiffGain, 1.0, 64.0);
         previewClipHigh = Math.clamp(previewClipHigh, 1, 255);
         previewClipLow = Math.clamp(previewClipLow, 0, 254);

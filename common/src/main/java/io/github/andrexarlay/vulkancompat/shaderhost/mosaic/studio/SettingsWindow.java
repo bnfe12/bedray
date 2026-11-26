@@ -423,6 +423,10 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.wide(check("Draw rarely while the studio is in the background", draft.previewIdleInBackground, v -> draft.previewIdleInBackground = v));
         f.row("Background frame interval", "How often the preview draws while another window is in front",
             slider(250, 30000, draft.previewBackgroundMs, v -> draft.previewBackgroundMs = v, v -> String.format(java.util.Locale.ROOT, "%.1f s", v / 1000.0)));
+        f.row("Rest after", "Seconds without a change (camera, graph, look) after which the preview slows down (0: never)",
+            slider(0, 120, draft.previewIdleSeconds, v -> draft.previewIdleSeconds = v, v -> v == 0 ? "never" : v + " s"));
+        f.row("Resting frame rate", "Frames per second while resting (time, clouds and water still move, slowly)",
+            slider(1, 30, draft.previewIdleFps, v -> draft.previewIdleFps = v, v -> v + " fps"));
         f.row("Shortest pause between frames", "Even on a fast GPU", slider(0, 1000, draft.previewMinPauseMs, v -> draft.previewMinPauseMs = v,
             v -> v + " ms"));
         f.section("Views and compare");
@@ -458,6 +462,8 @@ final class SettingsWindow extends Dock.StudioWindow {
             draft.previewGpuShare = d.previewGpuShare;
             draft.previewIdleInBackground = d.previewIdleInBackground;
             draft.previewBackgroundMs = d.previewBackgroundMs;
+            draft.previewIdleSeconds = d.previewIdleSeconds;
+            draft.previewIdleFps = d.previewIdleFps;
             draft.previewMinPauseMs = d.previewMinPauseMs;
             draft.previewDiffGain = d.previewDiffGain;
             draft.previewClipHigh = d.previewClipHigh;

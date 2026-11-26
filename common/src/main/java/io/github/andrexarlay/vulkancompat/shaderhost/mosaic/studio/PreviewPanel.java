@@ -73,6 +73,9 @@ final class PreviewPanel extends Panels.Listening {
     private final JComboBox<Compare> compareBox = new JComboBox<>(Compare.values());
     private long lastLoop = System.nanoTime();
     private long atlasChecked;
+    /** The last moment something changed (camera, graph, look, settings): after a while the preview rests. */
+    private volatile long lastActivity = System.currentTimeMillis();
+    private Object lastSeenKey;
 
     PreviewPanel(StudioModel m) {
         super(m);
@@ -247,6 +250,7 @@ final class PreviewPanel extends Panels.Listening {
         view.setFocusable(true);
         java.awt.event.MouseAdapter fly = new java.awt.event.MouseAdapter() {
             @Override public void mousePressed(java.awt.event.MouseEvent e) {
+                lastActivity = System.currentTimeMillis();
                 dragFrom = e.getPoint();
                 view.requestFocusInWindow();
                 Rectangle r = imageRect;
@@ -1010,12 +1014,21 @@ final class PreviewPanel extends Panels.Listening {
                 lastLoop = System.nanoTime();
                 // keep the studio smooth on small GPUs: after a heavy frame wait so the preview takes at most its share of the GPU,
                 // and draw rarely while another window is in front
+                // idle: nothing changed for a while (no camera move, no edit) -> a slow frame rate saves the laptop's GPU
+                Object activityKey = java.util.List.of(System.identityHashCode(c), System.identityHashCode(worldView), lookKey(), showMode, compare);
+                if (!activityKey.equals(lastSeenKey)) {
+                    lastSeenKey = activityKey;
+                    lastActivity = System.currentTimeMillis();
+                }
+                boolean idle = StudioUi.settings.previewIdleSeconds > 0
+                    && System.currentTimeMillis() - lastActivity > StudioUi.settings.previewIdleSeconds * 1000L;
                 double share = StudioUi.settings.previewGpuShare / 100.0;
                 long rest = Math.max(1000 / StudioUi.settings.previewFps - ms, (long) (ms * (1 - share) / share));
                 Window win = SwingUtilities.getWindowAncestor(root);
                 if (StudioUi.settings.previewIdleInBackground && win != null && !win.isActive()
                     && java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getActiveWindow() == null)
                     rest = Math.max(rest, StudioUi.settings.previewBackgroundMs);
+                if (idle) rest = Math.max(rest, 1000 / Math.max(1, StudioUi.settings.previewIdleFps));
                 Thread.sleep(Math.max(StudioUi.settings.previewMinPauseMs, rest));
             } catch (InterruptedException e) {
                 return;
