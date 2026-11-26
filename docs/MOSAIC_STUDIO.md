@@ -58,6 +58,9 @@ grass blocks, Wood, Sand and gravel, Snow, Ice, Glass, Metal, Light sources, Oth
 and hand, Underwater view - then effects and lights, passes (buffers), Bedray and the Output, each with a line saying
 what it does. Click shows a node, the dot turns it on / off, double click renames.
 
+Right click a part in Scene for its ready **looks** (Sunset glow, Tropical water, Autumn leaves, Warm glow lights, Noir
+blocks... about thirty; `mosaic looks`, `mosaic look <graph> <node> <look>`).
+
 Every part is one node (category *Minecraft parts*) that changes only its pixels: wire your own shader for the part into
 **look** and set **lookAmount**, or adjust it with tint, brightness, saturation and contrast; **strength** fades the change.
 Each part also has a mask node (1 on the part, 0 elsewhere). Template **Minecraft by parts** starts with the main parts
@@ -131,10 +134,15 @@ occlusion, Block models and entities). The built-in landscape has grass, flowers
 Grass, leaves and water take the colours of each column's biome (from the save, or the game's capture), computed like the
 game from the biome's temperature, downfall and colour overrides in the client jar's worldgen data.
 
-It is still Studio's own renderer, so a few things differ from the game: saves of 26.x keep only block names, so stairs,
-logs and doors use their default orientation; particles, weather and animated textures are not drawn. The game's cloud
-layer (clouds.png at y 192.33, drifting) and distance fog are (World look: Clouds, Cloud height / speed / opacity, Fog,
-Fog start). The game's own frame with your graph is in Result (and Preview > Game frame)
+Block states come with the world (saves of 26.x: palettes of names and {id, properties}; the game's capture: every
+state), so stairs, logs, fences, walls, vines and doors face the way they do in the game: the matching blockstate
+variant, or every multipart part whose condition holds. Water, lava, fire and other animated textures play their
+.mcmeta animations; the world's rain falls as the game's rain texture around the camera and darkens the light (World look:
+Rain, Rain opacity / speed / darkening, Animated textures); the game's cloud layer (clouds.png at y 192.33, drifting) and
+distance fog are drawn too (Clouds, Cloud height / speed / opacity, Fog, Fog start).
+
+It is still Studio's own renderer: particles, block entities with special renderers (chests, signs, banners) and
+thunder flashes are not drawn, and lighting follows the game's light map rather than its exact shader. The game's own frame with your graph is in Result (and Preview > Game frame)
 while the game runs with the pack.
 
 The Preview renders the open graph over a **real scene**, not a picture: the blocks around the player when the game

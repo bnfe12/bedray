@@ -1030,6 +1030,54 @@ public final class MosaicEffects {
         }
     }
 
+    /** A ready look for a part: values of its inputs (tint, brightness, saturation, contrast, strength...). */
+    public record PartLook(String part, String label, Map<String, double[]> values) {}
+
+    private static PartLook look(String part, String label, Object... kv) {
+        Map<String, double[]> m = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < kv.length; i += 2) m.put((String) kv[i], (double[]) kv[i + 1]);
+        return new PartLook(part, label, m);
+    }
+
+    private static double[] v(double... d) { return d; }
+
+    /** The built-in looks of every part (Scene > right click a part > Look). */
+    public static final List<PartLook> PART_LOOKS = List.of(
+        look("partSky", "Sunset glow", "tint", v(1.15, 0.85, 0.7), "saturation", v(1.3)),
+        look("partSky", "Deep blue", "tint", v(0.75, 0.9, 1.25), "saturation", v(1.25), "contrast", v(1.1)),
+        look("partSky", "Overcast", "saturation", v(0.25), "brightness", v(0.85)),
+        look("partWater", "Tropical", "tint", v(0.65, 1.15, 1.1), "saturation", v(1.4), "brightness", v(1.1)),
+        look("partWater", "Murky swamp", "tint", v(0.75, 0.85, 0.55), "saturation", v(0.7), "brightness", v(0.8)),
+        look("partWater", "Deep ocean", "tint", v(0.55, 0.7, 1.15), "brightness", v(0.8), "contrast", v(1.15)),
+        look("partLava", "Hotter", "tint", v(1.2, 0.9, 0.6), "brightness", v(1.4), "saturation", v(1.2)),
+        look("partLava", "Cooling crust", "brightness", v(0.75), "contrast", v(1.3)),
+        look("partLeaves", "Autumn", "tint", v(1.45, 0.85, 0.35), "saturation", v(1.3)),
+        look("partLeaves", "Lush", "tint", v(0.85, 1.15, 0.8), "saturation", v(1.35)),
+        look("partLeaves", "Pale winter", "saturation", v(0.4), "brightness", v(1.1)),
+        look("partPlants", "Vivid flowers", "saturation", v(1.6), "contrast", v(1.1)),
+        look("partPlants", "Dry", "tint", v(1.15, 1.0, 0.7), "saturation", v(0.6)),
+        look("partStone", "Cool stone", "tint", v(0.9, 0.95, 1.08), "contrast", v(1.1)),
+        look("partStone", "Warm sandstone", "tint", v(1.1, 1.0, 0.85)),
+        look("partDirt", "Rich soil", "tint", v(1.05, 0.95, 0.85), "saturation", v(1.25), "contrast", v(1.08)),
+        look("partWood", "Weathered", "saturation", v(0.6), "brightness", v(0.9)),
+        look("partSand", "White beach", "tint", v(1.05, 1.05, 1.0), "brightness", v(1.12), "saturation", v(0.8)),
+        look("partSnow", "Blue shade", "tint", v(0.92, 0.97, 1.1)),
+        look("partIce", "Glacier", "tint", v(0.8, 0.95, 1.15), "saturation", v(1.3)),
+        look("partGlass", "Tinted", "tint", v(0.85, 0.95, 1.05), "contrast", v(1.1)),
+        look("partMetal", "Polished", "contrast", v(1.25), "brightness", v(1.1)),
+        look("partLights", "Warm glow", "tint", v(1.2, 1.0, 0.75), "brightness", v(1.5)),
+        look("partLights", "Cold neon", "tint", v(0.75, 0.95, 1.3), "brightness", v(1.5), "saturation", v(1.3)),
+        look("partBlocks", "Film", "saturation", v(0.85), "contrast", v(1.12)),
+        look("partBlocks", "Vibrant", "saturation", v(1.3), "contrast", v(1.05)),
+        look("partBlocks", "Noir", "saturation", v(0.0), "contrast", v(1.3)),
+        look("partNotBlocks", "Highlight mobs", "brightness", v(1.25), "saturation", v(1.2)),
+        look("partNotBlocks", "Silhouettes", "brightness", v(0.15), "saturation", v(0.0)),
+        look("partUnderwater", "Clear", "tint", v(0.85, 1.0, 1.05), "contrast", v(1.1)),
+        look("partUnderwater", "Deep murk", "tint", v(0.5, 0.7, 0.75), "brightness", v(0.7)));
+
+    /** The looks of one part. */
+    public static List<PartLook> looksOf(String part) { return PART_LOOKS.stream().filter(l -> l.part().equals(part)).toList(); }
+
     /** The part a function node stands for, or null. */
     public static Part part(String functionName) {
         if (functionName == null) return null;

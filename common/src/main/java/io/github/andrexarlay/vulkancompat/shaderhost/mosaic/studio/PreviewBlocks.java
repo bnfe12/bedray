@@ -37,10 +37,10 @@ final class PreviewBlocks {
      * edge 1, edge 2 in volume cells with the atlas rect packed in their w; uv origin and edges; rect height, flags) and per
      * cell (start << 8 | count) into the quad id list that follows the cells.
      */
-    record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh, int[] biome, int[] clouds) {
-        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null, null, null); }
+    record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh, int[] biome, int[] clouds, int[] rain) {
+        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null, null, null, null); }
 
-        Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) { this(argb, w, h, info, signature, quads, mesh, null, null); }
+        Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) { this(argb, w, h, info, signature, quads, mesh, null, null, null); }
 
         /** The rect (x, y, w, h) of the game's clouds.png in the atlas, or null. */
         int[] cloudRect() { return clouds; }
@@ -149,8 +149,8 @@ final class PreviewBlocks {
         int n = blocks == null ? 0 : blocks.size();
         int[] info = new int[Math.max(1, n) * 4];
         for (int b = 1; b < n; b++) {
-            String name = blocks.get(b);
-            String[] faces = faces(packs, name);
+            String name = baseName(blocks.get(b));
+            String[] faces = faces(packs, blocks.get(b));
             if (faces == null) continue;
             int kind = perColumnTint ? tintKind(name) : 0;
             int tint = kind != 0 ? 0 : tint(packs, name);
@@ -160,13 +160,21 @@ final class PreviewBlocks {
                 String key = faces[f] + "#" + Integer.toHexString(grassSide ? -1 : tint);
                 Integer id = byKey.get(key);
                 if (id == null) {
-                    int[] tile = tile(packs, faces[f], grassSide ? 0 : tint, grassSide ? tint(packs, "minecraft:grass_block") : 0);
-                    if (tile == null) {
+                    // every frame of an animated texture (water, lava, fire...) as consecutive tiles, in the .mcmeta order
+                    int[] anim = animation(packs, faces[f]);
+                    int base = tiles.size(), count = 0;
+                    for (int fr = 0; fr < anim.length - 1; fr++) {
+                        int[] tile = tile(packs, faces[f], grassSide ? 0 : tint, grassSide ? tint(packs, "minecraft:grass_block") : 0, anim[fr + 1]);
+                        if (tile == null) break;
+                        tiles.add(tile);
+                        count++;
+                    }
+                    if (count == 0) {
                         ids = null;
                         break;
                     }
-                    id = tiles.size();
-                    tiles.add(tile);
+                    // tile | frames << 20 | frame time (ticks) << 28
+                    id = base | (count > 1 ? Math.min(255, count) << 20 | Math.min(15, anim[0]) << 28 : 0);
                     byKey.put(key, id);
                 }
                 ids[f] = id;
@@ -192,12 +200,14 @@ final class PreviewBlocks {
     }
 
     /** Top, side and bottom texture ids of a block from its blockstate and model, or null (no model: material tile). */
-    static String[] faces(List<Pack> packs, String block) {
+    static String[] faces(List<Pack> packs, String state) {
+        String block = baseName(state);
         String ns = block.contains(":") ? block.substring(0, block.indexOf(':')) : "minecraft";
         String name = block.substring(block.indexOf(':') + 1);
         if (name.equals("water")) return new String[] {"minecraft:block/water_still", "minecraft:block/water_still", "minecraft:block/water_still"};
         if (name.equals("lava")) return new String[] {"minecraft:block/lava_still", "minecraft:block/lava_still", "minecraft:block/lava_still"};
-        String model = modelOf(packs, ns, name);
+        List<String[]> vs = variantsOf(packs, ns, name, props(state));
+        String model = vs.isEmpty() ? null : vs.get(0)[0];
         if (model == null) return null;
         Map<String, String> tex = new LinkedHashMap<>();
         Map<String, String> faceTex = new HashMap<>();
@@ -233,6 +243,51 @@ final class PreviewBlocks {
         if (any == null) any = resolve("#particle", tex);
         if (any == null) return null;
         return new String[] {norm(up != null ? up : any), norm(side != null ? side : any), norm(down != null ? down : any)};
+    }
+
+    /** "minecraft:oak_stairs[facing=east,half=bottom]" -> "minecraft:oak_stairs". */
+    static String baseName(String state) { return state.indexOf('[') > 0 ? state.substring(0, state.indexOf('[')) : state; }
+
+    /** The properties of a state name (key -> value), empty without them. */
+    static Map<String, String> props(String state) {
+        Map<String, String> out = new HashMap<>();
+        int a = state.indexOf('['), b = state.lastIndexOf(']');
+        if (a < 0 || b < a) return out;
+        for (String kv : state.substring(a + 1, b).split(",")) {
+            int eq = kv.indexOf('=');
+            if (eq > 0) out.put(kv.substring(0, eq).trim(), kv.substring(eq + 1).trim());
+        }
+        return out;
+    }
+
+    /** Whether a blockstate variant key ("facing=east,half=bottom") or multipart "when" holds for these properties. */
+    private static boolean matches(String key, Map<String, String> p) {
+        if (key.isEmpty() || key.equals("normal")) return true;
+        for (String kv : key.split(",")) {
+            int eq = kv.indexOf('=');
+            if (eq < 0) continue;
+            String k = kv.substring(0, eq), v = kv.substring(eq + 1);
+            if (!p.containsKey(k)) continue; // a property the save does not carry: any value
+            boolean any = false;
+            for (String alt : v.split("\\|")) any |= alt.equals(p.get(k));
+            if (!any) return false;
+        }
+        return true;
+    }
+
+    private static boolean when(JsonObject w, Map<String, String> p) {
+        if (w.has("OR")) {
+            for (JsonElement e : w.getAsJsonArray("OR")) if (when(e.getAsJsonObject(), p)) return true;
+            return false;
+        }
+        if (w.has("AND")) {
+            for (JsonElement e : w.getAsJsonArray("AND")) if (!when(e.getAsJsonObject(), p)) return false;
+            return true;
+        }
+        StringBuilder key = new StringBuilder();
+        for (var e : w.entrySet()) key.append(key.length() == 0 ? "" : ",").append(e.getKey()).append('=').append(e.getValue().getAsString());
+        if (p.isEmpty()) return false; // without properties only unconditional parts are drawn
+        return matches(key.toString(), p);
     }
 
     /** A model texture entry: a name, or (26.x) an object with its sprite. */
@@ -302,16 +357,49 @@ final class PreviewBlocks {
         }
     }
 
-    /** One 16 x 16 tile (bottom-up), tinted; for the grass side the tinted overlay over the dirt side. */
-    private static int[] tile(List<Pack> packs, String textureId, int tint, int overlayTint) {
+    /**
+     * The animation of a texture: {frame time in ticks, frame index...} from its .mcmeta (frames list, or every frame of
+     * the strip in order); {1, 0} for a still texture.
+     */
+    static int[] animation(List<Pack> packs, String textureId) {
+        String ns = textureId.substring(0, textureId.indexOf(':')), p = textureId.substring(textureId.indexOf(':') + 1);
+        BufferedImage img = image(packs, textureId);
+        int count = img == null || img.getHeight() <= img.getWidth() ? 1 : img.getHeight() / img.getWidth();
+        if (count <= 1) return new int[] {1, 0};
+        int frametime = 1;
+        List<Integer> order = new ArrayList<>();
+        byte[] meta = readFirst(packs, "assets/" + ns + "/textures/" + p + ".png.mcmeta");
+        if (meta != null) {
+            try {
+                JsonObject a = JsonParser.parseString(new String(meta, StandardCharsets.UTF_8)).getAsJsonObject().getAsJsonObject("animation");
+                if (a.has("frametime")) frametime = Math.max(1, a.get("frametime").getAsInt());
+                if (a.has("frames"))
+                    for (JsonElement e : a.getAsJsonArray("frames"))
+                        order.add(e.isJsonObject() ? e.getAsJsonObject().get("index").getAsInt() : e.getAsInt());
+            } catch (Exception ignored) {
+                // every frame in order
+            }
+        }
+        if (order.isEmpty()) for (int i = 0; i < count; i++) order.add(i);
+        int n = Math.min(255, order.size());
+        int[] out = new int[n + 1];
+        out[0] = frametime;
+        for (int i = 0; i < n; i++) out[i + 1] = Math.clamp(order.get(i), 0, count - 1);
+        return out;
+    }
+
+    private static int[] tile(List<Pack> packs, String textureId, int tint, int overlayTint) { return tile(packs, textureId, tint, overlayTint, 0); }
+
+    /** One 16 x 16 tile (bottom-up) of an animation frame, tinted; for the grass side the tinted overlay over the dirt side. */
+    private static int[] tile(List<Pack> packs, String textureId, int tint, int overlayTint, int frame) {
         BufferedImage img = image(packs, textureId);
         if (img == null) return null;
         BufferedImage over = overlayTint != 0 ? image(packs, "minecraft:block/grass_block_side_overlay") : null;
-        int size = Math.min(img.getWidth(), img.getHeight()); // animated textures: the first frame
+        int size = Math.min(img.getWidth(), img.getHeight()), y0 = Math.min(frame * size, Math.max(0, img.getHeight() - size));
         int[] out = new int[256];
         for (int y = 0; y < 16; y++)
             for (int x = 0; x < 16; x++) {
-                int argb = img.getRGB(x * img.getWidth() / 16, y * size / 16);
+                int argb = img.getRGB(x * img.getWidth() / 16, y0 + y * size / 16);
                 if (tint != 0) argb = mul(argb, tint);
                 if (over != null) {
                     int o = over.getRGB(x * over.getWidth() / 16, y * Math.min(over.getWidth(), over.getHeight()) / 16);
@@ -329,6 +417,7 @@ final class PreviewBlocks {
 
     /** How a block takes its biome's colour: 0 none, 1 grass, 2 foliage, 3 water (fixed-colour leaves are 0: tint() bakes them). */
     static int tintKind(String block) {
+        block = baseName(block);
         String n = block.substring(block.indexOf(':') + 1);
         if (n.equals("water")) return 3;
         if (n.equals("grass_block") || n.equals("short_grass") || n.equals("tall_grass") || n.contains("fern") || n.equals("sugar_cane") || n.equals("bush"))
@@ -391,6 +480,7 @@ final class PreviewBlocks {
 
     /** The game's tint of a block at the preview's biome (0: none). */
     static int tint(List<Pack> packs, String block) {
+        block = baseName(block);
         String n = block.substring(block.indexOf(':') + 1);
         if (n.equals("water")) return 0x3F76E4;
         if (n.equals("spruce_leaves")) return 0x619961;
@@ -414,12 +504,29 @@ final class PreviewBlocks {
     record Q(double[] p0, double[] e1, double[] e2, double[] uv0, double[] du, double[] dv, String texture, int tint) {}
 
     /** A block's model as quads (null when it is a plain full cube, drawn by the cube path). */
-    static List<Q> modelQuads(List<Pack> packs, String block) {
+    static List<Q> modelQuads(List<Pack> packs, String state) {
+        String block = baseName(state);
         String ns = block.contains(":") ? block.substring(0, block.indexOf(':')) : "minecraft";
         String name = block.substring(block.indexOf(':') + 1);
         if (name.equals("water") || name.equals("lava")) return null;
-        String[] variant = variantOf(packs, ns, name);
-        if (variant == null) return null;
+        List<String[]> variants = variantsOf(packs, ns, name, props(state));
+        if (variants.isEmpty()) return null;
+        List<Q> all = new ArrayList<>();
+        boolean allCubes = true;
+        for (String[] variant : variants) {
+            List<Q> part = variantQuads(packs, block, variant);
+            if (part == null) continue; // a plain unrotated cube
+            if (part.isEmpty()) return null;
+            allCubes = false;
+            all.addAll(part);
+        }
+        if (allCubes && variants.size() == 1) return null;
+        if (allCubes) return null;
+        return all.isEmpty() ? null : all;
+    }
+
+    /** The quads of one model variant; null when it is a plain, unrotated full cube (the cube path draws it). */
+    private static List<Q> variantQuads(List<Pack> packs, String block, String[] variant) {
         Map<String, String> tex = new LinkedHashMap<>();
         com.google.gson.JsonArray elements = null;
         String id = variant[0];
@@ -446,8 +553,8 @@ final class PreviewBlocks {
             double[] f = vec(e.getAsJsonArray("from")), t = vec(e.getAsJsonArray("to"));
             if (e.has("rotation") || f[0] != 0 || f[1] != 0 || f[2] != 0 || t[0] != 16 || t[1] != 16 || t[2] != 16) cube = false;
         }
-        if (cube) return null;
         int rx = Integer.parseInt(variant[1]), ry = Integer.parseInt(variant[2]);
+        if (cube && rx == 0 && ry == 0) return null; // a rotated cube (a log lying along x) is drawn by its quads
         int kind = perColumnTint ? tintKind(block) : 0;
         int tint = kind != 0 ? -kind : tint(packs, block); // < 0: coloured per column by the shader (grass, foliage)
         List<Q> out = new ArrayList<>();
@@ -474,7 +581,7 @@ final class PreviewBlocks {
                     new double[] {(c[0] - a[0]) / 16, (c[1] - a[1]) / 16}, norm(texture), tinted ? tint : 0));
             }
         }
-        return out.isEmpty() ? null : out;
+        return out;
     }
 
     private static double[] scale(double[] p) { return new double[] {p[0] / 16, p[1] / 16, p[2] / 16}; }
@@ -497,6 +604,50 @@ final class PreviewBlocks {
                 default -> { q[0] = o[0] + x * c - y * s; q[1] = o[1] + x * s + y * c; }
             }
         }
+    }
+
+    /**
+     * The models of a block state: the variant matching its properties (or the default-looking one when the state has none),
+     * or every multipart part whose condition holds; each {model, x rotation, y rotation}.
+     */
+    static List<String[]> variantsOf(List<Pack> packs, String ns, String name, Map<String, String> p) {
+        List<String[]> out = new ArrayList<>();
+        byte[] json = readFirst(packs, "assets/" + ns + "/blockstates/" + name + ".json");
+        if (json == null) return out;
+        try {
+            JsonObject o = JsonParser.parseString(new String(json, StandardCharsets.UTF_8)).getAsJsonObject();
+            if (o.has("variants") && !p.isEmpty()) {
+                JsonObject vs = o.getAsJsonObject("variants");
+                for (String k : vs.keySet())
+                    if (matches(k, p)) {
+                        String[] v = variantIn(vs.get(k));
+                        if (v != null) out.add(v);
+                        return out;
+                    }
+            }
+            if (o.has("multipart") && !p.isEmpty()) {
+                for (JsonElement part : o.getAsJsonArray("multipart")) {
+                    JsonObject po = part.getAsJsonObject();
+                    if (po.has("when") && !when(po.getAsJsonObject("when"), p)) continue;
+                    String[] v = variantIn(po.get("apply"));
+                    if (v != null) out.add(v);
+                }
+                if (!out.isEmpty()) return out;
+            }
+        } catch (Exception ignored) {
+            // fall back to the default-looking variant
+        }
+        String[] v = variantOf(packs, ns, name);
+        if (v != null) out.add(v);
+        return out;
+    }
+
+    private static String[] variantIn(JsonElement v) {
+        if (v != null && v.isJsonArray()) v = v.getAsJsonArray().isEmpty() ? null : v.getAsJsonArray().get(0);
+        if (v == null || !v.isJsonObject() || !v.getAsJsonObject().has("model")) return null;
+        JsonObject m = v.getAsJsonObject();
+        return new String[] {m.get("model").getAsString(), String.valueOf(m.has("x") ? m.get("x").getAsInt() : 0),
+            String.valueOf(m.has("y") ? m.get("y").getAsInt() : 0)};
     }
 
     /** The default-looking variant of a block: {model, x rotation, y rotation}, or null. */
@@ -676,6 +827,16 @@ final class PreviewBlocks {
             cloudRect = new int[] {0, 0, cw, ch};
             placed.add(cloudRect);
         }
+        int[] rainRect = null;
+        BufferedImage rainImg = image(packs, "minecraft:environment/rain");
+        if (rainImg != null) {
+            int rw = Math.min(64, rainImg.getWidth()), rh = Math.min(256, rainImg.getHeight());
+            int[] px = new int[rw * rh];
+            for (int yy = 0; yy < rh; yy++) for (int xx = 0; xx < rw; xx++) px[yy * rw + xx] = rainImg.getRGB(xx * rainImg.getWidth() / rw, yy * rainImg.getHeight() / rh);
+            pixels.add(px);
+            rainRect = new int[] {0, 0, rw, rh};
+            placed.add(rainRect);
+        }
         List<int[]> cellQuads = new ArrayList<>(); // {cell index, quad index}
         List<float[]> quads = new ArrayList<>();
         int sx = s.sx(), sy = s.sy(), sz = s.sz();
@@ -753,7 +914,7 @@ final class PreviewBlocks {
         }
         for (int k = 0; k < cellQuads.size(); k++) mesh[cells + k] = cellQuads.get(k)[1];
         perColumnTint = false;
-        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh, biomeCols, cloudRect);
+        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh, biomeCols, cloudRect, rainRect);
         if (CACHE.size() > 4) CACHE.clear();
         CACHE.put(sig, a);
         return a;

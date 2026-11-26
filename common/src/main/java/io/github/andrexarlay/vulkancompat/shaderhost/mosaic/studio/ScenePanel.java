@@ -94,6 +94,12 @@ final class ScenePanel extends Panels.Listening {
                 if (p == null) return;
                 Object u = ((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject();
                 if (!(u instanceof Row r)) return;
+                if (SwingUtilities.isRightMouseButton(e) && r.node() != null) {
+                    JPopupMenu pm = rowMenu(r.node());
+                    StudioWidgets.fitToScreen(pm, tree);
+                    pm.show(tree, e.getX(), e.getY());
+                    return;
+                }
                 Rectangle b = tree.getPathBounds(p);
                 boolean onDot = b != null && e.getX() < b.x + 18 && r.node() != null;
                 if (onDot) {
@@ -120,6 +126,45 @@ final class ScenePanel extends Panels.Listening {
         hint.setBorder(new EmptyBorder(3, 8, 3, 8));
         root.add(hint, BorderLayout.SOUTH);
         refresh();
+    }
+
+    /** Right click a row: the ready looks of a part, back to unchanged, on / off, rename. */
+    private JPopupMenu rowMenu(MosaicDocument.ENode n) {
+        JPopupMenu m = new JPopupMenu();
+        String fn = MosaicFunction.isFunctionType(n.type) ? MosaicFunction.nameOf(n.type) : null;
+        var looks = fn == null ? java.util.List.<MosaicEffects.PartLook>of() : MosaicEffects.looksOf(fn);
+        if (!looks.isEmpty()) {
+            JLabel h = label("  Look", FAINT);
+            h.setFont(UI_S);
+            m.add(h);
+            for (MosaicEffects.PartLook l : looks) {
+                JMenuItem it = new JMenuItem(l.label());
+                it.addActionListener(e -> model.edit(title(n) + ": " + l.label(), () -> {
+                    for (String k : java.util.List.of("tint", "brightness", "saturation", "contrast")) n.defaults.remove(k);
+                    l.values().forEach((k, v) -> n.defaults.put(k, v.clone()));
+                }));
+                m.add(it);
+            }
+            JMenuItem reset = new JMenuItem("Unchanged (reset the look)");
+            reset.addActionListener(e -> model.edit(title(n) + ": unchanged", () -> {
+                for (String k : java.util.List.of("tint", "brightness", "saturation", "contrast", "contrastPivot", "strength", "lookAmount")) n.defaults.remove(k);
+            }));
+            m.add(reset);
+            m.addSeparator();
+        }
+        JMenuItem mute = new JMenuItem(n.muted ? "Turn on" : "Turn off (mute)");
+        mute.addActionListener(e -> {
+            model.select(n);
+            model.toggleMute();
+        });
+        m.add(mute);
+        JMenuItem ren = new JMenuItem("Rename...");
+        ren.addActionListener(e -> {
+            model.select(n);
+            if (model.activeGraph != null) model.activeGraph.renameDialog();
+        });
+        m.add(ren);
+        return m;
     }
 
     private static String hex(Color c) { return String.format("#%02X%02X%02X", c.getRed(), c.getGreen(), c.getBlue()); }

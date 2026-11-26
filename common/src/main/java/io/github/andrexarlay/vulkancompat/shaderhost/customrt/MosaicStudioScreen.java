@@ -78,7 +78,11 @@ public final class MosaicStudioScreen extends Screen {
                         pos.set(snap.ox() + lx, snap.oy() + ly, snap.oz() + lz);
                         var st = level.getBlockState(pos);
                         if (st.isAir()) continue;
+                        // the block and its state (Block{minecraft:oak_stairs}[facing=east,...] -> minecraft:oak_stairs[facing=east,...])
                         String name = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString();
+                        String full = st.toString();
+                        int close = full.indexOf('}');
+                        if (close >= 0 && close + 1 < full.length() && full.charAt(close + 1) == '[') name += full.substring(close + 1);
                         Integer id = ids.get(name);
                         if (id == null && ids.size() < 65535) ids.put(name, id = ids.size());
                         idx[i] = (short) (id == null ? 0 : id.intValue());

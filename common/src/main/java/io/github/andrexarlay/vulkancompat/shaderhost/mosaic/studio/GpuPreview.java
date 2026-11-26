@@ -508,7 +508,13 @@ final class GpuPreview implements AutoCloseable {
     static String gbufferSource(PreviewWorld.View view) {
         boolean blocks = view.blocks() != null, mesh = view.atlas().hasMesh();
         return GBUFFER_GLSL.replace("%CONSTANTS%", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.constants(view.graphSettings(), false)
-            + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\nconst bool HAS_MESH = " + mesh + ";\nconst bool HAS_BIOMES = " + view.atlas().hasBiomes() + ";\n" + cloudConstants(view.atlas().cloudRect()));
+            + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\nconst bool HAS_MESH = " + mesh + ";\nconst bool HAS_BIOMES = " + view.atlas().hasBiomes() + ";\n" + cloudConstants(view.atlas().cloudRect())
+            + rainConstants(view.atlas().rain(), PreviewWorld.weatherOf(view.world())));
+    }
+
+    private static String rainConstants(int[] r, float[] w) {
+        String rect = r == null ? "vec4(0.0)" : "vec4(" + r[0] + ".0, " + r[1] + ".0, " + r[2] + ".0, " + r[3] + ".0)";
+        return "const bool HAS_RAIN_TEX = " + (r != null) + ";\nconst vec4 RAIN_RECT = " + rect + ";\nconst float WORLD_RAIN = " + w[0] + ";\n";
     }
 
     private static String cloudConstants(int[] r) {
@@ -911,7 +917,13 @@ final class GpuPreview implements AutoCloseable {
                 uint b = (blockIds.ids[i >> 1] >> uint((i & 1) * 16)) & 0xFFFFu;
                 if (b != 0u) {
                     uvec4 inf = blockInfo.info[b];
-                    if ((inf.w & 1u) != 0u) return int(n.y > 0.5 ? inf.x : (n.y < -0.5 ? inf.z : inf.y));
+                    if ((inf.w & 1u) != 0u) {
+                        uint v = n.y > 0.5 ? inf.x : (n.y < -0.5 ? inf.z : inf.y);
+                        int tile = int(v & 0xFFFFFu);
+                        uint frames = (v >> 20) & 255u, ft = max((v >> 28) & 15u, 1u);
+                        if (frames > 1u && pw_animate > 0.5) tile += int(uint(floor(frame.timing.x * 20.0 / float(ft))) % frames);
+                        return tile;
+                    }
                 }
             }
             return tileOf(m, n);
@@ -1158,7 +1170,27 @@ final class GpuPreview implements AutoCloseable {
                     }
                 }
             }
+            float rain = pw_rain > 1.5 ? 1.0 : pw_rain > 0.5 ? WORLD_RAIN : 0.0;
+            skyCol *= 1.0 - rain * pw_rainDarken * 2.0;
             if (trans > 0.0) acc += trans * skyCol;
+            acc *= 1.0 - rain * pw_rainDarken;
+            // the game's rain: its texture on cylinders around the camera, falling
+            if (rain > 0.0 && HAS_RAIN_TEX) {
+                vec2 dh = d.xz;
+                float dl = length(dh);
+                for (int k = 0; k < 4 && dl > 1e-4; k++) {
+                    float rad = 2.0 + float(k) * 2.5;
+                    float tr = rad / dl;
+                    if (tr >= depth) break;
+                    vec3 hp = d * tr;
+                    float ang = atan(hp.z, hp.x);
+                    // one quarter of the texture's width per block of arc and per 4 blocks of height, like the game's rain quads
+                    vec2 ruv = vec2(fract(ang * rad * 0.25 + float(k) * 0.37),
+                        fract((hp.y + frame.cameraPosition.y) * 0.25 + frame.timing.x * pw_rainSpeed + float(k) * 0.21));
+                    vec4 rt = textureLod(atlas, (RAIN_RECT.xy + ruv * RAIN_RECT.zw) / vec2(textureSize(atlas, 0)), 0.0);
+                    acc = mix(acc, rt.rgb * vec3(0.8, 0.85, 0.95), rt.a * pw_rainOpacity * rain);
+                }
+            }
             // the game's distance fog towards the sky colour at the horizon
             if (pw_fog > 0.5 && depth < 1.0e5) {
                 float end = pw_maxDistance;

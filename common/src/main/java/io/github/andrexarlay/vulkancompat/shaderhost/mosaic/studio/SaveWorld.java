@@ -85,6 +85,7 @@ final class SaveWorld {
             }
         }
         long dayTime = level != null && level.get("DayTime") != null ? (long) num(level.get("DayTime")) : clock(save, dim);
+        float[] weather = weather(save, level);
         float tod = (float) (Math.floorMod(dayTime - 6000L, 24000L) / 24000.0);
         Path regions = regionDir(save, dim);
         try (Reader r = new Reader(regions)) {
@@ -132,6 +133,7 @@ final class SaveWorld {
             MosaicWorld.Snapshot snap = new MosaicWorld.Snapshot(sx, sy, sz, ox, oy, oz, cells, x, y, z, yaw, pitch, tod);
             if (farSize > 0) snap = snap.withFar(far(r, fx, fz, farSize));
             List<PreviewWorld.Entity> ents = entities(regions.resolveSibling("entities"), ox, oy, oz, sx, sy, sz);
+            PreviewWorld.weather(snap, weather[0], weather[1]);
             return new Loaded(snap, new MosaicWorld.BlockTable(List.copyOf(ids.keySet()), index), ents, PreviewWorld.Biomes.of(colBiome));
         }
     }
@@ -217,7 +219,7 @@ final class SaveWorld {
                         hs[k] = (short) Math.clamp(top, -32767, 32767);
                         gs[k] = (short) Math.clamp(ground == Integer.MIN_VALUE ? top : ground, -32767, 32767);
                         ms[k] = (byte) m.id();
-                        if (gs[k] < hs[k] && c.block(x, gs[k], z).matches(".*(_log|_stem|_wood|_hyphae)$")) ms[k] |= (byte) 0x80;
+                        if (gs[k] < hs[k] && c.block(x, gs[k], z).replaceAll("\\[.*$", "").matches(".*(_log|_stem|_wood|_hyphae)$")) ms[k] |= (byte) 0x80;
                         else if (gs[k] < hs[k] && classify(c.block(x, gs[k], z)) == Material.WOOD) ms[k] |= (byte) 0x80;
                     }
             }
@@ -241,6 +243,18 @@ final class SaveWorld {
             return f == null ? null : root(gunzip(Files.readAllBytes(f)));
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /** Rain and thunder (0 / 1) of a save: data/minecraft/weather.dat (26.x) or level.dat. */
+    private static float[] weather(Path save, Map<String, Object> level) {
+        try {
+            Path f = save.resolve("data/minecraft/weather.dat");
+            Map<String, Object> w = Files.isRegularFile(f) ? compound(root(gunzip(Files.readAllBytes(f))), "data") : level;
+            if (w == null) return new float[] {0, 0};
+            return new float[] {num(w.getOrDefault("raining", 0)) > 0 ? 1f : 0f, num(w.getOrDefault("thundering", 0)) > 0 ? 1f : 0f};
+        } catch (Exception e) {
+            return new float[] {0, 0};
         }
     }
 
@@ -298,6 +312,7 @@ final class SaveWorld {
 
     /** The material class of a block for rays and the preview (the game's MosaicWorldFeed does the same from block states). */
     static Material classify(String id) {
+        if (id.indexOf('[') > 0) id = id.substring(0, id.indexOf('['));
         String n = id.contains(":") ? id.substring(id.indexOf(':') + 1) : id;
         if (n.equals("air") || n.equals("cave_air") || n.equals("void_air") || n.equals("light") || n.equals("structure_void")) return Material.AIR;
         if (n.equals("water") || n.equals("bubble_column") || n.contains("kelp") || n.contains("seagrass")) return Material.WATER;
@@ -362,9 +377,7 @@ final class SaveWorld {
             String[] pal = palettes.computeIfAbsent(Math.floorDiv(y, 16), k -> {
                 if (!(bs.get("palette") instanceof List<?> p)) return new String[] {"minecraft:air"};
                 String[] out = new String[p.size()];
-                for (int i = 0; i < out.length; i++)
-                    out[i] = p.get(i) instanceof String s0 ? s0 // 26.x: the palette holds block names (state properties dropped)
-                        : p.get(i) instanceof Map<?, ?> e && e.get("Name") instanceof String n ? n : "minecraft:air";
+                for (int i = 0; i < out.length; i++) out[i] = stateName(p.get(i));
                 return out;
             });
             if (pal.length == 1 || !(bs.get("data") instanceof long[] data)) return pal[0];
@@ -375,6 +388,25 @@ final class SaveWorld {
             return v < pal.length ? pal[v] : pal[0];
         }
 
+        /**
+         * A palette entry as "name[key=value,...]" (keys sorted): a plain name, 1.21.5+ heterogeneous-list wrappers
+         * ({"": entry}), 26.x {id, properties} and older {Name, Properties} compounds.
+         */
+        static String stateName(Object e) {
+            if (e instanceof String s) return s;
+            if (!(e instanceof Map<?, ?> m)) return "minecraft:air";
+            if (m.size() == 1 && m.containsKey("")) return stateName(m.get(""));
+            Object id = m.containsKey("id") ? m.get("id") : m.get("Name");
+            if (!(id instanceof String name)) return "minecraft:air";
+            Object props = m.containsKey("properties") ? m.get("properties") : m.get("Properties");
+            if (!(props instanceof Map<?, ?> pm) || pm.isEmpty()) return name;
+            java.util.TreeMap<String, String> sorted = new java.util.TreeMap<>();
+            for (var en : pm.entrySet()) sorted.put(String.valueOf(en.getKey()), String.valueOf(en.getValue() instanceof Map<?, ?> w && w.containsKey("") ? w.get("") : en.getValue()));
+            StringBuilder sb = new StringBuilder(name).append('[');
+            for (var en : sorted.entrySet()) sb.append(sb.charAt(sb.length() - 1) == '[' ? "" : ",").append(en.getKey()).append('=').append(en.getValue());
+            return sb.append(']').toString();
+        }
+
         /** The biome at a block (4 x 4 x 4 cells per section), or null. */
         @SuppressWarnings("unchecked")
         String biome(int x, int y, int z) {
@@ -382,13 +414,12 @@ final class SaveWorld {
             if (s == null || !(s.get("biomes") instanceof Map<?, ?> b0)) return null;
             Map<String, Object> b = (Map<String, Object>) b0;
             if (!(b.get("palette") instanceof List<?> pal) || pal.isEmpty()) return null;
-            Object first = pal.get(0);
-            if (pal.size() == 1 || !(b.get("data") instanceof long[] data)) return first instanceof String f ? f : null;
+            if (pal.size() == 1 || !(b.get("data") instanceof long[] data)) return stateName(pal.get(0));
             int bits = 32 - Integer.numberOfLeadingZeros(pal.size() - 1), perLong = 64 / bits;
             int i = (((y & 15) >> 2) * 4 + (z >> 2)) * 4 + (x >> 2);
             if (i / perLong >= data.length) return null;
             int v = (int) ((data[i / perLong] >>> ((i % perLong) * bits)) & ((1L << bits) - 1));
-            return v < pal.size() && pal.get(v) instanceof String n ? n : null;
+            return v < pal.size() ? stateName(pal.get(v)) : null;
         }
 
         /** Saved light (0..15) at a block, or {@code missing} when the section has none. */

@@ -96,6 +96,8 @@ public final class AgentCli {
           mosaic lint <graph.json>                   errors, warnings and hints with the node they sit on
           mosaic find <graph.json> <text>            nodes by id, type, label or buffer name
           mosaic passes <graph.json>                 the pass plan: buffers, scales, what each pass reads, history copies
+          mosaic looks [part]                        ready looks of the Minecraft parts (partWater, partLeaves...)
+          mosaic look <graph.json> <node> <look>     give a part node one of them
           mosaic graph-settings <graph.json> [key [values|default]] [--preset name] [--reset]
                                                      the graph's settings (sky, rays, world volume...): list, read, set
           mosaic settings                            studio settings (design)
@@ -193,6 +195,29 @@ public final class AgentCli {
             }
             case "project" -> {
                 return project(a);
+            }
+            case "looks" -> {
+                need(Need.READ);
+                String part = a.size() > 1 ? a.get(1) : null;
+                for (var l : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicEffects.PART_LOOKS)
+                    if (part == null || l.part().equals(part)) out.println(l.part() + "  " + l.label() + "  " + l.values().keySet());
+                return 0;
+            }
+            case "look" -> {
+                need(Need.GRAPHS);
+                if (a.size() < 4) return usage();
+                MosaicDocument d = MosaicDocument.load(path(a, 1));
+                MosaicDocument.ENode n = node(d, a.get(2));
+                String fn = MosaicFunction.isFunctionType(n.type) ? MosaicFunction.nameOf(n.type) : "";
+                String want = String.join(" ", a.subList(3, a.size()));
+                var l = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicEffects.looksOf(fn).stream()
+                    .filter(x -> x.label().equalsIgnoreCase(want)).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("no look " + want + " for " + fn + " (see: mosaic looks " + fn + ")"));
+                for (String k : List.of("tint", "brightness", "saturation", "contrast")) n.defaults.remove(k);
+                l.values().forEach((k, v) -> n.defaults.put(k, v.clone()));
+                d.save();
+                say(n.id + ": look " + l.label());
+                return 0;
             }
             case "graph-settings" -> {
                 return graphSettings(a);

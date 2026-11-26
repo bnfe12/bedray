@@ -59,6 +59,16 @@ final class PreviewWorld {
 
     static Biomes biomesOf(MosaicWorld.Snapshot s) { return s == null ? null : BIOMES.get(s); }
 
+    private static final java.util.Map<MosaicWorld.Snapshot, float[]> WEATHER = java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    static void weather(MosaicWorld.Snapshot s, float rain, float thunder) { WEATHER.put(s, new float[] {rain, thunder}); }
+
+    /** Rain and thunder of a loaded world (0 / 1), none when unknown. */
+    static float[] weatherOf(MosaicWorld.Snapshot s) {
+        float[] w = s == null ? null : WEATHER.get(s);
+        return w == null ? new float[] {0, 0} : w;
+    }
+
     /** An entity of a loaded world: id (minecraft:cow), feet position (absolute blocks), body yaw (Minecraft degrees). */
     record Entity(String id, double x, double y, double z, float yaw) {}
 
@@ -465,6 +475,11 @@ final class PreviewWorld {
         look("cloudHeight", "Cloud height", "Absolute y of the cloud layer (the game: 192.33).", 192.33),
         look("cloudSpeed", "Cloud speed", "Blocks per second the clouds drift along x (the game: about 0.6).", 0.6),
         look("cloudOpacity", "Cloud opacity", "How much the clouds cover the sky.", 0.8),
+        look("rain", "Rain", "0: never; 1: when the world is raining (saves keep their weather); 2: always.", 1),
+        look("rainOpacity", "Rain opacity", "How strongly the falling rain shows.", 0.55),
+        look("rainSpeed", "Rain speed", "How fast the rain falls (texture lengths per second).", 1.6),
+        look("rainDarken", "Rain darkening", "How much rain darkens the sky and the daylight (the game: about 0.75 of the light).", 0.25),
+        look("animate", "Animated textures", "1: water, lava, fire, sea lanterns... play their animations like the game; 0: the first frame.", 1),
         look("models", "Block models and entities", "1: stairs, slabs, torches, flowers, fences... and the world's entities drawn by their models; 0: cubes.", 1));
 
     private static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting look(String key, String label, String help, double def) {
