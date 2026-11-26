@@ -38,6 +38,7 @@ final class PreviewPanel extends Panels.Listening {
     volatile String message = "Starting the GPU...";
     volatile boolean playing = true;
     private final JButton play;
+    private JToggleButton bypassButton;
     private final Thread worker;
     private volatile boolean alive = true;
     private long start = System.nanoTime();
@@ -73,6 +74,24 @@ final class PreviewPanel extends Panels.Listening {
     private final JComboBox<Compare> compareBox = new JComboBox<>(Compare.values());
     private long lastLoop = System.nanoTime();
     private long atlasChecked;
+    /** Bypass (B): the world without the graph, as the game draws it before your nodes. */
+    volatile boolean bypass;
+    private static java.util.List<GpuPreview.PassRun> passThrough;
+
+    private static synchronized java.util.List<GpuPreview.PassRun> passThrough() {
+        if (passThrough != null) return passThrough;
+        try {
+            String json = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicTemplates.all().stream()
+                .filter(t -> t.name().equals("Pass-through")).findFirst().orElseThrow().json();
+            var r = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicShaderCheck.compile(io.github.andrexarlay.vulkancompat.shaderhost.mosaic
+                .MosaicCodegen.generate(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicGraph.parse(json),
+                    io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicCodegen.Options.PREVIEW, false));
+            passThrough = r.ok() ? java.util.List.of(new GpuPreview.PassRun(r.spirv(), 1, -1)) : null;
+        } catch (Exception e) {
+            passThrough = null;
+        }
+        return passThrough;
+    }
     /** The last moment something changed (camera, graph, look, settings): after a while the preview rests. */
     private volatile long lastActivity = System.currentTimeMillis();
     private Object lastSeenKey;
@@ -169,6 +188,14 @@ final class PreviewPanel extends Panels.Listening {
         row3.add(compareBox);
         row3.add(button("Keep A", "Keep the frame shown now as A to compare against (change something, then look at Split or Difference)",
             this::keepReference));
+        JToggleButton bypassBtn = new JToggleButton("Bypass");
+        bypassBtn.setToolTipText("The world without your graph, as the game draws it before your nodes (B). Keep A + Split compares them.");
+        bypassBtn.addActionListener(e -> {
+            bypass = bypassBtn.isSelected();
+            lastKey = null;
+        });
+        this.bypassButton = bypassBtn;
+        row3.add(bypassBtn);
         JButton views = button("Views", "Saved cameras: save this view, go back to one (keys 1..9), the start view (R)", () -> { });
         views.addActionListener(e -> {
             JPopupMenu vm = viewsMenu();
@@ -307,6 +334,11 @@ final class PreviewPanel extends Panels.Listening {
                     worldView = startView;
                     syncTime();
                     lastKey = null;
+                    e.consume();
+                    return;
+                }
+                if (code == java.awt.event.KeyEvent.VK_B && bypassButton != null) {
+                    bypassButton.doClick();
                     e.consume();
                     return;
                 }
@@ -997,6 +1029,7 @@ final class PreviewPanel extends Panels.Listening {
                     gpu.worldWidth = StudioUi.settings.previewWidth;
                     gpu.worldHeight = StudioUi.settings.previewHeight;
                     var list = runs != null ? runs : java.util.List.of(new GpuPreview.PassRun(c.spirv(), 1, -1));
+                    if (bypass && passThrough() != null) list = passThrough();
                     out = gpu.runChain(list, input, t, frame++, extras(), wv);
                 } catch (UnsupportedOperationException e) {
                     show(null, e.getMessage());
