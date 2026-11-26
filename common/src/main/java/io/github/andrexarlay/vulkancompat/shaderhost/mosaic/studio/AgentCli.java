@@ -106,7 +106,7 @@ public final class AgentCli {
           mosaic arrange <graph.json>
           mosaic bake <material.mosaic.json> <texture.png> <out-folder>   LabPBR _s / _n (+ colour)
         Rendering and Bedray hooks (for people and agents)
-          mosaic render <graph.json> <out.png> [--time ticks] [--pitch deg] [--yaw deg] [--pos x,y,z] [--size WxH] [--frames N] [--world file]
+          mosaic render <graph.json> <out.png> [--time ticks] [--pitch deg] [--yaw deg] [--pos x,y,z] [--size WxH] [--frames N] [--world file] [--profile]
                                                      the graph over the preview world, headless, to a PNG
           mosaic hook <function|user.stage> --slang <body.slang>   a Bedray function / your stage from Slang text
           mosaic hook <function|user.stage> --reset                back to Bedray's own
@@ -685,8 +685,32 @@ public final class AgentCli {
             gpu.worldHeight = Integer.parseInt(wh[1].trim());
             java.awt.image.BufferedImage img = null;
             long t0 = System.nanoTime();
-            for (int f = 0; f < Math.max(1, frames); f++) img = gpu.runChain(runs, null, f / 30f, f, null, view);
+            double[] sum = null;
+            int counted = 0;
+            for (int f = 0; f < Math.max(1, frames); f++) {
+                img = gpu.runChain(runs, null, f / 30f, f, null, view);
+                double[] tm = gpu.lastTimings;
+                if (f >= 2 && tm != null) { // the first frames build pipelines and fill buffers
+                    if (sum == null) sum = new double[tm.length];
+                    for (int i = 0; i < tm.length && i < sum.length; i++) sum[i] += tm[i];
+                    counted++;
+                }
+            }
             long ms = (System.nanoTime() - t0) / 1_000_000 / Math.max(1, frames);
+            if (a.contains("--profile")) {
+                if (sum == null) out.println("profile: this GPU queue writes no timestamps");
+                else {
+                    double total = 0;
+                    for (double v : sum) total += v / counted;
+                    out.println(String.format(Locale.ROOT, "GPU time per frame %.2f ms (average of %d frames)", total, counted));
+                    out.println(String.format(Locale.ROOT, "  %-34s %7.2f ms", "world G-buffer", sum[0] / counted));
+                    for (int i = 1; i < sum.length; i++) {
+                        String name = plan == null ? "final image" : plan.all().get(i - 1).name() == null ? "final image"
+                            : "Buffer " + plan.all().get(i - 1).name() + " 1/" + plan.all().get(i - 1).scale();
+                        out.println(String.format(Locale.ROOT, "  %-34s %7.2f ms", name, sum[i] / counted));
+                    }
+                }
+            }
             if (png.getParent() != null) Files.createDirectories(png.getParent());
             ImageIO.write(img, "png", png.toFile());
             out.println("rendered " + png + "  " + gpu.worldWidth + "x" + gpu.worldHeight + ", " + runs.size() + " passes, " + frames

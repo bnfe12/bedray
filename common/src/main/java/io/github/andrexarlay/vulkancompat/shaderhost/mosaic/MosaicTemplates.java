@@ -174,6 +174,10 @@ public final class MosaicTemplates {
             f.addProperty("color", (String) spec[0]);
             frames.add(f);
         };
+        java.util.function.BiConsumer<JsonObject, Object[]> buf = (n, mi) -> {
+            n.addProperty("mask", (String) mi[0]);
+            if (mi.length > 1) n.addProperty("index", (Integer) mi[1]);
+        };
         // G-buffer
         add.apply(new Object[] {"uv", "mosaic.uv", 0, 0});
         add.apply(new Object[] {"pos", "mosaic.position", 0, 1});
@@ -237,13 +241,13 @@ public final class MosaicTemplates {
         zero.add(0);
         flat.add("cloudCoverage", zero); // the volumetric clouds below replace the flat layer
         skyBg.add("defaults", flat);
-        add.apply(new Object[] {"clouds", "fn:volumetricClouds", 4, 3.6, "color", "skyBg", "uv", "uv"});
+        // volumetric clouds at half size in their own buffer, composited over the sky (about a quarter of the cost)
+        add.apply(new Object[] {"cloudRay", "fn:cloudLayer", 3, 3.6, "uv", "uv"});
+        buf.accept(add.apply(new Object[] {"cloudBuf", "mosaic.pass", 3, 4.8, "color", "cloudRay"}), new Object[] {"clouds", 2});
+        buf.accept(add.apply(new Object[] {"cloudIn", "mosaic.bufferIn", 3, 6}), new Object[] {"clouds"});
+        add.apply(new Object[] {"clouds", "fn:cloudComposite", 4, 3.6, "color", "skyBg", "layer", "cloudIn", "uv", "uv"});
         add.apply(new Object[] {"air", "fn:atmosphere", 4, 4.8, "color", "clouds", "uv", "uv"});
         // HDR into a buffer, then a bloom chain at 1/2, 1/4 and 1/8 added back before the tone map
-        java.util.function.BiConsumer<JsonObject, Object[]> buf = (n, mi) -> {
-            n.addProperty("mask", (String) mi[0]);
-            if (mi.length > 1) n.addProperty("index", (Integer) mi[1]);
-        };
         buf.accept(add.apply(new Object[] {"hdrBuf", "mosaic.pass", 5, 0, "color", "air"}), new Object[] {"hdr", 1});
         buf.accept(add.apply(new Object[] {"hdrIn", "mosaic.bufferIn", 5, 1.2}), new Object[] {"hdr"});
         add.apply(new Object[] {"bright", "fn:brightPass", 5, 2.4, "color", "hdrIn"});
@@ -285,7 +289,7 @@ public final class MosaicTemplates {
         frame.accept("Direct light", new Object[] {"#B07A2E", "shadow", "sun", "spec", "torch", "glow"});
         if (gi) frame.accept(rt ? "Indirect light (RT GI)" : "Indirect light (voxel GI)",
             new Object[] {"#2F8F7C", "giRaw", "acc", "giBuf", "dn0", "buf0", "dn1", "buf1", "dn2", "giRgb"});
-        frame.accept("Shade, sky and atmosphere", new Object[] {"#8A5CC8", "direct", "light", "extra", "shade", "water", "skyBg", "clouds", "air"});
+        frame.accept("Shade, sky and atmosphere", new Object[] {"#8A5CC8", "direct", "light", "extra", "shade", "water", "skyBg", "cloudRay", "cloudBuf", "cloudIn", "clouds", "air"});
         frame.accept("HDR and bloom", new Object[] {"#C06A3A", "hdrBuf", "hdrIn", "ssr", "bright", "bloomA", "kA", "bloomB", "kB", "bloomC", "bA", "bB", "bC"});
         frame.accept("Auto exposure", new Object[] {"#3E8EB0", "logLum", "lumBuf", "avg", "expPrev", "adapt", "expBuf", "expIn", "ae"});
         frame.accept("Tone map and output", new Object[] {"#4B8A4B", "bloom", "tone", "frameBuf", "taa", "out"});

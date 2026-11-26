@@ -60,6 +60,11 @@ public final class MosaicStudioScreen extends Screen {
                     ms[j * fs + i] = (byte) MosaicWorldFeed.classify(state).id();
                     gs[j * fs + i] = (short) Math.clamp(level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz) - 1,
                         -32767, 32767);
+                    // a log right under the leaves (on the ground): the column's trunk, marked in the material's high bit
+                    if (gs[j * fs + i] < hs[j * fs + i]) {
+                        pos.set(bx, gs[j * fs + i], bz);
+                        if (level.getBlockState(pos).is(net.minecraft.tags.BlockTags.LOGS)) ms[j * fs + i] |= (byte) 0x80;
+                    }
                 }
             var far = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Far(fs, fox, foz, hs, ms, gs);
             java.nio.file.Files.write(dir.resolve("preview-world.bin"),

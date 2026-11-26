@@ -11,6 +11,7 @@ import org.lwjgl.vulkan.*;
 import java.awt.image.BufferedImage;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -34,6 +35,10 @@ final class GpuPreview implements AutoCloseable {
     private final long commandPool, fence;
     private final VkCommandBuffer cmd;
     final String deviceName;
+    /** Nanoseconds per timestamp tick (0: the queue writes no timestamps). */
+    private float timestampPeriod;
+    /** GPU time of the last run in ms: [0] the world G-buffer, then every pass in run order. */
+    volatile double[] lastTimings;
 
 
     private GpuPreview(VkInstance instance, VkPhysicalDevice physical, VkDevice device, int family, String name) {
@@ -46,6 +51,14 @@ final class GpuPreview implements AutoCloseable {
             PointerBuffer pq = s.mallocPointer(1);
             vkGetDeviceQueue(device, family, 0, pq);
             queue = new VkQueue(pq.get(0), device);
+            // timestamps for per-pass GPU timings (mosaic render --profile), when the queue family writes them
+            VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.calloc(s);
+            vkGetPhysicalDeviceProperties(physical, props);
+            IntBuffer nq = s.mallocInt(1);
+            vkGetPhysicalDeviceQueueFamilyProperties(physical, nq, null);
+            VkQueueFamilyProperties.Buffer qf = VkQueueFamilyProperties.calloc(nq.get(0), s);
+            vkGetPhysicalDeviceQueueFamilyProperties(physical, nq, qf);
+            timestampPeriod = qf.get(family).timestampValidBits() > 0 ? props.limits().timestampPeriod() : 0f;
             LongBuffer lp = s.mallocLong(1);
             check(vkCreateCommandPool(device, VkCommandPoolCreateInfo.calloc(s).sType$Default()
                 .flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT).queueFamilyIndex(family), null, lp), "command pool");
@@ -165,6 +178,9 @@ final class GpuPreview implements AutoCloseable {
         io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field heightField;
         long gbModule, gbSetLayout, gbLayout, gbPipeline, gbPool, gbSet;
         boolean gbFresh = true;
+        /** GPU timestamps: start, after the G-buffer, after every pass (0 when the queue has no timestamps). */
+        long queryPool;
+        int queries;
         PreviewWorld.View lastView;
 
         void destroy() {
@@ -172,6 +188,7 @@ final class GpuPreview implements AutoCloseable {
             for (Prepared p : passes) p.destroy();
             if (sampler != 0) vkDestroySampler(device, sampler, null);
             if (nearest != 0) vkDestroySampler(device, nearest, null);
+            if (queryPool != 0) vkDestroyQueryPool(device, queryPool, null);
             if (gbPipeline != 0) vkDestroyPipeline(device, gbPipeline, null);
             if (gbLayout != 0) vkDestroyPipelineLayout(device, gbLayout, null);
             if (gbPool != 0) vkDestroyDescriptorPool(device, gbPool, null);
@@ -337,6 +354,10 @@ final class GpuPreview implements AutoCloseable {
         try (MemoryStack s = MemoryStack.stackPush()) {
             vkResetCommandBuffer(cmd, 0);
             vkBeginCommandBuffer(cmd, VkCommandBufferBeginInfo.calloc(s).sType$Default().flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
+            if (c.queryPool != 0) {
+                vkCmdResetQueryPool(cmd, c.queryPool, 0, c.queries);
+                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.queryPool, 0);
+            }
             if (c.world) {
                 int from = c.gbFresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 barrier(s, c.scene.image(), from, VK_IMAGE_LAYOUT_GENERAL);
@@ -347,6 +368,7 @@ final class GpuPreview implements AutoCloseable {
                 vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
                 barrier(s, c.scene.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 barrier(s, c.dist.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                if (c.queryPool != 0) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, c.queryPool, 1);
             } else {
                 barrier(s, c.input.image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
                 copyIn(s, c.upload, c.input);
@@ -384,6 +406,7 @@ final class GpuPreview implements AutoCloseable {
                 vkCmdDispatch(cmd, (p.output.w() + 7) / 8, (p.output.h() + 7) / 8, 1);
                 p.layout = p.fin ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 barrier(s, p.output.image(), VK_IMAGE_LAYOUT_GENERAL, p.layout);
+                if (c.queryPool != 0) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, c.queryPool, i + 2);
             }
             Img fin = c.passes.stream().filter(q -> q.fin).findFirst().orElse(c.passes.get(c.passes.size() - 1)).output;
             VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, s);
@@ -402,6 +425,21 @@ final class GpuPreview implements AutoCloseable {
             vkResetFences(device, fence);
             check(vkQueueSubmit(queue, VkSubmitInfo.calloc(s).sType$Default().pCommandBuffers(s.pointers(cmd)), fence), "submit");
             check(vkWaitForFences(device, fence, true, 5_000_000_000L), "wait");
+            if (c.queryPool != 0) {
+                LongBuffer ts = s.mallocLong(c.queries);
+                if (vkGetQueryPoolResults(device, c.queryPool, 0, c.queries, ts, 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
+                    double[] ms = new double[c.queries - 1];
+                    long t0 = ts.get(0), prev = t0;
+                    if (!c.world) ts.put(1, t0); // no G-buffer pass: its slot holds the start
+                    for (int q = 1; q < c.queries; q++) {
+                        long t = ts.get(q);
+                        if (q == 1 && !c.world) t = t0;
+                        ms[q - 1] = Math.max(0, t - prev) * timestampPeriod / 1.0e6;
+                        prev = t;
+                    }
+                    lastTimings = ms;
+                }
+            }
         }
         BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
         int[] row = new int[w];
@@ -598,6 +636,12 @@ final class GpuPreview implements AutoCloseable {
             c.passes.add(p);
         }
         for (int i = 0; i < runs.size(); i++) preparePass(c, c.passes.get(i), runs.get(i).spirv(), buffers, extras);
+        if (timestampPeriod > 0) try (MemoryStack s = MemoryStack.stackPush()) {
+            LongBuffer lp = s.mallocLong(1);
+            c.queries = runs.size() + 2;
+            if (vkCreateQueryPool(device, VkQueryPoolCreateInfo.calloc(s).sType$Default().queryType(VK_QUERY_TYPE_TIMESTAMP).queryCount(c.queries),
+                    null, lp) == VK_SUCCESS) c.queryPool = lp.get(0);
+        }
         return c;
     }
 
@@ -874,9 +918,11 @@ final class GpuPreview implements AutoCloseable {
             if (trans > 0.0 && farField.head.w == 1) {
                 float t = max(tExit, 0.5), lastY = 1e9;
                 int fsz = farField.head.z;
+                float maxTop = float(farField.camY.y - farField.camY.x) + 1.0;
                 for (int i = 0; i < 1024; i++) {
                     if (t > pw_farDistance) break;
                     vec3 q = o + d * t;
+                    if (q.y > maxTop && d.y >= 0.0) break; // above every hill and still rising: only sky ahead
                     ivec2 c = ivec2(floor(q.xz)) - farField.head.xy;
                     if (c.x < 0 || c.y < 0 || c.x >= fsz || c.y >= fsz) break;
                     uint fc = farField.cells[c.y * fsz + c.x];
@@ -884,14 +930,19 @@ final class GpuPreview implements AutoCloseable {
                     if (hAbs > -32000) {
                         float top = float(hAbs - farField.camY.x) + 1.0;
                         float canopy = float((fc >> 24) & 0xFFu);
-                        uint m = (fc >> 16) & 0xFFu;
+                        uint m = (fc >> 16) & 0x7Fu;
+                        bool trunk = ((fc >> 16) & 0x80u) != 0u;
                         // a column under leaves: the canopy (at most pw_canopyDepth blocks) over open air over the ground
                         float ground = top - canopy;
                         bool inCanopy = canopy > 0.0 && q.y < top && q.y >= top - min(canopy, pw_canopyDepth);
                         bool inGround = q.y < (canopy > 0.0 ? ground : top);
-                        if (inCanopy || inGround) {
+                        // the trunk: a log column from the ground up to the canopy, narrower than the block (pw_trunkWidth)
+                        vec2 fq = fract(q.xz) - 0.5;
+                        bool inTrunk = trunk && canopy > 0.0 && q.y >= ground && q.y < top && max(abs(fq.x), abs(fq.y)) < pw_trunkWidth * 0.5;
+                        if (inCanopy || inGround || inTrunk) {
                             float surf = inCanopy ? top : (canopy > 0.0 ? ground : top);
-                            if (!inCanopy && canopy > 0.0) m = 4u; // the ground under trees
+                            if (!inCanopy && !inTrunk && canopy > 0.0) m = 4u; // the ground under trees
+                            if (inTrunk && !inCanopy) m = 7u;
                             vec3 n = lastY >= surf ? vec3(0.0, 1.0, 0.0)
                                 : (abs(d.x) > abs(d.z) ? vec3(-sign(d.x), 0.0, 0.0) : vec3(0.0, 0.0, -sign(d.z)));
                             vec3 qs = n.y > 0.5 ? vec3(q.x, surf, q.z) : q;

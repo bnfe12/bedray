@@ -149,7 +149,7 @@ final class PreviewWorld {
                     h += (x == cx && z == cz) ? 6 : 5;
                 }
                 hs[j * fs + i] = (short) h;
-                ms[j * fs + i] = (byte) m.id();
+                ms[j * fs + i] = (byte) (m.id() | (m == Material.LEAVES && x == cx && z == cz ? 0x80 : 0)); // the trunk under the crown
             }
         return s.withFar(new MosaicWorld.Far(fs, fox, foz, hs, ms, gs));
     }
@@ -293,7 +293,8 @@ final class PreviewWorld {
         look("maxDistance", "View distance (blocks)", "Blocks the preview camera sees in full detail (the volume).", 256),
         look("farDistance", "Far view distance", "Blocks the far land (height field beyond the volume) is drawn to.", 1500),
         look("canopyDepth", "Far canopy depth", "Blocks of leaves drawn at the top of a far tree column (the rest down to the ground is open).", 4),
-        look("farStep", "Far march step", "Growth of the far land's march steps with distance (smaller = finer, slower).", 0.004),
+        look("trunkWidth", "Far trunk width", "Width of a far tree's trunk (fraction of a block).", 0.7),
+        look("farStep", "Far march step", "Growth of the far land's march steps with distance (smaller = finer, slower).", 0.01),
         look("lightCurve", "Light curve", "Shape of the light map: level / ((1 + k) - k x level); 3 is Minecraft's.", 3),
         look("dayRise", "Daylight rise", "How fast sky light brightens with the sun's height.", 2.5),
         look("dayOffset", "Daylight offset", "Sky light when the sun is at the horizon.", 0.55),

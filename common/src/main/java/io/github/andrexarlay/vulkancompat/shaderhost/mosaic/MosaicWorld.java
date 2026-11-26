@@ -165,7 +165,7 @@ public final class MosaicWorld {
             b.order(ByteOrder.LITTLE_ENDIAN);
             int fx = (int) Math.floor(camX), fz = (int) Math.floor(camZ);
             b.putInt(0, ox - fx).putInt(4, oz - fz).putInt(8, size).putInt(12, 1);
-            b.putInt(16, (int) Math.floor(camY)).putInt(20, 0).putInt(24, 0).putInt(28, 0);
+            b.putInt(16, (int) Math.floor(camY)).putInt(20, maxTop()).putInt(24, 0).putInt(28, 0);
             // canopy depth: blocks from the top (leaves) down to the ground under them, 0 for bare ground
             if (cells) for (int i = 0; i < size * size; i++) {
                 int canopy = heights[i] == Short.MIN_VALUE ? 0 : Math.clamp(heights[i] - groundAt(i), 0, 255);
@@ -174,6 +174,13 @@ public final class MosaicWorld {
         }
 
         public int bytes() { return 32 + size * size * 4; }
+
+        /** The highest top of the field (absolute y), so rays above it stop early. */
+        public int maxTop() {
+            int m = Short.MIN_VALUE;
+            for (short h : heights) if (h != Short.MIN_VALUE && h > m) m = h;
+            return m;
+        }
     }
 
     /**

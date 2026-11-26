@@ -726,6 +726,68 @@ public final class MosaicEffects {
             vec3 under = pow(max(mosaicScene(clamp(uv + off, vec2(0.0), vec2(1.0))).rgb, vec3(0.0)), vec3(gamma));
             vec3 keep = exp(-absorption * d / max(clarity, 0.01));
             return vec4(mix(deepColor, under, keep) * 0.5 + color.rgb * 0.5 * keep, color.a);""");
+        add("Render pipeline", "vec4 cloudLayer(vec2 uv, float bottom = 170, float top = 240, float coverage = 0.5, float density = 0.035, float scale = 0.006, float detail = 3, float steps = 14, float lightSteps = 3, float absorption = 1.2, vec3 sunColor = vec3(1.0, 0.95, 0.88), float sunStrength = 3, vec3 ambientColor = vec3(0.55, 0.65, 0.8), float ambientStrength = 0.6, float forwardScatter = 0.6, float powder = 0.5, vec2 windDirection = vec2(1.0, 0.3), float windSpeed = 2, float fadeDistance = 9000, float nightLevel = 0.04)",
+            "Cloud layer", "The volumetric clouds as a layer (light in rgb, transmittance in alpha) for a Buffer at 1/2 or 1/4: ray-marched clouds in a slab between bottom and top (blocks above sea level 0): noise density with"
+                + " coverage, light marched toward the sun (Beer and powder), forward scattering toward the sun, sky ambient, drifting"
+                + " with the wind. Composite it with Cloud composite; at 1/2 size it costs about a quarter.", """
+            if (mosaicDepth(uv) < 1.0e5) return vec4(0.0, 0.0, 0.0, 1.0);
+            vec3 d = mosaicViewDir(uv);
+            if (d.y <= 0.01) return vec4(0.0, 0.0, 0.0, 1.0);
+            vec3 cam = frame.cameraPosition.xyz + mosaicEye();
+            float t0 = (bottom - cam.y) / d.y, t1 = (top - cam.y) / d.y;
+            if (t1 <= 0.0) return vec4(0.0, 0.0, 0.0, 1.0);
+            t0 = max(t0, 0.0);
+            vec3 L = mosaicSunDir();
+            float day = clamp(L.y * 4.0 + 0.3, 0.0, 1.0);
+            if (L.y < 0.0) L = -L;
+            int n = int(clamp(steps, 4.0, 64.0)), nl = int(clamp(lightSteps, 1.0, 8.0));
+            float dt = (t1 - t0) / float(n);
+            float jitter = fract(52.9829189 * fract(dot(uv * frame.viewSize.xy, vec2(0.06711056, 0.00583715))) + frame.timing.z * 0.618);
+            vec3 wind = vec3(windDirection.x, 0.0, windDirection.y) * frame.timing.x * windSpeed;
+            float cosT = dot(d, L);
+            float phase = mix(1.0, (1.0 - forwardScatter * forwardScatter) / pow(1.0 + forwardScatter * forwardScatter - 2.0 * forwardScatter * cosT, 1.5), 0.5);
+            vec3 light = vec3(0.0);
+            float trans = 1.0;
+            for (int i = 0; i < 64; i++) {
+                if (i >= n || trans < 0.02) break;
+                vec3 p = cam + d * (t0 + (float(i) + jitter) * dt);
+                float h = clamp((p.y - bottom) / max(top - bottom, 1.0), 0.0, 1.0);
+                float shape = 4.0 * h * (1.0 - h);
+                float nse = mosaicNoise((p + wind) * scale, detail, 0.5, 0.0);
+                float dens = max(nse - (1.0 - coverage), 0.0) * shape * density * 10.0;
+                if (dens <= 0.0) continue;
+                float lightDepth = 0.0;
+                for (int j = 0; j < 8; j++) {
+                    if (j >= nl) break;
+                    vec3 q = p + L * (float(j) + 0.5) * (top - bottom) / float(nl) * 0.5;
+                    float hq = clamp((q.y - bottom) / max(top - bottom, 1.0), 0.0, 1.0);
+                    lightDepth += max(mosaicNoise((q + wind) * scale, detail, 0.5, 0.0) - (1.0 - coverage), 0.0) * 4.0 * hq * (1.0 - hq);
+                }
+                float beer = exp(-lightDepth * density * 10.0 * absorption * (top - bottom) / float(nl) * 0.5);
+                float pow_ = 1.0 - exp(-dens * dt * 2.0) * powder;
+                vec3 lit = sunColor * sunStrength * beer * pow_ * phase * day + ambientColor * ambientStrength * max(day, nightLevel);
+                float a = 1.0 - exp(-dens * dt * absorption);
+                light += trans * a * lit;
+                trans *= 1.0 - a;
+            }
+            float fade = clamp(1.0 - t0 / fadeDistance, 0.0, 1.0);
+            return vec4(light * fade, mix(1.0, trans, fade));""");
+        add("Render pipeline", "vec4 waterBody(vec4 color, vec2 uv, vec3 deepColor = vec3(0.01, 0.06, 0.09), vec3 absorption = vec3(0.45, 0.12, 0.08), float refraction = 0.015, float clarity = 1, float gamma = 2.2, float maxDepth = 32)",
+            "Water body", "What lies under a water surface, seen through it: the image refracted by the waves (refraction), colours absorbed"
+                + " per block of water (absorption per channel, clarity), fading into deepColor. Linear light; put it before reflections.", """
+            if (mosaicHitMaterial(uv) != 1.0 || mosaicUnderwater() > 0.5) return color;
+            float d = min(mosaicWaterDepth(uv), maxDepth);
+            vec3 w = mosaicWorldPos(uv);
+            float tm = frame.timing.x;
+            vec2 off = vec2(sin(w.x * 1.9 + tm * 1.4) + sin(w.z * 2.7 - tm), cos(w.z * 2.1 + tm * 1.2) + cos(w.x * 3.1 + tm * 0.8)) * refraction;
+            vec3 under = pow(max(mosaicScene(clamp(uv + off, vec2(0.0), vec2(1.0))).rgb, vec3(0.0)), vec3(gamma));
+            vec3 keep = exp(-absorption * d / max(clarity, 0.01));
+            return vec4(mix(deepColor, under, keep) * 0.5 + color.rgb * 0.5 * keep, color.a);""");
+        add("Render pipeline", "vec4 cloudComposite(vec4 color, vec4 layer, vec2 uv, float strength = 1)", "Cloud composite",
+            "Draws a Cloud layer (read from its Buffer) over the sky pixels of the image: dimmed by the clouds' transmittance, their light added.", """
+            if (mosaicDepth(uv) < 1.0e5) return color;
+            vec3 c = color.rgb * layer.a + layer.rgb;
+            return vec4(mix(color.rgb, c, strength), color.a);""");
         add("Render pipeline", "vec3 skyAmbient(vec3 normal, float skyLight = 1, float intensity = 0.6, float skyCurve = 2, float upBias = 1)", "Sky ambient",
             "Cheap light from the sky dome on a surface (no rays): the sky colour above the normal (upBias tilts it up), fading with"
                 + " the sky light level to the power skyCurve (0 in caves). Use it instead of Diffuse GI on slow GPUs.", """
