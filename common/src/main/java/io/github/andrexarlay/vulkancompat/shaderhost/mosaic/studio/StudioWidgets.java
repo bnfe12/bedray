@@ -865,10 +865,13 @@ final class StudioWidgets {
             for (Component c : tools) if (shown(c)) all += c.getPreferredSize().width + gap;
             boolean overflow = in.left + all - gap > limit;
             hidden.clear();
+            boolean first = true;
             for (Component c : tools) {
                 if (!shown(c)) continue;
                 Dimension d = c.getPreferredSize();
                 int room = overflow ? limit - moreW - gap : limit;
+                if (first && x + d.width > room) d = new Dimension(Math.max(40, room - x), d.height); // the lead tool shrinks instead
+                first = false;
                 if (hidden.isEmpty() && x + d.width <= room) {
                     c.setBounds(x, in.top + (h - d.height) / 2, d.width, d.height);
                     x += d.width + gap;

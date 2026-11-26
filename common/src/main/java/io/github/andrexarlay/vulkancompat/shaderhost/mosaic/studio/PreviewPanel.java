@@ -139,7 +139,7 @@ final class PreviewPanel extends Panels.Listening {
         bar.setBorder(new EmptyBorder(5, 6, 5, 6));
         source.select(0);
         source.onChange(s -> lastKey = null);
-        bar.add(source, BorderLayout.CENTER);
+        // the source switch leads the one row of tools (bar.add below): a short panel keeps its height for the picture
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         right.setOpaque(false);
         play = button("Pause", "Animate time (time, noise, grain...) and, with a day speed in Settings > Preview, the time of day (P)", () -> { });
@@ -268,6 +268,7 @@ final class PreviewPanel extends Panels.Listening {
         StudioWidgets.OverflowBar rows = new StudioWidgets.OverflowBar(4);
         rows.setBorder(new EmptyBorder(4, 0, 0, 0));
         java.util.List<Component> order = new java.util.ArrayList<>();
+        rows.tool(source);
         for (Component comp : row3.getComponents()) order.add(comp);
         for (Component comp : row2.getComponents()) order.add(comp);
         // the most used first: Bypass, Node, Views, World, size, view mode, compare..., time last
@@ -283,8 +284,9 @@ final class PreviewPanel extends Panels.Listening {
             if (comp instanceof AbstractButton ab) ab.setMargin(new Insets(2, 8, 2, 8));
             rows.tool(comp);
         }
+        rows.setBorder(null);
         bar.add(right, BorderLayout.EAST);
-        bar.add(rows, BorderLayout.SOUTH);
+        bar.add(rows, BorderLayout.CENTER);
         root.add(bar, BorderLayout.NORTH);
         view = new JComponent() {
             @Override protected void paintComponent(Graphics g0) {
@@ -1191,7 +1193,8 @@ final class PreviewPanel extends Panels.Listening {
     int[] renderSize() {
         StudioSettings s = StudioUi.settings;
         JComponent v = view;
-        if (!s.previewFit || v == null || v.getWidth() < 16 || v.getHeight() < 16) return new int[] {s.previewWidth, s.previewHeight};
+        if (!s.previewFit || v == null) return new int[] {s.previewWidth, s.previewHeight};
+        if (v.getWidth() < 16 || v.getHeight() < 16) return new int[] {160, 96}; // a squeezed panel: the smallest frame
         double dpi = 1;
         GraphicsConfiguration gc = v.getGraphicsConfiguration();
         if (gc != null) dpi = gc.getDefaultTransform().getScaleX();
