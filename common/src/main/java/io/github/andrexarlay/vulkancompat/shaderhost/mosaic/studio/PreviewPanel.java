@@ -332,6 +332,11 @@ final class PreviewPanel extends Panels.Listening {
         info.setFont(UI_S);
         info.setBorder(new EmptyBorder(3, 8, 3, 8));
         root.add(info, BorderLayout.SOUTH);
+        if (Boolean.getBoolean("mosaic.selfshot.look")) { // verification aid: the World look editor open
+            javax.swing.Timer lt = new javax.swing.Timer(4000, e -> lookDialog());
+            lt.setRepeats(false);
+            lt.start();
+        }
         worker = new Thread(this::loop, "mosaic-gpu-preview");
         worker.setDaemon(true);
         worker.start();
@@ -647,35 +652,233 @@ final class PreviewPanel extends Panels.Listening {
         return out;
     }
 
-    /** The preview look (PreviewWorld.LOOK) as a dialog of numbers, saved in Studio settings. */
+    /** Sections of the World look editor (key -> tab); keys not listed go to "More". */
+    private static final String[][] LOOK_TABS = {
+        {"Light", "lightCurve,dayRise,dayOffset,nightLevel,brightness,nightSkyColor,blockColor,blockBoost,ambient,smoothLighting,aoStrength,faceTop,faceBottom,faceX,faceZ"},
+        {"Sky and weather", "vanillaSky,sunsetGlow,stars,moonSharpness,moonBrightness,clouds,cloudHeight,cloudSpeed,cloudOpacity,fog,fogStart,rain,rainOpacity,rainSpeed,rainDarken,snowTemperature,snowSpeed"},
+        {"Water and glass", "waterOpacity,waterReflection,glassOpacity,cutout"},
+        {"World", "models,animate,maxDistance,farDistance,farStep,canopyDepth,trunkWidth"}};
+
+    /** Ranges of the look numbers for their sliders. */
+    private static final java.util.Map<String, double[]> LOOK_RANGES = java.util.Map.ofEntries(
+        java.util.Map.entry("maxDistance", new double[] {32, 512}), java.util.Map.entry("farDistance", new double[] {0, 4000}),
+        java.util.Map.entry("canopyDepth", new double[] {0, 16}), java.util.Map.entry("trunkWidth", new double[] {0, 1}),
+        java.util.Map.entry("farStep", new double[] {0.002, 0.05}), java.util.Map.entry("lightCurve", new double[] {0, 8}),
+        java.util.Map.entry("dayRise", new double[] {0, 6}), java.util.Map.entry("dayOffset", new double[] {0, 1.5}),
+        java.util.Map.entry("nightLevel", new double[] {0, 1}), java.util.Map.entry("blockBoost", new double[] {0, 3}),
+        java.util.Map.entry("ambient", new double[] {0, 0.3}), java.util.Map.entry("faceTop", new double[] {0, 1}),
+        java.util.Map.entry("faceBottom", new double[] {0, 1}), java.util.Map.entry("faceX", new double[] {0, 1}),
+        java.util.Map.entry("faceZ", new double[] {0, 1}), java.util.Map.entry("waterOpacity", new double[] {0, 1}),
+        java.util.Map.entry("waterReflection", new double[] {0, 1}), java.util.Map.entry("glassOpacity", new double[] {0, 1}),
+        java.util.Map.entry("cutout", new double[] {0, 1}), java.util.Map.entry("moonSharpness", new double[] {50, 4000}),
+        java.util.Map.entry("moonBrightness", new double[] {0, 6}), java.util.Map.entry("aoStrength", new double[] {0, 1}),
+        java.util.Map.entry("fogStart", new double[] {0, 1}), java.util.Map.entry("cloudHeight", new double[] {64, 320}),
+        java.util.Map.entry("cloudSpeed", new double[] {0, 5}), java.util.Map.entry("cloudOpacity", new double[] {0, 1}),
+        java.util.Map.entry("rainOpacity", new double[] {0, 1}), java.util.Map.entry("rainSpeed", new double[] {0, 5}),
+        java.util.Map.entry("rainDarken", new double[] {0, 1}), java.util.Map.entry("sunsetGlow", new double[] {0, 2}),
+        java.util.Map.entry("stars", new double[] {0, 3}), java.util.Map.entry("snowTemperature", new double[] {-0.5, 1}),
+        java.util.Map.entry("snowSpeed", new double[] {0, 1}), java.util.Map.entry("brightness", new double[] {0, 1}));
+
+    /** Look numbers that are switches. */
+    private static final java.util.Set<String> LOOK_SWITCHES = java.util.Set.of("smoothLighting", "models", "fog", "clouds", "animate", "vanillaSky");
+
+    private JDialog lookWindow;
+    private final javax.swing.Timer lookSave = new javax.swing.Timer(600, e -> StudioUi.settings.save());
+
+    /**
+     * World look: every number of how the preview world is drawn (light map, sky and weather, water and glass, models,
+     * far land) in tabs, with sliders, switches and a reset per value. Changes show in the preview at once.
+     */
     private void lookDialog() {
-        JPanel p = new JPanel(new GridLayout(0, 2, 6, 4));
-        java.util.Map<String, JTextField> fields = new java.util.LinkedHashMap<>();
-        for (var s : PreviewWorld.LOOK) {
-            JLabel l = new JLabel(s.label());
-            l.setToolTipText(s.help());
-            double[] v = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(StudioUi.settings.previewLook, s);
-            JTextField f = new JTextField(InspectorPanel.numbers(v), 12);
-            f.setToolTipText(s.help());
-            p.add(l);
-            p.add(f);
-            fields.put(s.key(), f);
+        if (lookWindow != null && lookWindow.isDisplayable()) {
+            lookWindow.toFront();
+            return;
         }
-        JScrollPane sp = new JScrollPane(p);
-        sp.setPreferredSize(new Dimension(460, 420));
-        Object[] options = {"Apply", "Defaults", "Cancel"};
-        int r = JOptionPane.showOptionDialog(root, sp, "Preview world look", JOptionPane.DEFAULT_OPTION, JOptionPane.PLAIN_MESSAGE, null, options, options[0]);
-        if (r == 1) StudioUi.settings.previewLook.clear();
-        else if (r == 0) {
-            for (var s : PreviewWorld.LOOK) {
-                double[] v = InspectorPanel.parse(fields.get(s.key()).getText());
-                if (v == null || v.length != s.size()) continue;
-                if (java.util.Arrays.equals(v, s.def())) StudioUi.settings.previewLook.remove(s.key());
-                else StudioUi.settings.previewLook.put(s.key(), v);
+        lookSave.setRepeats(false);
+        JDialog d = new JDialog(SwingUtilities.getWindowAncestor(root), "World look");
+        lookWindow = d;
+        JTabbedPane tabs = new JTabbedPane();
+        tabs.setFont(UI);
+        tabs.setBackground(PANEL2);
+        tabs.setForeground(TEXT);
+        java.util.Set<String> placed = new java.util.HashSet<>();
+        java.util.List<Runnable> refreshers = new java.util.ArrayList<>();
+        for (String[] tab : LOOK_TABS) {
+            JPanel col = lookColumn();
+            for (String key : tab[1].split(",")) {
+                var s = PreviewWorld.LOOK.stream().filter(x -> x.key().equals(key)).findFirst().orElse(null);
+                if (s == null) continue;
+                placed.add(key);
+                refreshers.add(lookRow(col, s));
             }
-        } else return;
-        StudioUi.settings.save();
+            col.add(Box.createVerticalGlue());
+            tabs.addTab(tab[0], lookScroll(col));
+        }
+        JPanel more = lookColumn();
+        for (var s : PreviewWorld.LOOK) if (!placed.contains(s.key())) refreshers.add(lookRow(more, s));
+        if (more.getComponentCount() > 0) {
+            more.add(Box.createVerticalGlue());
+            tabs.addTab("More", lookScroll(more));
+        }
+        JPanel foot = new JPanel(new BorderLayout());
+        foot.setBackground(PANEL2);
+        foot.setBorder(new EmptyBorder(8, 12, 8, 12));
+        JLabel hint = label("Changes show in the preview at once and are kept in Studio settings.", FAINT);
+        hint.setFont(UI_S);
+        foot.add(hint, BorderLayout.WEST);
+        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        btns.setOpaque(false);
+        btns.add(button("All to defaults", "Every look value back to the game-like default", () -> {
+            StudioUi.settings.previewLook.clear();
+            lookChanged();
+            refreshers.forEach(Runnable::run);
+        }));
+        btns.add(button("Close", null, d::dispose));
+        foot.add(btns, BorderLayout.EAST);
+        JPanel rootP = new JPanel(new BorderLayout());
+        rootP.setBackground(BG);
+        rootP.add(tabs, BorderLayout.CENTER);
+        rootP.add(foot, BorderLayout.SOUTH);
+        d.setContentPane(rootP);
+        Rectangle scr = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+        d.setSize(Math.min(700, scr.width - 40), Math.min(620, scr.height - 60));
+        d.setLocationRelativeTo(root);
+        d.setVisible(true);
+    }
+
+    private static JPanel lookColumn() {
+        JPanel col = new JPanel();
+        col.setLayout(new BoxLayout(col, BoxLayout.Y_AXIS));
+        col.setBackground(BG);
+        col.setBorder(new EmptyBorder(10, 14, 10, 14));
+        return col;
+    }
+
+    private static JScrollPane lookScroll(JPanel col) {
+        JScrollPane sp = new JScrollPane(col, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        sp.setBorder(null);
+        sp.getVerticalScrollBar().setUnitIncrement(24);
+        darken(sp);
+        return sp;
+    }
+
+    private void lookChanged() {
         lastKey = null;
+        lookSave.restart();
+    }
+
+    private void lookSet(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting s, double[] v) {
+        if (java.util.Arrays.equals(v, s.def())) StudioUi.settings.previewLook.remove(s.key());
+        else StudioUi.settings.previewLook.put(s.key(), v);
+        lookChanged();
+    }
+
+    /** One look value: label and help, then a switch, a choice, a slider with its number, or a colour; reset. Returns its refresher. */
+    private Runnable lookRow(JPanel col, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting s) {
+        JPanel row = new JPanel(new BorderLayout(10, 2));
+        row.setOpaque(false);
+        row.setBorder(new EmptyBorder(6, 0, 6, 0));
+        JLabel name = label(s.label(), TEXT);
+        name.setFont(UI_B);
+        JLabel help = new JLabel("<html><div style='width:230px'>" + esc(s.help()) + "</div></html>");
+        help.setForeground(FAINT);
+        help.setFont(UI_S);
+        JPanel text = new JPanel(new BorderLayout(0, 2));
+        text.setOpaque(false);
+        text.add(name, BorderLayout.NORTH);
+        text.add(help, BorderLayout.CENTER);
+        row.add(text, BorderLayout.CENTER);
+        JButton reset = button("Reset", "Back to " + InspectorPanel.numbers(s.def()), () -> { });
+        reset.setFont(UI_S);
+        reset.setMargin(new Insets(1, 6, 1, 6));
+        JPanel control = new JPanel(new BorderLayout(6, 0));
+        control.setOpaque(false);
+        Runnable refresh;
+        double[] cur = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(StudioUi.settings.previewLook, s);
+        if (LOOK_SWITCHES.contains(s.key())) {
+            JCheckBox box = new JCheckBox("", cur[0] > 0.5);
+            box.setOpaque(false);
+            box.addActionListener(e -> lookSet(s, new double[] {box.isSelected() ? 1 : 0}));
+            control.add(box, BorderLayout.CENTER);
+            refresh = () -> box.setSelected(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(StudioUi.settings.previewLook, s)[0] > 0.5);
+        } else if (s.key().equals("rain")) {
+            JComboBox<String> box = new JComboBox<>(new String[] {"Never", "When the world rains", "Always"});
+            box.setSelectedIndex(Math.clamp((int) Math.round(cur[0]), 0, 2));
+            box.setFont(UI_S);
+            box.addActionListener(e -> lookSet(s, new double[] {box.getSelectedIndex()}));
+            control.add(box, BorderLayout.CENTER);
+            refresh = () -> box.setSelectedIndex(Math.clamp((int) Math.round(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(
+                StudioUi.settings.previewLook, s)[0]), 0, 2));
+        } else if (s.size() == 3) {
+            JButton swatch = new JButton();
+            swatch.setPreferredSize(new Dimension(70, 24));
+            Runnable paint = () -> {
+                double[] v = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(StudioUi.settings.previewLook, s);
+                swatch.setBackground(new Color((float) Math.clamp(v[0], 0, 1), (float) Math.clamp(v[1], 0, 1), (float) Math.clamp(v[2], 0, 1)));
+            };
+            paint.run();
+            swatch.addActionListener(e -> {
+                Color c = JColorChooser.showDialog(row, s.label(), swatch.getBackground());
+                if (c == null) return;
+                lookSet(s, new double[] {c.getRed() / 255.0, c.getGreen() / 255.0, c.getBlue() / 255.0});
+                paint.run();
+            });
+            control.add(swatch, BorderLayout.CENTER);
+            refresh = paint;
+        } else {
+            double[] range = LOOK_RANGES.getOrDefault(s.key(), new double[] {0, Math.max(1, s.def()[0] * 4)});
+            JSlider sl = new JSlider(0, 1000, (int) Math.round(Math.clamp((cur[0] - range[0]) / (range[1] - range[0]), 0, 1) * 1000));
+            sl.setOpaque(false);
+            sl.setPreferredSize(new Dimension(150, 22));
+            JTextField num = new JTextField(InspectorPanel.numbers(cur), 6);
+            num.setFont(UI_S);
+            boolean[] quiet = {false};
+            sl.addChangeListener(e -> {
+                if (quiet[0]) return;
+                double v = range[0] + (range[1] - range[0]) * sl.getValue() / 1000.0;
+                v = Double.parseDouble(String.format(java.util.Locale.ROOT, "%.4g", v));
+                num.setText(InspectorPanel.numbers(new double[] {v}));
+                lookSet(s, new double[] {v});
+            });
+            num.addActionListener(e -> {
+                double[] v = InspectorPanel.parse(num.getText());
+                if (v == null || v.length != 1) return;
+                lookSet(s, v);
+                quiet[0] = true;
+                sl.setValue((int) Math.round(Math.clamp((v[0] - range[0]) / (range[1] - range[0]), 0, 1) * 1000));
+                quiet[0] = false;
+            });
+            control.add(sl, BorderLayout.CENTER);
+            control.add(num, BorderLayout.EAST);
+            refresh = () -> {
+                double[] v = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(StudioUi.settings.previewLook, s);
+                quiet[0] = true;
+                sl.setValue((int) Math.round(Math.clamp((v[0] - range[0]) / (range[1] - range[0]), 0, 1) * 1000));
+                num.setText(InspectorPanel.numbers(v));
+                quiet[0] = false;
+            };
+        }
+        Runnable fin = refresh;
+        reset.addActionListener(e -> {
+            StudioUi.settings.previewLook.remove(s.key());
+            lookChanged();
+            fin.run();
+        });
+        control.add(reset, BorderLayout.WEST);
+        JPanel right = new JPanel(new BorderLayout());
+        right.setOpaque(false);
+        right.add(control, BorderLayout.NORTH);
+        right.setPreferredSize(new Dimension(290, 30));
+        right.setMinimumSize(new Dimension(290, 30));
+        row.add(right, BorderLayout.EAST);
+        row.setAlignmentX(0);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+        col.add(row);
+        JSeparator sep = new JSeparator();
+        sep.setForeground(EDGE);
+        sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+        col.add(sep);
+        return fin;
     }
 
     private void loop() {

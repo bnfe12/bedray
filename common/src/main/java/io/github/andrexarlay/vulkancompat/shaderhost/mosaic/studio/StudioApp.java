@@ -203,6 +203,15 @@ final class StudioApp {
         if (shot != null) {
             Timer t = new Timer(Integer.getInteger("mosaic.selfshot.delay", 3500), e -> {
                 try {
+                    int dn = 0;
+                    for (Window dw : Window.getWindows())
+                        if (dw instanceof JDialog jd && jd.isShowing() && jd != CommandPalette.last) {
+                            java.awt.image.BufferedImage di = new java.awt.image.BufferedImage(jd.getWidth(), jd.getHeight(), java.awt.image.BufferedImage.TYPE_INT_RGB);
+                            java.awt.Graphics2D dg = di.createGraphics();
+                            jd.getContentPane().paint(dg);
+                            dg.dispose();
+                            javax.imageio.ImageIO.write(di, "png", new java.io.File(shot.replace(".png", "-dialog" + dn++ + ".png")));
+                        }
                     JDialog pal = CommandPalette.last;
                     if (pal != null && pal.isShowing()) {
                         java.awt.image.BufferedImage pi = new java.awt.image.BufferedImage(pal.getWidth(), pal.getHeight(),
