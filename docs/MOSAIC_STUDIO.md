@@ -119,6 +119,10 @@ value has a reset, and All to defaults puts the game-like look back.
 - **Compare**: Keep A stores the frame shown now; Split shows A and the current frame side by side (drag the line, or
   Shift+drag anywhere), Difference shows |now - A| brightened (Settings > Preview > Difference gain).
 - **Pixel probe**: hover the image for the pixel position, its 8-bit and 0..1 values and its brightness.
+- **Bypass** (B): the world without your graph, as the game draws it before your nodes; **Node** (N): the output of the
+  selected node instead of the final picture (one-pass graphs). With Keep A and Split they compare before / after.
+- **Rest**: with nothing changing for a while (Settings > Preview > Rest after) the preview slows to a few frames per
+  second, so the laptop's GPU stays cool.
 - **Views**: save the camera under a name, go back with keys 1..9, R returns to the start view, P pauses.
 - **Image**: save the frame as PNG (as it is, or as shown with the view and compare), copy it to the clipboard.
 - **Size**: 320 x 180 up to 2560 x 1440, or Custom... (any size 160..3840 x 90..2160).

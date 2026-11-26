@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.shaderhost.mosaic.studio;
 
+import io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicDocument;
 import javax.imageio.ImageIO;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -38,7 +39,7 @@ final class PreviewPanel extends Panels.Listening {
     volatile String message = "Starting the GPU...";
     volatile boolean playing = true;
     private final JButton play;
-    private JToggleButton bypassButton;
+    private JToggleButton bypassButton, nodeButton;
     private final Thread worker;
     private volatile boolean alive = true;
     private long start = System.nanoTime();
@@ -74,6 +75,40 @@ final class PreviewPanel extends Panels.Listening {
     private final JComboBox<Compare> compareBox = new JComboBox<>(Compare.values());
     private long lastLoop = System.nanoTime();
     private long atlasChecked;
+    /** Node (N): the preview shows the output of the selected node instead of the graph's final picture. */
+    volatile boolean nodeMode;
+    private String nodeKey;
+    private java.util.List<GpuPreview.PassRun> nodeRuns;
+    private volatile boolean nodeCompiling;
+
+    /** The selected node's output as a pass (one-pass graphs; compiled in the background, cached per graph and node). */
+    private java.util.List<GpuPreview.PassRun> nodeRuns() {
+        MosaicDocument.ENode n = model.primary;
+        var g = model.analysis.graph();
+        if (n == null || g == null || g.multiPass()) return null;
+        String key = System.identityHashCode(g) + "|" + n.id;
+        if (key.equals(nodeKey)) return nodeRuns;
+        if (nodeCompiling) return nodeRuns;
+        nodeCompiling = true;
+        Thread t = new Thread(() -> {
+            java.util.List<GpuPreview.PassRun> made = null;
+            try {
+                var r = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicShaderCheck.compile(io.github.andrexarlay.vulkancompat.shaderhost.mosaic
+                    .MosaicCodegen.generate(g, new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicCodegen.Options(n.id, false, true, true), false));
+                if (r.ok()) made = java.util.List.of(new GpuPreview.PassRun(r.spirv(), 1, -1));
+            } catch (Exception ignored) {
+                // no node picture
+            }
+            nodeRuns = made;
+            nodeKey = key;
+            nodeCompiling = false;
+            lastKey = null;
+        }, "mosaic-node-preview");
+        t.setDaemon(true);
+        t.start();
+        return nodeRuns;
+    }
+
     /** Bypass (B): the world without the graph, as the game draws it before your nodes. */
     volatile boolean bypass;
     private static java.util.List<GpuPreview.PassRun> passThrough;
@@ -196,6 +231,14 @@ final class PreviewPanel extends Panels.Listening {
         });
         this.bypassButton = bypassBtn;
         row3.add(bypassBtn);
+        JToggleButton nodeBtn = new JToggleButton("Node");
+        nodeBtn.setToolTipText("Show the output of the selected node instead of the final picture (N); one-pass graphs");
+        nodeBtn.addActionListener(e -> {
+            nodeMode = nodeBtn.isSelected();
+            lastKey = null;
+        });
+        this.nodeButton = nodeBtn;
+        row3.add(nodeBtn);
         JButton views = button("Views", "Saved cameras: save this view, go back to one (keys 1..9), the start view (R)", () -> { });
         views.addActionListener(e -> {
             JPopupMenu vm = viewsMenu();
@@ -334,6 +377,11 @@ final class PreviewPanel extends Panels.Listening {
                     worldView = startView;
                     syncTime();
                     lastKey = null;
+                    e.consume();
+                    return;
+                }
+                if (code == java.awt.event.KeyEvent.VK_N && nodeButton != null) {
+                    nodeButton.doClick();
                     e.consume();
                     return;
                 }
@@ -1002,6 +1050,7 @@ final class PreviewPanel extends Panels.Listening {
                 }
                 var runs = model.passRuns;
                 Object key = java.util.List.of(System.identityHashCode(c), System.identityHashCode(input), s, System.identityHashCode(runs),
+                    nodeMode ? String.valueOf(nodeKey) + (model.primary == null ? "" : model.primary.id) : "", bypass,
                     wv == null ? 0 : System.identityHashCode(worldView), lookKey());
                 if (!playing && key.equals(lastKey)) {
                     Thread.sleep(120);
@@ -1030,6 +1079,10 @@ final class PreviewPanel extends Panels.Listening {
                     gpu.worldHeight = StudioUi.settings.previewHeight;
                     var list = runs != null ? runs : java.util.List.of(new GpuPreview.PassRun(c.spirv(), 1, -1));
                     if (bypass && passThrough() != null) list = passThrough();
+                    else if (nodeMode) {
+                        var nr = nodeRuns();
+                        if (nr != null) list = nr;
+                    }
                     out = gpu.runChain(list, input, t, frame++, extras(), wv);
                 } catch (UnsupportedOperationException e) {
                     show(null, e.getMessage());
