@@ -978,6 +978,65 @@ public final class MosaicEffects {
             return vec4(pow(clamp(c, vec3(0.0), vec3(1.0)), vec3(1.0 / max(gamma, 0.1))), color.a);""");
     }
 
+    /**
+     * The parts of Minecraft's picture, one node each (category "Minecraft parts"): Sky, Water, Lava, Leaves, Plants,
+     * Stone, Dirt and grass, Wood, Sand and gravel, Snow, Ice, Glass, Metal, Light sources, Other blocks, All blocks,
+     * Not blocks (entities, particles, the hand) and the underwater view. Each one changes only the pixels of its part:
+     * wire your own shader for the part into look (and raise lookAmount), or adjust it with tint, brightness, saturation
+     * and contrast; strength fades the whole change. Chain them between Scene and Output (the Scene panel lists them).
+     */
+    public record Part(String name, String label, String mask, String help) {}
+
+    public static final List<Part> PARTS = List.of(
+        new Part("partSky", "Sky", "mosaicDepth(uv) >= 1.0e5 ? 1.0 : 0.0", "The sky: every pixel where no block or entity was hit (sun, moon, stars, the game's clouds)."),
+        new Part("partWater", "Water", "step(0.001, mosaicWaterDepth(uv))", "Water surfaces and what is seen through them."),
+        new Part("partLava", "Lava", "step(0.001, mosaicLavaDepth(uv))", "Lava surfaces."),
+        new Part("partLeaves", "Leaves", "mosaicHitMaterial(uv) == 5.0 ? 1.0 : 0.0", "Leaves of every tree."),
+        new Part("partPlants", "Plants and flowers", "mosaicHitMaterial(uv) == 6.0 ? 1.0 : 0.0", "Grass, ferns, flowers, crops, vines, cactus, bamboo."),
+        new Part("partStone", "Stone and ore", "mosaicHitMaterial(uv) == 3.0 ? 1.0 : 0.0", "Stone, deepslate, ores, bricks, terracotta."),
+        new Part("partDirt", "Dirt and grass blocks", "mosaicHitMaterial(uv) == 4.0 ? 1.0 : 0.0", "Grass blocks, dirt, podzol, mud, moss."),
+        new Part("partWood", "Wood", "mosaicHitMaterial(uv) == 7.0 ? 1.0 : 0.0", "Logs, planks, fences, doors, chests."),
+        new Part("partSand", "Sand and gravel", "mosaicHitMaterial(uv) == 8.0 ? 1.0 : 0.0", "Sand, red sand, gravel."),
+        new Part("partSnow", "Snow", "mosaicHitMaterial(uv) == 9.0 ? 1.0 : 0.0", "Snow layers and blocks, powder snow."),
+        new Part("partIce", "Ice", "mosaicHitMaterial(uv) == 10.0 ? 1.0 : 0.0", "Ice, packed and blue ice."),
+        new Part("partGlass", "Glass", "mosaicHitMaterial(uv) == 11.0 ? 1.0 : 0.0", "Glass blocks and panes, stained glass."),
+        new Part("partMetal", "Metal", "mosaicHitMaterial(uv) == 12.0 ? 1.0 : 0.0", "Iron, gold, copper, netherite, anvils, chains."),
+        new Part("partLights", "Light sources", "mosaicHitMaterial(uv) == 13.0 ? 1.0 : 0.0", "Torches, lanterns, glowstone, lamps, fire."),
+        new Part("partOther", "Other blocks", "mosaicHitMaterial(uv) == 14.0 ? 1.0 : 0.0", "Every block that is not one of the parts above."),
+        new Part("partBlocks", "All blocks", "(mosaicDepth(uv) < 1.0e5 && (mosaicHitMaterial(uv) >= 1.0 || mosaicDepth(uv) >= maxDistance)) ? 1.0 : 0.0",
+            "Every block of the world (terrain, buildings, water and lava), the far land beyond maxDistance (the reach of the world volume) included."),
+        new Part("partNotBlocks", "Entities, particles and hand", "(mosaicDepth(uv) < 1.0e5 && mosaicDepth(uv) < maxDistance && mosaicHitMaterial(uv) == 0.0) ? 1.0 : 0.0",
+            "What is in front of the camera but is not a block: mobs, players, items, particles, the hand (within maxDistance, the reach of the world volume)."),
+        new Part("partUnderwater", "Underwater view", "mosaicUnderwater()", "The whole picture while the camera is under water."));
+
+    static {
+        for (Part p : PARTS) {
+            boolean dist = p.mask().contains("maxDistance");
+            add("Minecraft parts", "vec4 " + p.name() + "(vec4 color, vec2 uv, vec4 look = vec4(0.0, 0.0, 0.0, 1.0), float lookAmount = 0, vec3 tint = vec3(1.0, 1.0, 1.0),"
+                    + " float brightness = 1, float saturation = 1, float contrast = 1, float contrastPivot = 0.5, float strength = 1"
+                    + (dist ? ", float maxDistance = 48" : "") + ")",
+                p.label(), p.help() + " Wire your shader for this part into look and set lookAmount to 1, or adjust it with tint,"
+                    + " brightness, saturation and contrast; strength fades the change.", """
+                float m = clamp(%s, 0.0, 1.0) * strength;
+                if (m <= 0.0) return color;
+                vec3 c = mix(color.rgb, look.rgb, clamp(lookAmount, 0.0, 1.0)) * tint * brightness;
+                float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                c = mix(vec3(l), c, saturation);
+                c = (c - vec3(contrastPivot)) * contrast + vec3(contrastPivot);
+                return vec4(mix(color.rgb, max(c, vec3(0.0)), m), color.a);""".formatted(p.mask()));
+            add("Minecraft parts", "float " + p.name() + "Mask(vec2 uv" + (dist ? ", float maxDistance = 48" : "") + ")", p.label() + " (mask)",
+                "1 where the pixel shows " + p.label().toLowerCase(java.util.Locale.ROOT) + ", 0 elsewhere: to mix your own nodes by part.",
+                "return clamp(" + p.mask() + ", 0.0, 1.0);");
+        }
+    }
+
+    /** The part a function node stands for, or null. */
+    public static Part part(String functionName) {
+        if (functionName == null) return null;
+        for (Part p : PARTS) if (functionName.equals(p.name()) || functionName.equals(p.name() + "Mask")) return p;
+        return null;
+    }
+
     /** Every built-in effect, in palette order. */
     public static List<MosaicFunction> all() { return new ArrayList<>(ALL.values()); }
 

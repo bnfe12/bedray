@@ -54,6 +54,10 @@ public final class MosaicTemplates {
 
     static {
         ALL.add(new Template("Pass-through", "Start", "The world image unchanged: the smallest valid graph.", chain()));
+        ALL.add(new Template("Minecraft by parts", "Start", "The picture as Minecraft's parts, one node each: sky, water, lava, leaves,"
+            + " plants, light sources, all blocks, entities and particles. Every part starts unchanged: pick one in the Scene panel"
+            + " and give it your look (tint, brightness, contrast) or wire your own shader into its look input.",
+            chain("partSky", "partWater", "partLava", "partLeaves", "partPlants", "partLights", "partBlocks", "partNotBlocks")));
         ALL.add(new Template("Cinematic", "Post effects", "Color grade, vignette and film grain.",
             chain("colorGrade", "vignette", "filmGrain")));
         ALL.add(new Template("Retro screen", "Post effects", "Posterized colors, scanlines and a lens split.",

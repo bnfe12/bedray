@@ -54,6 +54,7 @@ final class Icons {
             case MATERIAL -> new Color(0xB86A3A);
             case BROWSER -> new Color(0x5A7AC8);
             case PREVIEW -> new Color(0x3AA0A0);
+            case SCENE -> new Color(0x4FB886);
             case CONFIG -> new Color(0x8A9CF0);
             case GUIDE -> new Color(0xD0A04A);
         };
@@ -149,6 +150,13 @@ final class Icons {
                 g.drawRoundRect((int) a, (int) a + 3, (int) (b - a) - 2, (int) (b - a) - 3, 3, 3);
                 g.draw(new java.awt.geom.Line2D.Float(a + 2, b - 3, m, m + 1));
                 g.draw(new java.awt.geom.Line2D.Float(m, m + 1, b - 4, b - 3));
+            }
+            case SCENE -> { // an outliner: three rows with a dot each
+                for (int i = 0; i < 3; i++) {
+                    float y = a + (b - a) * (0.2f + 0.3f * i);
+                    g.fill(new java.awt.geom.Ellipse2D.Float(a, y - 1.5f, 3, 3));
+                    g.drawLine((int) (a + 5), (int) y, (int) b, (int) y);
+                }
             }
             case PREVIEW -> { // an eye
                 g.drawOval((int) a, (int) (m - (b - a) / 4), (int) (b - a), (int) ((b - a) / 2));

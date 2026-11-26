@@ -30,6 +30,19 @@ to Minecraft, or without it.
 A node with more than six inputs shows only the required, wired and changed ones; the rest are edited in Properties
 ("+N more" on the node). Ctrl+H (or the right-click menu) shows every input of the selected nodes, to wire one.
 
+## Scene: the parts of Minecraft's picture
+
+The **Scene** panel shows the graph the way Blender's outliner shows a scene: groups (the graph's frames, like
+collections), and in them the **Minecraft parts** - Sky, Water, Lava, Leaves, Plants and flowers, Stone and ore, Dirt and
+grass blocks, Wood, Sand and gravel, Snow, Ice, Glass, Metal, Light sources, Other blocks, All blocks, Entities particles
+and hand, Underwater view - then effects and lights, passes (buffers), Bedray and the Output, each with a line saying
+what it does. Click shows a node, the dot turns it on / off, double click renames.
+
+Every part is one node (category *Minecraft parts*) that changes only its pixels: wire your own shader for the part into
+**look** and set **lookAmount**, or adjust it with tint, brightness, saturation and contrast; **strength** fades the change.
+Each part also has a mask node (1 on the part, 0 elsewhere). Template **Minecraft by parts** starts with the main parts
+chained between Scene and Output; Scene > Add part puts another one before the output.
+
 ## Finding things and getting around
 
 - **Command palette** (Ctrl+Shift+P or F3): one search over every command, every menu item, the templates, the node

@@ -303,8 +303,8 @@ final class Dock {
     static String defaultLayout() {
         return """
             {"windows": [{"main": true, "tree":
-              {"split": "side", "ratio": 0.14, "a": {"panel": "PALETTE"},
-               "b": {"split": "side", "ratio": 0.6,
+              {"split": "side", "ratio": 0.18, "a": {"split": "stack", "ratio": 0.5, "a": {"panel": "SCENE"}, "b": {"panel": "PALETTE"}},
+               "b": {"split": "side", "ratio": 0.56,
                  "a": {"split": "stack", "ratio": 0.76, "a": {"panel": "GRAPH"},
                         "b": {"split": "side", "ratio": 0.55, "a": {"panel": "PROBLEMS"}, "b": {"panel": "HISTORY"}}},
                  "b": {"split": "stack", "ratio": 0.5, "a": {"panel": "PREVIEW"}, "b": {"panel": "INSPECTOR"}}}}}]}""";

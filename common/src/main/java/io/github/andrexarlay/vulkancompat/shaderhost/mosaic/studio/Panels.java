@@ -30,6 +30,7 @@ final class Panels {
 
     enum Type {
         GRAPH("Node graph", "Main", "Build the shader from nodes"),
+        SCENE("Scene", "Main", "What the picture is made of, like Blender's outliner: groups, Minecraft's parts (sky, water, leaves...), passes, the output"),
         RESULT("Result", "Main", "The real render from the game, before / after / compare"),
         HISTORY("History", "Main", "Every change by name; click one to go back"),
         PALETTE("Nodes", "Data", "All nodes by category; drag onto the graph"),
@@ -80,6 +81,7 @@ final class Panels {
                 case MATERIAL -> new MaterialPanels.MaterialPanel(m);
                 case BROWSER -> new ShaderBrowser(m);
                 case PREVIEW -> new PreviewPanel(m);
+                case SCENE -> new ScenePanel(m);
                 case CONFIG -> new ConfigPanel(m);
                 case GUIDE -> new GuidePanel(m);
             };

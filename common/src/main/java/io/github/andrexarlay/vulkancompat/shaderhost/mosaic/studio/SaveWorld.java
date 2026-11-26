@@ -91,6 +91,7 @@ final class SaveWorld {
             int fx = (int) Math.floor(x), fy = (int) Math.floor(y), fz = (int) Math.floor(z);
             int ox = fx - sx / 2, oy = fy - sy / 2, oz = fz - sz / 2;
             short[] cells = new short[sx * sy * sz];
+            int[] tops = new int[sx * sz]; // the top of every column (heightmap): sky light starts above it
             short[] index = new short[cells.length];
             Map<String, Integer> ids = new LinkedHashMap<>();
             ids.put("minecraft:air", 0);
@@ -104,6 +105,7 @@ final class SaveWorld {
                             int bx = ox + lx;
                             if (Math.floorDiv(bx, 16) != cx) continue;
                             int top = c == null ? Integer.MIN_VALUE : c.top(bx & 15, bz & 15, "MOTION_BLOCKING");
+                            tops[lz * sx + lx] = top;
                             for (int ly = 0; ly < sy; ly++) {
                                 int by = oy + ly, i = (ly * sz + lz) * sx + lx;
                                 if (c == null) {
@@ -124,9 +126,67 @@ final class SaveWorld {
                         }
                     }
                 }
+            if (computeLight) light(cells, tops, sx, sy, sz, oy);
             MosaicWorld.Snapshot snap = new MosaicWorld.Snapshot(sx, sy, sz, ox, oy, oz, cells, x, y, z, yaw, pitch, tod);
             if (farSize > 0) snap = snap.withFar(far(r, fx, fz, farSize));
             return new Loaded(snap, new MosaicWorld.BlockTable(List.copyOf(ids.keySet()), index));
+        }
+    }
+
+    /** Light the volume like the game (sky light from above every column, block light from light sources) instead of the saved light. */
+    static boolean computeLight = true;
+
+    private static boolean opaque(Material m) {
+        return switch (m) {
+            case AIR, WATER, LEAVES, PLANT, GLASS, ICE, LIGHT, LAVA -> false;
+            default -> true;
+        };
+    }
+
+    /** Sky light 15 above each column's top, spread sideways and down (1 less per block, more through water and leaves); block light from light sources and lava. */
+    static void light(short[] cells, int[] tops, int sx, int sy, int sz, int oy) {
+        int n = cells.length;
+        byte[] sky = new byte[n], blk = new byte[n];
+        int[] queue = new int[n * 4];
+        for (int pass = 0; pass < 2; pass++) {
+            byte[] lv = pass == 0 ? sky : blk;
+            int head = 0, tail = 0;
+            for (int ly = 0; ly < sy; ly++)
+                for (int lz = 0; lz < sz; lz++)
+                    for (int lx = 0; lx < sx; lx++) {
+                        int i = (ly * sz + lz) * sx + lx;
+                        Material m = MosaicWorld.material(cells[i] & 0xFFFF);
+                        int start = 0;
+                        if (pass == 0 && oy + ly > tops[lz * sx + lx] && !opaque(m)) start = 15;
+                        if (pass == 1) start = m == Material.LAVA ? 15 : m == Material.LIGHT ? 14 : 0;
+                        if (start > 0) {
+                            lv[i] = (byte) start;
+                            queue[tail++ % queue.length] = i;
+                        }
+                    }
+            while (head < tail) {
+                int i = queue[head++ % queue.length];
+                int l = lv[i];
+                int lx = i % sx, lz = (i / sx) % sz, ly = i / (sx * sz);
+                for (int d = 0; d < 6; d++) {
+                    int nx = lx + (d == 0 ? 1 : d == 1 ? -1 : 0), ny = ly + (d == 2 ? 1 : d == 3 ? -1 : 0), nz = lz + (d == 4 ? 1 : d == 5 ? -1 : 0);
+                    if (nx < 0 || ny < 0 || nz < 0 || nx >= sx || ny >= sy || nz >= sz) continue;
+                    int j = (ny * sz + nz) * sx + nx;
+                    Material m = MosaicWorld.material(cells[j] & 0xFFFF);
+                    if (opaque(m)) continue;
+                    int loss = 1 + (m == Material.WATER || m == Material.LEAVES ? 1 : 0);
+                    // sky light falls straight down through air without loss, like the game
+                    if (pass == 0 && d == 3 && l == 15 && m == Material.AIR) loss = 0;
+                    int nl = l - loss;
+                    if (nl <= lv[j]) continue;
+                    lv[j] = (byte) nl;
+                    if (tail - head < queue.length) queue[tail++ % queue.length] = j; // a ring: the queue never holds more than the volume
+                }
+            }
+        }
+        for (int i = 0; i < n; i++) {
+            Material m = MosaicWorld.material(cells[i] & 0xFFFF);
+            cells[i] = (short) MosaicWorld.cell(m, blk[i], sky[i]);
         }
     }
 

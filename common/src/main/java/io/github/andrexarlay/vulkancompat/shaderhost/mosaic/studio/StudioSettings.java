@@ -145,7 +145,7 @@ public final class StudioSettings {
     /** Palette / add-menu groups the user collapsed. */
     public java.util.Set<String> collapsed = new java.util.LinkedHashSet<>();
     /** Version of the default layouts: a saved layout older than {@link #LAYOUT_VERSION} is replaced once by the new default. */
-    public static final int LAYOUT_VERSION = 2;
+    public static final int LAYOUT_VERSION = 3;
     public int layoutVersion = 0;
     /** Saved window layout (see Dock), or null for the default. */
     public String layout;
@@ -286,7 +286,7 @@ public final class StudioSettings {
         previewWidth = Math.clamp(previewWidth, 160, 3840);
         previewHeight = Math.clamp(previewHeight, 90, 2160);
         if (previewLook == null) previewLook = new java.util.LinkedHashMap<>();
-        if (layoutVersion < LAYOUT_VERSION) { // version 2: the Preview (the graph over the world) is in the default layout
+        if (layoutVersion < LAYOUT_VERSION) { // 2: the Preview in the default layout; 3: the Scene (outliner) beside the nodes
             layout = null;
             layoutVersion = LAYOUT_VERSION;
         }

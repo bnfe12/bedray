@@ -1592,8 +1592,9 @@ public final class MosaicCodegen {
         for (int i = 0; i < f.params().size(); i++) {
             MosaicFunction.Param prm = f.params().get(i);
             if (i > 0) sb.append(", ");
+            double[] own = n.defaultOf(prm.name()); // a value set on the node (Properties, mosaic set) wins over the signature's
             sb.append(n.inputs().containsKey(prm.name()) ? in(p, n, prm.name())
-                : MosaicEval.literal(prm.defaultValue(), prm.kind(), sl));
+                : MosaicEval.literal(own != null && own.length == prm.defaultValue().length ? own : prm.defaultValue(), prm.kind(), sl));
         }
         return sb.append(')').toString();
     }
