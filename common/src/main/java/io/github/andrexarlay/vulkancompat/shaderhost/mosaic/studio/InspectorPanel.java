@@ -286,6 +286,31 @@ final class InspectorPanel extends Panels.Listening {
             model.edit("Set " + n.id + "." + port.name(), () -> n.defaults.put(port.name(), v));
         });
         content.add(f);
+        String pn = port.name().toLowerCase(java.util.Locale.ROOT);
+        boolean colour = (size == 3 || size == 4) && (pn.contains("tint") || pn.contains("color") || pn.contains("colour") || pn.contains("albedo")
+            || pn.contains("glow") || pn.endsWith("sky") || pn.contains("fog"));
+        if (colour) { // a colour: a swatch that opens the colour chooser (values above 1 are kept as a brightness factor)
+            double peak = Math.max(1.0, Math.max(shown[0], Math.max(shown[1], shown[2])));
+            JButton sw = new JButton(peak > 1.0 ? String.format(java.util.Locale.ROOT, "x %.2f", peak) : " ");
+            sw.setFont(UI_S);
+            sw.setFocusable(false);
+            sw.setBackground(new Color((float) Math.clamp(shown[0] / peak, 0, 1), (float) Math.clamp(shown[1] / peak, 0, 1),
+                (float) Math.clamp(shown[2] / peak, 0, 1)));
+            sw.setToolTipText("Pick a colour (the brightness factor above 1 stays)");
+            sw.addActionListener(ev -> {
+                Color c = JColorChooser.showDialog(content, port.name(), sw.getBackground());
+                if (c == null) return;
+                double[] v = shown.clone();
+                v[0] = c.getRed() / 255.0 * peak;
+                v[1] = c.getGreen() / 255.0 * peak;
+                v[2] = c.getBlue() / 255.0 * peak;
+                model.edit("Set " + n.id + "." + port.name(), () -> n.defaults.put(port.name(), v));
+                rebuild();
+            });
+            sw.setAlignmentX(0);
+            sw.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+            content.add(sw);
+        }
         if (size == 1) {
             double v0 = shown[0];
             double max = Math.max(1, Math.abs(v0) * 2), min = v0 < 0 ? -max : 0;
