@@ -1267,24 +1267,58 @@ final class GpuPreview implements AutoCloseable {
                 }
             }
             vec3 skyCol = sky(d);
-            // the game's flat cloud layer (clouds.png, 12 blocks per texel) where the ray reaches it before anything else
-            if (HAS_CLOUDS && pw_clouds > 0.5 && abs(d.y) > 1e-4) {
-                float camY = frame.cameraPosition.y;
-                float tc = (pw_cloudHeight - camY) / d.y;
-                if (tc > 0.0 && tc < depth && tc < pw_farDistance) {
-                    vec3 wp = vec3(frame.cameraPosition.x, camY, frame.cameraPosition.z) + d * tc;
-                    vec2 cuv = fract(vec2(wp.x + frame.timing.x * pw_cloudSpeed, wp.z) / (12.0 * CLOUD_RECT.zw));
-                    vec4 cl = textureLod(atlas, (CLOUD_RECT.xy + cuv * CLOUD_RECT.zw) / vec2(textureSize(atlas, 0)), 0.0);
-                    if (cl.a > 0.5) {
-                        float day = clamp(sunDir().y * pw_dayRise + pw_dayOffset, pw_nightLevel, 1.0);
-                        float fade = 1.0 - smoothstep(pw_farDistance * 0.5, pw_farDistance, tc);
-                        skyCol = mix(skyCol, vec3(day) * (d.y < 0.0 ? 0.75 : 1.0), pw_cloudOpacity * fade);
+            // the game's clouds: clouds.png, 12 x 12 blocks per texel, as boxes pw_cloudThickness high (the game's Fancy
+            // clouds; 0 draws the flat layer), with brighter tops and darker sides and bottoms; they cover the sky and
+            // whatever lies behind them
+            bool cloudHit = false;
+            vec3 cloudCol = vec3(0.0);
+            float cloudA = 0.0;
+            if (HAS_CLOUDS && pw_clouds > 0.5) {
+                vec3 cam = frame.cameraPosition.xyz;
+                float h0 = pw_cloudHeight, h1 = pw_cloudHeight + max(pw_cloudThickness, 0.0);
+                float ta = 0.0, tb = pw_farDistance;
+                bool any = true;
+                if (abs(d.y) < 1e-5) any = cam.y >= h0 && cam.y <= h1;
+                else {
+                    float t0 = (h0 - cam.y) / d.y, t1 = (h1 - cam.y) / d.y;
+                    ta = max(min(t0, t1), 0.0);
+                    tb = max(t0, t1);
+                }
+                tb = min(tb, min(depth, pw_farDistance));
+                if (any && ta < tb) {
+                    vec2 W = CLOUD_RECT.zw;
+                    vec3 p = cam + d * ta;
+                    p.x += frame.timing.x * pw_cloudSpeed;
+                    ivec2 c = ivec2(floor(p.xz / 12.0));
+                    vec2 dd = d.xz;
+                    ivec2 st = ivec2(sign(dd));
+                    vec2 tdel = vec2(abs(dd.x) > 1e-6 ? 12.0 / abs(dd.x) : 1e30, abs(dd.y) > 1e-6 ? 12.0 / abs(dd.y) : 1e30);
+                    vec2 fr = p.xz / 12.0 - vec2(c);
+                    vec2 tnext = vec2(dd.x > 0.0 ? 1.0 - fr.x : fr.x, dd.y > 0.0 ? 1.0 - fr.y : fr.y) * tdel + ta;
+                    float t = ta;
+                    // the face the ray enters by: the slab's top or bottom, else a side
+                    float shade = ta > 0.0 ? (d.y < 0.0 ? 1.0 : 0.7) : 0.85;
+                    for (int i = 0; i < 128 && t < tb; i++) {
+                        vec2 tex = (mod(vec2(c), W) + 0.5) / W;
+                        vec4 cl = textureLod(atlas, (CLOUD_RECT.xy + tex * W) / vec2(textureSize(atlas, 0)), 0.0);
+                        if (cl.a > 0.5) {
+                            float dayC = clamp(sunDir().y * pw_dayRise + pw_dayOffset, pw_nightLevel, 1.0);
+                            float fade = 1.0 - smoothstep(pw_farDistance * 0.5, pw_farDistance, t);
+                            cloudHit = true;
+                            cloudCol = vec3(dayC) * shade;
+                            cloudA = pw_cloudOpacity * fade;
+                            break;
+                        }
+                        if (tnext.x < tnext.y) { t = tnext.x; tnext.x += tdel.x; c.x += st.x; shade = 0.9; }
+                        else { t = tnext.y; tnext.y += tdel.y; c.y += st.y; shade = 0.8; }
+                        if (pw_cloudThickness <= 0.0) break; // the flat layer: only the texel where the ray meets it
                     }
                 }
             }
             float rain = pw_rain > 1.5 ? 1.0 : pw_rain > 0.5 ? WORLD_RAIN : 0.0;
             skyCol *= 1.0 - rain * pw_rainDarken * 2.0;
             if (trans > 0.0) acc += trans * skyCol;
+            if (cloudHit) acc = mix(acc, cloudCol * (1.0 - rain * pw_rainDarken), cloudA);
             acc *= 1.0 - rain * pw_rainDarken;
             // the game's rain: its texture on cylinders around the camera, falling
             // cold biome at the camera: snow (slow, white) instead of rain, like the game

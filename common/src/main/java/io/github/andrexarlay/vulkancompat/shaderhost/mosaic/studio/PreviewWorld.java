@@ -478,6 +478,7 @@ final class PreviewWorld {
         look("fogStart", "Fog start", "Fraction of the view distance where the fog begins (the game: about 0.9 of the render distance).", 0.75),
         look("clouds", "Clouds", "1: the game's cloud layer (clouds.png) drawn over the world; 0: none.", 1),
         look("cloudHeight", "Cloud height", "Absolute y of the cloud layer (the game: 192.33).", 192.33),
+        look("cloudThickness", "Cloud thickness", "Blocks high the cloud boxes are (the game's Fancy clouds: 4; 0: the flat layer).", 4),
         look("cloudSpeed", "Cloud speed", "Blocks per second the clouds drift along x (the game: about 0.6).", 0.6),
         look("cloudOpacity", "Cloud opacity", "How much the clouds cover the sky.", 0.8),
         look("rain", "Rain", "0: never; 1: when the world is raining (saves keep their weather); 2: always.", 1),
