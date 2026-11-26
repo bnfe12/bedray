@@ -57,7 +57,7 @@ public final class MosaicTemplates {
         ALL.add(new Template("Minecraft by parts", "Start", "The picture as Minecraft's parts, one node each: sky, water, lava, leaves,"
             + " plants, light sources, all blocks, entities and particles. Every part starts unchanged: pick one in the Scene panel"
             + " and give it your look (tint, brightness, contrast) or wire your own shader into its look input.",
-            chain("partSky", "partWater", "partLava", "partLeaves", "partPlants", "partLights", "partBlocks", "partNotBlocks")));
+            zigzag(chain("partSky", "partWater", "partLava", "partLeaves", "partPlants", "partLights", "partBlocks", "partNotBlocks"))));
         ALL.add(new Template("Cinematic", "Post effects", "Color grade, vignette and film grain.",
             chain("colorGrade", "vignette", "filmGrain")));
         ALL.add(new Template("Retro screen", "Post effects", "Posterized colors, scanlines and a lens split.",
@@ -373,6 +373,23 @@ public final class MosaicTemplates {
     }
 
     public static List<Template> all() { return List.copyOf(ALL); }
+
+    /** A long chain laid out in two rows (left to right, then back), so a fitted view stays readable. */
+    static String zigzag(String json) {
+        JsonObject root = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+        JsonArray nodes = root.getAsJsonArray("nodes");
+        int k = 0, perRow = 5;
+        for (var e : nodes) {
+            JsonObject n = e.getAsJsonObject();
+            String type = n.get("type").getAsString();
+            if (type.equals("mosaic.uv")) { n.addProperty("x", 0); n.addProperty("y", 150); continue; }
+            int row = k / perRow, col = k % perRow;
+            n.addProperty("x", (row % 2 == 0 ? col : perRow - 1 - col) * 220);
+            n.addProperty("y", row * 300);
+            k++;
+        }
+        return new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(root);
+    }
 
     /** scene color -> effects in order -> output, laid out left to right, sharing one uv node. */
     static String chain(String... effects) {

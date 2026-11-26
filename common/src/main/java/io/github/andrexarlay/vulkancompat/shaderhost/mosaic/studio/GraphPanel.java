@@ -38,7 +38,7 @@ final class GraphPanel extends JComponent {
     final StudioModel model;
     double panX = 60, panY = 60, zoom = 1;
     Point mouseScreen = new Point(200, 200);
-    private boolean fitted;
+    private boolean fitted, sizeChecked;
 
     // gestures
     private MosaicDocument.ENode dragNode;
@@ -152,7 +152,10 @@ final class GraphPanel extends JComponent {
     }
 
     /** The view was restored from project metadata: do not auto-fit on the first paint. */
-    void markFitted() { fitted = true; }
+    void markFitted() {
+        fitted = true;
+        sizeChecked = false; // look again at the restored view on the next paint
+    }
 
     void dispose() {
         model.unlisten(listener);
@@ -1204,6 +1207,21 @@ final class GraphPanel extends JComponent {
         if (!fitted && getWidth() > 0) {
             fitted = true;
             fitReadable();
+        }
+        if (!sizeChecked && getWidth() > 0 && !model.doc.nodes.isEmpty()) {
+            // a view restored from an earlier session that leaves the graph a speck in a corner: fit it once
+            sizeChecked = true;
+            int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE;
+            for (MosaicDocument.ENode n : model.doc.nodes) {
+                minX = Math.min(minX, n.x);
+                minY = Math.min(minY, n.y);
+                maxX = Math.max(maxX, n.x + W());
+                maxY = Math.max(maxY, n.y + height(n));
+            }
+            boolean tiny = (maxX - minX) * zoom < getWidth() * 0.6 && (maxY - minY) * zoom < getHeight() * 0.6;
+            boolean away = (minX * zoom + panX) < -10 || (maxX * zoom + panX) > getWidth() + 10 || (minY * zoom + panY) < -10
+                || (maxY * zoom + panY) > getHeight() + 10; // cut by an edge
+            if (tiny || away) fitReadable();
         }
         Graphics2D g = (Graphics2D) g0.create();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);

@@ -132,8 +132,7 @@ final class PreviewPanel extends Panels.Listening {
             lastKey = null;
         });
         row2.add(size);
-        row2.add(button("World look...", "How the preview world draws the game's image: light map, face shading, water and glass, view distance",
-            this::lookDialog));
+
         JButton worldBtn = button("World", "Which world the preview shows: one of your saves, the place the game captured (J), the built-in landscape", () -> { });
         worldBtn.addActionListener(e -> {
             JPopupMenu wm = worldMenu();
@@ -141,10 +140,7 @@ final class PreviewPanel extends Panels.Listening {
             wm.show(worldBtn, 0, worldBtn.getHeight());
         });
         row2.add(worldBtn);
-        row2.add(button("Reload world", "Load the world again (a save is read again; the game saves the place you stand on each time it opens Studio)", () -> {
-            worldView = null;
-            lastKey = null;
-        }));
+
         JPanel row3 = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         row3.setOpaque(false);
         row3.setBorder(new EmptyBorder(4, 0, 0, 0));
@@ -180,10 +176,18 @@ final class PreviewPanel extends Panels.Listening {
         JButton image = button("Image", "Save the frame as PNG, copy it", () -> { });
         image.addActionListener(e -> imageMenu().show(image, 0, image.getHeight()));
         row3.add(image);
-        JPanel rows = new JPanel(new GridLayout(0, 1));
+        // one flowing row of tools: a single line on a wide panel, wrapping on a narrow one (small screens keep the picture big)
+        JPanel rows = new JPanel(new StartScreen.WrapLayout(FlowLayout.LEFT, 4, 3));
         rows.setOpaque(false);
-        rows.add(row2);
-        rows.add(row3);
+        for (Component comp : row2.getComponents()) rows.add(comp);
+        for (Component comp : row3.getComponents()) rows.add(comp);
+        for (Component comp : rows.getComponents()) { // compact: small text and margins, so more of the picture shows
+            comp.setFont(UI_S);
+            if (comp instanceof AbstractButton ab) ab.setMargin(new Insets(2, 8, 2, 8));
+        }
+        bar.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override public void componentResized(java.awt.event.ComponentEvent e) { rows.revalidate(); }
+        });
         bar.add(right, BorderLayout.EAST);
         bar.add(rows, BorderLayout.SOUTH);
         root.add(bar, BorderLayout.NORTH);
@@ -456,6 +460,16 @@ final class PreviewPanel extends Panels.Listening {
             m.add(h);
             for (java.nio.file.Path s : saves) add.accept(s.getFileName().toString(), s.toString());
         }
+        m.addSeparator();
+        JMenuItem lookItem = new JMenuItem("World look (light, water, clouds, rain, models)...");
+        lookItem.addActionListener(e -> lookDialog());
+        m.add(lookItem);
+        JMenuItem reload = new JMenuItem("Reload the world");
+        reload.addActionListener(e -> {
+            worldView = null;
+            lastKey = null;
+        });
+        m.add(reload);
         m.addSeparator();
         JMenuItem other = new JMenuItem("Another save folder...");
         other.addActionListener(e -> {
