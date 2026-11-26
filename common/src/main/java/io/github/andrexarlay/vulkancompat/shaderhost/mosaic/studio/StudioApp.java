@@ -214,6 +214,17 @@ final class StudioApp {
             st.setRepeats(false);
             st.start();
         }
+        String shotChooser = System.getProperty("mosaic.selfshot.chooser"); // folder | picture: verification aid
+        if (shot != null && shotChooser != null) {
+            Timer ch = new Timer(1500, e -> {
+                StudioChooser c = new StudioChooser(System.getProperty("mosaic.selfshot.chooserDir"));
+                if (shotChooser.equals("folder")) c.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+                else c.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Pictures", "png", "jpg"));
+                c.showOpenDialog(main);
+            });
+            ch.setRepeats(false);
+            ch.start();
+        }
         String shotPalette = System.getProperty("mosaic.selfshot.palette"); // a query: verification aid
         if (shot != null && shotPalette != null) {
             Timer pa = new Timer(2200, e -> CommandPalette.open(this, false, shotPalette));
@@ -984,7 +995,7 @@ final class StudioApp {
             model.say("Nothing to export: " + model.analysis.firstError(), BAD);
             return;
         }
-        JFileChooser fc = new JFileChooser();
+        StudioChooser fc = new StudioChooser();
         fc.setSelectedFile(new java.io.File("mosaic.export.comp"));
         if (fc.showSaveDialog(main) != JFileChooser.APPROVE_OPTION) return;
         try {
@@ -1267,7 +1278,7 @@ final class StudioApp {
                     });
             }
             case OPEN -> {
-                JFileChooser fc = new JFileChooser(model.doc.file == null ? null : model.doc.file.getParent().toFile());
+                StudioChooser fc = new StudioChooser(model.doc.file == null ? null : model.doc.file.getParent().toFile());
                 fc.setFileSelectionMode(JFileChooser.FILES_AND_DIRECTORIES);
                 if (fc.showOpenDialog(main) == JFileChooser.APPROVE_OPTION) {
                     model.open(fc.getSelectedFile().toPath());
@@ -1277,7 +1288,7 @@ final class StudioApp {
             }
             case SAVE -> {
                 if (model.doc.file == null) {
-                    JFileChooser fc = new JFileChooser();
+                    StudioChooser fc = new StudioChooser();
                     fc.setDialogTitle("Save mosaic.json (inside <pack>/shaders/bedray/ to use it in the game)");
                     fc.setSelectedFile(new java.io.File("mosaic.json"));
                     if (fc.showSaveDialog(main) != JFileChooser.APPROVE_OPTION) return;

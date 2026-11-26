@@ -237,7 +237,7 @@ final class MaterialPanels {
         }
 
         void importFiles() {
-            JFileChooser fc = new JFileChooser();
+            StudioChooser fc = new StudioChooser();
             fc.setMultiSelectionEnabled(true);
             fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Images", "png", "jpg", "jpeg", "bmp", "gif"));
             if (fc.showOpenDialog(root) != JFileChooser.APPROVE_OPTION) return;
@@ -246,7 +246,7 @@ final class MaterialPanels {
         }
 
         void chooseGame() {
-            JFileChooser fc = new JFileChooser();
+            StudioChooser fc = new StudioChooser();
             fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
             fc.setDialogTitle("Minecraft folder (the one with resourcepacks/ and shaderpacks/)");
             if (fc.showOpenDialog(root) != JFileChooser.APPROVE_OPTION) return;
@@ -386,7 +386,7 @@ final class MaterialPanels {
                 p.addSeparator();
                 JMenuItem hd = new JMenuItem("Load HDRI (.hdr, .png, .jpg)...");
                 hd.addActionListener(ev -> {
-                    JFileChooser fc = new JFileChooser();
+                    StudioChooser fc = new StudioChooser();
                     fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("HDRI / panorama", "hdr", "png", "jpg", "jpeg"));
                     if (fc.showOpenDialog(root) != JFileChooser.APPROVE_OPTION) return;
                     try {

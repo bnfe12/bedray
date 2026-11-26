@@ -605,7 +605,7 @@ final class PreviewPanel extends Panels.Listening {
         m.addSeparator();
         JMenuItem other = new JMenuItem("Another save folder...");
         other.addActionListener(e -> {
-            JFileChooser fc = new JFileChooser(StudioLibrary.gameDir(model) == null ? null : StudioLibrary.gameDir(model).resolve("saves").toFile());
+            StudioChooser fc = new StudioChooser(StudioLibrary.gameDir(model) == null ? null : StudioLibrary.gameDir(model).resolve("saves").toFile());
             fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
             fc.setDialogTitle("A Minecraft world folder (with level.dat)");
             if (fc.showOpenDialog(root) != JFileChooser.APPROVE_OPTION) return;
@@ -741,7 +741,7 @@ final class PreviewPanel extends Panels.Listening {
                 g.dispose();
             }
         }
-        JFileChooser fc = new JFileChooser();
+        StudioChooser fc = new StudioChooser();
         fc.setSelectedFile(new java.io.File("preview-" + java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".png"));
         if (fc.showSaveDialog(root) != JFileChooser.APPROVE_OPTION) return;
         try {

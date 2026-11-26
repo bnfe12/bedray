@@ -179,7 +179,7 @@ final class StartScreen extends JFrame {
         gv.setToolTipText(gd == null ? "Projects then go to " + ProjectInfo.projectsHome() : gd.toString());
         game.add(gv, BorderLayout.CENTER);
         JButton change = button(gd == null ? "Choose..." : "Change...", "The Minecraft folder with Bedray (its shaderpacks/ hold your projects)", () -> {
-            JFileChooser fc = new JFileChooser(gd == null ? null : gd.toFile());
+            StudioChooser fc = new StudioChooser(gd == null ? null : gd.toFile());
             fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
             fc.setDialogTitle("The Minecraft folder (with mods/, shaderpacks/, saves/)");
             if (fc.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
@@ -976,7 +976,7 @@ final class StartScreen extends JFrame {
         JPopupMenu m = new JPopupMenu();
         item(m, "Open", () -> finish(ProjectInfo.graphOf(p.dir)));
         item(m, "Set the picture...", () -> {
-            JFileChooser fc = new JFileChooser();
+            StudioChooser fc = new StudioChooser();
             fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Pictures", "png", "jpg", "jpeg"));
             if (fc.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
             try {
@@ -1107,7 +1107,7 @@ final class StartScreen extends JFrame {
     }
 
     private void openOther() {
-        JFileChooser fc = new JFileChooser(home().toFile());
+        StudioChooser fc = new StudioChooser(home().toFile());
         fc.setFileSelectionMode(JFileChooser.FILES_AND_DIRECTORIES);
         if (fc.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
         Path p = fc.getSelectedFile().toPath();
@@ -1206,12 +1206,12 @@ final class StartScreen extends JFrame {
         field(form, "Name", name, null);
         field(form, "Description", desc, null);
         field(form, "Folder", folder, () -> {
-            JFileChooser fc = new JFileChooser(folder.getText());
+            StudioChooser fc = new StudioChooser(folder.getText());
             fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
             if (fc.showOpenDialog(d) == JFileChooser.APPROVE_OPTION) folder.setText(fc.getSelectedFile().toString());
         });
         field(form, "Picture", pic, () -> {
-            JFileChooser fc = new JFileChooser();
+            StudioChooser fc = new StudioChooser();
             fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Pictures", "png", "jpg", "jpeg"));
             if (fc.showOpenDialog(d) == JFileChooser.APPROVE_OPTION) pic.setText(fc.getSelectedFile().toString());
         });

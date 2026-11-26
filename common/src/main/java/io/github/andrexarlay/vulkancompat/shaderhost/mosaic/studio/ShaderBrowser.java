@@ -256,7 +256,7 @@ final class ShaderBrowser extends Panels.Listening {
             model.say("Choose the game folder first (Library > game instance)", MUTED);
             return;
         }
-        JFileChooser fc = new JFileChooser();
+        StudioChooser fc = new StudioChooser();
         fc.setMultiSelectionEnabled(true);
         fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Shader pack zips", "zip"));
         if (fc.showOpenDialog(root) != JFileChooser.APPROVE_OPTION) return;
@@ -284,7 +284,7 @@ final class ShaderBrowser extends Panels.Listening {
             model.say("Select a pack folder to export", MUTED);
             return;
         }
-        JFileChooser fc = new JFileChooser();
+        StudioChooser fc = new StudioChooser();
         fc.setSelectedFile(new java.io.File(p.name() + ".zip"));
         if (fc.showSaveDialog(root) != JFileChooser.APPROVE_OPTION) return;
         Path out = fc.getSelectedFile().toPath();

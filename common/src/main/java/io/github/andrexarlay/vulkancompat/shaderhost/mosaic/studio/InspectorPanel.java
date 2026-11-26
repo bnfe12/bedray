@@ -377,7 +377,7 @@ final class InspectorPanel extends Panels.Listening {
         row.setOpaque(false);
         row.setAlignmentX(0);
         row.add(button("Open image...", "Choose a PNG / JPG: it is copied into the project", () -> {
-            JFileChooser fc = new JFileChooser();
+            StudioChooser fc = new StudioChooser();
             fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Images", "png", "jpg", "jpeg", "bmp", "gif"));
             if (fc.showOpenDialog(content) == JFileChooser.APPROVE_OPTION) model.setImage(n, fc.getSelectedFile());
         }));

@@ -82,7 +82,7 @@ final class ConfigPanel extends Panels.Listening {
     }
 
     private void saveAs() {
-        JFileChooser fc = new JFileChooser();
+        StudioChooser fc = new StudioChooser();
         fc.setSelectedFile(new java.io.File("bedray-studio.toml"));
         if (fc.showSaveDialog(root) != JFileChooser.APPROVE_OPTION) return;
         try {
