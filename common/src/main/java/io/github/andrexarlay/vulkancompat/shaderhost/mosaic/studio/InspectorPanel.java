@@ -921,7 +921,7 @@ final class InspectorPanel extends Panels.Listening {
             case "mat.texture" -> textureInfo();
             case "mosaic.gradient" -> modeCombo(n, "Type", MosaicGraph.GRADIENT_MODES, "linear");
             case "mosaic.pass" -> bufferEditor(n);
-            case "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.taa", "mosaic.bufferPrev", "mosaic.accumulate", "mosaic.atrous", "mosaic.average", "mosaic.ssr" -> bufferChoice(n);
+            case "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.taa", "mosaic.bufferPrev", "mosaic.accumulate", "mosaic.atrous", "mosaic.average", "mosaic.ssr", "mosaic.upsample" -> bufferChoice(n);
             case "mosaic.repeat" -> repeatEditor(n);
             case "mosaic.wave" -> modeCombo(n, "Type", MosaicGraph.WAVE_MODES, "bands");
             default -> { }

@@ -788,6 +788,9 @@ public final class MosaicEffects {
             if (mosaicDepth(uv) < 1.0e5) return color;
             vec3 c = color.rgb * layer.a + layer.rgb;
             return vec4(mix(color.rgb, c, strength), color.a);""");
+        add("Render pipeline", "vec4 packLight(vec3 light, float visibility)", "Pack light + shadow",
+            "Packs a colour (rgb) and a visibility (alpha) into one vec4 for a Buffer: e.g. shadowed block light and the sun's shadow at 1/2 size.", """
+            return vec4(light, visibility);""");
         add("Render pipeline", "vec3 skyAmbient(vec3 normal, float skyLight = 1, float intensity = 0.6, float skyCurve = 2, float upBias = 1)", "Sky ambient",
             "Cheap light from the sky dome on a surface (no rays): the sky colour above the normal (upBias tilts it up), fading with"
                 + " the sky light level to the power skyCurve (0 in caves). Use it instead of Diffuse GI on slow GPUs.", """

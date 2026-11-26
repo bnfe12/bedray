@@ -163,11 +163,11 @@ public final class MosaicCodegen {
     /** Which bindings and helpers the emitted code needs. */
     private record Needs(boolean ray, boolean scene, boolean depth, boolean world, boolean buffer, boolean lut, int maxPush, boolean noise,
                          java.util.Set<Integer> buffers, boolean history, boolean worldInfo, boolean blur, boolean prev, boolean taa, boolean height,
-                         boolean accumulate, boolean atrous, boolean voxelRays, boolean average, boolean ssr) {
+                         boolean accumulate, boolean atrous, boolean voxelRays, boolean average, boolean ssr, boolean upsample) {
         /** Ray helpers on the world volume instead of the acceleration structure (Options.voxelRays). */
         Needs voxel() {
             return new Needs(false, scene, depth, true, buffer, lut, maxPush, noise, buffers, history, worldInfo, blur, prev, taa, height,
-                accumulate, atrous, true, average, ssr);
+                accumulate, atrous, true, average, ssr, upsample);
         }
     }
 
@@ -188,7 +188,7 @@ public final class MosaicCodegen {
 
     private static Needs needs(MosaicGraph g, Plan p) {
         boolean ray = false, scene = false, depth = false, world = false, buffer = false, lut = false, noise = false, history = false, info = false,
-            blur = false, prev = false, taa = false, height = false, accumulate = false, atrous = false, average = false, ssr = false;
+            blur = false, prev = false, taa = false, height = false, accumulate = false, atrous = false, average = false, ssr = false, upsample = false;
         java.util.Set<Integer> buffers = new java.util.TreeSet<>();
         int push = -1;
         for (Node n : p.emit) {
@@ -223,6 +223,10 @@ public final class MosaicCodegen {
                     buffers.add(n.index());
                     depth = world = ssr = height = true;
                 }
+                case "mosaic.upsample" -> {
+                    buffers.add(n.index());
+                    depth = upsample = true;
+                }
                 case "mosaic.average" -> {
                     buffers.add(n.index());
                     average = true;
@@ -251,7 +255,7 @@ public final class MosaicCodegen {
             noise |= mentions(body, NOISE_HELPERS);
             height |= body.contains("mosaicHeightAt(") || body.contains("mosaicFarShadow(");
         }
-        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur, prev, taa, height, accumulate, atrous, false, average, ssr);
+        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur, prev, taa, height, accumulate, atrous, false, average, ssr, upsample);
     }
 
     /** Header of a stats comment so authors see what the optimizer did. */
@@ -408,7 +412,13 @@ public final class MosaicCodegen {
         if (nd.scene()) o.a("vec4 mosaicScene(vec2 uv) { return texture(bedraySceneColor, uv); }\n");
         if (nd.depth()) o.a("""
             float mosaicDepth(vec2 uv) { return texture(bedrayDepth, uv).r; }
-            vec3 mosaicHitPos(vec2 uv) { return mosaicEye() + mosaicViewDir(uv) * min(mosaicDepth(uv), 4096.0); }
+            // the position of the depth texel actually read (its centre): a pass at 1/2 or 1/4 size samples between texels, and a
+            // view ray through the exact uv with a neighbour's distance would land under a grazing surface
+            vec3 mosaicHitPos(vec2 uv) {
+                vec2 dsz = vec2(textureSize(bedrayDepth, 0));
+                vec2 su = (floor(uv * dsz + 1e-3) + 0.5) / dsz; // + 1e-3: a uv on a texel border always picks the same side
+                return mosaicEye() + mosaicViewDir(su) * min(mosaicDepth(su), 4096.0);
+            }
             vec3 mosaicWorldPos(vec2 uv) { return frame.cameraPosition.xyz + mosaicHitPos(uv); }
             /** Surface normal rebuilt from the depth of neighbouring pixels (the shorter side wins at edges). */
             vec3 mosaicNormal(vec2 uv) {
@@ -429,6 +439,7 @@ public final class MosaicCodegen {
         if (nd.accumulate()) o.a(GLSL_ACCUMULATE);
         if (nd.atrous()) o.a(GLSL_ATROUS);
         if (nd.average()) o.a(GLSL_AVERAGE);
+        if (nd.upsample()) o.a(GLSL_UPSAMPLE);
         if (nd.height()) o.a(MosaicHeight.GLSL);
         if (nd.ssr()) o.a(GLSL_SSR); // after the height field: it reads mosaicFarShadow
         if (nd.voxelRays()) o.a("""
@@ -782,6 +793,52 @@ public final class MosaicCodegen {
                 }
                 float fres = f0 + (1.0 - f0) * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
                 return float4(lerp(base.rgb, refl, clamp(fres * strength, 0.0, 1.0)), base.a);
+            }
+            """;
+    /** Depth-aware upsample: the four nearest texels of a smaller buffer weighted by bilinear weight and distance match. */
+    private static final String GLSL_UPSAMPLE = """
+            vec4 mosaicUpsample(sampler2D s, vec2 uv, float sharpness, float tolerance) {
+                vec2 dim = vec2(textureSize(s, 0));
+                vec2 f = uv * dim - 0.5;
+                vec2 base = floor(f), w = f - base;
+                float t0 = min(mosaicDepth(uv), 4096.0);
+                vec4 sum = vec4(0.0);
+                float wsum = 0.0;
+                for (int j = 0; j < 2; j++)
+                    for (int i = 0; i < 2; i++) {
+                        vec2 c = (base + vec2(float(i), float(j)) + 0.5) / dim;
+                        float bw = (i == 0 ? 1.0 - w.x : w.x) * (j == 0 ? 1.0 - w.y : w.y);
+                        float ti = min(mosaicDepth(clamp(c, vec2(0.0), vec2(1.0))), 4096.0);
+                        float dw = exp(-abs(ti - t0) / (tolerance * t0 + 0.05) * sharpness);
+                        float k = max(bw * dw, 1e-5);
+                        sum += textureLod(s, clamp(c, vec2(0.0), vec2(1.0)), 0.0) * k;
+                        wsum += k;
+                    }
+                return sum / wsum;
+            }
+            """;
+    private static final String SLANG_UPSAMPLE = """
+            float4 mosaicUpsample(Sampler2D s, float2 uv, float sharpness, float tolerance)
+            {
+                uint sw, sh;
+                s.GetDimensions(sw, sh);
+                float2 dim = float2(sw, sh);
+                float2 f = uv * dim - 0.5;
+                float2 base = floor(f), w = f - base;
+                float t0 = min(mosaicDepth(uv), 4096.0);
+                float4 sum = float4(0.0);
+                float wsum = 0.0;
+                for (int j = 0; j < 2; j++)
+                    for (int i = 0; i < 2; i++) {
+                        float2 c = (base + float2(float(i), float(j)) + 0.5) / dim;
+                        float bw = (i == 0 ? 1.0 - w.x : w.x) * (j == 0 ? 1.0 - w.y : w.y);
+                        float ti = min(mosaicDepth(clamp(c, float2(0.0), float2(1.0))), 4096.0);
+                        float dw = exp(-abs(ti - t0) / (tolerance * t0 + 0.05) * sharpness);
+                        float k = max(bw * dw, 1e-5);
+                        sum += s.SampleLevel(clamp(c, float2(0.0), float2(1.0)), 0.0) * k;
+                        wsum += k;
+                    }
+                return sum / wsum;
             }
             """;
     /** Average of a buffer: 8 x 8 bilinear taps over its central area (spread), the centre weighted (auto exposure). */
@@ -1281,6 +1338,7 @@ public final class MosaicCodegen {
                 + in(p, n, "maxDistance") + ", " + in(p, n, "steps") + ", " + in(p, n, "thickness") + ", " + in(p, n, "f0") + ", " + in(p, n, "waves")
                 + ", " + in(p, n, "waveScale") + ", " + in(p, n, "waveSpeed") + ", " + in(p, n, "waveHeight") + ", " + in(p, n, "edgeFade")
                 + ", " + in(p, n, "farLand") + ", " + in(p, n, "farDistance") + ", " + in(p, n, "landColor") + ")";
+            case "mosaic.upsample" -> "mosaicUpsample(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "depthSharpness") + ", " + in(p, n, "depthTolerance") + ")";
             case "mosaic.average" -> "mosaicAverage(bedrayBuf" + n.index() + ", " + in(p, n, "spread") + ", " + in(p, n, "centerWeight") + ")";
             case "mosaic.atrous" -> "mosaicAtrous(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "step") + ", " + in(p, n, "edges") + ", "
                 + in(p, n, "planeTolerance") + ", " + in(p, n, "planeTolerancePerBlock") + ", " + in(p, n, "colorTolerance") + ", " + in(p, n, "colorToleranceBase") + ")";
@@ -1652,7 +1710,14 @@ public final class MosaicCodegen {
         if (nd.scene()) o.a("float4 mosaicScene(float2 uv) { return bedraySceneColor.SampleLevel(uv, 0.0); }\n");
         if (nd.depth()) o.a("""
             float mosaicDepth(float2 uv) { return bedrayDepth.SampleLevel(uv, 0.0).r; }
-            float3 mosaicHitPos(float2 uv) { return mosaicEye() + mosaicViewDir(uv) * min(mosaicDepth(uv), 4096.0); }
+            float3 mosaicHitPos(float2 uv)
+            {
+                uint dw, dh;
+                bedrayDepth.GetDimensions(dw, dh);
+                float2 dsz = float2(dw, dh);
+                float2 su = (floor(uv * dsz + 1e-3) + 0.5) / dsz;
+                return mosaicEye() + mosaicViewDir(su) * min(mosaicDepth(su), 4096.0);
+            }
             float3 mosaicWorldPos(float2 uv) { return frame.cameraPosition.xyz + mosaicHitPos(uv); }
             float3 mosaicNormal(float2 uv)
             {
@@ -1673,6 +1738,7 @@ public final class MosaicCodegen {
         if (nd.accumulate()) o.a(SLANG_ACCUMULATE);
         if (nd.atrous()) o.a(SLANG_ATROUS);
         if (nd.average()) o.a(SLANG_AVERAGE);
+        if (nd.upsample()) o.a(SLANG_UPSAMPLE);
         if (nd.height()) o.a(MosaicHeight.SLANG);
         if (nd.ssr()) o.a(SLANG_SSR);
         if (nd.voxelRays()) o.a("""

@@ -191,25 +191,35 @@ public final class MosaicTemplates {
         if (rt) add.apply(new Object[] {"sun", "fn:sunLightRT", 2, 0, "position", "pos", "normal", "nrm"});
         else {
             add.apply(new Object[] {"shadow", "fn:sunShadow", 2, 0, "position", "pos", "normal", "nrm"});
-            add.apply(new Object[] {"sun", "fn:sunLight", 2, 1, "position", "pos", "normal", "nrm", "visibility", "shadow"});
+            add.apply(new Object[] {"sun", "fn:sunLight", 2, 1, "position", "pos", "normal", "nrm", "visibility", "visUp"});
         }
         if (rt) add.apply(new Object[] {"spec", "fn:sunSpecular", 2, 1, "position", "pos", "normal", "nrm", "roughness", "rough"});
-        else add.apply(new Object[] {"spec", "fn:sunSpecular", 2, 2, "position", "pos", "normal", "nrm", "roughness", "rough", "visibility", "shadow"});
+        else add.apply(new Object[] {"spec", "fn:sunSpecular", 2, 2, "position", "pos", "normal", "nrm", "roughness", "rough", "visibility", "visUp"});
         add.apply(new Object[] {"torch", "fn:torchLightShadowed", 2, 3, "position", "pos", "normal", "nrm", "blockLight", "lamp"});
+        if (!rt) {
+            // the traced shadows (sun visibility, shadowed block light) at 1/2 size, read back sharp at block edges
+            add.apply(new Object[] {"pack", "fn:packLight", 1, 4.2, "light", "torch", "visibility", "shadow"});
+            buf.accept(add.apply(new Object[] {"lightBuf", "mosaic.pass", 1, 5.4, "color", "pack"}), new Object[] {"light", 2});
+            buf.accept(add.apply(new Object[] {"lightUp", "mosaic.upsample", 2, 5.4}), new Object[] {"light"});
+            JsonObject sv = add.apply(new Object[] {"visUp", "mosaic.swizzle", 2.5, 4.4, "a", "lightUp"});
+            sv.addProperty("mask", "w");
+            JsonObject st = add.apply(new Object[] {"torchUp", "mosaic.swizzle", 3, 4.4, "a", "lightUp"});
+            st.addProperty("mask", "xyz");
+        }
         add.apply(new Object[] {"glow", "fn:selfGlow", 2, 4, "uv", "uv", "albedo", "albedo"});
         // indirect light
         String indirect;
         if (gi) {
-            add.apply(new Object[] {"giRaw", rt ? "fn:diffuseGIRT" : "fn:diffuseGI", 1, 5.6, "position", "pos", "normal", "nrm"});
-            JsonObject acc = add.apply(new Object[] {"acc", "mosaic.accumulate", 2, 5.6, "color", "giRaw"});
+            add.apply(new Object[] {"giRaw", rt ? "fn:diffuseGIRT" : "fn:diffuseGI", 1, 7, "position", "pos", "normal", "nrm"});
+            JsonObject acc = add.apply(new Object[] {"acc", "mosaic.accumulate", 2, 7, "color", "giRaw"});
             acc.addProperty("mask", "gi");
-            JsonObject p0 = add.apply(new Object[] {"giBuf", "mosaic.pass", 3, 5.6, "color", "acc"});
+            JsonObject p0 = add.apply(new Object[] {"giBuf", "mosaic.pass", 3, 7, "color", "acc"});
             p0.addProperty("mask", "gi");
             p0.addProperty("index", 2);
             String prev = "gi";
             String[] steps = {"giA", "giB"};
             for (int i = 0; i < 3; i++) {
-                JsonObject d = add.apply(new Object[] {"dn" + i, "mosaic.atrous", 1 + i, 6.8});
+                JsonObject d = add.apply(new Object[] {"dn" + i, "mosaic.atrous", 1 + i, 8.2});
                 d.addProperty("mask", prev);
                 JsonObject def = new JsonObject();
                 JsonArray s = new JsonArray();
@@ -217,12 +227,12 @@ public final class MosaicTemplates {
                 def.add("step", s);
                 d.add("defaults", def);
                 if (i == 2) break;
-                JsonObject p = add.apply(new Object[] {"buf" + i, "mosaic.pass", 1 + i + 0.5, 7.8, "color", "dn" + i});
+                JsonObject p = add.apply(new Object[] {"buf" + i, "mosaic.pass", 1 + i + 0.5, 9.2, "color", "dn" + i});
                 p.addProperty("mask", steps[i]);
                 p.addProperty("index", 2);
                 prev = steps[i];
             }
-            JsonObject sw = add.apply(new Object[] {"giRgb", "mosaic.swizzle", 4, 6.8, "a", "dn2"});
+            JsonObject sw = add.apply(new Object[] {"giRgb", "mosaic.swizzle", 4, 8.2, "a", "dn2"});
             sw.addProperty("mask", "xyz");
             indirect = "giRgb";
         } else {
@@ -230,7 +240,7 @@ public final class MosaicTemplates {
             indirect = "amb";
         }
         // shading chain
-        add.apply(new Object[] {"direct", "mosaic.add", 3, 0, "a", "sun", "b", "torch"});
+        add.apply(new Object[] {"direct", "mosaic.add", 3, 0, "a", "sun", "b", rt ? "torch" : "torchUp"});
         add.apply(new Object[] {"light", "mosaic.add", 3, 1, "a", "direct", "b", indirect});
         add.apply(new Object[] {"extra", "mosaic.add", 3, 2, "a", "glow", "b", "spec"});
         add.apply(new Object[] {"shade", "fn:litSurface", 4, 0, "uv", "uv", "albedo", "albedo", "light", "light", "glow", "extra"});
@@ -286,7 +296,7 @@ public final class MosaicTemplates {
         add.apply(new Object[] {"out", "mosaic.output", 9, 1.2, "color", "taa"});
         frame.accept("G-buffer", gi ? new Object[] {"#3A6EA5", "uv", "pos", "nrm", "lamp"} : new Object[] {"#3A6EA5", "uv", "pos", "nrm", "lamp", "sky"});
         frame.accept("Surface", gi ? new Object[] {"#7A4FA8", "albedo", "rough"} : new Object[] {"#7A4FA8", "albedo", "rough", "amb"});
-        frame.accept("Direct light", new Object[] {"#B07A2E", "shadow", "sun", "spec", "torch", "glow"});
+        frame.accept("Direct light", new Object[] {"#B07A2E", "shadow", "sun", "spec", "torch", "glow", "pack", "lightBuf", "lightUp", "visUp", "torchUp"});
         if (gi) frame.accept(rt ? "Indirect light (RT GI)" : "Indirect light (voxel GI)",
             new Object[] {"#2F8F7C", "giRaw", "acc", "giBuf", "dn0", "buf0", "dn1", "buf1", "dn2", "giRgb"});
         frame.accept("Shade, sky and atmosphere", new Object[] {"#8A5CC8", "direct", "light", "extra", "shade", "water", "skyBg", "cloudRay", "cloudBuf", "cloudIn", "clouds", "air"});

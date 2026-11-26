@@ -45,6 +45,8 @@ public final class MosaicEval {
             case "mosaic.atrous.colorToleranceBase" -> new double[] {0.05};
             case "mosaic.taa.maxBlend" -> new double[] {0.98};
             case "mosaic.average.spread" -> new double[] {0.9};
+            case "mosaic.upsample.depthSharpness" -> new double[] {1.0};
+            case "mosaic.upsample.depthTolerance" -> new double[] {0.02};
             case "mosaic.ssr.material", "mosaic.ssr.strength", "mosaic.ssr.waves", "mosaic.ssr.waveScale", "mosaic.ssr.waveSpeed" -> new double[] {1.0};
             case "mosaic.ssr.maxDistance" -> new double[] {96.0};
             case "mosaic.ssr.steps" -> new double[] {48.0};
