@@ -776,6 +776,49 @@ final class PreviewBlocks {
 
     private static boolean exportAsked;
 
+    /**
+     * The flame particle the game shows over a torch (a small cross of the particle texture at the torch's tip; wall
+     * torches lean away from their wall).
+     */
+    static List<Q> withFlame(List<Q> quads, String state, List<Pack> packs) {
+        String n = baseName(state);
+        boolean soul = n.endsWith("soul_torch") || n.endsWith("soul_wall_torch");
+        if (!(n.endsWith(":torch") || n.endsWith(":wall_torch") || soul) || !PreviewBlocks.flames) return quads;
+        String tex = soul ? "minecraft:particle/soul_fire_flame" : "minecraft:particle/flame";
+        if (image(packs, tex) == null) return quads;
+        double cx = 0.5, cy = 0.7, cz = 0.5;
+        if (n.endsWith("wall_torch")) {
+            String f = props(state).getOrDefault("facing", "north");
+            double o = 0.27;
+            cy = 0.92;
+            switch (f) {
+                case "north" -> cz += o;
+                case "south" -> cz -= o;
+                case "east" -> cx -= o;
+                default -> cx += o;
+            }
+            // the torch leans away from the wall it hangs on: its tip sits further out
+            switch (f) {
+                case "north" -> cz = 0.5 + 0.18;
+                case "south" -> cz = 0.5 - 0.18;
+                case "east" -> cx = 0.5 - 0.18;
+                default -> cx = 0.5 + 0.18;
+            }
+        }
+        double h = flameSize;
+        List<Q> out = new ArrayList<>(quads);
+        for (int k = 0; k < 2; k++) {
+            double dx = k == 0 ? h : 0, dz = k == 0 ? 0 : h;
+            double[] p0 = {cx - dx / 2, cy, cz - dz / 2};
+            out.add(new Q(p0, new double[] {dx, 0, dz}, new double[] {0, h, 0}, new double[] {0, 1}, new double[] {1, 0}, new double[] {0, -1}, tex, 0));
+        }
+        return out;
+    }
+
+    /** Draw torch flames (World look could switch them; on by default) and their size in blocks. */
+    static boolean flames = true;
+    static double flameSize = 0.14;
+
     /** Blocks the game draws with an entity model (chests, bells): layer and texture. */
     static final Map<String, String[]> BLOCK_ENTITIES = Map.of(
         "minecraft:chest", new String[] {"minecraft:chest#main", "minecraft:entity/chest/normal"},
@@ -855,6 +898,7 @@ final class PreviewBlocks {
         for (int b = 0; b < n; b++) {
             List<Q> q = b == 0 ? null : blockEntityQuads(t.names().get(b), layers, packs);
             if (q == null && b != 0) q = modelQuads(packs, t.names().get(b));
+            if (q != null && b != 0) q = withFlame(q, t.names().get(b), packs);
             models.add(q);
             if (q != null && b * 4 + 3 < info.length) info[b * 4 + 3] |= 2;
         }
