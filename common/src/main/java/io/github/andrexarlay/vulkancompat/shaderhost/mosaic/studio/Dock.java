@@ -543,7 +543,7 @@ final class Dock {
 
         /** Title-bar button: a painted icon (min / max / close) or, with no icon, a "Dock back" text button. */
         private JButton chrome(String iconKind, String tip, Runnable r) {
-            JButton b = iconKind == null ? new JButton("Dock back") : new JButton(new Icon() {
+            JButton b = iconKind == null ? new JButton("Dock") : new JButton(new Icon() {
                 public int getIconWidth() { return 12; }
                 public int getIconHeight() { return 12; }
                 public void paintIcon(Component c, Graphics g0, int x, int y) {
