@@ -689,7 +689,14 @@ final class PreviewPanel extends Panels.Listening {
                 SwingUtilities.invokeLater(() -> info.setText(gpu.deviceName + "   -   " + out.getWidth() + "x" + out.getHeight() + "   -   "
                     + (passes > 1 ? passes + " passes, " : "") + ms + " ms" + gpuLine + "   -   " + where));
                 lastLoop = System.nanoTime();
-                Thread.sleep(Math.max(5, 1000 / StudioUi.settings.previewFps - ms));
+                // keep the studio smooth on small GPUs: after a heavy frame wait so the preview takes at most its share of the GPU,
+                // and draw rarely while another window is in front
+                double share = StudioUi.settings.previewGpuShare / 100.0;
+                long rest = Math.max(1000 / StudioUi.settings.previewFps - ms, (long) (ms * (1 - share) / share));
+                Window win = SwingUtilities.getWindowAncestor(root);
+                if (StudioUi.settings.previewIdleInBackground && win != null && !win.isActive()
+                    && java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getActiveWindow() == null) rest = Math.max(rest, 2000);
+                Thread.sleep(Math.max(5, rest));
             } catch (InterruptedException e) {
                 return;
             } catch (Throwable t) {

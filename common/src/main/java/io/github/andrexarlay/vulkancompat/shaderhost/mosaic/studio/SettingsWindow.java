@@ -397,6 +397,9 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.wide(check("Invert up / down when dragging", draft.previewInvertY, v -> draft.previewInvertY = v));
         f.section("Frames");
         f.row("Frames per second at most", "The GPU may give fewer; lower saves power", slider(2, 120, draft.previewFps, v -> draft.previewFps = v));
+        f.row("GPU share", "Most of the GPU's time the preview may take; lower keeps the studio smooth on laptops",
+            slider(10, 100, draft.previewGpuShare, v -> draft.previewGpuShare = v, v -> v + " %"));
+        f.wide(check("Draw rarely while the studio is in the background", draft.previewIdleInBackground, v -> draft.previewIdleInBackground = v));
         f.row("Day speed", "Minecraft ticks per second while the preview plays (0: time stands still, 20: the game's speed)",
             slider(0, 2400, draft.previewDaySpeed, v -> draft.previewDaySpeed = v));
         f.wide(check("Smooth scaling (off: exact pixels when the image is enlarged)", draft.previewSmooth, v -> draft.previewSmooth = v));
@@ -411,6 +414,8 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.wide(button("Reset preview settings to defaults", null, () -> {
             StudioSettings d = new StudioSettings();
             draft.previewFps = d.previewFps;
+            draft.previewGpuShare = d.previewGpuShare;
+            draft.previewIdleInBackground = d.previewIdleInBackground;
             draft.previewLookSpeed = d.previewLookSpeed;
             draft.previewFlySpeed = d.previewFlySpeed;
             draft.previewWheelSpeed = d.previewWheelSpeed;

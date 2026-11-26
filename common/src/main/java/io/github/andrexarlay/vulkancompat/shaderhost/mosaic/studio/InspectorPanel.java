@@ -25,7 +25,16 @@ import static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.studio.Studio
  */
 final class InspectorPanel extends Panels.Listening {
 
-    private final JPanel content = new JPanel();
+    /** Always as wide as the panel: rows shrink and wrap instead of running past the right edge. */
+    private final JPanel content = new ScrollableColumn();
+
+    private static final class ScrollableColumn extends JPanel implements Scrollable {
+        @Override public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
+        @Override public int getScrollableUnitIncrement(Rectangle r, int o, int d) { return 28; }
+        @Override public int getScrollableBlockIncrement(Rectangle r, int o, int d) { return Math.max(28, r.height - 40); }
+        @Override public boolean getScrollableTracksViewportWidth() { return true; }
+        @Override public boolean getScrollableTracksViewportHeight() { return false; }
+    }
     private final JScrollPane root;
     private String shownKey = "";
     private int width = 220;
@@ -37,7 +46,7 @@ final class InspectorPanel extends Panels.Listening {
         content.setBorder(new EmptyBorder(10, 12, 10, 12));
         root = new JScrollPane(content, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         root.setBorder(null);
-        root.getVerticalScrollBar().setUnitIncrement(16);
+        root.getVerticalScrollBar().setUnitIncrement(28);
         darken(root);
         root.getViewport().addComponentListener(new ComponentAdapter() {
             @Override public void componentResized(ComponentEvent e) {
@@ -894,9 +903,10 @@ final class InspectorPanel extends Panels.Listening {
         box.setAlignmentX(0);
         box.setMaximumSize(new Dimension(Integer.MAX_VALUE, box.getPreferredSize().height));
         content.add(box);
-        JPanel row = new JPanel(new GridLayout(1, 3, 4, 0));
+        JPanel row = new JPanel(new GridLayout(0, 3, 4, 4));
         row.setOpaque(false);
         row.setAlignmentX(0);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
         row.add(button("Save preset...", "Save the changed values of this graph as a preset of your own", () -> {
             if (model.doc.settings.isEmpty()) {
                 model.say("No changed graph settings to save", MUTED);

@@ -115,8 +115,8 @@ final class StudioUi {
     static JScrollPane scroll(JComponent c) {
         JScrollPane sp = new JScrollPane(c);
         sp.setBorder(null);
-        sp.getVerticalScrollBar().setUnitIncrement(16);
-        sp.getHorizontalScrollBar().setUnitIncrement(16);
+        sp.getVerticalScrollBar().setUnitIncrement(28);
+        sp.getHorizontalScrollBar().setUnitIncrement(28);
         darken(sp);
         return sp;
     }

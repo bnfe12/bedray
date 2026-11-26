@@ -1254,6 +1254,7 @@ final class StudioApp {
         next.paletteRecent = settings.paletteRecent;
         next.previewViews = settings.previewViews;
         next.previewLook = settings.previewLook;
+        next.layoutVersion = settings.layoutVersion;
         next.previewWidth = settings.previewWidth;    // the preview's size list changes these
         next.previewHeight = settings.previewHeight;
         settings = next;

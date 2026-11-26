@@ -144,6 +144,9 @@ public final class StudioSettings {
     public java.util.Set<String> hiddenLibraries = new java.util.LinkedHashSet<>();
     /** Palette / add-menu groups the user collapsed. */
     public java.util.Set<String> collapsed = new java.util.LinkedHashSet<>();
+    /** Version of the default layouts: a saved layout older than {@link #LAYOUT_VERSION} is replaced once by the new default. */
+    public static final int LAYOUT_VERSION = 2;
+    public int layoutVersion = 0;
     /** Saved window layout (see Dock), or null for the default. */
     public String layout;
     /** Layout of the Materials workspace (the Shaders workspace uses {@link #layout}). */
@@ -174,7 +177,11 @@ public final class StudioSettings {
 
     // ---------------------------------------------------------------- preview
     /** Preview frames per second at most (the GPU may give fewer). */
-    public int previewFps = 20;            // 2..120
+    public int previewFps = 12;            // 2..120
+    /** Most of the GPU's time the preview may take (percent): it waits at least as long as a heavy frame took, so the studio stays smooth. */
+    public int previewGpuShare = 40;       // 10..100
+    /** When the studio window is not the active one, the preview draws one frame every 2 seconds. */
+    public boolean previewIdleInBackground = true;
     /** Degrees the preview camera turns per pixel of mouse drag. */
     public double previewLookSpeed = 0.3;  // 0.05..2
     /** Blocks the preview camera moves per key press (Ctrl: x3). */
@@ -260,11 +267,16 @@ public final class StudioSettings {
         previewWidth = Math.clamp(previewWidth, 160, 3840);
         previewHeight = Math.clamp(previewHeight, 90, 2160);
         if (previewLook == null) previewLook = new java.util.LinkedHashMap<>();
+        if (layoutVersion < LAYOUT_VERSION) { // version 2: the Preview (the graph over the world) is in the default layout
+            layout = null;
+            layoutVersion = LAYOUT_VERSION;
+        }
         compactInputs = Math.clamp(compactInputs, 2, 24);
         compileDelayMs = Math.clamp(compileDelayMs, 100, 3000);
         if (recentFiles == null) recentFiles = new java.util.ArrayList<>();
         if (paletteRecent == null) paletteRecent = new java.util.ArrayList<>();
         previewFps = Math.clamp(previewFps, 2, 120);
+        previewGpuShare = Math.clamp(previewGpuShare, 10, 100);
         previewLookSpeed = Math.clamp(previewLookSpeed, 0.05, 2.0);
         previewFlySpeed = Math.clamp(previewFlySpeed, 0.1, 8.0);
         previewWheelSpeed = Math.clamp(previewWheelSpeed, 0.1, 16.0);
