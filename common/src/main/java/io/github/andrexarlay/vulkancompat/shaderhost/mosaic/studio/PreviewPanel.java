@@ -223,7 +223,7 @@ final class PreviewPanel extends Panels.Listening {
         row3.add(compareBox);
         row3.add(button("Keep A", "Keep the frame shown now as A to compare against (change something, then look at Split or Difference)",
             this::keepReference));
-        JToggleButton bypassBtn = new JToggleButton("Bypass");
+        JToggleButton bypassBtn = toggle("Bypass");
         bypassBtn.setToolTipText("The world without your graph, as the game draws it before your nodes (B). Keep A + Split compares them.");
         bypassBtn.addActionListener(e -> {
             bypass = bypassBtn.isSelected();
@@ -231,7 +231,7 @@ final class PreviewPanel extends Panels.Listening {
         });
         this.bypassButton = bypassBtn;
         row3.add(bypassBtn);
-        JToggleButton nodeBtn = new JToggleButton("Node");
+        JToggleButton nodeBtn = toggle("Node");
         nodeBtn.setToolTipText("Show the output of the selected node instead of the final picture (N); one-pass graphs");
         nodeBtn.addActionListener(e -> {
             nodeMode = nodeBtn.isSelected();
@@ -424,6 +424,25 @@ final class PreviewPanel extends Panels.Listening {
         worker = new Thread(this::loop, "mosaic-gpu-preview");
         worker.setDaemon(true);
         worker.start();
+    }
+
+    /** A toggle in the studio's look: dark when off, the accent when on. */
+    private static JToggleButton toggle(String text) {
+        JToggleButton t = new JToggleButton(text);
+        t.setFont(UI_S);
+        t.setFocusable(false);
+        t.setMargin(new Insets(2, 8, 2, 8));
+        t.setContentAreaFilled(false);
+        t.setOpaque(true);
+        Runnable paint = () -> {
+            t.setBackground(t.isSelected() ? StudioWidgets.mix(PANEL2, SELECT, 0.45) : BUTTON);
+            t.setForeground(t.isSelected() ? Color.WHITE : TEXT);
+            t.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(t.isSelected() ? SELECT : EDGE),
+                new EmptyBorder(3, 8, 3, 8)));
+        };
+        paint.run();
+        t.addItemListener(e -> paint.run());
+        return t;
     }
 
     /** The time slider follows the camera's time of day (without a feedback loop: the slider sets the same time). */
@@ -1027,7 +1046,10 @@ final class PreviewPanel extends Panels.Listening {
                     Thread.sleep(400);
                     continue;
                 }
-                if (model.materialDoc()) {
+                // a material: the world without a shader graph, its blocks from the resource packs (Mosaic Materials included),
+                // so a saved material shows on the world (the textures reload when the pack changes)
+                boolean materialWorld = model.materialDoc() && wv != null && passThrough() != null;
+                if (model.materialDoc() && !materialWorld) {
                     show(null, "Materials preview on the Material panel");
                     Thread.sleep(400);
                     continue;
@@ -1037,13 +1059,13 @@ final class PreviewPanel extends Panels.Listening {
                     Thread.sleep(300);
                     continue;
                 }
-                if (c == null && model.generated != null && !model.compiling) {
+                if (!materialWorld && c == null && model.generated != null && !model.compiling) {
                     SwingUtilities.invokeLater(model::compileNow); // a graph opened without edits has not been compiled yet
                     show(shown, "Compiling...");
                     Thread.sleep(250);
                     continue;
                 }
-                if (c == null || !c.ok() || c.spirv() == null) {
+                if (!materialWorld && (c == null || !c.ok() || c.spirv() == null)) {
                     show(shown, model.compiling ? "Compiling..." : "The graph does not compile: see Problems");
                     Thread.sleep(250);
                     continue;
@@ -1077,9 +1099,9 @@ final class PreviewPanel extends Panels.Listening {
                     float t = (System.nanoTime() - start) / 1e9f;
                     gpu.worldWidth = StudioUi.settings.previewWidth;
                     gpu.worldHeight = StudioUi.settings.previewHeight;
-                    var list = runs != null ? runs : java.util.List.of(new GpuPreview.PassRun(c.spirv(), 1, -1));
-                    if (bypass && passThrough() != null) list = passThrough();
-                    else if (nodeMode) {
+                    var list = (bypass || materialWorld) && passThrough() != null ? passThrough()
+                        : runs != null ? runs : java.util.List.of(new GpuPreview.PassRun(c.spirv(), 1, -1));
+                    if (!bypass && !materialWorld && nodeMode) {
                         var nr = nodeRuns();
                         if (nr != null) list = nr;
                     }
