@@ -1216,6 +1216,13 @@ final class StartScreen extends JFrame {
             if (fc.showOpenDialog(d) == JFileChooser.APPROVE_OPTION) pic.setText(fc.getSelectedFile().toString());
         });
         field(form, "Licence", lic, null);
+        JLabel licHint = new JLabel(ProjectGit.licenseHint((String) lic.getSelectedItem()));
+        licHint.setFont(UI_S);
+        licHint.setForeground(MUTED);
+        licHint.setAlignmentX(0);
+        lic.addActionListener(e -> licHint.setText(ProjectGit.licenseHint((String) lic.getSelectedItem())));
+        form.add(licHint);
+        form.add(Box.createVerticalStrut(6));
         github.setAlignmentX(0);
         form.add(github);
         form.add(Box.createVerticalGlue());
@@ -1322,10 +1329,24 @@ final class StartScreen extends JFrame {
         f.add(new JLabel("Writes README.md (picture, description, install), .gitignore, .github/workflows/release.yml"));
         f.add(new JLabel("(a version tag such as v1.0.0 makes a release with the pack zip) and the licence you choose."));
         f.add(lic);
+        JLabel licHint = new JLabel(ProjectGit.licenseHint((String) lic.getSelectedItem()));
+        lic.addActionListener(e -> licHint.setText(ProjectGit.licenseHint((String) lic.getSelectedItem())));
+        f.add(licHint);
         f.add(over);
+        // files that are Minecraft's own: Mojang's terms do not allow sharing them
+        List<String> foreign = ProjectGit.unignoredForeign(p.dir);
+        JCheckBox keepOut = new JCheckBox("Keep them out of the repository and the release (.gitignore)", true);
+        if (!foreign.isEmpty()) {
+            JLabel w = new JLabel("<html><b>Minecraft's files in this project</b> (not yours to share):<br>"
+                + String.join("<br>", foreign.stream().limit(8).map(x -> x.replace("&", "&amp;").replace("<", "&lt;")).toList())
+                + (foreign.size() > 8 ? "<br>... and " + (foreign.size() - 8) + " more" : "") + "</html>");
+            f.add(w);
+            f.add(keepOut);
+        }
         if (JOptionPane.showConfirmDialog(owner, f, "Prepare for GitHub", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
         try {
             List<Path> w = ProjectGit.prepare(p, (String) lic.getSelectedItem(), over.isSelected());
+            if (!foreign.isEmpty() && keepOut.isSelected()) ProjectGit.ignore(p.dir, foreign);
             JOptionPane.showMessageDialog(owner, "Written:\n" + String.join("\n", w.stream().map(x -> p.dir.relativize(x).toString()).toList()));
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(owner, "Could not write the files: " + ex.getMessage());
@@ -1339,6 +1360,20 @@ final class StartScreen extends JFrame {
             "Publish to GitHub", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, opts, opts[0]);
         if (r != 0 && r != 1) return;
         boolean pub = r == 1;
+        List<String> foreign = ProjectGit.unignoredForeign(p.dir);
+        if (!foreign.isEmpty()) {
+            Object[] o2 = {"Keep them out and publish", "Publish anyway", "Cancel"};
+            int k = JOptionPane.showOptionDialog(owner, "<html><b>" + foreign.size() + " file(s) are Minecraft's own</b> (Mojang's terms do not allow sharing them):<br>"
+                    + String.join("<br>", foreign.stream().limit(8).map(x -> x.replace("&", "&amp;").replace("<", "&lt;")).toList()) + "</html>",
+                "Publish to GitHub", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, o2, o2[0]);
+            if (k == 2 || k < 0) return;
+            if (k == 0) try {
+                ProjectGit.ignore(p.dir, foreign);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(owner, "Could not write .gitignore: " + ex.getMessage());
+                return;
+            }
+        }
         runLogged(owner, "Publish to GitHub", out -> {
             if (!Files.exists(p.dir.resolve("README.md"))) ProjectGit.prepare(p, null, false);
             ProjectGit.publish(p, pub, out);

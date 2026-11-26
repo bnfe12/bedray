@@ -456,8 +456,34 @@ final class StudioApp {
         h.add(item("Config (all public numbers)", () -> popOut(Panels.Type.CONFIG)));
         h.add(item("All keys", StudioKeys.Action.HELP));
         h.add(item("Game link", () -> popOut(Panels.Type.GAME)));
+        h.addSeparator();
+        h.add(item("Licences...", this::licences));
         bar.add(h);
         return bar;
+    }
+
+    private String projectLicence() {
+        Path pack = model.doc.file == null ? null : ProjectInfo.packOf(model.doc.file);
+        if (pack == null || !ProjectInfo.isProject(pack)) return "";
+        ProjectInfo p = ProjectInfo.load(pack);
+        return ": " + (p.license.isBlank() ? "none chosen" : ProjectGit.spdx(p.license));
+    }
+
+    /** Help > Licences: Bedray's own, what the studio uses, what it never ships, and the project's. */
+    private void licences() {
+        String body = "<html><div style='width:460px'>"
+            + "<b>Mosaic Studio</b> is part of Bedray: GNU LGPL-3.0-or-later (LICENSE and COPYING in the Bedray repository)."
+            + " Not an official Minecraft product; not approved by or associated with Mojang or Microsoft.<br><br>"
+            + "<b>Uses, not shipped</b> (they come with the game): LWJGL with Vulkan (BSD-3-Clause), Gson (Apache-2.0),"
+            + " JNA (Apache-2.0 / LGPL-2.1). The Slang compiler (Apache-2.0 with LLVM exception) runs only when you installed it.<br><br>"
+            + "<b>Minecraft's files</b>: textures, models and sounds are read from your own copy of the game, for the preview and"
+            + " the material editor, and cached on this computer only. They are never put into a project for you; Prepare for"
+            + " GitHub and Publish find copies of them in a project and keep them out of the repository.<br><br>"
+            + "<b>Your project</b>: its licence is the one in its card (Project card, Prepare for GitHub)"
+            + projectLicence()
+            + ". The full texts of MIT, Apache-2.0, MPL-2.0, GPL-3.0, LGPL-3.0, CC-BY(-SA/-NC)-4.0 and CC0-1.0 ship with Bedray"
+            + " and go into the project's LICENSE.</div></html>";
+        JOptionPane.showMessageDialog(main, body, "Licences", JOptionPane.PLAIN_MESSAGE);
     }
 
     /** File > Open recent: the last files, newest first; missing ones are dropped. */

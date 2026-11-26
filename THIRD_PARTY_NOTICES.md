@@ -15,6 +15,7 @@ build tooling only.
 | NVIDIA Image Scaling (NIS) SDK v1.0.3 headers `NIS_Scaler.h`, `NIS_Config.h` | `common/src/main/resources/shaders/third_party/nis/` | MIT, Copyright NVIDIA CORPORATION & AFFILIATES | Three small in-memory patches are applied at build time of the shader source (see `SpatialShaderSource`). The licence text is kept in the file headers. Used by the built-in "NIS" upscaler. |
 | `nrd_wrapper.cpp`, `nrd_wrapper.hpp` from nvpro-samples/vk_denoise_nrd (commit 67f28c7c6a7bd2495bd6382dac8cffbf85673858) | `native/nrd_bridge/third_party/vk_denoise_nrd/` | Apache License 2.0, Copyright (c) 2024-2025 NVIDIA CORPORATION | Unmodified copies kept for attribution, not compiled. `native/nrd_bridge/src/vkb_nrd.cpp` is a derived work; its changes are listed in `native/nrd_bridge/third_party/vk_denoise_nrd/NOTICE` (Apache-2.0 section 4(b)). It does not contain NRD code. |
 
+| Licence texts for Mosaic projects: Apache-2.0, MPL-2.0, CC-BY-4.0, CC-BY-SA-4.0, CC-BY-NC-4.0, CC0-1.0 (and GPL-3.0 / LGPL-3.0, copies of `COPYING` / `LICENSE`) | `common/src/main/resources/assets/bedray/licenses/` | Verbatim copying permitted by each text's own terms (Apache Software Foundation, Mozilla Foundation, Creative Commons, Free Software Foundation) | Unmodified, downloaded 2026-11-26 from apache.org, mozilla.org and creativecommons.org. Mosaic Studio writes the one a user chooses into their project's LICENSE. They do not license Bedray. |
 | Gradle wrapper (`gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`) | repository root, `gradle/wrapper/` | Apache License 2.0, Copyright Gradle Inc. | Unmodified; build tooling only, not part of the mod jars. |
 
 ## Included in release jars only
@@ -36,6 +37,9 @@ Their license files are stored in each JAR under `META-INF/licenses/natives/<dll
 | NeoForge, Fabric Loader | LGPL-2.1 / Apache-2.0 (see their projects) | Compile-time only, never packaged. |
 | Sodium | Its own licence, see the Sodium project | The mod adds a settings page and mixins into Sodium at run time. No Sodium file is included or patched on disk. |
 | LWJGL (incl. shaderc), SLF4J, Mixin | BSD-3-Clause, MIT, MIT | Provided by the game / loader at run time. |
+| Gson, JNA (used by Mosaic Studio) | Apache-2.0; Apache-2.0 / LGPL-2.1 | Provided by the game at run time; the standalone Studio puts the game's own copies on its class path. |
+| Slang compiler (`slangc`) | Apache-2.0 WITH LLVM-exception | Optional; run as an external program only when the user installed it. Never included. |
+| Minecraft assets (textures, models, sounds) | Minecraft EULA / Mojang terms | Mosaic Studio reads them from the user's own client jar for its preview and material editor and caches them on that computer only. Never included in Bedray or written into a user's project; "Prepare for GitHub" and "Publish" find copies in a project and offer to keep them out. |
 | Bedray Core (internal platform layer, directory `core/`) | LGPL-3.0-or-later | Same author, same licence as Bedray. Packaged inside the Bedray jar; its source is in this repository. |
 
 ## Ideas and references (no code copied)

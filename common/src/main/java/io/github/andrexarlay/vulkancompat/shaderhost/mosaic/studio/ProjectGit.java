@@ -22,7 +22,24 @@ final class ProjectGit {
 
     private ProjectGit() {}
 
-    static final String[] LICENSES = {"None (all rights reserved)", "MIT", "Apache-2.0", "CC-BY-4.0", "CC-BY-NC-4.0", "GPL-3.0"};
+    static final String[] LICENSES = {"None (all rights reserved)", "MIT", "Apache-2.0", "MPL-2.0", "GPL-3.0", "LGPL-3.0", "CC-BY-4.0",
+        "CC-BY-SA-4.0", "CC-BY-NC-4.0", "CC0-1.0"};
+
+    /** One line for the licence chooser: what each licence lets others do. */
+    static String licenseHint(String id) {
+        return switch (id == null ? "" : id) {
+            case "MIT" -> "Anyone may use, change and share it, also in closed packs; they keep your name in the copy.";
+            case "Apache-2.0" -> "Like MIT, plus a patent grant and a note of changes in modified files.";
+            case "MPL-2.0" -> "Changed files of yours stay open; they may be mixed into packs under other licences.";
+            case "GPL-3.0" -> "Anything built from it must be shared under GPL-3.0 too, with its source.";
+            case "LGPL-3.0" -> "Changes to your pack stay open; using it next to other work is free (Bedray's own licence).";
+            case "CC-BY-4.0" -> "For art: anyone may share and adapt it, crediting you.";
+            case "CC-BY-SA-4.0" -> "For art: share and adapt with credit; adaptations under the same licence.";
+            case "CC-BY-NC-4.0" -> "For art: share and adapt with credit, not for money.";
+            case "CC0-1.0" -> "Public domain: no conditions at all.";
+            default -> "Nobody may copy, change or share it without your permission (GitHub still shows it).";
+        };
+    }
 
     /** Writes the repository files into the project (an existing README or LICENSE is kept unless overwrite). */
     static List<Path> prepare(ProjectInfo p, String license, boolean overwrite) throws IOException {
@@ -37,7 +54,11 @@ final class ProjectGit {
             "shaders/bedray/.studio/cache/", "shaders/bedray/.studio/history/", "shaders/bedray/.studio/*.gif",
             "shaders/bedray/.studio/*.mp4", "*.zip", ".DS_Store", "Thumbs.db", ""), overwrite));
         written.add(write(d.resolve(".github/workflows/release.yml"), workflow(), overwrite));
-        if (p.license != null && !p.license.isBlank()) written.add(write(d.resolve("LICENSE"), licenseText(p), overwrite));
+        if (p.license != null && !p.license.isBlank()) {
+            written.add(write(d.resolve("LICENSE"), licenseText(p), overwrite));
+            // the LGPL is a set of extra permissions on top of the GPL: both texts go with it
+            if (p.license.equals("LGPL-3.0")) written.add(write(d.resolve("COPYING"), bundled("GPL-3.0"), overwrite));
+        }
         written.removeIf(java.util.Objects::isNull);
         return written;
     }
@@ -66,7 +87,8 @@ final class ProjectGit {
             .append(": the workflow in ").append(BT).append(".github/workflows/release.yml").append(BT)
             .append(" zips the pack and attaches it to a release.\n");
         if (!p.author.isBlank()) sb.append("\nBy ").append(p.author).append(".\n");
-        if (p.license != null && !p.license.isBlank()) sb.append("\nLicence: ").append(p.license).append(" (see LICENSE).\n");
+        if (p.license != null && !p.license.isBlank()) sb.append("\nLicence: ").append(spdx(p.license)).append(" (see LICENSE).\n");
+        sb.append("\nNot an official Minecraft product. Not approved by or associated with Mojang or Microsoft.\n");
         return sb.toString();
     }
 
@@ -112,8 +134,115 @@ final class ProjectGit {
             + " NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,"
             + " WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR"
             + " OTHER DEALINGS IN THE SOFTWARE.\n";
-        return "Copyright (c) " + year + " " + who + "\n\nLicensed under " + p.license + ". The full text: https://spdx.org/licenses/"
-            + p.license + ".html\n";
+        String full = bundled(p.license);
+        String head = "Copyright (c) " + year + " " + who + "\nSPDX-License-Identifier: " + spdx(p.license) + "\n\n";
+        if (full != null) return head + full;
+        return head + "Licensed under " + p.license + ". The full text: https://spdx.org/licenses/" + p.license + ".html\n";
+    }
+
+    /** The SPDX id written into the files: the GNU licences as "-or-later", like Bedray's own. */
+    static String spdx(String id) {
+        return id.equals("GPL-3.0") || id.equals("LGPL-3.0") ? id + "-or-later" : id;
+    }
+
+    /** The full licence text shipped with Bedray (assets/bedray/licenses), or null. */
+    static String bundled(String id) {
+        try (var in = ProjectGit.class.getResourceAsStream("/assets/bedray/licenses/" + id + ".txt")) {
+            return in == null ? null : new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** Adds files to the project's .gitignore (paths relative to the project), once each. */
+    static void ignore(Path dir, List<String> rels) throws IOException {
+        Path gi = dir.resolve(".gitignore");
+        String cur = Files.exists(gi) ? Files.readString(gi, StandardCharsets.UTF_8) : "";
+        StringBuilder sb = new StringBuilder(cur);
+        if (!cur.isEmpty() && !cur.endsWith("\n")) sb.append('\n');
+        boolean header = false;
+        for (String r : rels) {
+            String path = "/" + r.replaceAll("  \\(.*\\)$", "");
+            if (cur.lines().anyMatch(l -> l.trim().equals(path))) continue;
+            if (!header) sb.append("# Minecraft's own files: not ours to share\n");
+            header = true;
+            sb.append(path).append('\n');
+        }
+        Files.writeString(gi, sb.toString(), StandardCharsets.UTF_8);
+    }
+
+    /** Files of foreignAssets the .gitignore does not keep out yet. */
+    static List<String> unignoredForeign(Path dir) {
+        List<String> all = foreignAssets(dir);
+        Path gi = dir.resolve(".gitignore");
+        if (!Files.exists(gi)) return all;
+        try {
+            java.util.Set<String> lines = new java.util.HashSet<>(Files.readAllLines(gi, StandardCharsets.UTF_8));
+            all.removeIf(r -> lines.contains("/" + r.replaceAll("  \\(.*\\)$", "")));
+        } catch (IOException ignored) {
+            // unreadable: list them all
+        }
+        return all;
+    }
+
+    // ------------------------------------------------------------------ assets that are not yours to publish
+
+    /**
+     * Files of a project that are Minecraft's own (byte for byte a file of the client jar, or under assets/minecraft/):
+     * Mojang's licence does not allow sharing them, so they should stay out of a public repository and a release.
+     */
+    static List<String> foreignAssets(Path dir) {
+        List<String> out = new ArrayList<>();
+        java.util.Set<String> vanilla = vanillaHashes();
+        try (var files = Files.walk(dir)) {
+            for (Path f : (Iterable<Path>) files::iterator) {
+                if (!Files.isRegularFile(f)) continue;
+                String rel = dir.relativize(f).toString().replace('\\', '/');
+                if (rel.startsWith(".git/") || rel.contains("/.studio/")) continue;
+                String name = rel.toLowerCase(java.util.Locale.ROOT);
+                if (!(name.endsWith(".png") || name.endsWith(".ogg") || name.endsWith(".json") || name.endsWith(".mcmeta"))) continue;
+                boolean copy = Files.size(f) < 8 << 20 && vanilla.contains(sha(Files.readAllBytes(f)));
+                if (copy) out.add(rel + "  (the same file as Minecraft's)");
+                else if (name.contains("assets/minecraft/") && name.endsWith(".png")) out.add(rel + "  (replaces a Minecraft texture: fine if you drew it)");
+            }
+        } catch (IOException e) {
+            // an unreadable folder: nothing listed
+        }
+        return out;
+    }
+
+    private static java.util.Set<String> vanillaHashes;
+
+    private static synchronized java.util.Set<String> vanillaHashes() {
+        if (vanillaHashes != null) return vanillaHashes;
+        java.util.Set<String> out = new java.util.HashSet<>();
+        try {
+            if (StudioUi.settings == null) StudioUi.settings = StudioSettings.load(); // the command line: no studio around
+            for (StudioLibrary.Source v : StudioLibrary.vanillaJars()) {
+                try (var zip = new java.util.zip.ZipFile(v.path().toFile())) {
+                    var en = zip.entries();
+                    while (en.hasMoreElements()) {
+                        var e = en.nextElement();
+                        String n = e.getName();
+                        if (!n.startsWith("assets/") || e.isDirectory() || !(n.endsWith(".png") || n.endsWith(".ogg"))) continue;
+                        try (var in = zip.getInputStream(e)) { out.add(sha(in.readAllBytes())); }
+                    }
+                }
+                break; // the newest client is enough
+            }
+        } catch (Exception e) {
+            // no client jar: only the path rule applies
+        }
+        vanillaHashes = out;
+        return out;
+    }
+
+    private static String sha(byte[] b) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return "";
+        }
     }
 
     // ------------------------------------------------------------------ commands (started by the user)

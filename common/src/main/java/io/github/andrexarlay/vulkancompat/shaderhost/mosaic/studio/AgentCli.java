@@ -116,6 +116,8 @@ public final class AgentCli {
           mosaic project new <folder> [--name N] [--description D] [--template T] [--github [--license MIT]]
           mosaic project list | info <folder> | card <folder> [--name ..] [--description ..] [--picture file.png] [--version ..] [--github url]
           mosaic project github <folder> [--license L] [--overwrite]   README, release workflow, .gitignore, licence
+          mosaic project check <folder> [--ignore]   Minecraft's own files in the project (--ignore: into .gitignore)
+          mosaic project licenses                    the licences a project can take, with what each allows
           mosaic project refresh <folder>             git pull and the description / topics from GitHub
           mosaic project clone <owner/repo> <into>    a Mosaic project from GitHub (publishing: Studio > File > This project)
         Rendering and Bedray hooks (for people and agents)
@@ -514,6 +516,21 @@ public final class AgentCli {
                 need(Need.GRAPHS);
                 ProjectInfo p = ProjectInfo.load(Path.of(a.get(2)));
                 for (Path w : ProjectGit.prepare(p, opt(a, "--license", null), a.contains("--overwrite"))) out.println("wrote " + w);
+                return 0;
+            }
+            case "check" -> {
+                need(Need.GRAPHS);
+                Path dir = Path.of(a.get(2));
+                List<String> f = ProjectGit.unignoredForeign(dir);
+                for (String s : f) out.println(s);
+                if (a.contains("--ignore") && !f.isEmpty()) {
+                    ProjectGit.ignore(dir, f);
+                    say(f.size() + " file(s) added to .gitignore");
+                } else say(f.isEmpty() ? "no Minecraft files to keep out" : f.size() + " Minecraft file(s): not yours to publish (--ignore keeps them out)");
+                return 0;
+            }
+            case "licenses" -> {
+                for (String l : ProjectGit.LICENSES) out.println(String.format("%-28s %s", l, ProjectGit.licenseHint(l)));
                 return 0;
             }
             case "refresh" -> {

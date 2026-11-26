@@ -51,7 +51,13 @@ or a thumbnail of the preview is kept until you choose one).
   private or public repository of your account.
 - **Update from GitHub**: `git pull`, then the repository's description, topics and owner into the card. **Clone from
   GitHub** does the same for a repository you name.
-- Agents: `mosaic project new | list | info | card | github | refresh | clone`.
+- **Licence**: None, MIT, Apache-2.0, MPL-2.0, GPL-3.0, LGPL-3.0, CC-BY-4.0, CC-BY-SA-4.0, CC-BY-NC-4.0 or CC0-1.0, each
+  with a line on what it allows. LICENSE gets your name, the year, the SPDX id and the full text (shipped with Bedray; LGPL
+  also writes COPYING). The README says the pack is not an official Minecraft product.
+- **Minecraft's files**: Prepare and Publish list files of the project that are Minecraft's own (byte for byte a file of
+  the client jar, or a texture under `assets/minecraft/`) and offer to keep them out through .gitignore: Mojang's terms
+  do not allow sharing them. Help > Licences sums up Bedray's licence, what the studio uses and the project's licence.
+- Agents: `mosaic project new | list | info | card | github | check [--ignore] | licenses | refresh | clone`.
 
 ## Scene: the parts of Minecraft's picture
 
