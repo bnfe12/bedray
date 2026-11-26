@@ -74,6 +74,28 @@ final class StartScreen extends JFrame {
         setLocationRelativeTo(null);
         reload();
         show("Home");
+        keys(root);
+    }
+
+    /** Keyboard: Ctrl+N new project, Ctrl+O open, Ctrl+F search projects, Ctrl+1..4 the pages. */
+    private void keys(JComponent root) {
+        InputMap im = root.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
+        ActionMap am = root.getActionMap();
+        Object[][] binds = {{"ctrl N", (Runnable) this::newProject}, {"ctrl O", (Runnable) this::openOther},
+            {"ctrl F", (Runnable) () -> {
+                show("Projects");
+                search.requestFocusInWindow();
+            }},
+            {"ctrl 1", (Runnable) () -> show("Home")}, {"ctrl 2", (Runnable) () -> show("Projects")},
+            {"ctrl 3", (Runnable) () -> show("Templates")}, {"ctrl 4", (Runnable) () -> show("Learn")}};
+        for (Object[] bnd : binds) {
+            String k = (String) bnd[0];
+            Runnable run = (Runnable) bnd[1];
+            im.put(KeyStroke.getKeyStroke(k), k);
+            am.put(k, new AbstractAction() {
+                @Override public void actionPerformed(java.awt.event.ActionEvent e) { run.run(); }
+            });
+        }
     }
 
     // ------------------------------------------------------------------ frame
@@ -261,8 +283,8 @@ final class StartScreen extends JFrame {
         c.add(Box.createVerticalStrut(20));
         JPanel actions = new JPanel(new GridLayout(1, 4, 14, 0));
         actions.setOpaque(false);
-        actions.add(new Action("New project", "From a template, with a picture", "plus", new Color(0x4F8BF0), this::newProject));
-        actions.add(new Action("Open", "A project, a pack or a graph", "folder", new Color(0xD69A3C), this::openOther));
+        actions.add(new Action("New project", "From a template, with a picture  (Ctrl+N)", "plus", new Color(0x4F8BF0), this::newProject));
+        actions.add(new Action("Open", "A project, a pack or a graph  (Ctrl+O)", "folder", new Color(0xD69A3C), this::openOther));
         actions.add(new Action("Clone from GitHub", "A Mosaic project repository", "branch", new Color(0x8B6FD8), this::cloneProject));
         actions.add(new Action("Empty graph", "No project, save it later", "page", new Color(0x3FAE86), () -> finish(null)));
         actions.setBorder(new EmptyBorder(0, 16, 0, 0));
