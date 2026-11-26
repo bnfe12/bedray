@@ -67,8 +67,25 @@ public final class MosaicStudioScreen extends Screen {
                     }
                 }
             var far = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Far(fs, fox, foz, hs, ms, gs);
-            java.nio.file.Files.write(dir.resolve("preview-world.bin"),
-                volume.snapshot(x, y, z, player.getYRot(), player.getXRot(), tod).withFar(far).toBytes());
+            var snap = volume.snapshot(x, y, z, player.getYRot(), player.getXRot(), tod).withFar(far);
+            // which block every cell is, so Studio's preview draws each block with its own textures
+            java.util.Map<String, Integer> ids = new java.util.LinkedHashMap<>();
+            ids.put("minecraft:air", 0);
+            short[] idx = new short[snap.cellCount()];
+            for (int ly = 0, i = 0; ly < snap.sy(); ly++)
+                for (int lz = 0; lz < snap.sz(); lz++)
+                    for (int lx = 0; lx < snap.sx(); lx++, i++) {
+                        pos.set(snap.ox() + lx, snap.oy() + ly, snap.oz() + lz);
+                        var st = level.getBlockState(pos);
+                        if (st.isAir()) continue;
+                        String name = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString();
+                        Integer id = ids.get(name);
+                        if (id == null && ids.size() < 65535) ids.put(name, id = ids.size());
+                        idx[i] = (short) (id == null ? 0 : id.intValue());
+                    }
+            byte[] bytes = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BlockTable(java.util.List.copyOf(ids.keySet()), idx)
+                .appendTo(snap.toBytes());
+            java.nio.file.Files.write(dir.resolve("preview-world.bin"), bytes);
         } catch (java.io.IOException | RuntimeException e) {
             org.slf4j.LoggerFactory.getLogger("bedray").warn("[mosaic-studio] could not save the preview world: {}", e.toString());
         }

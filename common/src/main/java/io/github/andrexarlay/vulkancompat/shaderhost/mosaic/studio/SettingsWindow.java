@@ -421,6 +421,13 @@ final class SettingsWindow extends Dock.StudioWindow {
             slider(0, 2400, draft.previewDaySpeed, v -> draft.previewDaySpeed = v));
         f.wide(check("Smooth scaling (off: exact pixels when the image is enlarged)", draft.previewSmooth, v -> draft.previewSmooth = v));
         f.wide(check("Info line: device, size, GPU time of the passes", draft.previewInfo, v -> draft.previewInfo = v));
+        f.section("World");
+        f.row("Far land from a save", "Columns per side read around the camera beyond the volume (0: none; more is slower to load)",
+            slider(0, 1024, draft.previewFarSize, v -> draft.previewFarSize = v));
+        f.row("Biome temperature", "Grass and leaf colour of the preview world (the game's colour map; plains 0.8)",
+            slider(-100, 200, (int) Math.round(draft.previewBiomeTemperature * 100), v -> draft.previewBiomeTemperature = v / 100.0, SettingsWindow::hundredth));
+        f.row("Biome downfall", "Plains 0.4, jungle 0.9, desert 0", slider(0, 100, (int) Math.round(draft.previewBiomeDownfall * 100),
+            v -> draft.previewBiomeDownfall = v / 100.0, SettingsWindow::hundredth));
         f.section("Saved views");
         f.row("Saved cameras", draft.previewViews.size() + " (Preview > Views; keys 1..9 in the preview)", button("Delete all", null, () -> {
             draft.previewViews.clear();

@@ -208,6 +208,12 @@ public final class StudioSettings {
     public int previewDaySpeed = 0;        // 0..2400
     /** The line under the preview with the device, size and GPU time of every pass. */
     public boolean previewInfo = true;
+    /** The preview world: "" the game's capture (else the built-in landscape), "builtin", "game", or the folder of a save. */
+    public String previewWorld = "";
+    /** Columns per side of the far land read from a save around the camera (0: none). */
+    public int previewFarSize = 384;      // 0..1024
+    /** Biome the preview tints grass and leaves for (the game's temperature and downfall; plains 0.8 / 0.4). */
+    public double previewBiomeTemperature = 0.8, previewBiomeDownfall = 0.4;
     /** Saved preview cameras: name -> x, y, z, yaw, pitch, time of day (0 noon). Keys 1..9 recall them. */
     public java.util.Map<String, double[]> previewViews = new java.util.LinkedHashMap<>();
 
@@ -305,6 +311,10 @@ public final class StudioSettings {
         previewWheelSpeed = Math.clamp(previewWheelSpeed, 0.1, 16.0);
         previewDaySpeed = Math.clamp(previewDaySpeed, 0, 2400);
         if (previewViews == null) previewViews = new java.util.LinkedHashMap<>();
+        if (previewWorld == null) previewWorld = "";
+        previewFarSize = Math.clamp(previewFarSize, 0, 1024);
+        previewBiomeTemperature = Math.clamp(previewBiomeTemperature, -1.0, 2.0);
+        previewBiomeDownfall = Math.clamp(previewBiomeDownfall, 0.0, 1.0);
         return this;
     }
 

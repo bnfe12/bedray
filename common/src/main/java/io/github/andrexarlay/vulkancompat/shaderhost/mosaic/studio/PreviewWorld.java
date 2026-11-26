@@ -23,13 +23,53 @@ final class PreviewWorld {
     static final int SX = 96, SY = 48, SZ = 96;
 
     /** The game's capture when there is one, else the built-in landscape. */
-    static MosaicWorld.Snapshot load(Path gameDir) {
-        if (gameDir != null) {
+    static MosaicWorld.Snapshot load(Path gameDir) { return load(gameDir, "", 96, 48, 96); }
+
+    /** Which block every cell of a loaded snapshot is (null: material tiles only). */
+    private static final java.util.Map<MosaicWorld.Snapshot, MosaicWorld.BlockTable> BLOCKS =
+        java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    /** Where a loaded snapshot came from, for the info line. */
+    private static final java.util.Map<MosaicWorld.Snapshot, String> ORIGIN =
+        java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    static MosaicWorld.BlockTable blocksOf(MosaicWorld.Snapshot s) { return s == null ? null : BLOCKS.get(s); }
+
+    static String originOf(MosaicWorld.Snapshot s) {
+        String o = s == null ? null : ORIGIN.get(s);
+        return o != null ? o : s == DEMO ? "built-in world" : "world from the game";
+    }
+
+    /**
+     * The preview world by choice (Studio settings previewWorld): "" the game's capture when there is one, else the
+     * built-in landscape; "builtin"; "game" (the capture only); or the folder of a save (its blocks around the player,
+     * sx x sy x sz).
+     */
+    static MosaicWorld.Snapshot load(Path gameDir, String choice, int sx, int sy, int sz) {
+        if (choice != null && !choice.isBlank() && !choice.equals("builtin") && !choice.equals("game")) {
+            Path save = Path.of(choice);
+            if (SaveWorld.isSave(save)) {
+                try {
+                    SaveWorld.Loaded l = SaveWorld.load(save, sx, sy, sz);
+                    BLOCKS.put(l.snapshot(), l.blocks());
+                    ORIGIN.put(l.snapshot(), "save " + save.getFileName());
+                    return l.snapshot();
+                } catch (Exception e) {
+                    lastError = "could not read the save " + save.getFileName() + ": " + e.getMessage();
+                }
+            } else lastError = "not a Minecraft save (no level.dat): " + save;
+        }
+        if (!"builtin".equals(choice) && gameDir != null) {
             try {
                 Path f = gameDir.resolve("bedray-studio").resolve("preview-world.bin");
                 if (Files.isRegularFile(f)) {
-                    MosaicWorld.Snapshot s = MosaicWorld.Snapshot.read(Files.readAllBytes(f));
-                    if (s != null) return s;
+                    byte[] data = Files.readAllBytes(f);
+                    MosaicWorld.Snapshot s = MosaicWorld.Snapshot.read(data);
+                    if (s != null) {
+                        MosaicWorld.BlockTable t = MosaicWorld.BlockTable.read(data);
+                        if (t != null && t.index().length == s.cellCount()) BLOCKS.put(s, t);
+                        ORIGIN.put(s, "world from the game (J)");
+                        return s;
+                    }
                 }
             } catch (Exception ignored) {
                 // unreadable capture: the built-in world
@@ -37,6 +77,9 @@ final class PreviewWorld {
         }
         return demo();
     }
+
+    /** Why the chosen world could not be loaded (shown once), or null. */
+    static volatile String lastError;
 
     static boolean fromGame(MosaicWorld.Snapshot s) { return s != DEMO; }
 
@@ -332,15 +375,24 @@ final class PreviewWorld {
     // ------------------------------------------------------------------ the preview camera
 
     /** Where the preview looks from: absolute position, Minecraft yaw / pitch in degrees, time of day (0 noon). */
-    record View(MosaicWorld.Snapshot world, double x, double y, double z, float yaw, float pitch, float timeOfDay, int[] atlas,
+    record View(MosaicWorld.Snapshot world, double x, double y, double z, float yaw, float pitch, float timeOfDay, PreviewBlocks.Atlas atlas,
                 java.util.Map<String, double[]> graphSettings, java.util.Map<String, double[]> look) {
-        View(MosaicWorld.Snapshot world, double x, double y, double z, float yaw, float pitch, float timeOfDay, int[] atlas) {
+        View(MosaicWorld.Snapshot world, double x, double y, double z, float yaw, float pitch, float timeOfDay, PreviewBlocks.Atlas atlas) {
             this(world, x, y, z, yaw, pitch, timeOfDay, atlas, java.util.Map.of(), java.util.Map.of());
         }
 
-        static View of(MosaicWorld.Snapshot s) {
-            return new View(s, s.camX(), s.camY(), s.camZ(), s.yaw(), s.pitch(), s.timeOfDay(), PreviewWorld.atlas());
+        static View of(MosaicWorld.Snapshot s) { return of(s, null); }
+
+        /** The view of a snapshot with the atlas of its blocks and the game folder's resource packs. */
+        static View of(MosaicWorld.Snapshot s, Path gameDir) {
+            MosaicWorld.BlockTable t = blocksOf(s);
+            return new View(s, s.camX(), s.camY(), s.camZ(), s.yaw(), s.pitch(), s.timeOfDay(),
+                PreviewBlocks.atlas(t == null ? null : t.names(), gameDir));
         }
+
+        View withAtlas(PreviewBlocks.Atlas a) { return new View(world, x, y, z, yaw, pitch, timeOfDay, a, graphSettings, look); }
+
+        MosaicWorld.BlockTable blocks() { return blocksOf(world); }
 
         /** The graph's settings (sky model, material colours) and the preview look the G-buffer draws with. */
         View with(java.util.Map<String, double[]> graph, java.util.Map<String, double[]> lookValues) {

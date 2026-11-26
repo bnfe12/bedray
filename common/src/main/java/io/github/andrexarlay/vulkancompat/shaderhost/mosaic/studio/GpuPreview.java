@@ -173,6 +173,7 @@ final class GpuPreview implements AutoCloseable {
         Buf worldBuf;
         Img scene, dist, atlas;
         Buf farBuf;
+        Buf blockIds, blockInfo;
         /** Far shadows in the preview: the far land as the height field of binding 18 (MosaicHeight), following the camera. */
         Buf heightBuf;
         io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field heightField;
@@ -195,7 +196,7 @@ final class GpuPreview implements AutoCloseable {
             if (gbSetLayout != 0) vkDestroyDescriptorSetLayout(device, gbSetLayout, null);
             if (gbModule != 0) vkDestroyShaderModule(device, gbModule, null);
             if (lastCamera != null) MemoryUtil.memFree(lastCamera);
-            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, farBuf, heightBuf}) free(b);
+            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, farBuf, heightBuf, blockIds, blockInfo}) free(b);
             for (Img i : new Img[] {input, depth, one, history, scene, dist, atlas}) free(i);
         }
     }
@@ -296,7 +297,8 @@ final class GpuPreview implements AutoCloseable {
      */
     synchronized BufferedImage runChain(List<PassRun> runs, BufferedImage input, float time, int frame, Extras extras, PreviewWorld.View view) {
         int w = view != null ? worldWidth : input.getWidth(), h = view != null ? worldHeight : input.getHeight();
-        int key = java.util.Objects.hash(view != null, view == null ? 0 : gbufferSource(view).hashCode(), view == null ? 0 : view.world().bytes(), w, h, runs.stream().map(r -> Arrays.hashCode(r.spirv()) * 31 + r.scale() * 7 + r.binding() + (r.after() ? 1 << 20 : 0)).toList());
+        int key = java.util.Objects.hash(view != null, view == null ? 0 : gbufferSource(view).hashCode(), view == null ? 0 : view.world().bytes(), w, h,
+            view == null ? 0 : System.identityHashCode(view.atlas()), view == null ? 0 : System.identityHashCode(view.world()), runs.stream().map(r -> Arrays.hashCode(r.spirv()) * 31 + r.scale() * 7 + r.binding() + (r.after() ? 1 << 20 : 0)).toList());
         if (chain == null || chain.key != key) {
             if (chain != null) chain.destroy();
             chain = null;
@@ -504,8 +506,9 @@ final class GpuPreview implements AutoCloseable {
 
     /** The G-buffer shader with the graph's settings (sky model) and the preview look as constants. */
     static String gbufferSource(PreviewWorld.View view) {
+        boolean blocks = view.blocks() != null;
         return GBUFFER_GLSL.replace("%CONSTANTS%", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.constants(view.graphSettings(), false)
-            + PreviewWorld.lookConstants(view.look()));
+            + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\n");
     }
 
     private static synchronized byte[] gbufferSpirv(String source) {
@@ -521,8 +524,18 @@ final class GpuPreview implements AutoCloseable {
     /** The world's G-buffer pass: bindings 1 frame, 15 world volume, 6 block atlas, 3 scene colour out, 7 ray distance out. */
     private void prepareGbuffer(Chain c, PreviewWorld.View view) {
         byte[] spirv = gbufferSpirv(gbufferSource(view));
-        int[] atlas = view.atlas();
-        c.atlas = image(PreviewWorld.TILES * 16, 16, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        int[] atlas = view.atlas().argb();
+        c.atlas = image(view.atlas().w(), view.atlas().h(), VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        // which block every cell is (16 bits per cell) and the tiles of every block (top, side, bottom, flags)
+        var table = view.blocks();
+        short[] ids = table == null ? new short[2] : table.index();
+        c.blockIds = buffer(Math.max(16, ((ids.length + 1) / 2) * 4L), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        ByteBuffer ib = MemoryUtil.memByteBuffer(c.blockIds.mapped(), (int) c.blockIds.size()).order(ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < ids.length; i++) ib.putShort(i * 2, ids[i]);
+        int[] info = view.atlas().info();
+        c.blockInfo = buffer(Math.max(16, info.length * 4L), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        ByteBuffer nb = MemoryUtil.memByteBuffer(c.blockInfo.mapped(), (int) c.blockInfo.size()).order(ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < info.length; i++) nb.putInt(i * 4, info[i]);
         int[] rgba = new int[atlas.length];
         for (int i = 0; i < atlas.length; i++) rgba[i] = (atlas[i] & 0xFF00FF00) | (atlas[i] >> 16 & 0xFF) | (atlas[i] & 0xFF) << 16;
         fill(c.atlas, rgba, 4);
@@ -533,7 +546,8 @@ final class GpuPreview implements AutoCloseable {
             check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(code), null, lp), "world shader module");
             c.gbModule = lp.get(0);
             int[][] binds = {{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, {15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}};
+                {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}};
             VkDescriptorSetLayoutBinding.Buffer lb = VkDescriptorSetLayoutBinding.calloc(binds.length, s);
             for (int i = 0; i < binds.length; i++)
                 lb.get(i).binding(binds[i][0]).descriptorType(binds[i][1]).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
@@ -548,7 +562,7 @@ final class GpuPreview implements AutoCloseable {
             c.gbPipeline = lp.get(0);
             VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(4, s);
             sizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
-            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(2);
+            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(4);
             sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
             sizes.get(3).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(2);
             check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(sizes), null, lp), "world pool");
@@ -556,7 +570,11 @@ final class GpuPreview implements AutoCloseable {
             check(vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(c.gbPool)
                 .pSetLayouts(s.longs(c.gbSetLayout)), lp), "world set");
             c.gbSet = lp.get(0);
-            VkWriteDescriptorSet.Buffer wr = VkWriteDescriptorSet.calloc(6, s);
+            VkWriteDescriptorSet.Buffer wr = VkWriteDescriptorSet.calloc(8, s);
+            VkDescriptorBufferInfo.Buffer idb = VkDescriptorBufferInfo.calloc(1, s);
+            idb.get(0).buffer(c.blockIds.handle()).offset(0).range(c.blockIds.size());
+            VkDescriptorBufferInfo.Buffer inb = VkDescriptorBufferInfo.calloc(1, s);
+            inb.get(0).buffer(c.blockInfo.handle()).offset(0).range(c.blockInfo.size());
             VkDescriptorBufferInfo.Buffer fb = VkDescriptorBufferInfo.calloc(1, s);
             fb.get(0).buffer(c.farBuf.handle()).offset(0).range(c.farBuf.size());
             VkDescriptorBufferInfo.Buffer ub = VkDescriptorBufferInfo.calloc(1, s);
@@ -575,6 +593,8 @@ final class GpuPreview implements AutoCloseable {
             wr.get(3).sType$Default().dstSet(c.gbSet).dstBinding(3).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(so);
             wr.get(4).sType$Default().dstSet(c.gbSet).dstBinding(7).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(dout);
             wr.get(5).sType$Default().dstSet(c.gbSet).dstBinding(8).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(fb);
+            wr.get(6).sType$Default().dstSet(c.gbSet).dstBinding(9).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(idb);
+            wr.get(7).sType$Default().dstSet(c.gbSet).dstBinding(10).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(inb);
             vkUpdateDescriptorSets(device, wr, null);
         }
     }
@@ -814,8 +834,9 @@ final class GpuPreview implements AutoCloseable {
         layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D sceneOut;
         layout(set = 0, binding = 7, r32f) uniform writeonly image2D distOut;
         layout(std430, set = 0, binding = 8) readonly buffer FarField { ivec4 head; ivec4 camY; uint cells[]; } farField;
+        layout(std430, set = 0, binding = 9) readonly buffer BlockIds { uint ids[]; } blockIds;
+        layout(std430, set = 0, binding = 10) readonly buffer BlockInfo { uvec4 info[]; } blockInfo;
         %CONSTANTS%
-        const float TILES = 18.0;
         bool inside(ivec3 c) {
             ivec3 p = c - world.originRel.xyz;
             return all(greaterThanEqual(p, ivec3(0))) && all(lessThan(p, world.size.xyz));
@@ -845,10 +866,26 @@ final class GpuPreview implements AutoCloseable {
             if (m == 7u && abs(n.y) > 0.5) return 17;
             return int(m);
         }
+        // the block's own textures (top, side, bottom) when the world names its blocks, else the material class tile
+        int tileFor(ivec3 c, uint m, vec3 n) {
+            if (HAS_BLOCKS) {
+                ivec3 p = c - world.originRel.xyz;
+                int i = (p.y * world.size.z + p.z) * world.size.x + p.x;
+                uint b = (blockIds.ids[i >> 1] >> uint((i & 1) * 16)) & 0xFFFFu;
+                if (b != 0u) {
+                    uvec4 inf = blockInfo.info[b];
+                    if ((inf.w & 1u) != 0u) return int(n.y > 0.5 ? inf.x : (n.y < -0.5 ? inf.z : inf.y));
+                }
+            }
+            return tileOf(m, n);
+        }
         vec4 texel(int tile, vec3 q, vec3 n) {
             vec2 f = abs(n.x) > 0.5 ? vec2(q.z * -n.x, q.y) : abs(n.y) > 0.5 ? vec2(q.x, q.z) : vec2(q.x * n.z, q.y);
             f = fract(f);
-            return textureLod(atlas, vec2((float(tile) + clamp(f.x, 0.002, 0.998)) / TILES, clamp(f.y, 0.002, 0.998)), 0.0);
+            ivec2 asz = textureSize(atlas, 0);
+            int cols = asz.x / 16, rows = asz.y / 16;
+            vec2 base = vec2(float(tile % cols), float(tile / cols));
+            return textureLod(atlas, (base + clamp(f, vec2(0.002), vec2(0.998))) / vec2(float(cols), float(rows)), 0.0);
         }
         // the game's light map: sky light by the time of day, coloured block light, per-face shading (all from the look)
         float curve(float l) { return l / ((1.0 + pw_lightCurve) - pw_lightCurve * l); }
@@ -891,7 +928,7 @@ final class GpuPreview implements AutoCloseable {
                 if (m == 0u) { prev = 0u; continue; }
                 uint front = cellAt(back);
                 vec3 q = o + d * t;
-                vec4 tx = texel(tileOf(m, n), q, n);
+                vec4 tx = texel(tileFor(cell, m, n), q, n);
                 if (m == 1u) {
                     if (prev == 1u) continue;
                     prev = 1u;

@@ -146,6 +146,65 @@ public final class MosaicWorld {
     }
 
     /**
+     * Which block every cell of a snapshot is (for the preview's real block textures): a name table (index 0 = air) and
+     * one index per cell in the snapshot's order. Appended to {@code preview-world.bin} after everything else, found by
+     * its 8-byte trailer (int start of the section, int {@link #TRAILER}), so readers that do not know it skip it.
+     */
+    public record BlockTable(java.util.List<String> names, short[] index) {
+        public static final int MAGIC = 0x314B4C42;   // "BLK1"
+        public static final int TRAILER = 0x544B4C42; // "BLKT"
+
+        /** The section plus its trailer, to append to a snapshot's bytes that start at {@code start}. */
+        public byte[] toBytes(int start) {
+            java.io.ByteArrayOutputStream names0 = new java.io.ByteArrayOutputStream();
+            for (String n : names) {
+                byte[] u = n.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                names0.write(u.length & 255);
+                names0.write(u.length >> 8 & 255);
+                names0.write(u, 0, u.length);
+            }
+            ByteBuffer b = ByteBuffer.allocate(12 + names0.size() + index.length * 2 + 8).order(ByteOrder.LITTLE_ENDIAN);
+            b.putInt(MAGIC).putInt(names.size()).putInt(index.length);
+            b.put(names0.toByteArray());
+            for (short s : index) b.putShort(s);
+            b.putInt(start).putInt(TRAILER);
+            return b.array();
+        }
+
+        /** The table of a snapshot file, or null when it has none. */
+        public static BlockTable read(byte[] data) {
+            if (data == null || data.length < 20) return null;
+            ByteBuffer b = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+            if (b.getInt(data.length - 4) != TRAILER) return null;
+            int start = b.getInt(data.length - 8);
+            if (start < 0 || start > data.length - 20) return null;
+            b.position(start);
+            if (b.getInt() != MAGIC) return null;
+            int n = b.getInt(), cells = b.getInt();
+            if (n < 1 || n > 65535 || cells < 0 || cells > 512 * 512 * 512) return null;
+            java.util.List<String> names = new java.util.ArrayList<>(n);
+            for (int i = 0; i < n; i++) {
+                int len = (b.get() & 255) | (b.get() & 255) << 8;
+                byte[] u = new byte[len];
+                b.get(u);
+                names.add(new String(u, java.nio.charset.StandardCharsets.UTF_8));
+            }
+            if (b.remaining() < cells * 2 + 8) return null;
+            short[] idx = new short[cells];
+            for (int i = 0; i < cells; i++) idx[i] = b.getShort();
+            return new BlockTable(java.util.List.copyOf(names), idx);
+        }
+
+        /** Snapshot bytes with this table appended. */
+        public byte[] appendTo(byte[] snapshot) {
+            byte[] tail = toBytes(snapshot.length);
+            byte[] out = java.util.Arrays.copyOf(snapshot, snapshot.length + tail.length);
+            System.arraycopy(tail, 0, out, snapshot.length, tail.length);
+            return out;
+        }
+    }
+
+    /**
      * The land beyond the volume, for the preview's far view: a size x size grid around the camera (x fastest), the
      * absolute y of the top block of each column (Short.MIN_VALUE unknown) and its material class.
      */

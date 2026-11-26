@@ -111,7 +111,7 @@ public final class AgentCli {
           mosaic arrange <graph.json>
           mosaic bake <material.mosaic.json> <texture.png> <out-folder>   LabPBR _s / _n (+ colour)
         Rendering and Bedray hooks (for people and agents)
-          mosaic render <graph.json> <out.png> [--time ticks] [--pitch deg] [--yaw deg] [--pos x,y,z] [--size WxH] [--frames N] [--world file] [--profile]
+          mosaic render <graph.json> <out.png> [--time ticks] [--pitch deg] [--yaw deg] [--pos x,y,z] [--size WxH] [--frames N] [--world file|save folder] [--profile]
                                                      the graph over the preview world, headless, to a PNG
           mosaic hook <function|user.stage> --slang <body.slang>   a Bedray function / your stage from Slang text
           mosaic hook <function|user.stage> --reset                back to Bedray's own
@@ -807,11 +807,14 @@ public final class AgentCli {
         }
         StudioUi.settings = settings;
         String worldFile = opt(a, "--world", null);
-        var snap = worldFile != null
-            ? io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Snapshot.read(Files.readAllBytes(Path.of(worldFile)))
-            : PreviewWorld.load(gameDirOf(graphFile));
+        int wr = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.intValue(g.settings(), "worldRadius", 8, 256);
+        int wh0 = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.intValue(g.settings(), "worldHeight", 16, 256);
+        var snap = worldFile == null ? PreviewWorld.load(gameDirOf(graphFile))
+            : Files.isDirectory(Path.of(worldFile)) ? PreviewWorld.load(gameDirOf(graphFile), worldFile, wr * 2, wh0, wr * 2) // a save folder
+            : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Snapshot.read(Files.readAllBytes(Path.of(worldFile)));
         if (snap == null) throw new IllegalArgumentException("not a preview world file: " + worldFile);
-        PreviewWorld.View view = PreviewWorld.View.of(snap);
+        if (PreviewWorld.lastError != null) out.println("warning: " + PreviewWorld.lastError);
+        PreviewWorld.View view = PreviewWorld.View.of(snap, gameDirOf(graphFile));
         String time = opt(a, "--time", null), pitch = opt(a, "--pitch", null), yaw = opt(a, "--yaw", null);
         String pos = opt(a, "--pos", null);
         if (pos != null) {
@@ -858,7 +861,8 @@ public final class AgentCli {
             if (png.getParent() != null) Files.createDirectories(png.getParent());
             ImageIO.write(img, "png", png.toFile());
             out.println("rendered " + png + "  " + gpu.worldWidth + "x" + gpu.worldHeight + ", " + runs.size() + " passes, " + frames
-                + " frames, " + ms + " ms/frame on " + gpu.deviceName + (PreviewWorld.fromGame(snap) ? ", world from the game" : ", built-in world"));
+                + " frames, " + ms + " ms/frame on " + gpu.deviceName + ", " + PreviewWorld.originOf(snap)
+            + (PreviewWorld.blocksOf(snap) != null ? " (" + PreviewWorld.blocksOf(snap).names().size() + " kinds of blocks)" : ""));
         }
         return 0;
     }

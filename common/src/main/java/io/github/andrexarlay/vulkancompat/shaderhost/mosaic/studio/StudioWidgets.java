@@ -809,4 +809,48 @@ final class StudioWidgets {
             }
         };
     }
+
+    /**
+     * Makes a popup menu fit the screen it opens on (small screens such as 1366 x 720): items with a line of help become
+     * one line (the help moves to the tooltip), and a menu still taller than the screen is laid out in columns.
+     */
+    static void fitToScreen(JPopupMenu m, Component invoker) {
+        GraphicsConfiguration gc = invoker == null ? null : invoker.getGraphicsConfiguration();
+        Rectangle screen = gc == null ? GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds() : gc.getBounds();
+        Insets in = gc == null ? new Insets(0, 0, 0, 0) : Toolkit.getDefaultToolkit().getScreenInsets(gc);
+        int avail = screen.height - in.top - in.bottom - 40;
+        if (m.getPreferredSize().height <= avail) return;
+        for (Component c : m.getComponents())
+            if (c instanceof JMenuItem it && it.getText() != null && it.getText().startsWith("<html>") && it.getText().contains("<br>")) {
+                String t = it.getText();
+                String head = t.replaceAll("(?s)^<html>(.*?)<br>.*$", "$1").replaceAll("<[^>]+>", "");
+                String help = t.replaceAll("(?s)^.*?<br>(.*)$", "$1").replaceAll("<[^>]+>", "").trim();
+                it.setText(head);
+                if (!help.isEmpty()) it.setToolTipText(help);
+                it.setBorder(BorderFactory.createEmptyBorder(3, 10, 3, 18));
+            }
+        if (m.getPreferredSize().height <= avail) return;
+        java.util.List<Component> cs = new java.util.ArrayList<>();
+        for (Component c : m.getComponents()) if (!(c instanceof JSeparator)) cs.add(c);
+        int rowH = 1;
+        for (Component c : cs) rowH = Math.max(rowH, c.getPreferredSize().height);
+        int rows = Math.max(1, avail / rowH), cols = (cs.size() + rows - 1) / rows;
+        rows = (cs.size() + cols - 1) / cols;
+        m.removeAll();
+        m.setLayout(new GridLayout(rows, cols, 8, 0));
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++) {
+                int i = c * rows + r; // column by column, as the list reads
+                m.add(i < cs.size() ? cs.get(i) : new JLabel());
+            }
+    }
+
+    /** {@link #fitToScreen} for a menu of the menu bar, applied each time it opens. */
+    static void fitOnOpen(JMenu menu) {
+        menu.addMenuListener(new javax.swing.event.MenuListener() {
+            @Override public void menuSelected(javax.swing.event.MenuEvent e) { fitToScreen(menu.getPopupMenu(), menu); }
+            @Override public void menuDeselected(javax.swing.event.MenuEvent e) { }
+            @Override public void menuCanceled(javax.swing.event.MenuEvent e) { }
+        });
+    }
 }

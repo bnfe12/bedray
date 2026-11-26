@@ -574,7 +574,9 @@ final class GraphPanel extends JComponent {
         if (SwingUtilities.isRightMouseButton(e)) {
             MosaicDocument.ENode n = nodeAt(e.getPoint());
             if (n != null && !model.selection.contains(n)) model.select(n);
-            contextMenu(n).show(this, e.getX(), e.getY());
+            JPopupMenu cm = contextMenu(n);
+            StudioWidgets.fitToScreen(cm, this);
+            cm.show(this, e.getX(), e.getY());
             return;
         }
         MosaicDocument.Frame corner = frameCornerAt(e.getPoint());

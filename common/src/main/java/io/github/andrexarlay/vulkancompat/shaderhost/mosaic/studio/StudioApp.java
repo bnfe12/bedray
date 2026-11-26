@@ -437,6 +437,7 @@ final class StudioApp {
 
     private JMenu menu(String title) {
         JMenu m = new JMenu(title);
+        StudioWidgets.fitOnOpen(m);
         m.setFont(UI_S);
         m.setForeground(TEXT);
         m.setBorder(new EmptyBorder(2, 8, 2, 8));
@@ -1253,6 +1254,7 @@ final class StudioApp {
         next.recentFiles = settings.recentFiles;      // kept up to date outside the settings window
         next.paletteRecent = settings.paletteRecent;
         next.previewViews = settings.previewViews;
+        next.previewWorld = settings.previewWorld;
         next.previewLook = settings.previewLook;
         next.layoutVersion = settings.layoutVersion;
         next.previewWidth = settings.previewWidth;    // the preview's size list changes these

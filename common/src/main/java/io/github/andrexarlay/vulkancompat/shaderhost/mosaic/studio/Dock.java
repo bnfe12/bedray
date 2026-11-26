@@ -47,7 +47,11 @@ final class Dock {
             chooser.setBorder(new EmptyBorder(2, 4, 2, 8));
             chooser.setIconTextGap(6);
             chooser.setToolTipText("Change the editor in this area (" + model.keys.humanFor(StudioKeys.Action.CYCLE_EDITOR) + ")");
-            chooser.addActionListener(e -> editorMenu().show(chooser, 0, chooser.getHeight()));
+            chooser.addActionListener(e -> {
+                JPopupMenu em = editorMenu();
+                StudioWidgets.fitToScreen(em, chooser);
+                em.show(chooser, 0, chooser.getHeight());
+            });
             chooser.addMouseListener(new MouseAdapter() {
                 @Override public void mouseEntered(MouseEvent e) { chooser.setForeground(SELECT); }
                 @Override public void mouseExited(MouseEvent e) { chooser.setForeground(TEXT); }

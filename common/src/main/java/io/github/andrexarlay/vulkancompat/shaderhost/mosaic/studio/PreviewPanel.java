@@ -72,6 +72,7 @@ final class PreviewPanel extends Panels.Listening {
     private Object displayKey;
     private final JComboBox<Compare> compareBox = new JComboBox<>(Compare.values());
     private long lastLoop = System.nanoTime();
+    private long atlasChecked;
 
     PreviewPanel(StudioModel m) {
         super(m);
@@ -133,7 +134,14 @@ final class PreviewPanel extends Panels.Listening {
         row2.add(size);
         row2.add(button("World look...", "How the preview world draws the game's image: light map, face shading, water and glass, view distance",
             this::lookDialog));
-        row2.add(button("Reload world", "Load the world again (the game saves the place you stand on each time it opens Studio)", () -> {
+        JButton worldBtn = button("World", "Which world the preview shows: one of your saves, the place the game captured (J), the built-in landscape", () -> { });
+        worldBtn.addActionListener(e -> {
+            JPopupMenu wm = worldMenu();
+            StudioWidgets.fitToScreen(wm, worldBtn);
+            wm.show(worldBtn, 0, worldBtn.getHeight());
+        });
+        row2.add(worldBtn);
+        row2.add(button("Reload world", "Load the world again (a save is read again; the game saves the place you stand on each time it opens Studio)", () -> {
             worldView = null;
             lastKey = null;
         }));
@@ -163,7 +171,11 @@ final class PreviewPanel extends Panels.Listening {
         row3.add(button("Keep A", "Keep the frame shown now as A to compare against (change something, then look at Split or Difference)",
             this::keepReference));
         JButton views = button("Views", "Saved cameras: save this view, go back to one (keys 1..9), the start view (R)", () -> { });
-        views.addActionListener(e -> viewsMenu().show(views, 0, views.getHeight()));
+        views.addActionListener(e -> {
+            JPopupMenu vm = viewsMenu();
+            StudioWidgets.fitToScreen(vm, views);
+            vm.show(views, 0, views.getHeight());
+        });
         row3.add(views);
         JButton image = button("Image", "Save the frame as PNG, copy it", () -> { });
         image.addActionListener(e -> imageMenu().show(image, 0, image.getHeight()));
@@ -419,6 +431,52 @@ final class PreviewPanel extends Panels.Listening {
         view.repaint();
     }
 
+    /** Which world: your saves (newest first), another save folder, the game's capture, the built-in landscape. */
+    private JPopupMenu worldMenu() {
+        JPopupMenu m = new JPopupMenu();
+        String cur = StudioUi.settings.previewWorld;
+        java.util.function.BiConsumer<String, String> add = (label, choice) -> {
+            JCheckBoxMenuItem it = new JCheckBoxMenuItem(label, choice.equals(cur));
+            it.addActionListener(e -> {
+                StudioUi.settings.previewWorld = choice;
+                StudioUi.settings.save();
+                worldView = null;
+                lastKey = null;
+            });
+            m.add(it);
+        };
+        add.accept("Automatic: the game's capture, else built in", "");
+        add.accept("The place the game captured (J in the game)", "game");
+        add.accept("Built-in landscape", "builtin");
+        var saves = SaveWorld.saves(StudioLibrary.gameDir(model));
+        if (!saves.isEmpty()) {
+            m.addSeparator();
+            JLabel h = label("  Your worlds (around where you stand)", FAINT);
+            h.setFont(UI_S);
+            m.add(h);
+            for (java.nio.file.Path s : saves) add.accept(s.getFileName().toString(), s.toString());
+        }
+        m.addSeparator();
+        JMenuItem other = new JMenuItem("Another save folder...");
+        other.addActionListener(e -> {
+            JFileChooser fc = new JFileChooser(StudioLibrary.gameDir(model) == null ? null : StudioLibrary.gameDir(model).resolve("saves").toFile());
+            fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            fc.setDialogTitle("A Minecraft world folder (with level.dat)");
+            if (fc.showOpenDialog(root) != JFileChooser.APPROVE_OPTION) return;
+            java.nio.file.Path p = fc.getSelectedFile().toPath();
+            if (!SaveWorld.isSave(p)) {
+                model.say("Not a Minecraft world: " + p + " has no level.dat", WARN);
+                return;
+            }
+            StudioUi.settings.previewWorld = p.toString();
+            StudioUi.settings.save();
+            worldView = null;
+            lastKey = null;
+        });
+        m.add(other);
+        return m;
+    }
+
     /** Saved cameras: save, go to (1..9), delete; the start view. */
     private JPopupMenu viewsMenu() {
         JPopupMenu m = new JPopupMenu();
@@ -605,8 +663,19 @@ final class PreviewPanel extends Panels.Listening {
                 BufferedImage input = null;
                 if (s == Source.WORLD) {
                     if (worldView == null) {
-                        var snap = PreviewWorld.load(StudioLibrary.gameDir(model));
-                        worldView = PreviewWorld.View.of(snap);
+                        String choice = StudioUi.settings.previewWorld;
+                        if (choice != null && !choice.isBlank() && !choice.equals("builtin") && !choice.equals("game"))
+                            show(shown, "Loading the world " + java.nio.file.Path.of(choice).getFileName() + "...");
+                        int wr = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.intValue(model.doc.settings, "worldRadius", 8, 256);
+                        int wh = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.intValue(model.doc.settings, "worldHeight", 16, 256);
+                        SaveWorld.farSize = StudioUi.settings.previewFarSize;
+                        PreviewBlocks.biomeTemperature = StudioUi.settings.previewBiomeTemperature;
+                        PreviewBlocks.biomeDownfall = StudioUi.settings.previewBiomeDownfall;
+                        PreviewWorld.lastError = null;
+                        var snap = PreviewWorld.load(StudioLibrary.gameDir(model), choice, wr * 2, wh, wr * 2);
+                        if (PreviewWorld.lastError != null) model.say(PreviewWorld.lastError, WARN);
+                        worldView = PreviewWorld.View.of(snap, StudioLibrary.gameDir(model));
+                        atlasChecked = System.nanoTime();
                         // verification aids: start time (ticks) and pitch of the preview camera
                         Integer forcedTime = Integer.getInteger("mosaic.preview.time");
                         String forcedPitch = System.getProperty("mosaic.preview.pitch");
@@ -622,6 +691,17 @@ final class PreviewPanel extends Panels.Listening {
                         PreviewWorld.View v0 = worldView;
                         worldView = v0.at((float) (v0.timeOfDay() + dt * daySpeed / 24000.0 - Math.floor(v0.timeOfDay() + dt * daySpeed / 24000.0)));
                         syncTime();
+                    }
+                    // resource packs or materials changed (Mosaic Materials, options.txt): the blocks get their new textures
+                    if (System.nanoTime() - atlasChecked > 2_000_000_000L) {
+                        atlasChecked = System.nanoTime();
+                        PreviewWorld.View v1 = worldView;
+                        var t = v1.blocks();
+                        String sig = PreviewBlocks.signature(StudioLibrary.gameDir(model), t == null ? null : t.names());
+                        if (!sig.equals(v1.atlas().signature())) {
+                            worldView = v1.withAtlas(PreviewBlocks.atlas(t == null ? null : t.names(), StudioLibrary.gameDir(model)));
+                            model.say("Preview: textures reloaded (resource packs / materials changed)", MUTED);
+                        }
                     }
                     wv = worldView.with(model.doc.settings, StudioUi.settings.previewLook);
                 } else input = model.liveBefore != null ? fit(model.liveBefore, 960) : null;
@@ -689,8 +769,8 @@ final class PreviewPanel extends Panels.Listening {
                 long ms = (System.nanoTime() - t0) / 1_000_000;
                 show(out, null);
                 int passes = runs == null ? 1 : runs.size();
-                String where = wv == null ? "game frame (no depth)" : PreviewWorld.fromGame(wv.world())
-                    ? "world from the game" : "built-in world (open Studio from the game for yours)";
+                String where = wv == null ? "game frame (no depth)" : PreviewWorld.originOf(wv.world())
+                    + (wv.blocks() != null ? ", block textures" : ", material textures");
                 String gpuLine = gpuProfile(gpu.lastTimings, wv != null);
                 SwingUtilities.invokeLater(() -> info.setText(gpu.deviceName + "   -   " + out.getWidth() + "x" + out.getHeight() + "   -   "
                     + (passes > 1 ? passes + " passes, " : "") + ms + " ms" + gpuLine + "   -   " + where));

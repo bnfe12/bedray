@@ -83,6 +83,17 @@ listed as a warning in Problems.
 
 ## Preview world
 
+**World** (Preview > World): one of your saves (the blocks around where you stand, read from its region files: block
+and sky light, the time of day, the far land from the heightmaps), another save folder, the place the game captured (J),
+or the built-in landscape. Every block is drawn with its own textures from its model (grass and leaves coloured by the
+game's colour maps for the biome set in Settings > Preview > World), taken from the resource packs the game has switched on
+(options.txt, in its order, Mosaic Materials included) before the vanilla jar, so material edits show on the world; the
+preview reloads them when a pack changes. `mosaic render ... --world <save folder>` does the same headlessly.
+
+The preview is Studio's own renderer (voxel rays over full blocks: no block models such as stairs or torches, no smooth
+lighting, no entities), so it is close to the game but not the same picture. The game's own frame with your graph is in
+Result (and Preview > Game frame) while the game runs with the pack.
+
 The Preview renders the open graph over a **real scene**, not a picture: the blocks around the player when the game
 opened Studio (J), or a built-in landscape (hills, a lake, a forest, a stone house with glass and torches, lava) until
 then. A G-buffer pass draws the blocks with Minecraft's textures and light map and gives the graph the same inputs as
