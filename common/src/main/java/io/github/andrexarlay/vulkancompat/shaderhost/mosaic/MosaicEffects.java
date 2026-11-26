@@ -901,7 +901,7 @@ public final class MosaicEffects {
             }
             float fres = f0 + (1.0 - f0) * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
             return vec4(mix(color.rgb, refl, clamp(fres * strength, 0.0, 1.0)), color.a);""");
-        add("Render pipeline", "vec3 sunLightRT(vec3 position, vec3 normal, float intensity = 2.2, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), float sunsetHeight = 0.35, vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float horizonFade = 0.08, float bias = 0.02, float biasPerBlock = 0.001)",
+        add("Render pipeline", "vec3 sunLightRT(vec3 position, vec3 normal, float intensity = 2.2, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), float sunsetHeight = 0.35, vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float horizonFade = 0.08, float bias = 0.02, float biasPerBlock = 0.001, float visibility = -1)",
             "Sun & moon light (RT)", "Sun & moon light with an exact shadow ray through the real scene geometry (hardware ray tracing:"
                 + " an RTX-class GPU); the same colours and fades as Sun & moon light.", """
             vec3 L = mosaicSunDir();
@@ -909,10 +909,25 @@ public final class MosaicEffects {
             if (L.y < 0.0) L = -L;
             float ndl = max(dot(normal, L), 0.0);
             if (ndl <= 0.0 || length(position) > 4000.0) return vec3(0.0);
-            float vis = mosaicShadow(position + normal * (bias + length(position) * biasPerBlock), L);
+            float vis = visibility >= 0.0 ? visibility : mosaicShadow(position + normal * (bias + length(position) * biasPerBlock), L);
             vec3 col = mix(sunsetColor, sunColor, smoothstep(0.0, sunsetHeight, L.y));
             col = mix(col, moonColor * moonLevel, moon);
             return col * ndl * vis * intensity * smoothstep(0.0, horizonFade, L.y);""");
+        add("Render pipeline", "float sunShadowRT(vec3 position, vec3 normal, float bias = 0.02, float biasPerBlock = 0.001, float sunAngularRadius = 0.02)",
+            "Sun shadow (RT)", "1 where the sun (the moon at night) reaches a surface, 0 in shadow, by a hardware shadow ray through the real scene"
+                + " geometry; sunAngularRadius softens the edges (a new point of the disc every frame). Wire it into Sun & moon light (RT)"
+                + " and Sun specular (visibility), or into a 1/2 Buffer with Pack light + shadow.", """
+            vec3 L = mosaicSunDir();
+            if (L.y < 0.0) L = -L;
+            if (dot(normal, L) <= 0.0 || length(position) > 4000.0) return 0.0;
+            if (sunAngularRadius > 0.0) {
+                vec3 jh = mosaicHash33(position * 7.13 + vec3(frame.timing.z * 0.6180339, frame.timing.z * 0.4142135, 0.0));
+                vec3 jt = normalize(abs(L.y) < 0.99 ? cross(L, vec3(0.0, 1.0, 0.0)) : cross(L, vec3(1.0, 0.0, 0.0)));
+                vec3 jb = cross(L, jt);
+                float ja = jh.y * 6.2831853, jr = sqrt(jh.x) * sunAngularRadius;
+                L = normalize(L + (jt * cos(ja) + jb * sin(ja)) * jr);
+            }
+            return mosaicShadow(position + normal * (bias + length(position) * biasPerBlock), L);""");
         add("Render pipeline", "vec4 diffuseGIRT(vec3 position, vec3 normal, float maxDistance = 64, float sunStrength = 2.2, float skyStrength = 1, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float hitSunShare = 0.6, float hitSkyAmbient = 0.3, vec3 unknownAlbedo = vec3(0.4), vec3 torchColor = vec3(1.0, 0.6, 0.3), float torchStrength = 1.5, float glowStrength = 2, float bias = 0.03, float farGround = 1, float farDistance = 256, vec3 farGroundAlbedo = vec3(0.32, 0.36, 0.22))",
             "Diffuse GI (RT)", "One-bounce light from a hardware ray per pixel and frame through the real scene geometry; the hit is shaded"
                 + " with the world volume's block colour (unknownAlbedo outside it), a shadow ray toward the sun and its sky light."

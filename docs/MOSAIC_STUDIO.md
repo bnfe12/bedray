@@ -94,6 +94,11 @@ A third variant, "Renderer from scratch (hardware RT)", uses Sun & moon light (R
 rays through the real scene geometry on GPUs with hardware ray tracing. Reflective surface (water) adds Fresnel
 reflections with waves on one material.
 
+All variants trace the sun's shadow (Sun shadow / Sun shadow (RT)) and the shadowed block light at 1/2 size and read them
+back with Depth-aware upsample; volumetric clouds run at 1/4 size; the GI is denoised at 1/2 and upsampled by depth.
+On an Intel UHD at 640 x 360 the graph costs about 29 ms (voxel GI), 32 ms (hardware RT, with voxel rays in the preview)
+and 14 ms (fast).
+
 The GI variant traces one path per pixel at 1/2 size, accumulates it over frames and denoises it in three steps; the
 fast variant uses sky ambient instead. Every node is an ordinary node: open its code, change it, or rewire the frame.
 

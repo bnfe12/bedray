@@ -188,15 +188,12 @@ public final class MosaicTemplates {
         add.apply(new Object[] {"albedo", "fn:sceneAlbedo", 1, 0, "uv", "uv"});
         add.apply(new Object[] {"rough", "fn:materialRoughness", 1, 1, "uv", "uv"});
         // direct light
-        if (rt) add.apply(new Object[] {"sun", "fn:sunLightRT", 2, 0, "position", "pos", "normal", "nrm"});
-        else {
-            add.apply(new Object[] {"shadow", "fn:sunShadow", 2, 0, "position", "pos", "normal", "nrm"});
-            add.apply(new Object[] {"sun", "fn:sunLight", 2, 1, "position", "pos", "normal", "nrm", "visibility", "visUp"});
-        }
-        if (rt) add.apply(new Object[] {"spec", "fn:sunSpecular", 2, 1, "position", "pos", "normal", "nrm", "roughness", "rough"});
-        else add.apply(new Object[] {"spec", "fn:sunSpecular", 2, 2, "position", "pos", "normal", "nrm", "roughness", "rough", "visibility", "visUp"});
+        // one sun shadow ray (voxel or hardware) shared by diffuse sun and specular, traced at 1/2 size below
+        add.apply(new Object[] {"shadow", rt ? "fn:sunShadowRT" : "fn:sunShadow", 2, 0, "position", "pos", "normal", "nrm"});
+        add.apply(new Object[] {"sun", rt ? "fn:sunLightRT" : "fn:sunLight", 2, 1, "position", "pos", "normal", "nrm", "visibility", "visUp"});
+        add.apply(new Object[] {"spec", "fn:sunSpecular", 2, 2, "position", "pos", "normal", "nrm", "roughness", "rough", "visibility", "visUp"});
         add.apply(new Object[] {"torch", "fn:torchLightShadowed", 2, 3, "position", "pos", "normal", "nrm", "blockLight", "lamp"});
-        if (!rt) {
+        {
             // the traced shadows (sun visibility, shadowed block light) at 1/2 size, read back sharp at block edges
             add.apply(new Object[] {"pack", "fn:packLight", 1, 4.2, "light", "torch", "visibility", "shadow"});
             buf.accept(add.apply(new Object[] {"lightBuf", "mosaic.pass", 1, 5.4, "color", "pack"}), new Object[] {"light", 2});
@@ -232,7 +229,9 @@ public final class MosaicTemplates {
                 p.addProperty("index", 2);
                 prev = steps[i];
             }
-            JsonObject sw = add.apply(new Object[] {"giRgb", "mosaic.swizzle", 4, 8.2, "a", "dn2"});
+            buf.accept(add.apply(new Object[] {"giBufC", "mosaic.pass", 4, 9.2, "color", "dn2"}), new Object[] {"giC", 2});
+            buf.accept(add.apply(new Object[] {"giUp", "mosaic.upsample", 5, 9.2}), new Object[] {"giC"});
+            JsonObject sw = add.apply(new Object[] {"giRgb", "mosaic.swizzle", 4, 8.2, "a", "giUp"});
             sw.addProperty("mask", "xyz");
             indirect = "giRgb";
         } else {
@@ -240,7 +239,7 @@ public final class MosaicTemplates {
             indirect = "amb";
         }
         // shading chain
-        add.apply(new Object[] {"direct", "mosaic.add", 3, 0, "a", "sun", "b", rt ? "torch" : "torchUp"});
+        add.apply(new Object[] {"direct", "mosaic.add", 3, 0, "a", "sun", "b", "torchUp"});
         add.apply(new Object[] {"light", "mosaic.add", 3, 1, "a", "direct", "b", indirect});
         add.apply(new Object[] {"extra", "mosaic.add", 3, 2, "a", "glow", "b", "spec"});
         add.apply(new Object[] {"shade", "fn:litSurface", 4, 0, "uv", "uv", "albedo", "albedo", "light", "light", "glow", "extra"});
@@ -253,9 +252,19 @@ public final class MosaicTemplates {
         skyBg.add("defaults", flat);
         // volumetric clouds at half size in their own buffer, composited over the sky (about a quarter of the cost)
         add.apply(new Object[] {"cloudRay", "fn:cloudLayer", 3, 3.6, "uv", "uv"});
-        buf.accept(add.apply(new Object[] {"cloudBuf", "mosaic.pass", 3, 4.8, "color", "cloudRay"}), new Object[] {"clouds", 2});
+        buf.accept(add.apply(new Object[] {"cloudBuf", "mosaic.pass", 3, 4.8, "color", "cloudRay"}), new Object[] {"clouds", 4});
         buf.accept(add.apply(new Object[] {"cloudIn", "mosaic.bufferIn", 3, 6}), new Object[] {"clouds"});
         add.apply(new Object[] {"clouds", "fn:cloudComposite", 4, 3.6, "color", "skyBg", "layer", "cloudIn", "uv", "uv"});
+        // the cloud layer at 1/4 size: more steps fit in the same time (soft shapes lose nothing)
+        JsonObject cr = null;
+        for (var el : nodes) if (el.getAsJsonObject().get("id").getAsString().equals("cloudRay")) cr = el.getAsJsonObject();
+        if (cr != null) {
+            JsonObject cd = new JsonObject();
+            JsonArray st = new JsonArray();
+            st.add(20);
+            cd.add("steps", st);
+            cr.add("defaults", cd);
+        }
         add.apply(new Object[] {"air", "fn:atmosphere", 4, 4.8, "color", "clouds", "uv", "uv"});
         // HDR into a buffer, then a bloom chain at 1/2, 1/4 and 1/8 added back before the tone map
         buf.accept(add.apply(new Object[] {"hdrBuf", "mosaic.pass", 5, 0, "color", "air"}), new Object[] {"hdr", 1});
@@ -298,7 +307,7 @@ public final class MosaicTemplates {
         frame.accept("Surface", gi ? new Object[] {"#7A4FA8", "albedo", "rough"} : new Object[] {"#7A4FA8", "albedo", "rough", "amb"});
         frame.accept("Direct light", new Object[] {"#B07A2E", "shadow", "sun", "spec", "torch", "glow", "pack", "lightBuf", "lightUp", "visUp", "torchUp"});
         if (gi) frame.accept(rt ? "Indirect light (RT GI)" : "Indirect light (voxel GI)",
-            new Object[] {"#2F8F7C", "giRaw", "acc", "giBuf", "dn0", "buf0", "dn1", "buf1", "dn2", "giRgb"});
+            new Object[] {"#2F8F7C", "giRaw", "acc", "giBuf", "dn0", "buf0", "dn1", "buf1", "dn2", "giBufC", "giUp", "giRgb"});
         frame.accept("Shade, sky and atmosphere", new Object[] {"#8A5CC8", "direct", "light", "extra", "shade", "water", "skyBg", "cloudRay", "cloudBuf", "cloudIn", "clouds", "air"});
         frame.accept("HDR and bloom", new Object[] {"#C06A3A", "hdrBuf", "hdrIn", "ssr", "bright", "bloomA", "kA", "bloomB", "kB", "bloomC", "bA", "bB", "bC"});
         frame.accept("Auto exposure", new Object[] {"#3E8EB0", "logLum", "lumBuf", "avg", "expPrev", "adapt", "expBuf", "expIn", "ae"});

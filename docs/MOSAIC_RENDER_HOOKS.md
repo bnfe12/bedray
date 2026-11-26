@@ -24,6 +24,9 @@ Earlier stages: `light/frame_sky/skyStudio` (the sky an eye or a glossy reflecti
 Every hook is free when it is the identity (inlined away). The material and medium hooks change the light transport
 itself, so bounced light, reflections and GI follow them; the image is not post-processed.
 
+Ready examples: `examples/mosaic-pathtracer-hooks` (wet block tops, golden sun, valley fog, soft firefly clamp), one
+`mosaic hook <stage> --slang <file>` each.
+
 ## The loop for agents (and people in a terminal)
 
 Agent access is off until Settings > Agent allows it (or a settings file given with `-Dmosaic.settings`).
