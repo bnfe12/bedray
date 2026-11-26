@@ -160,6 +160,9 @@ final class GpuPreview implements AutoCloseable {
         Buf worldBuf;
         Img scene, dist, atlas;
         Buf farBuf;
+        /** Far shadows in the preview: the far land as the height field of binding 18 (MosaicHeight), following the camera. */
+        Buf heightBuf;
+        io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field heightField;
         long gbModule, gbSetLayout, gbLayout, gbPipeline, gbPool, gbSet;
         boolean gbFresh = true;
         PreviewWorld.View lastView;
@@ -175,7 +178,7 @@ final class GpuPreview implements AutoCloseable {
             if (gbSetLayout != 0) vkDestroyDescriptorSetLayout(device, gbSetLayout, null);
             if (gbModule != 0) vkDestroyShaderModule(device, gbModule, null);
             if (lastCamera != null) MemoryUtil.memFree(lastCamera);
-            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, farBuf}) free(b);
+            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, farBuf, heightBuf}) free(b);
             for (Img i : new Img[] {input, depth, one, history, scene, dist, atlas}) free(i);
         }
     }
@@ -294,6 +297,23 @@ final class GpuPreview implements AutoCloseable {
         copyCamera(cam, c.lastCamera);
         if (view != null) {
             var far = view.world().far();
+            if (far != null) { // the far land doubles as the height field of far shadows (binding 18)
+                boolean newWorld = c.lastView == null || c.lastView.world() != view.world();
+                io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Sampler hs = (hx, hz) -> {
+                    int i = hx - far.ox(), j = hz - far.oz();
+                    if (i < 0 || j < 0 || i >= far.size() || j >= far.size()) return Short.MIN_VALUE;
+                    short top = far.heights()[j * far.size() + i];
+                    return top == Short.MIN_VALUE ? Short.MIN_VALUE : top + 1;
+                };
+                int ox0 = c.heightField.originX(), oz0 = c.heightField.originZ();
+                c.heightField.update(hs, view.x(), view.z(), 0);
+                ByteBuffer hb = MemoryUtil.memByteBuffer(c.heightBuf.mapped(), (int) c.heightBuf.size());
+                if (newWorld || c.heightField.originX() != ox0 || c.heightField.originZ() != oz0) {
+                    c.heightField.update(hs, view.x(), view.z(), io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.COLUMNS);
+                    c.heightField.writeColumns(hb, io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.HEADER_BYTES);
+                }
+                c.heightField.writeHeader(hb, view.x(), view.y(), view.z());
+            }
             if (far != null)
                 far.writeBuffer(MemoryUtil.memByteBuffer(c.farBuf.mapped(), (int) c.farBuf.size()), view.x(), view.y(), view.z(),
                     c.lastView == null || c.lastView.world() != view.world());
@@ -558,6 +578,8 @@ final class GpuPreview implements AutoCloseable {
                 c.world = true;
                 c.worldBuf = buffer(view.world().bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 c.farBuf = buffer(view.world().far() == null ? 64 : view.world().far().bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                c.heightBuf = buffer(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                c.heightField = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field();
                 c.scene = image(w, h, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
                 c.dist = image(w, h, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
             }
@@ -638,6 +660,7 @@ final class GpuPreview implements AutoCloseable {
                 switch (vkType(b.kind())) {
                     case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER -> {
                         Buf buf = b.binding() == 1 ? c.ubo : b.binding() == 17 ? c.prev : b.binding() == 15 && c.world ? c.worldBuf
+                            : b.binding() == io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BINDING && c.world ? c.heightBuf
                             : extraBuffer(c, p, b, extras);
                         VkDescriptorBufferInfo.Buffer bi = VkDescriptorBufferInfo.calloc(1, s);
                         bi.get(0).buffer(buf.handle()).offset(0).range(buf.size());
