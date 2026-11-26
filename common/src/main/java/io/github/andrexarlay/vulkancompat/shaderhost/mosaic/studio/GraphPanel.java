@@ -65,6 +65,11 @@ final class GraphPanel extends JComponent {
             @Override public void mouseDragged(MouseEvent e) { drag(e); }
             @Override public void mouseReleased(MouseEvent e) { release(e); }
             @Override public void mouseMoved(MouseEvent e) {
+                boolean overMap = minimapRect != null && minimapRect.contains(e.getPoint());
+                if (overMap != minimapHover) {
+                    minimapHover = overMap;
+                    repaint();
+                }
                 mouseScreen = e.getPoint();
                 Tool t = toolAt(e.getPoint());
                 if (t != hoverTool) {
@@ -1370,7 +1375,7 @@ final class GraphPanel extends JComponent {
     // ================================================================== minimap
 
     private Rectangle minimapRect;
-    private boolean minimapDrag;
+    private boolean minimapDrag, minimapHover;
     private double mmScale, mmX0, mmY0;
 
     /**
@@ -1402,6 +1407,8 @@ final class GraphPanel extends JComponent {
         minimapRect = r;
         Graphics2D g = (Graphics2D) g0.create();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        // see-through until the pointer comes to it: the nodes under it stay visible
+        if (!minimapHover && !minimapDrag) g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.45f));
         g.setColor(new Color(PANEL2.getRed(), PANEL2.getGreen(), PANEL2.getBlue(), 225));
         g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
         g.setColor(EDGE);
