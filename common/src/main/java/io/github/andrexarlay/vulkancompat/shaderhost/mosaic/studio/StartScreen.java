@@ -288,7 +288,31 @@ final class StartScreen extends JFrame {
         c.add(heading(hello, "Shaders, renderers and materials for Bedray - pick up a project or start a new one."));
         c.add(Box.createVerticalStrut(20));
         boolean session = !StudioUi.settings.openTabs.isEmpty();
-        JPanel actions = new JPanel(new GridLayout(1, session ? 5 : 4, 14, 0));
+        int count = session ? 5 : 4;
+        // as many tiles in a row as the window has room for (at least 170 px each), the rest wrap
+        JPanel actions = new JPanel(new GridLayout(1, count, 14, 0)) {
+            @Override public void doLayout() {
+                GridLayout gl = (GridLayout) getLayout();
+                int cols = Math.clamp((getWidth() - 16 + 14) / (170 + 14), 1, count);
+                if (gl.getColumns() != cols) {
+                    gl.setColumns(cols);
+                    gl.setRows(0);
+                    gl.setVgap(14);
+                    SwingUtilities.invokeLater(this::revalidate);
+                }
+                super.doLayout();
+            }
+
+            private int tall() {
+                int cols = Math.max(1, ((GridLayout) getLayout()).getColumns());
+                int rows = (count + cols - 1) / cols;
+                return rows * 84 + (rows - 1) * 14;
+            }
+
+            @Override public Dimension getMaximumSize() { return new Dimension(Integer.MAX_VALUE, tall()); }
+
+            @Override public Dimension getPreferredSize() { return new Dimension(super.getPreferredSize().width, tall()); }
+        };
         if (session)
             actions.add(new Action("Continue", StudioUi.settings.openTabs.size() + (StudioUi.settings.openTabs.size() == 1 ? " tab" : " tabs"), "page", new Color(0xE0605A), () -> {
                 continueSession = true;

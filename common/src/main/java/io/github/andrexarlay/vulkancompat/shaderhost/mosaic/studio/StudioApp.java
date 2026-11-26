@@ -206,6 +206,8 @@ final class StudioApp {
         if (shot != null && shotStart != null) {
             Timer st = new Timer(1500, e -> {
                 StartScreen ss = new StartScreen(p -> { }, false);
+                String ps = System.getProperty("mosaic.selfshot.popSize");
+                if (ps != null) ss.setSize(Integer.parseInt(ps.split("x")[0]), Integer.parseInt(ps.split("x")[1]));
                 ss.setVisible(true);
                 if (shotStart.equals("settings")) ss.openSettings();
             });
