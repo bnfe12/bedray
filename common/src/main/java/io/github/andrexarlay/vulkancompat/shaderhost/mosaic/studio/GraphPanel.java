@@ -203,14 +203,17 @@ final class GraphPanel extends JComponent {
             return out;
         }
         List<MosaicGraph.Port> ports = MosaicGraph.portsOf(n.type, model.functions());
-        boolean compact = !n.expanded && ports.size() > COMPACT_FROM;
+        boolean compact = !n.expanded && ports.size() > compactFrom();
         for (MosaicGraph.Port p : ports)
             if (!compact || p.required() || n.inputs.containsKey(p.name()) || n.defaults.containsKey(p.name())) out.add(p.name());
         return out;
     }
 
     /** Nodes with more inputs than this show only the required, wired and changed ones until Ctrl+H expands them. */
-    static final int COMPACT_FROM = 6;
+    private void runAction(StudioKeys.Action a) { model.runAction.accept(a); }
+
+    /** Settings > Editor: how many inputs a node shows before it folds the unused ones. */
+    static int compactFrom() { return StudioUi.settings == null ? 6 : StudioUi.settings.compactInputs; }
 
     /** Inputs hidden on a compact node (edited in the inspector, shown with Ctrl+H). */
     int hiddenInputs(MosaicDocument.ENode n) {
@@ -543,6 +546,11 @@ final class GraphPanel extends JComponent {
         requestFocusInWindow();
         model.activeGraph = this;
         finishGlide();
+        if (minimapRect != null && minimapRect.contains(e.getPoint()) && SwingUtilities.isLeftMouseButton(e)) {
+            minimapDrag = true;
+            minimapJump(e.getPoint());
+            return;
+        }
         Tool tool = SwingUtilities.isLeftMouseButton(e) ? toolAt(e.getPoint()) : null;
         if (tool != null) {
             tool.run().run();
@@ -638,6 +646,10 @@ final class GraphPanel extends JComponent {
 
     private void drag(MouseEvent e) {
         mouseScreen = e.getPoint();
+        if (minimapDrag) {
+            minimapJump(e.getPoint());
+            return;
+        }
         Point w = toWorld(e.getPoint());
         if (!knife.isEmpty()) {
             knife.add(w);
@@ -683,6 +695,10 @@ final class GraphPanel extends JComponent {
     private void release(MouseEvent e) {
         edgeTimer.stop();
         lastDrag = null;
+        if (minimapDrag) {
+            minimapDrag = false;
+            return;
+        }
         if (!knife.isEmpty()) {
             cutWires();
             knife.clear();
@@ -1144,6 +1160,11 @@ final class GraphPanel extends JComponent {
             item(m, "Paste", k.humanFor(StudioKeys.Action.PASTE), () -> model.paste(mouseWorld()));
             item(m, "Arrange all", k.humanFor(StudioKeys.Action.ARRANGE), () -> model.arrange(this::height));
             item(m, "Fit view", k.humanFor(StudioKeys.Action.FIT), this::fit);
+            m.addSeparator();
+            item(m, "Find a node...", k.humanFor(StudioKeys.Action.FIND_NODE), () -> runAction(StudioKeys.Action.FIND_NODE));
+            item(m, "Command palette...", k.humanFor(StudioKeys.Action.COMMAND_PALETTE), () -> runAction(StudioKeys.Action.COMMAND_PALETTE));
+            item(m, StudioUi.settings.minimap ? "Hide the minimap" : "Show the minimap", k.humanFor(StudioKeys.Action.TOGGLE_MINIMAP),
+                () -> runAction(StudioKeys.Action.TOGGLE_MINIMAP));
             return m;
         }
         item(m, "Rename / label...", k.humanFor(StudioKeys.Action.RENAME), this::renameDialog);
@@ -1152,6 +1173,8 @@ final class GraphPanel extends JComponent {
             item(m, n.expanded ? "Hide unused inputs" : "Show all inputs", k.humanFor(StudioKeys.Action.EXPAND), model::toggleExpand);
         item(m, model.gamePreview != null && model.gamePreview.equals(n.id) ? "Stop preview in game" : "Preview this node in game", "",
             () -> model.previewInGame(model.gamePreview != null && model.gamePreview.equals(n.id) ? null : n));
+        item(m, "Select what feeds it", k.humanFor(StudioKeys.Action.SELECT_UPSTREAM), () -> model.selectLinked(true));
+        item(m, "Select what it feeds", k.humanFor(StudioKeys.Action.SELECT_DOWNSTREAM), () -> model.selectLinked(false));
         item(m, "Wire output into...", k.humanFor(StudioKeys.Action.CONNECT_FROM), this::connectFrom);
         item(m, "Feed input from...", k.humanFor(StudioKeys.Action.CONNECT_INTO), this::connectInto);
         m.addSeparator();
@@ -1227,6 +1250,7 @@ final class GraphPanel extends JComponent {
         }
         g.dispose();
         selectionBar((Graphics2D) g0);
+        minimap((Graphics2D) g0);
         if (boxing && boxEnd != null) {
             Rectangle r = new Rectangle(Math.min(pressScreen.x, boxEnd.x), Math.min(pressScreen.y, boxEnd.y),
                 Math.abs(pressScreen.x - boxEnd.x), Math.abs(pressScreen.y - boxEnd.y));
@@ -1298,6 +1322,76 @@ final class GraphPanel extends JComponent {
                 g.draw(new CubicCurve2D.Double(a.x, a.y, a.x + bend, a.y, b.x - bend, b.y, b.x, b.y));
             }
         }
+    }
+
+    // ================================================================== minimap
+
+    private Rectangle minimapRect;
+    private boolean minimapDrag;
+    private double mmScale, mmX0, mmY0;
+
+    /**
+     * The whole graph in the bottom-right corner when it does not fit the view: nodes (selected ones in the accent colour,
+     * nodes with errors in red), frames and the visible area; click or drag in it to move the view.
+     */
+    private void minimap(Graphics2D g0) {
+        minimapRect = null;
+        if (StudioUi.settings == null || !StudioUi.settings.minimap || model.doc.nodes.size() < 2) return;
+        double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        for (MosaicDocument.ENode n : model.doc.nodes) {
+            minX = Math.min(minX, n.x);
+            minY = Math.min(minY, n.y);
+            maxX = Math.max(maxX, n.x + W());
+            maxY = Math.max(maxY, n.y + height(n));
+        }
+        double vx = -panX / zoom, vy = -panY / zoom, vw = getWidth() / zoom, vh = getHeight() / zoom;
+        if (minX >= vx && minY >= vy && maxX <= vx + vw && maxY <= vy + vh) return; // everything is in view
+        minX = Math.min(minX, vx);
+        minY = Math.min(minY, vy);
+        maxX = Math.max(maxX, vx + vw);
+        maxY = Math.max(maxY, vy + vh);
+        int mw = Math.min(200, getWidth() / 4), mh = Math.min(130, getHeight() / 4);
+        if (mw < 60 || mh < 40) return;
+        mmScale = Math.min((mw - 8) / (maxX - minX), (mh - 8) / (maxY - minY));
+        mmX0 = minX;
+        mmY0 = minY;
+        Rectangle r = new Rectangle(getWidth() - mw - 10, getHeight() - mh - 10, mw, mh);
+        minimapRect = r;
+        Graphics2D g = (Graphics2D) g0.create();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(new Color(PANEL2.getRed(), PANEL2.getGreen(), PANEL2.getBlue(), 225));
+        g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+        g.setColor(EDGE);
+        g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+        g.clipRect(r.x + 2, r.y + 2, r.width - 4, r.height - 4);
+        java.util.Set<String> bad = new java.util.HashSet<>();
+        for (MosaicGraph.Problem p : model.analysis.problems())
+            if (p.severity() == MosaicGraph.Severity.ERROR && p.node() != null) bad.add(p.node());
+        for (MosaicDocument.Frame f : model.doc.frames) {
+            g.setColor(new Color((f.color >> 16) & 255, (f.color >> 8) & 255, f.color & 255, 70));
+            g.fillRect(mmX(f.x), mmY(f.y), Math.max(2, (int) (f.w * mmScale)), Math.max(2, (int) (f.h * mmScale)));
+        }
+        for (MosaicDocument.ENode n : model.doc.nodes) {
+            Color c = model.selection.contains(n) ? SELECT : bad.contains(n.id) ? BAD : n.muted ? FAINT : StudioWidgets.mix(MUTED, PANEL2, 0.25);
+            g.setColor(c);
+            g.fillRect(mmX(n.x), mmY(n.y), Math.max(2, (int) (W() * mmScale)), Math.max(2, (int) (height(n) * mmScale)));
+        }
+        g.setColor(SELECT);
+        g.drawRect(mmX(vx), mmY(vy), Math.max(3, (int) (vw * mmScale)), Math.max(3, (int) (vh * mmScale)));
+        g.dispose();
+    }
+
+    private int mmX(double wx) { return minimapRect.x + 4 + (int) Math.round((wx - mmX0) * mmScale); }
+
+    private int mmY(double wy) { return minimapRect.y + 4 + (int) Math.round((wy - mmY0) * mmScale); }
+
+    /** Centres the view on the world point under a minimap click. */
+    private void minimapJump(Point p) {
+        if (minimapRect == null || mmScale <= 0) return;
+        double wx = mmX0 + (p.x - minimapRect.x - 4) / mmScale, wy = mmY0 + (p.y - minimapRect.y - 4) / mmScale;
+        panX = getWidth() / 2.0 - wx * zoom;
+        panY = getHeight() / 2.0 - wy * zoom;
+        repaint();
     }
 
     /** Nodes that appeared in the last moment (added, pasted, duplicated): they scale and fade in. */

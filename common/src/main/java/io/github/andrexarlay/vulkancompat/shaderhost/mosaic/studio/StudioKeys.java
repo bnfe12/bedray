@@ -50,6 +50,11 @@ public final class StudioKeys {
         MOVE_UP_FAR("Move up by a grid step", "Move", "shift UP"),
         MOVE_DOWN_FAR("Move down by a grid step", "Move", "shift DOWN"),
         EDIT_PROPERTIES("Edit properties (focus the inspector)", "Select", "ENTER"),
+        FIND_NODE("Find a node in the graph", "Select", "ctrl F"),
+        SELECT_UPSTREAM("Select what feeds the selection (wires and buffers)", "Select", "L"),
+        SELECT_DOWNSTREAM("Select what the selection feeds", "Select", "shift L"),
+        NEXT_PROBLEM("Go to the next problem on a node", "Select", "F8"),
+        PREV_PROBLEM("Go to the previous problem on a node", "Select", "shift F8"),
         // view
         FIT("Fit graph", "View", "F", "HOME"),
         CENTER("Center on selection", "View", "C"),
@@ -60,6 +65,7 @@ public final class StudioKeys {
         PAN_RIGHT("Pan right", "View", "ctrl RIGHT"),
         PAN_UP("Pan up", "View", "ctrl UP"),
         PAN_DOWN("Pan down", "View", "ctrl DOWN"),
+        TOGGLE_MINIMAP("Show / hide the minimap", "View", "ctrl shift M"),
         // areas (Blender-like layout)
         NEXT_AREA("Focus next area", "Areas", "F6"),
         PREV_AREA("Focus previous area", "Areas", "shift F6"),
@@ -70,6 +76,7 @@ public final class StudioKeys {
         DETACH_AREA("Pop area out into a window", "Areas", "ctrl alt D"),
         CYCLE_EDITOR("Change area editor type", "Areas", "ctrl alt E"),
         // file and tools
+        COMMAND_PALETTE("Command palette: every command, node, template and file", "File", "ctrl shift P", "F3"),
         NEW_TEMPLATE("New from template", "File", "ctrl N"),
         OPEN("Open...", "File", "ctrl O"),
         SAVE("Save", "File", "ctrl S"),

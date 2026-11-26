@@ -69,6 +69,56 @@ public final class MosaicSettings {
             + " voxel render, reflections (air, water, lava, stone, dirt, leaves, plants, wood, sand, snow, ice, glass, metal, lights, other).",
             45, MATERIAL_COLORS, false));
 
+    /** Sensible range of every setting (lo, hi): Properties shows a slider over it, values outside it are flagged. */
+    private static final Map<String, double[]> RANGES = Map.ofEntries(
+        Map.entry("sunTilt", new double[] {-1, 1}), Map.entry("skyHorizon", new double[] {0, 4}), Map.entry("skyZenith", new double[] {0, 4}),
+        Map.entry("skyNight", new double[] {0, 1}), Map.entry("skyDayRise", new double[] {0, 10}), Map.entry("skyDayOffset", new double[] {0, 2}),
+        Map.entry("sunDiscColor", new double[] {0, 4}), Map.entry("sunDiscSharpness", new double[] {1, 4096}),
+        Map.entry("sunDiscBrightness", new double[] {0, 100}), Map.entry("shadowDirection", new double[] {-1, 1}),
+        Map.entry("shadowRayStart", new double[] {0, 1}), Map.entry("shadowRayLength", new double[] {1, 4096}),
+        Map.entry("worldRadius", new double[] {8, 256}), Map.entry("worldHeight", new double[] {16, 256}),
+        Map.entry("worldRefresh", new double[] {1024, 262144}), Map.entry("hitOffset", new double[] {0, 0.5}),
+        Map.entry("voxelSteps", new double[] {8, 1024}), Map.entry("materialPathSteps", new double[] {8, 1024}),
+        Map.entry("farShadowSteps", new double[] {8, 512}), Map.entry("farShadowStep", new double[] {0.05, 16}),
+        Map.entry("farShadowGrowth", new double[] {0, 0.5}), Map.entry("farShadowBias", new double[] {0, 2}),
+        Map.entry("materialColors", new double[] {0, 1}));
+
+    /** The range (lo, hi) of a setting, or null when it has none. */
+    public static double[] range(String key) { return RANGES.get(key); }
+
+    /** Messages for the values of a graph that lie outside their range (they still work; the game clamps host values). */
+    public static java.util.List<String> check(Map<String, double[]> values) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (values == null) return out;
+        for (Map.Entry<String, double[]> e : values.entrySet()) {
+            double[] r = RANGES.get(e.getKey());
+            Setting s = of(e.getKey());
+            if (r == null || s == null) continue;
+            for (double d : e.getValue())
+                if (d < r[0] || d > r[1]) {
+                    out.add("graph setting " + s.label() + " (" + e.getKey() + ") = " + num(d) + " is outside " + num(r[0]) + ".." + num(r[1]));
+                    break;
+                }
+        }
+        return out;
+    }
+
+    /** A named group of graph settings ready to apply (Properties > Graph settings > Presets, mosaic graph-settings --preset). */
+    public record Preset(String name, String help, Map<String, double[]> values) {}
+
+    public static final java.util.List<Preset> PRESETS = java.util.List.of(
+        new Preset("Fast", "Short rays and coarse marches for weak GPUs", Map.of("voxelSteps", new double[] {96}, "materialPathSteps",
+            new double[] {64}, "farShadowSteps", new double[] {48}, "farShadowGrowth", new double[] {0.06}, "shadowRayLength", new double[] {128})),
+        new Preset("Quality", "Long rays and fine marches", Map.of("voxelSteps", new double[] {384}, "materialPathSteps", new double[] {256},
+            "farShadowSteps", new double[] {192}, "farShadowGrowth", new double[] {0.015}, "shadowRayLength", new double[] {512})),
+        new Preset("Big world volume", "More blocks around the camera for voxel rays (more memory, slower refresh)", Map.of("worldRadius",
+            new double[] {96}, "worldHeight", new double[] {96}, "worldRefresh", new double[] {65536}, "voxelSteps", new double[] {320})),
+        new Preset("Golden hour sky", "Warm low sun, deep blue zenith", Map.of("skyHorizon", new double[] {0.95, 0.72, 0.52}, "skyZenith",
+            new double[] {0.18, 0.32, 0.70}, "sunDiscColor", new double[] {1.0, 0.75, 0.45}, "sunTilt", new double[] {0.45})),
+        new Preset("Overcast", "Grey flat sky, weak sun disc", Map.of("skyHorizon", new double[] {0.66, 0.68, 0.70}, "skyZenith",
+            new double[] {0.52, 0.55, 0.60}, "sunDiscBrightness", new double[] {0.6}, "sunDiscSharpness", new double[] {48})),
+        new Preset("Bright night", "Moonlit night sky", Map.of("skyNight", new double[] {0.16})));
+
     public static Setting of(String key) {
         for (Setting s : ALL) if (s.key().equals(key)) return s;
         return null;

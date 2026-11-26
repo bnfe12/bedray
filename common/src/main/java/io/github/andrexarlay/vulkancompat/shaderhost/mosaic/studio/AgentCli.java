@@ -93,6 +93,11 @@ public final class AgentCli {
           mosaic code <graph.json> [--slang]         the generated shader
           mosaic compile <graph.json> [--slang]      compile check (errors on nodes)
           mosaic templates                           ready graphs
+          mosaic lint <graph.json>                   errors, warnings and hints with the node they sit on
+          mosaic find <graph.json> <text>            nodes by id, type, label or buffer name
+          mosaic passes <graph.json>                 the pass plan: buffers, scales, what each pass reads, history copies
+          mosaic graph-settings <graph.json> [key [values|default]] [--preset name] [--reset]
+                                                     the graph's settings (sky, rays, world volume...): list, read, set
           mosaic settings                            studio settings (design)
         Graphs and materials (a running studio shows each change as an undoable step)
           mosaic new <graph.json> [template]         a new graph (empty, or from a template)
@@ -179,6 +184,66 @@ public final class AgentCli {
                 if (json) out.println(GSON.toJson(rows));
                 else for (Map<String, Object> r : rows) out.println(r.get("type") + "  (" + r.get("label") + ", " + r.get("category") + ")  " + r.get("ports"));
                 return 0;
+            }
+            case "graph-settings" -> {
+                return graphSettings(a);
+            }
+            case "passes" -> {
+                need(Need.READ);
+                MosaicGraph.Analysis an = MosaicDocument.load(path(a, 1)).analyze();
+                if (!an.ok()) throw new IllegalStateException("graph has errors: " + an.firstError());
+                if (!an.graph().multiPass()) {
+                    say("one pass (no Buffer nodes)");
+                    return 0;
+                }
+                var plan = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.plan(an.graph());
+                Map<Integer, String> names = new java.util.TreeMap<>();
+                plan.bindings().forEach((k, v) -> names.put(v, k));
+                List<Map<String, Object>> rows = new ArrayList<>();
+                for (var p : plan.all())
+                    rows.add(Map.of("name", p.name() == null ? "(final image)" : p.name(), "scale", p.scale(), "history", p.history(),
+                        "reads", p.reads().stream().sorted().map(b -> names.getOrDefault(b, "#" + b)).toList(),
+                        "after", plan.after().contains(p)));
+                if (json) out.println(GSON.toJson(Map.of("passes", rows, "bindings", plan.bindings())));
+                else for (Map<String, Object> r : rows)
+                    out.println(r.get("name") + "  1/" + r.get("scale") + (Boolean.TRUE.equals(r.get("after")) ? "  (after the frame: history)" : "")
+                        + (((List<?>) r.get("reads")).isEmpty() ? "" : "  reads " + r.get("reads")));
+                return 0;
+            }
+            case "find" -> {
+                need(Need.READ);
+                if (a.size() < 3) return usage();
+                MosaicDocument d = MosaicDocument.load(path(a, 1));
+                String q = String.join(" ", a.subList(2, a.size())).toLowerCase(Locale.ROOT);
+                List<Map<String, Object>> rows = new ArrayList<>();
+                for (MosaicDocument.ENode n : d.nodes) {
+                    String text = (n.id + " " + n.type + " " + (n.label == null ? "" : n.label) + " " + (n.mask == null ? "" : n.mask)).toLowerCase(Locale.ROOT);
+                    if (!text.contains(q)) continue;
+                    Map<String, Object> r = new java.util.LinkedHashMap<>();
+                    r.put("id", n.id);
+                    r.put("type", n.type);
+                    if (n.label != null) r.put("label", n.label);
+                    if (n.mask != null) r.put("mask", n.mask);
+                    r.put("inputs", n.inputs);
+                    rows.add(r);
+                }
+                if (json) out.println(GSON.toJson(rows));
+                else for (Map<String, Object> r : rows) out.println(r.get("id") + "  " + r.get("type") + (r.containsKey("label") ? "  \"" + r.get("label") + "\"" : "")
+                    + (r.containsKey("mask") ? "  [" + r.get("mask") + "]" : "") + "  <- " + r.get("inputs"));
+                return rows.isEmpty() ? 1 : 0;
+            }
+            case "lint" -> {
+                need(Need.READ);
+                MosaicGraph.Analysis an = MosaicDocument.load(path(a, 1)).analyze();
+                if (json) out.println(GSON.toJson(Map.of("ok", an.ok(), "problems", an.problems())));
+                else {
+                    for (MosaicGraph.Severity sv : MosaicGraph.Severity.values())
+                        for (MosaicGraph.Problem p : an.problems())
+                            if (p.severity() == sv) out.println(sv + (p.node() == null ? "" : "  [" + p.node() + (p.port() == null ? "" : "." + p.port()) + "]")
+                                + "  " + p.message() + (p.fix() == MosaicGraph.Fix.NONE ? "" : "  (fix: " + p.fix().name().toLowerCase(Locale.ROOT) + ")"));
+                    out.println(an.problems().isEmpty() ? "clean" : an.ok() ? "valid, " + an.problems().size() + " note(s)" : "has errors");
+                }
+                return an.ok() ? 0 : 1;
             }
             case "templates" -> {
                 need(Need.READ);
@@ -281,6 +346,85 @@ public final class AgentCli {
                 return edit(a);
             }
         }
+    }
+
+    /**
+     * {@code graph-settings <graph>} lists every graph setting (value, default, range); with a key it prints one; with a key and
+     * values it sets it ({@code default} removes it); {@code --preset <name>} applies a preset; {@code --reset} clears all.
+     */
+    private int graphSettings(List<String> a) throws Exception {
+        Path p = path(a, 1);
+        MosaicDocument d = MosaicDocument.load(p);
+        int pi = a.indexOf("--preset");
+        if (pi > 0 || a.contains("--reset")) {
+            need(Need.GRAPHS);
+            if (a.contains("--reset")) d.settings.clear();
+            else {
+                String name = String.join(" ", a.subList(pi + 1, a.size()));
+                var preset = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.PRESETS.stream()
+                    .filter(x -> x.name().equalsIgnoreCase(name)).findFirst().or(() -> InspectorPanel.userPresets().stream()
+                        .filter(x -> x.name().equalsIgnoreCase(name)).findFirst())
+                    .orElseThrow(() -> new IllegalArgumentException("no preset " + name + " (presets: " + io.github.andrexarlay.vulkancompat.shaderhost.mosaic
+                        .MosaicSettings.PRESETS.stream().map(x -> x.name()).toList() + " and yours)"));
+                preset.values().forEach((k, v) -> d.settings.put(k, v.clone()));
+            }
+            d.save();
+            say(a.contains("--reset") ? "graph settings back to their defaults" : "applied preset " + String.join(" ", a.subList(pi + 1, a.size())));
+            return 0;
+        }
+        if (a.size() <= 2) {
+            need(Need.READ);
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (var s : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.ALL) {
+                Map<String, Object> r = new java.util.LinkedHashMap<>();
+                r.put("key", s.key());
+                r.put("label", s.label());
+                r.put("group", s.group());
+                r.put("value", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(d.settings, s));
+                r.put("default", s.def());
+                double[] range = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.range(s.key());
+                if (range != null) r.put("range", range);
+                r.put("changed", d.settings.containsKey(s.key()));
+                r.put("help", s.help());
+                rows.add(r);
+            }
+            if (json) out.println(GSON.toJson(rows));
+            else for (Map<String, Object> r : rows)
+                out.println((Boolean.TRUE.equals(r.get("changed")) ? "* " : "  ") + r.get("key") + " = " + nums((double[]) r.get("value"))
+                    + "   (default " + nums((double[]) r.get("default")) + (r.containsKey("range") ? ", range " + nums((double[]) r.get("range")) : "")
+                    + ")   " + r.get("label"));
+            return 0;
+        }
+        var s = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.of(a.get(2));
+        if (s == null) throw new IllegalArgumentException("unknown graph setting " + a.get(2) + " (see: mosaic graph-settings " + a.get(1) + ")");
+        if (a.size() == 3) {
+            need(Need.READ);
+            out.println(nums(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(d.settings, s)));
+            return 0;
+        }
+        need(Need.GRAPHS);
+        String text = String.join(",", a.subList(3, a.size()));
+        if (text.equalsIgnoreCase("default")) d.settings.remove(s.key());
+        else {
+            double[] v = numbers(text);
+            if (v.length != s.size()) throw new IllegalArgumentException(s.key() + " takes " + s.size() + " number(s), got " + v.length);
+            if (Arrays.equals(v, s.def())) d.settings.remove(s.key());
+            else d.settings.put(s.key(), v);
+        }
+        d.save();
+        for (String m : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.check(d.settings)) out.println("warning: " + m);
+        say(s.key() + " = " + nums(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(d.settings, s)));
+        return 0;
+    }
+
+    private static String nums(double[] v) {
+        StringBuilder sb = new StringBuilder();
+        for (double x : v) {
+            if (sb.length() > 0) sb.append(",");
+            sb.append(x == Math.rint(x) && Math.abs(x) < 1e9 ? String.valueOf((long) x)
+                : new java.math.BigDecimal(String.format(Locale.ROOT, "%.4g", x)).stripTrailingZeros().toPlainString());
+        }
+        return sb.toString();
     }
 
     private static boolean enumLike(JsonElement e) {

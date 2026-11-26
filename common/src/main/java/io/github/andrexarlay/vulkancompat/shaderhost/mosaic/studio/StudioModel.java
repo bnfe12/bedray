@@ -316,6 +316,8 @@ final class StudioModel {
     java.util.function.Consumer<String> openStage;
     /** Opens the Bedray stages workspace (double-click on a Bedray render node). */
     Runnable openRenderer;
+    /** Runs a studio command (set by the app; panels use it for menu entries that need the whole studio). */
+    java.util.function.Consumer<StudioKeys.Action> runAction = a -> { };
 
     static Path stagesDir() { return StudioSettings.file().resolveSibling("studio").resolve("stages"); }
 
@@ -908,7 +910,51 @@ final class StudioModel {
         docVersion++;
         analyze();
         fire();
+        int delay = StudioUi.settings == null ? 350 : StudioUi.settings.compileDelayMs;
+        settle.setInitialDelay(delay);
+        settle.setDelay(delay);
         settle.restart();
+    }
+
+    /** File > Open recent and the command palette list this file first. */
+    void rememberRecent(Path p) {
+        if (StudioUi.settings == null || p == null) return;
+        StudioUi.settings.remember(p);
+        StudioUi.settings.save();
+    }
+
+    /**
+     * Selects everything that feeds the selection (upstream: wires and the Buffer nodes whose buffers it reads) or
+     * everything the selection feeds (downstream).
+     */
+    void selectLinked(boolean upstream) {
+        if (selection.isEmpty()) {
+            say("Select a node first", StudioUi.MUTED);
+            return;
+        }
+        java.util.Set<MosaicDocument.ENode> found = new LinkedHashSet<>(selection);
+        java.util.ArrayDeque<MosaicDocument.ENode> work = new java.util.ArrayDeque<>(selection);
+        while (!work.isEmpty()) {
+            MosaicDocument.ENode n = work.pop();
+            List<MosaicDocument.ENode> next = new ArrayList<>();
+            if (upstream) {
+                for (String ref : n.inputs.values()) next.add(doc.byId(ref.contains(".") ? ref.substring(0, ref.indexOf('.')) : ref));
+                if (MosaicGraph.readsBuffer(n.type) && n.mask != null)
+                    for (MosaicDocument.ENode w : doc.nodes) if (w.type.equals("mosaic.pass") && n.mask.equals(w.mask)) next.add(w);
+            } else {
+                for (MosaicDocument.ENode o : doc.nodes)
+                    for (String ref : o.inputs.values())
+                        if (ref.equals(n.id) || ref.startsWith(n.id + ".")) next.add(o);
+                if (n.type.equals("mosaic.pass") && n.mask != null)
+                    for (MosaicDocument.ENode r : doc.nodes) if (MosaicGraph.readsBuffer(r.type) && n.mask.equals(r.mask)) next.add(r);
+            }
+            for (MosaicDocument.ENode x : next) if (x != null && found.add(x)) work.push(x);
+        }
+        int added = found.size() - selection.size();
+        selection.clear();
+        selection.addAll(found);
+        selectionChanged();
+        say((upstream ? "Selected what feeds it: " : "Selected what it feeds: ") + added + " more node(s)", StudioUi.MUTED);
     }
 
     void selectionChanged() {
@@ -1519,6 +1565,7 @@ final class StudioModel {
             layoutIfUnplaced();
             doc.dirty = false;
             stampFile();
+            rememberRecent(p);
             fire();
         } catch (Exception e) {
             say("Open failed: " + e.getMessage(), StudioUi.BAD);
@@ -1532,8 +1579,10 @@ final class StudioModel {
             doc.save();
             stampFile();
             shipSpirv();
-            if (loud) say("Saved " + doc.file, StudioUi.OK);
-            else fire();
+            if (loud) {
+                say("Saved " + doc.file, StudioUi.OK);
+                rememberRecent(doc.file);
+            } else fire();
             return true;
         } catch (Exception e) {
             say("Save failed: " + e.getMessage(), StudioUi.BAD);

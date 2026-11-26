@@ -1186,6 +1186,7 @@ public final class MosaicGraph {
                 Node n = nodes.get(id);
                 if (n != null && (n.type().equals("mosaic.trace") || n.type().equals("mosaic.shadow"))) rays++;
             }
+            for (String m : MosaicSettings.check(graphSettings)) warn(null, m, Fix.NONE);
             if (rays > 3)
                 warn(null, rays + " ray queries per pixel: each one traces the whole scene, expect a large frame cost",
                     Fix.NONE);

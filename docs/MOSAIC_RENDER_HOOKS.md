@@ -36,6 +36,9 @@ mosaic hook user.material --slang wet_tops.slang      # body from Slang text -> 
 mosaic hook user.material --reset                     # back to Bedray's own
 mosaic pack check pathtrace/path_tracer/materialStudio
 mosaic pack apply                                     # rebuild every pass that uses the changed modules for the game
+mosaic lint graph.json                                # problems with the node they sit on (exit 1 on errors)
+mosaic passes graph.json                              # the pass plan the game runs
+mosaic graph-settings graph.json [key [values|default]] [--preset name] [--reset]
 mosaic render graph.json out.png --time 12100 --pitch 5 --yaw 180 --pos 30,71.5,80 --frames 16 [--size 1280x720] [--world preview-world.bin] [--profile]
                                                       # --profile: GPU ms of the preview G-buffer and of every pass (Vulkan timestamps)
 ```

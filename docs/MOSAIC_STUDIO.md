@@ -30,12 +30,30 @@ to Minecraft, or without it.
 A node with more than six inputs shows only the required, wired and changed ones; the rest are edited in Properties
 ("+N more" on the node). Ctrl+H (or the right-click menu) shows every input of the selected nodes, to wire one.
 
+## Finding things and getting around
+
+- **Command palette** (Ctrl+Shift+P or F3): one search over every command, every menu item, the templates, the node
+  types to add, the nodes of the open graph and the recent files. Words match in any order, initials work too ("tm" finds
+  Toggle minimap); the commands you used last come first.
+- **Find a node** (Ctrl+F): by name, type, id or buffer name; Enter selects it and centres the view on it.
+- **L / Shift+L** select everything that feeds the selection / everything it feeds, through wires and buffers.
+- **F8 / Shift+F8** walk the errors and warnings that sit on nodes (selects the node, shows the message).
+- **Minimap** (Ctrl+Shift+M): the whole graph in a corner when it does not fit the view; selected nodes in the accent
+  colour, nodes with errors in red; click or drag in it to move the view.
+- **File > Open recent**: the last 12 files.
+
 ## Every number is yours
 
 Built-in nodes take every number that changes the picture as an input with a default (distances such as where far
 shadows take over, colours, biases, strengths, speeds), so a value is never decided inside a node. The numbers under
 all nodes - sky model, sun path tilt, ray lengths, march limits, material colours - are **Graph settings**: click empty
 canvas, edit them in Properties; they are saved with the graph.
+
+Properties > Graph settings: a filter field, a slider over the sensible range of every single number (logarithmic for
+wide ranges such as ray lengths), **reset** per value, a dot on changed values, **presets** (Fast, Quality, Big world
+volume, Golden hour sky, Overcast, Bright night, and your own: Save preset... writes
+`~/.bedray/studio/setting-presets/<name>.json`), Copy / Paste as JSON. A value outside its range still works and is
+listed as a warning in Problems.
 
 ## Settings of the world volume and the preview
 
@@ -45,6 +63,21 @@ canvas, edit them in Properties; they are saved with the graph.
 - **Preview** (Studio settings): resolution (Preview > size list) and the look of the preview world
   (Preview > World look: light map curve, daylight, block light colour and strength, face shading, water and glass
   opacity, view distance, moon). The preview's sky follows the graph's own sky settings.
+
+## Preview tools
+
+- **View**: Image, False colour (brightness as a heat ramp), Clipping (red where a channel is at 255, blue where all are
+  near 0), Brightness, Red, Green, Blue.
+- **Compare**: Keep A stores the frame shown now; Split shows A and the current frame side by side (drag the line, or
+  Shift+drag anywhere), Difference shows |now - A| four times brighter.
+- **Pixel probe**: hover the image for the pixel position, its 8-bit and 0..1 values and its brightness.
+- **Views**: save the camera under a name, go back with keys 1..9, R returns to the start view, P pauses.
+- **Image**: save the frame as PNG (as it is, or as shown with the view and compare), copy it to the clipboard.
+- **Size**: 320 x 180 up to 2560 x 1440, or Custom... (any size 160..3840 x 90..2160).
+- **Settings > Preview**: look, fly and wheel speed, invert up / down, frames per second, day speed (the time of day runs
+  while the preview plays), smooth or exact-pixel scaling, the info line.
+- **Settings > Editor**: how many inputs a node shows before it folds the rest, minimap, fit on open, how long after an
+  edit the graph compiles, recent files and palette history.
 
 ## Preview world
 
@@ -131,6 +164,12 @@ studio's design. `--json` gives machine-readable output.
     mosaic connect shader.json n1 mix.fac
     mosaic compile shader.json
     mosaic set-setting theme OLED
+    mosaic lint shader.json                            # errors, warnings, hints with their node
+    mosaic find shader.json bloom                      # nodes by id, type, label or buffer
+    mosaic passes shader.json                          # pass plan: buffers, scales, reads, history copies
+    mosaic graph-settings shader.json                  # every graph setting: value, default, range
+    mosaic graph-settings shader.json voxelSteps 256   # set one ("default" removes it)
+    mosaic graph-settings shader.json --preset Quality # or --reset
 
 A running studio takes every change in as one undoable step ("External edit"). Access is **off** until you turn it on
 in **Settings > Agent**, with separate switches for graphs, materials, design and compiling; agents cannot change

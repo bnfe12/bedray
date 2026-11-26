@@ -158,6 +158,39 @@ public final class StudioSettings {
     public int previewWidth = 640, previewHeight = 360;
     /** Look of the preview world (PreviewWorld.LOOK keys); missing keys use their defaults. */
     public java.util.Map<String, double[]> previewLook = new java.util.LinkedHashMap<>();
+    // ---------------------------------------------------------------- editor
+    /** A node with more inputs than this shows only the wired, required and changed ones (Ctrl+H shows all). */
+    public int compactInputs = 6;          // 2..24
+    /** Overview of the whole graph in the corner of the canvas (click or drag in it to move the view). */
+    public boolean minimap = true;
+    /** Pause after the last edit before the graph is compiled and saved (ms). */
+    public int compileDelayMs = 350;       // 100..3000
+    /** Fit the view to the graph when a graph or template is opened. */
+    public boolean fitOnOpen = true;
+    /** Most recent files (File > Open recent, command palette). */
+    public java.util.List<String> recentFiles = new java.util.ArrayList<>();
+    /** Commands used last in the command palette (shown first). */
+    public java.util.List<String> paletteRecent = new java.util.ArrayList<>();
+
+    // ---------------------------------------------------------------- preview
+    /** Preview frames per second at most (the GPU may give fewer). */
+    public int previewFps = 20;            // 2..120
+    /** Degrees the preview camera turns per pixel of mouse drag. */
+    public double previewLookSpeed = 0.3;  // 0.05..2
+    /** Blocks the preview camera moves per key press (Ctrl: x3). */
+    public double previewFlySpeed = 0.6;   // 0.1..8
+    /** Blocks per wheel step. */
+    public double previewWheelSpeed = 1.5; // 0.1..16
+    public boolean previewInvertY = false;
+    /** Bilinear filtering when the preview image is scaled to the view; off shows exact pixels. */
+    public boolean previewSmooth = true;
+    /** Day cycle while the preview plays: Minecraft ticks per second (0 = time stands still, 20 = the game's speed). */
+    public int previewDaySpeed = 0;        // 0..2400
+    /** The line under the preview with the device, size and GPU time of every pass. */
+    public boolean previewInfo = true;
+    /** Saved preview cameras: name -> x, y, z, yaw, pitch, time of day (0 noon). Keys 1..9 recall them. */
+    public java.util.Map<String, double[]> previewViews = new java.util.LinkedHashMap<>();
+
     /** Last files of each workspace. */
     public String lastShader = "", lastMaterial = "";
     /** What an AI agent may do through the mosaic command (Settings > Agent). Off until the user turns it on. */
@@ -227,7 +260,26 @@ public final class StudioSettings {
         previewWidth = Math.clamp(previewWidth, 160, 3840);
         previewHeight = Math.clamp(previewHeight, 90, 2160);
         if (previewLook == null) previewLook = new java.util.LinkedHashMap<>();
+        compactInputs = Math.clamp(compactInputs, 2, 24);
+        compileDelayMs = Math.clamp(compileDelayMs, 100, 3000);
+        if (recentFiles == null) recentFiles = new java.util.ArrayList<>();
+        if (paletteRecent == null) paletteRecent = new java.util.ArrayList<>();
+        previewFps = Math.clamp(previewFps, 2, 120);
+        previewLookSpeed = Math.clamp(previewLookSpeed, 0.05, 2.0);
+        previewFlySpeed = Math.clamp(previewFlySpeed, 0.1, 8.0);
+        previewWheelSpeed = Math.clamp(previewWheelSpeed, 0.1, 16.0);
+        previewDaySpeed = Math.clamp(previewDaySpeed, 0, 2400);
+        if (previewViews == null) previewViews = new java.util.LinkedHashMap<>();
         return this;
+    }
+
+    /** Puts a file first in the recent list (at most 12). */
+    public void remember(java.nio.file.Path p) {
+        if (p == null) return;
+        String s = p.toAbsolutePath().normalize().toString();
+        recentFiles.remove(s);
+        recentFiles.add(0, s);
+        while (recentFiles.size() > 12) recentFiles.remove(recentFiles.size() - 1);
     }
 
     public StudioSettings copy() { return GSON.fromJson(GSON.toJson(this), StudioSettings.class).sanitized(); }

@@ -820,57 +820,224 @@ final class InspectorPanel extends Panels.Listening {
      */
     private void graphSettings() {
         content.add(section("Graph settings"));
-        content.add(text("Numbers every node builds on (sky, sun path, ray lengths, material colours). Saved with this graph; Enter applies.", FAINT));
+        content.add(text("Numbers every node builds on (sky, sun path, ray lengths, material colours). Saved with this graph; Enter applies,"
+            + " the slider applies on release, Reset puts one value back. A dot marks a changed value.", FAINT));
+        java.util.List<Object[]> rows = new java.util.ArrayList<>(); // {lower-case text, components...}
+        JTextField filter = field("");
+        filter.setToolTipText("Filter the graph settings by name, group or help");
+        filter.setAlignmentX(0);
+        filter.setMaximumSize(new Dimension(Integer.MAX_VALUE, filter.getPreferredSize().height));
+        filter.getDocument().addDocumentListener(onText(() -> {
+            String q = filter.getText().trim().toLowerCase(java.util.Locale.ROOT);
+            for (Object[] r : rows) {
+                boolean show = q.isEmpty() || ((String) r[0]).contains(q);
+                for (int k = 1; k < r.length; k++) ((Component) r[k]).setVisible(show);
+            }
+            content.revalidate();
+            content.repaint();
+        }));
+        content.add(filter);
+        content.add(Box.createVerticalStrut(4));
+        presetsRow();
         String group = null;
-        for (io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting s
-                : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.ALL) {
+        for (io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting s : io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.ALL) {
             if (!s.group().equals(group)) {
                 group = s.group();
-                content.add(Box.createVerticalStrut(8));
+                Component gap = Box.createVerticalStrut(8);
+                content.add(gap);
                 JLabel g = text(group, TEXT);
                 g.setFont(UI_B);
                 content.add(g);
+                rows.add(new Object[] {group.toLowerCase(java.util.Locale.ROOT), gap, g});
             }
             double[] cur = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(model.doc.settings, s);
             if (s.size() == 45) {
                 var mats = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Material.values();
                 for (int k = 0; k < 15; k++) {
                     final int at = k;
-                    settingRow(s, mats[k].label, new double[] {cur[k * 3], cur[k * 3 + 1], cur[k * 3 + 2]}, v -> {
+                    double[] def = {s.def()[k * 3], s.def()[k * 3 + 1], s.def()[k * 3 + 2]};
+                    rows.add(settingRow(s, mats[k].label, new double[] {cur[k * 3], cur[k * 3 + 1], cur[k * 3 + 2]}, def, v -> {
                         double[] all = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.value(model.doc.settings, s).clone();
                         System.arraycopy(v, 0, all, at * 3, 3);
                         return all;
-                    }, 3);
+                    }, 3));
                 }
-            } else settingRow(s, s.label(), cur, v -> v, s.size());
+            } else rows.add(settingRow(s, s.label(), cur, s.def(), v -> v, s.size()));
         }
         content.add(Box.createVerticalStrut(6));
-        content.add(button("Reset graph settings", "Every graph setting back to its default", () -> model.edit("Reset graph settings",
-            () -> model.doc.settings.clear())));
+        content.add(button("Reset graph settings", "Every graph setting back to its default", () -> {
+            model.edit("Reset graph settings", () -> model.doc.settings.clear());
+            rebuild();
+        }));
     }
 
-    private void settingRow(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting s, String label, double[] shown,
-                            java.util.function.UnaryOperator<double[]> into, int size) {
-        JLabel l = text(label, MUTED);
-        l.setToolTipText(s.help());
-        content.add(l);
+    /** Presets (built in and your own, ~/.bedray/studio/setting-presets), copy / paste as JSON. */
+    private void presetsRow() {
+        java.util.List<io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Preset> all = new java.util.ArrayList<>(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.PRESETS);
+        all.addAll(userPresets());
+        JComboBox<String> box = new JComboBox<>();
+        box.addItem("Apply a preset...");
+        for (var p : all) box.addItem(p.name() + (p.help().isEmpty() ? "" : "  -  " + p.help()));
+        box.setToolTipText("Sets the values of the preset; the others stay as they are (Undo takes it back)");
+        box.addActionListener(e -> {
+            int i = box.getSelectedIndex() - 1;
+            if (i < 0) return;
+            var p = all.get(i);
+            model.edit("Preset " + p.name(), () -> p.values().forEach((k, v) -> {
+                var s = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.of(k);
+                if (s == null || v.length != s.size()) return;
+                if (java.util.Arrays.equals(v, s.def())) model.doc.settings.remove(k);
+                else model.doc.settings.put(k, v.clone());
+            }));
+            rebuild();
+        });
+        box.setAlignmentX(0);
+        box.setMaximumSize(new Dimension(Integer.MAX_VALUE, box.getPreferredSize().height));
+        content.add(box);
+        JPanel row = new JPanel(new GridLayout(1, 3, 4, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(0);
+        row.add(button("Save preset...", "Save the changed values of this graph as a preset of your own", () -> {
+            if (model.doc.settings.isEmpty()) {
+                model.say("No changed graph settings to save", MUTED);
+                return;
+            }
+            String name = JOptionPane.showInputDialog(content, "Preset name", "My settings");
+            if (name == null || name.isBlank()) return;
+            try {
+                java.nio.file.Path dir = presetDir();
+                java.nio.file.Files.createDirectories(dir);
+                com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+                o.addProperty("name", name.trim());
+                o.add("settings", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.toJson(model.doc.settings));
+                java.nio.file.Files.writeString(dir.resolve(name.trim().replaceAll("[^A-Za-z0-9 _-]", "_") + ".json"),
+                    new com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson(o));
+                model.say("Saved preset " + name.trim() + " in " + dir, OK);
+                rebuild();
+            } catch (Exception ex) {
+                model.say("Could not save the preset: " + ex.getMessage(), BAD);
+            }
+        }));
+        row.add(button("Copy", "Copy the changed graph settings as JSON", () -> {
+            String json = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.toJson(model.doc.settings).toString();
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(json), null);
+            model.say("Copied " + model.doc.settings.size() + " graph setting(s)", MUTED);
+        }));
+        row.add(button("Paste", "Set graph settings from JSON on the clipboard ({key: [numbers]})", () -> {
+            try {
+                String text = (String) Toolkit.getDefaultToolkit().getSystemClipboard().getData(java.awt.datatransfer.DataFlavor.stringFlavor);
+                java.util.List<String> bad = new java.util.ArrayList<>();
+                var values = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.read(com.google.gson.JsonParser.parseString(text), bad::add);
+                if (values.isEmpty()) {
+                    model.say("No graph settings on the clipboard" + (bad.isEmpty() ? "" : ": " + bad.get(0)), WARN);
+                    return;
+                }
+                model.edit("Paste " + values.size() + " graph setting(s)", () -> model.doc.settings.putAll(values));
+                if (!bad.isEmpty()) model.say("Pasted " + values.size() + "; skipped: " + String.join("; ", bad), WARN);
+                rebuild();
+            } catch (Exception ex) {
+                model.say("No graph settings on the clipboard", WARN);
+            }
+        }));
+        content.add(Box.createVerticalStrut(4));
+        content.add(row);
+    }
+
+    static java.nio.file.Path presetDir() { return StudioSettings.file().resolveSibling("studio").resolve("setting-presets"); }
+
+    static java.util.List<io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Preset> userPresets() {
+        java.util.List<io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Preset> out = new java.util.ArrayList<>();
+        try (var files = java.nio.file.Files.list(presetDir())) {
+            for (java.nio.file.Path f : files.sorted().toList()) {
+                if (!f.toString().endsWith(".json")) continue;
+                try {
+                    var o = com.google.gson.JsonParser.parseString(java.nio.file.Files.readString(f)).getAsJsonObject();
+                    var values = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.read(o.get("settings"), m -> { });
+                    String name = o.has("name") ? o.get("name").getAsString() : f.getFileName().toString().replaceAll("[.]json$", "");
+                    if (!values.isEmpty()) out.add(new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Preset(name, "yours", values));
+                } catch (Exception ignored) {
+                    // a broken preset file is skipped
+                }
+            }
+        } catch (Exception ignored) {
+            // no presets yet
+        }
+        return out;
+    }
+
+    /** Builds the panel again on the next turn (after an edit the shown fields do not follow by themselves). */
+    private void rebuild() {
+        SwingUtilities.invokeLater(() -> {
+            shownKey = "";
+            refresh();
+        });
+    }
+
+    /** One setting: label (dot when changed), value field, reset arrow and, for a single number with a range, a slider. */
+    private Object[] settingRow(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting s, String label, double[] shown, double[] def,
+                                java.util.function.UnaryOperator<double[]> into, int size) {
+        boolean changed = !java.util.Arrays.equals(shown, def);
+        JLabel l = text((changed ? "• " : "") + label, changed ? TEXT : MUTED);
+        l.setToolTipText(s.help() + "  Default: " + numbers(def));
         JTextField f = field(numbers(shown));
-        f.setToolTipText(s.help() + (size == 3 ? "  (three numbers: r, g, b or x, y, z)" : ""));
+        f.setToolTipText(s.help() + (size == 3 ? "  (three numbers: r, g, b or x, y, z)" : "") + "  Default: " + numbers(def));
+        java.util.function.Consumer<double[]> commit = v -> {
+            double[] all = into.apply(v);
+            model.edit(s.label() + ": " + numbers(v), () -> {
+                if (java.util.Arrays.equals(all, s.def())) model.doc.settings.remove(s.key());
+                else model.doc.settings.put(s.key(), all);
+            });
+        };
         f.addActionListener(ev -> {
             double[] v = parse(f.getText());
             if (v == null || v.length != size) {
                 f.setForeground(BAD);
                 return;
             }
-            double[] all = into.apply(v);
-            model.edit(s.label() + ": " + f.getText().trim(), () -> {
-                if (java.util.Arrays.equals(all, s.def())) model.doc.settings.remove(s.key());
-                else model.doc.settings.put(s.key(), all);
-            });
+            f.setForeground(TEXT);
+            commit.accept(v);
         });
-        f.setAlignmentX(0);
-        f.setMaximumSize(new Dimension(Integer.MAX_VALUE, f.getPreferredSize().height));
-        content.add(f);
+        JButton reset = new JButton("reset");
+        reset.setFont(UI_S);
+        reset.setFocusable(false);
+        reset.setMargin(new Insets(0, 6, 0, 6));
+        reset.setToolTipText("Back to the default: " + numbers(def));
+        reset.setEnabled(changed);
+        reset.addActionListener(ev -> {
+            commit.accept(def.clone());
+            rebuild();
+        });
+        JPanel line = new JPanel(new BorderLayout(4, 0));
+        line.setOpaque(false);
+        line.add(f, BorderLayout.CENTER);
+        line.add(reset, BorderLayout.EAST);
+        line.setAlignmentX(0);
+        line.setMaximumSize(new Dimension(Integer.MAX_VALUE, f.getPreferredSize().height));
+        content.add(l);
+        content.add(line);
+        String words = (label + " " + s.key() + " " + s.group() + " " + s.help()).toLowerCase(java.util.Locale.ROOT);
+        double[] range = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.range(s.key());
+        if (size == 1 && range != null) {
+            boolean log = range[0] > 0 && range[1] / range[0] >= 100;
+            java.util.function.DoubleUnaryOperator toV = t -> log ? range[0] * Math.pow(range[1] / range[0], t) : range[0] + (range[1] - range[0]) * t;
+            java.util.function.DoubleUnaryOperator toT = v -> log ? Math.log(Math.max(range[0], v) / range[0]) / Math.log(range[1] / range[0])
+                : (v - range[0]) / (range[1] - range[0]);
+            JSlider sl = new JSlider(0, 1000, (int) Math.round(Math.clamp(toT.applyAsDouble(shown[0]), 0, 1) * 1000));
+            sl.setOpaque(false);
+            sl.setFocusable(false);
+            sl.setToolTipText("Range " + numbers(range) + (log ? " (logarithmic)" : ""));
+            sl.addChangeListener(ev -> {
+                double v = toV.applyAsDouble(sl.getValue() / 1000.0);
+                v = s.integer() ? Math.round(v) : Double.parseDouble(String.format(java.util.Locale.ROOT, "%.4g", v));
+                f.setText(numbers(new double[] {v}));
+                if (!sl.getValueIsAdjusting()) commit.accept(new double[] {v});
+            });
+            sl.setAlignmentX(0);
+            sl.setMaximumSize(new Dimension(Integer.MAX_VALUE, sl.getPreferredSize().height));
+            content.add(sl);
+            return new Object[] {words, l, line, sl};
+        }
+        return new Object[] {words, l, line};
     }
 
     /** Read buffer / Blur buffer / Kawase blur: which Buffer of this graph they read. */

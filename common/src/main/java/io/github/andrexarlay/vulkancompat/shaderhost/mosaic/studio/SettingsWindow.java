@@ -32,6 +32,12 @@ final class SettingsWindow extends Dock.StudioWindow {
         build();
     }
 
+    /** Opens the page with this title (screenshot aid, links from other panels). */
+    void showPage(String title) {
+        for (int i = 0; i < pages.size(); i++) if (pages.get(i).title().equalsIgnoreCase(title)) tab = i;
+        build();
+    }
+
     void restyle() {
         BufferedImageHolder.fade(this, this::build);
     }
@@ -45,6 +51,8 @@ final class SettingsWindow extends Dock.StudioWindow {
         page("Look", "Theme, colours, nodes and wires", "shader", new Color(0x5AA0E0), this::look);
         page("Input", "Mouse, touchpad and keyboard", "move", new Color(0x4FB886), this::input);
         pages.add(new Page("Keys", "Every shortcut, rebindable", StudioWidgets.glyph("tag", new Color(0xB07CD8)), keys(), List.of("keys", "shortcut")));
+        page("Editor", "Nodes, minimap, compiling, files", "shader", new Color(0x5E9EC8), this::editor);
+        page("Preview", "Camera, frame rate, day cycle, image", "vanilla", new Color(0x7FB069), this::preview);
         page("Layout", "Areas and windows", "frame", new Color(0x8A6FC8), this::layout);
         page("Compiler", "Slang and SPIR-V", "code", new Color(0x5E9E4E), this::compiler);
         page("Game", "Running Minecraft from the studio", "vanilla", new Color(0xD08A4A), this::game);
@@ -153,7 +161,14 @@ final class SettingsWindow extends Dock.StudioWindow {
 
     /** Cards of rows: a title and a grey line of explanation on the left, the control on the right. */
     private final class Form {
-        final JPanel panel = new JPanel();
+        /** Follows the width of the window (long rows wrap or shrink instead of scrolling sideways). */
+        final JPanel panel = new JPanel() {
+            @Override public Dimension getPreferredSize() {
+                Dimension d = super.getPreferredSize();
+                Container vp = getParent();
+                return vp instanceof JViewport v && v.getWidth() > 0 ? new Dimension(v.getWidth(), d.height) : d;
+            }
+        };
         final List<Row> rows = new java.util.ArrayList<>();
         JPanel card;
         final String page;
@@ -204,7 +219,7 @@ final class SettingsWindow extends Dock.StudioWindow {
             text.setOpaque(false);
             text.add(StudioUi.label(label, TEXT));
             if (help != null) {
-                JLabel h = StudioUi.label(help, FAINT);
+                JLabel h = StudioUi.wrapped(esc(help), FAINT, 280); // long help wraps instead of widening the page
                 h.setFont(UI_S);
                 text.add(h);
             }
@@ -256,15 +271,32 @@ final class SettingsWindow extends Dock.StudioWindow {
         return box;
     }
 
-    private JSlider slider(int min, int max, int value, IntConsumer on) {
-        JSlider s = new JSlider(min, max, value);
+    private JComponent slider(int min, int max, int value, IntConsumer on) { return slider(min, max, value, on, String::valueOf); }
+
+    /** A slider with its value shown beside it (fmt turns the slider's integer into the number the user thinks in). */
+    private JComponent slider(int min, int max, int value, IntConsumer on, java.util.function.IntFunction<String> fmt) {
+        JSlider s = new JSlider(min, max, Math.clamp(value, min, max));
         s.setBackground(PANEL);
+        JLabel v = StudioUi.label(fmt.apply(s.getValue()), MUTED);
+        v.setFont(UI_S);
+        v.setHorizontalAlignment(SwingConstants.RIGHT);
+        v.setPreferredSize(new Dimension(44, v.getPreferredSize().height));
         s.addChangeListener(e -> {
             on.accept(s.getValue());
+            v.setText(fmt.apply(s.getValue()));
             if (!s.getValueIsAdjusting()) changed();
         });
-        return s;
+        JPanel p = new JPanel(new BorderLayout(6, 0));
+        p.setOpaque(false);
+        p.add(s, BorderLayout.CENTER);
+        p.add(v, BorderLayout.EAST);
+        p.setToolTipText(min + " .. " + max);
+        return p;
     }
+
+    private static String tenth(int v) { return String.format(java.util.Locale.ROOT, "%.1f", v / 10.0); }
+
+    private static String hundredth(int v) { return String.format(java.util.Locale.ROOT, "%.2f", v / 100.0); }
 
     /** A row with a sliding switch (the whole row is clickable). */
     private JComponent check(String label, boolean value, Consumer<Boolean> on) {
@@ -274,7 +306,7 @@ final class SettingsWindow extends Dock.StudioWindow {
         });
         JPanel r = new JPanel(new BorderLayout(16, 0));
         r.setOpaque(false);
-        JLabel l = StudioUi.label(label, TEXT);
+        JLabel l = StudioUi.wrapped(esc(label), TEXT, 420);
         r.add(l, BorderLayout.CENTER);
         r.add(t, BorderLayout.EAST);
         r.setToolTipText(label);
@@ -292,7 +324,7 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.row("Text size", "Scales every font of the studio", slider(80, 160, draft.fontPercent, v -> draft.fontPercent = v));
         f.section("Nodes and wires");
         f.row("Wires", "Curved, straight or angled", combo(StudioSettings.WireStyle.values(), draft.wires, v -> draft.wires = v));
-        f.row("Wire thickness", null, slider(10, 50, Math.round(draft.wireWidth * 10), v -> draft.wireWidth = v / 10f));
+        f.row("Wire thickness", null, slider(10, 50, Math.round(draft.wireWidth * 10), v -> draft.wireWidth = v / 10f, SettingsWindow::tenth));
         f.row("Node width", null, slider(130, 260, draft.nodeWidth, v -> draft.nodeWidth = v));
         f.wide(check("Port names on nodes", draft.portNames, v -> draft.portNames = v));
         f.section("Canvas");
@@ -328,6 +360,66 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.wide(check("Keyboard hints: outline the keyboard node and the focused area", draft.keyboardHints, v -> draft.keyboardHints = v));
         f.wide(wrapped("Keyboard only: Tab / Alt+arrows walk the nodes, arrows move them, Space adds, K / Shift+K wire, F2 renames, "
             + "Enter edits properties, F6 switches areas, Ctrl+Space maximizes one. Everything is rebindable in Keys.", MUTED, 440));
+    }
+
+    private void editor(Form f) {
+        f.section("Nodes");
+        f.row("Inputs shown before folding", "A node with more inputs shows only the wired, required and changed ones (Ctrl+H shows all)",
+            slider(2, 24, draft.compactInputs, v -> draft.compactInputs = v));
+        f.wide(check("Minimap in the corner of the canvas when the graph does not fit the view", draft.minimap, v -> draft.minimap = v));
+        f.wide(check("Fit the view to the graph when a graph or template is opened", draft.fitOnOpen, v -> draft.fitOnOpen = v));
+        f.section("Compiling");
+        f.row("Compile after an edit (ms)", "Pause after the last change before the graph is compiled, saved and sent to the game",
+            slider(100, 3000, draft.compileDelayMs, v -> draft.compileDelayMs = v));
+        f.section("Files");
+        f.row("Recent files", draft.recentFiles.size() + " in File > Open recent and the command palette", button("Clear", null, () -> {
+            draft.recentFiles.clear();
+            app.settings.recentFiles.clear();
+            changed();
+        }));
+        f.row("Command palette history", "Commands used last come first in Ctrl+Shift+P", button("Clear", null, () -> {
+            draft.paletteRecent.clear();
+            app.settings.paletteRecent.clear();
+            changed();
+        }));
+        f.wide(wrapped("Ctrl+Shift+P (or F3) opens the command palette: every command, menu item, template, node type and file. Ctrl+F finds a"
+            + " node of the graph, L / Shift+L select what feeds a node / what it feeds, F8 walks the problems.", MUTED, 440));
+    }
+
+    private void preview(Form f) {
+        f.section("Camera");
+        f.row("Look speed", "Degrees the camera turns per pixel of mouse drag", slider(5, 200, (int) Math.round(draft.previewLookSpeed * 100),
+            v -> draft.previewLookSpeed = v / 100.0, SettingsWindow::hundredth));
+        f.row("Fly speed", "Blocks per key press, W A S D / Space / Shift (Ctrl: 3 times)", slider(1, 80,
+            (int) Math.round(draft.previewFlySpeed * 10), v -> draft.previewFlySpeed = v / 10.0, SettingsWindow::tenth));
+        f.row("Wheel speed", "Blocks per wheel step", slider(1, 160, (int) Math.round(draft.previewWheelSpeed * 10),
+            v -> draft.previewWheelSpeed = v / 10.0, SettingsWindow::tenth));
+        f.wide(check("Invert up / down when dragging", draft.previewInvertY, v -> draft.previewInvertY = v));
+        f.section("Frames");
+        f.row("Frames per second at most", "The GPU may give fewer; lower saves power", slider(2, 120, draft.previewFps, v -> draft.previewFps = v));
+        f.row("Day speed", "Minecraft ticks per second while the preview plays (0: time stands still, 20: the game's speed)",
+            slider(0, 2400, draft.previewDaySpeed, v -> draft.previewDaySpeed = v));
+        f.wide(check("Smooth scaling (off: exact pixels when the image is enlarged)", draft.previewSmooth, v -> draft.previewSmooth = v));
+        f.wide(check("Info line: device, size, GPU time of the passes", draft.previewInfo, v -> draft.previewInfo = v));
+        f.section("Saved views");
+        f.row("Saved cameras", draft.previewViews.size() + " (Preview > Views; keys 1..9 in the preview)", button("Delete all", null, () -> {
+            draft.previewViews.clear();
+            app.settings.previewViews.clear();
+            changed();
+        }));
+        f.section("Reset");
+        f.wide(button("Reset preview settings to defaults", null, () -> {
+            StudioSettings d = new StudioSettings();
+            draft.previewFps = d.previewFps;
+            draft.previewLookSpeed = d.previewLookSpeed;
+            draft.previewFlySpeed = d.previewFlySpeed;
+            draft.previewWheelSpeed = d.previewWheelSpeed;
+            draft.previewInvertY = d.previewInvertY;
+            draft.previewSmooth = d.previewSmooth;
+            draft.previewDaySpeed = d.previewDaySpeed;
+            draft.previewInfo = d.previewInfo;
+            changed();
+        }));
     }
 
     private JComponent keys() {

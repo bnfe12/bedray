@@ -57,6 +57,7 @@ final class StudioApp {
         model.openFunction = this::openFunctionTab;
         model.openStage = this::openStageTab;
         model.openRenderer = () -> switchWorkspace(StudioModel.Workspace.RENDERER);
+        model.runAction = this::run;
         model.listen(this::updateStatus);
         initTabs();
         try {
@@ -186,14 +187,31 @@ final class StudioApp {
         if (shot != null && Boolean.getBoolean("mosaic.selfshot.settings")) {
             Timer s = new Timer(1000, e -> {
                 settingsWindow = new SettingsWindow(this);
+                String page = System.getProperty("mosaic.selfshot.settingsPage");
+                if (page != null) settingsWindow.showPage(page);
                 settingsWindow.setVisible(true);
             });
             s.setRepeats(false);
             s.start();
         }
+        String shotPalette = System.getProperty("mosaic.selfshot.palette"); // a query: verification aid
+        if (shot != null && shotPalette != null) {
+            Timer pa = new Timer(2200, e -> CommandPalette.open(this, false, shotPalette));
+            pa.setRepeats(false);
+            pa.start();
+        }
         if (shot != null) {
             Timer t = new Timer(Integer.getInteger("mosaic.selfshot.delay", 3500), e -> {
                 try {
+                    JDialog pal = CommandPalette.last;
+                    if (pal != null && pal.isShowing()) {
+                        java.awt.image.BufferedImage pi = new java.awt.image.BufferedImage(pal.getWidth(), pal.getHeight(),
+                            java.awt.image.BufferedImage.TYPE_INT_RGB);
+                        java.awt.Graphics2D pg = pi.createGraphics();
+                        pal.getContentPane().paint(pg);
+                        pg.dispose();
+                        javax.imageio.ImageIO.write(pi, "png", new java.io.File(shot.replace(".png", "-palette.png")));
+                    }
                     if (settingsWindow != null && settingsWindow.isShowing()) {
                         java.awt.image.BufferedImage si = settingsWindow.snapshot();
                         if (si != null) javax.imageio.ImageIO.write(si, "png", new java.io.File(shot.replace(".png", "-settings.png")));
@@ -221,7 +239,7 @@ final class StudioApp {
             body.setBackground(BG);
             frame.remove(w.root);
             w.menuSlot.setOpaque(false);
-            w.menuSlot.add(menus(), BorderLayout.CENTER);
+            w.menuSlot.add(menuBar = menus(), BorderLayout.CENTER);
             JPanel tabs = new JPanel(new BorderLayout());
             tabs.setOpaque(false);
             tabs.setBorder(new EmptyBorder(2, 10, 2, 4));
@@ -255,6 +273,13 @@ final class StudioApp {
         StudioKeys.Action[] file = {StudioKeys.Action.NEW_TEMPLATE, StudioKeys.Action.OPEN, StudioKeys.Action.SAVE};
         JMenu f = menu("File");
         for (StudioKeys.Action a : file) f.add(item(a.label, a));
+        JMenu recent = menu("Open recent");
+        recent.addMenuListener(new javax.swing.event.MenuListener() {
+            @Override public void menuSelected(javax.swing.event.MenuEvent e) { fillRecent(recent); }
+            @Override public void menuDeselected(javax.swing.event.MenuEvent e) { }
+            @Override public void menuCanceled(javax.swing.event.MenuEvent e) { }
+        });
+        f.add(recent);
         f.add(item("Save as...", () -> {
             Path keep = model.doc.file;
             model.doc.file = null;
@@ -275,7 +300,8 @@ final class StudioApp {
         JMenu e = menu("Edit");
         for (StudioKeys.Action a : new StudioKeys.Action[] {StudioKeys.Action.UNDO, StudioKeys.Action.REDO, null, StudioKeys.Action.COPY,
             StudioKeys.Action.PASTE, StudioKeys.Action.DUPLICATE, StudioKeys.Action.DELETE, null, StudioKeys.Action.SELECT_ALL,
-            StudioKeys.Action.DESELECT, StudioKeys.Action.RENAME})
+            StudioKeys.Action.DESELECT, StudioKeys.Action.SELECT_UPSTREAM, StudioKeys.Action.SELECT_DOWNSTREAM, null,
+            StudioKeys.Action.FIND_NODE, StudioKeys.Action.COMMAND_PALETTE, StudioKeys.Action.RENAME})
             if (a == null) e.addSeparator();
             else e.add(item(a.label, a));
         bar.add(e);
@@ -291,14 +317,15 @@ final class StudioApp {
         n.addSeparator();
         for (StudioKeys.Action a : new StudioKeys.Action[] {StudioKeys.Action.ADD_NODE, null, StudioKeys.Action.CONNECT_FROM,
             StudioKeys.Action.CONNECT_INTO, StudioKeys.Action.DISCONNECT, null, StudioKeys.Action.GROUP, StudioKeys.Action.UNGROUP,
-            StudioKeys.Action.ARRANGE})
+            StudioKeys.Action.ARRANGE, null, StudioKeys.Action.NEXT_PROBLEM, StudioKeys.Action.PREV_PROBLEM, StudioKeys.Action.EXPAND,
+            StudioKeys.Action.MUTE})
             if (a == null) n.addSeparator();
             else n.add(item(a.label, a));
         bar.add(n);
 
         JMenu v = menu("View");
         for (StudioKeys.Action a : new StudioKeys.Action[] {StudioKeys.Action.FIT, StudioKeys.Action.CENTER, StudioKeys.Action.ZOOM_IN,
-            StudioKeys.Action.ZOOM_OUT, StudioKeys.Action.ZOOM_RESET}) v.add(item(a.label, a));
+            StudioKeys.Action.ZOOM_OUT, StudioKeys.Action.ZOOM_RESET, StudioKeys.Action.TOGGLE_MINIMAP}) v.add(item(a.label, a));
         v.addSeparator();
         JMenu themes = menu("Theme");
         for (StudioSettings.Theme t : StudioSettings.Theme.values()) themes.add(item(t.label, () -> {
@@ -369,6 +396,45 @@ final class StudioApp {
         return bar;
     }
 
+    /** File > Open recent: the last files, newest first; missing ones are dropped. */
+    private void fillRecent(JMenu recent) {
+        recent.removeAll();
+        settings.recentFiles.removeIf(s -> !java.nio.file.Files.exists(Path.of(s)));
+        for (String s : settings.recentFiles) {
+            Path p = Path.of(s);
+            JMenuItem it = item(recentLabel(p), () -> openFile(p));
+            it.setToolTipText(s);
+            recent.add(it);
+        }
+        if (settings.recentFiles.isEmpty()) {
+            JMenuItem none = item("(none yet)", () -> { });
+            none.setEnabled(false);
+            recent.add(none);
+        } else {
+            recent.addSeparator();
+            recent.add(item("Clear the list", () -> {
+                settings.recentFiles.clear();
+                saveSettings();
+            }));
+        }
+    }
+
+    /** "mosaic.json - my pack" for files inside a pack, the file name otherwise. */
+    static String recentLabel(Path p) {
+        String name = p.getFileName().toString();
+        Path dir = p.getParent();
+        if (dir != null && dir.getFileName() != null && dir.getFileName().toString().equals("bedray") && dir.getParent() != null
+            && dir.getParent().getParent() != null && dir.getParent().getParent().getFileName() != null)
+            return name + "  -  " + dir.getParent().getParent().getFileName();
+        return name + (dir != null && dir.getFileName() != null ? "  -  " + dir.getFileName() : "");
+    }
+
+    void openFile(Path p) {
+        model.open(p);
+        GraphPanel gg = graph();
+        if (gg != null && settings.fitOnOpen) SwingUtilities.invokeLater(gg::fit);
+    }
+
     private JMenu menu(String title) {
         JMenu m = new JMenu(title);
         m.setFont(UI_S);
@@ -388,6 +454,7 @@ final class StudioApp {
     private JMenuItem item(String label, Runnable r) {
         JMenuItem i = new JMenuItem(label);
         i.setFont(UI_S);
+        i.putClientProperty(CommandPalette.LABEL, label);
         i.addActionListener(e -> r.run());
         return i;
     }
@@ -1121,8 +1188,42 @@ final class StudioApp {
                 settingsWindow.toFront();
             }
             case HELP -> popOut(Panels.Type.KEYS);
+            case COMMAND_PALETTE -> CommandPalette.open(this, false);
+            case FIND_NODE -> CommandPalette.open(this, true);
+            case SELECT_UPSTREAM -> model.selectLinked(true);
+            case SELECT_DOWNSTREAM -> model.selectLinked(false);
+            case NEXT_PROBLEM -> goToProblem(1);
+            case PREV_PROBLEM -> goToProblem(-1);
+            case TOGGLE_MINIMAP -> {
+                settings.minimap = !settings.minimap;
+                saveSettings();
+                if (g != null) g.repaint();
+                model.say("Minimap " + (settings.minimap ? "on" : "off"), MUTED);
+            }
         }
     }
+
+    private int problemAt = -1;
+
+    /** Walks the problems that sit on a node: selects it, centres the view on it and shows the message. */
+    void goToProblem(int dir) {
+        java.util.List<MosaicGraph.Problem> ps = model.problems().stream()
+            .filter(p -> p.node() != null && model.doc.byId(p.node()) != null && p.severity() != MosaicGraph.Severity.HINT).toList();
+        if (ps.isEmpty()) {
+            model.say("No errors or warnings on nodes", OK);
+            return;
+        }
+        problemAt = Math.floorMod(problemAt + dir, ps.size());
+        MosaicGraph.Problem p = ps.get(problemAt);
+        MosaicDocument.ENode n = model.doc.byId(p.node());
+        model.select(n);
+        GraphPanel g = graph();
+        if (g != null) g.center(n);
+        model.say((problemAt + 1) + " / " + ps.size() + "  " + p.message(), p.severity() == MosaicGraph.Severity.ERROR ? BAD : WARN);
+    }
+
+    /** The menu bar of the main window (the command palette lists every item of it). */
+    JMenuBar menuBar;
 
     void popOut(Panels.Type type) {
         for (Dock.StudioWindow w : windows)
@@ -1149,6 +1250,12 @@ final class StudioApp {
         next.keys = model.keys.toText();
         next.hiddenLibraries = settings.hiddenLibraries;
         next.collapsed = settings.collapsed;
+        next.recentFiles = settings.recentFiles;      // kept up to date outside the settings window
+        next.paletteRecent = settings.paletteRecent;
+        next.previewViews = settings.previewViews;
+        next.previewLook = settings.previewLook;
+        next.previewWidth = settings.previewWidth;    // the preview's size list changes these
+        next.previewHeight = settings.previewHeight;
         settings = next;
         List<BufferedImage> pictures = new ArrayList<>();
         List<Rectangle> bounds = new ArrayList<>();
