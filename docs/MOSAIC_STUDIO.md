@@ -32,10 +32,13 @@ A node with more than six inputs shows only the required, wired and changed ones
 
 ## Projects and GitHub
 
-Studio starts on the **projects screen** (Settings > Editor > Projects turns it off): a card per project with its
-picture, name and description - the game's shader packs with a Mosaic graph, your projects folder and recent ones - a
-search, **New project** (name, description, template, picture, licence, GitHub files), **Open**, **Clone from GitHub**
-and **Empty graph**. Right click a card: set the picture, edit the card, prepare / publish / update on GitHub, show the
+Studio starts on the **projects screen** (Settings > Editor > Projects turns it off): a rail with Home, Projects,
+Templates and Learn and the game folder; Home greets you with four actions (**New project** Ctrl+N, **Open** Ctrl+O,
+**Clone from GitHub**, **Empty graph**), your recent projects and a few templates; Projects has a search (Ctrl+F), filters
+(all, game packs, my projects, GitHub) and sorting; Templates shows every template by category with a picture the studio
+renders over the built-in world; Learn has the main ideas in a minute each. Cards show the project's picture (or its graph
+rendered by the studio), name, description and chips (GitHub, version, last change). New project opens a wizard: the
+template gallery on the left, the card (name, description, folder, picture, licence, GitHub files) on the right. Right click a card: set the picture, edit the card, prepare / publish / update on GitHub, show the
 folder. File > Projects brings the screen back, File > This project works on the open one.
 
 A project is a shader pack folder: `shaders/bedray/mosaic.json`, its card `mosaic-project.json` (name, description,
@@ -100,6 +103,15 @@ listed as a warning in Problems.
   (Preview > World look: light map curve, daylight, block light colour and strength, face shading, water and glass
   opacity, view distance, moon). The preview's sky follows the graph's own sky settings.
 
+## World look
+
+Preview > World > World look opens a live editor of how the preview world is drawn, in tabs: **Light** (light map curve,
+daylight, night level, the game's Brightness option, night sky light colour, block light colour and strength, smooth
+lighting and ambient occlusion, face shading), **Sky and weather** (the game's sky, sunset glow, stars, moon, clouds,
+fog, rain and snow), **Water and glass** (water level, opacity, reflection, glass, cutout), **World** (block models and
+entities, animated textures, view and far distances). Sliders, switches and colours change the preview at once; every
+value has a reset, and All to defaults puts the game-like look back.
+
 ## Preview tools
 
 - **View**: Image, False colour (brightness as a heat ramp), Clipping (red where a channel is at 255, blue where all are
@@ -114,6 +126,7 @@ listed as a warning in Problems.
   a heavy frame so the studio stays smooth on laptops), background frame interval, shortest pause, day speed (the time of
   day runs while the preview plays), smooth or exact-pixel scaling, the info line, difference gain, clipping thresholds,
   false colour range.
+- **Settings > Editor > Studio memory**: the heap of the Studio the game opens with J (default 1 GB; the game runs beside it).
 - **Settings > Editor**: how many inputs a node shows before it folds the rest, minimap, fit on open, how long after an
   edit the graph compiles, minimap size, how many recent files and palette commands are kept.
 
