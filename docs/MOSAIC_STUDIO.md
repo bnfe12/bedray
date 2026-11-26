@@ -77,7 +77,8 @@ GPU (voxel rays through the world volume, no ray tracing hardware needed):
   (directional, shadowed: light from where the block light rises, with a shadow ray toward it), Sky (procedural) and
   Sky background (gradient, sunset, sun / moon discs, stars, drifting cloud layer), Clouds (volumetric: ray-marched slab,
   light marched toward the sun, forward scattering), Bright pass and Bloom mix, Log luminance + Average (buffer) + Adapt
-  exposure + Auto exposure (eye adaptation).
+  exposure + Auto exposure (eye adaptation), Water body (refraction, absorption per channel, deep colour) and the pass node
+  Screen-space reflections (reflections read from your HDR buffer, sky model where they leave the screen).
 - Passes: Buffer (1/1..1/8), **Accumulate** (temporal accumulation with reprojection and disocclusion reset),
   **Buffer (last frame)** (feedback), **Denoise (a-trous)** steps, Temporal AA.
 - Combine (shade), **Tone map** (ACES, Reinhard, Hable, exponential, clip).

@@ -106,7 +106,7 @@ public final class AgentCli {
           mosaic arrange <graph.json>
           mosaic bake <material.mosaic.json> <texture.png> <out-folder>   LabPBR _s / _n (+ colour)
         Rendering and Bedray hooks (for people and agents)
-          mosaic render <graph.json> <out.png> [--time ticks] [--pitch deg] [--yaw deg] [--size WxH] [--frames N] [--world file]
+          mosaic render <graph.json> <out.png> [--time ticks] [--pitch deg] [--yaw deg] [--pos x,y,z] [--size WxH] [--frames N] [--world file]
                                                      the graph over the preview world, headless, to a PNG
           mosaic hook <function|user.stage> --slang <body.slang>   a Bedray function / your stage from Slang text
           mosaic hook <function|user.stage> --reset                back to Bedray's own
@@ -669,6 +669,12 @@ public final class AgentCli {
         if (snap == null) throw new IllegalArgumentException("not a preview world file: " + worldFile);
         PreviewWorld.View view = PreviewWorld.View.of(snap);
         String time = opt(a, "--time", null), pitch = opt(a, "--pitch", null), yaw = opt(a, "--yaw", null);
+        String pos = opt(a, "--pos", null);
+        if (pos != null) {
+            String[] xyz = pos.split(",");
+            view = new PreviewWorld.View(view.world(), Double.parseDouble(xyz[0]), Double.parseDouble(xyz[1]), Double.parseDouble(xyz[2]),
+                view.yaw(), view.pitch(), view.timeOfDay(), view.atlas());
+        }
         if (time != null) view = view.at((float) (Math.floorMod(Integer.parseInt(time) - 6000, 24000) / 24000.0));
         if (pitch != null) view = view.look(0f, Float.parseFloat(pitch) - view.pitch());
         if (yaw != null) view = view.look(Float.parseFloat(yaw) - view.yaw(), 0f);

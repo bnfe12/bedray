@@ -685,6 +685,17 @@ public final class MosaicEffects {
             }
             float fade = clamp(1.0 - t0 / fadeDistance, 0.0, 1.0);
             return vec4(mix(color.rgb, color.rgb * trans + light, fade), color.a);""");
+        add("Render pipeline", "vec4 waterBody(vec4 color, vec2 uv, vec3 deepColor = vec3(0.01, 0.06, 0.09), vec3 absorption = vec3(0.45, 0.12, 0.08), float refraction = 0.015, float clarity = 1, float gamma = 2.2, float maxDepth = 32)",
+            "Water body", "What lies under a water surface, seen through it: the image refracted by the waves (refraction), colours absorbed"
+                + " per block of water (absorption per channel, clarity), fading into deepColor. Linear light; put it before reflections.", """
+            if (mosaicHitMaterial(uv) != 1.0 || mosaicUnderwater() > 0.5) return color;
+            float d = min(mosaicWaterDepth(uv), maxDepth);
+            vec3 w = mosaicWorldPos(uv);
+            float tm = frame.timing.x;
+            vec2 off = vec2(sin(w.x * 1.9 + tm * 1.4) + sin(w.z * 2.7 - tm), cos(w.z * 2.1 + tm * 1.2) + cos(w.x * 3.1 + tm * 0.8)) * refraction;
+            vec3 under = pow(max(mosaicScene(clamp(uv + off, vec2(0.0), vec2(1.0))).rgb, vec3(0.0)), vec3(gamma));
+            vec3 keep = exp(-absorption * d / max(clarity, 0.01));
+            return vec4(mix(deepColor, under, keep) * 0.5 + color.rgb * 0.5 * keep, color.a);""");
         add("Render pipeline", "vec3 skyAmbient(vec3 normal, float skyLight = 1, float intensity = 0.6, float skyCurve = 2, float upBias = 1)", "Sky ambient",
             "Cheap light from the sky dome on a surface (no rays): the sky colour above the normal (upBias tilts it up), fading with"
                 + " the sky light level to the power skyCurve (0 in caves). Use it instead of Diffuse GI on slow GPUs.", """

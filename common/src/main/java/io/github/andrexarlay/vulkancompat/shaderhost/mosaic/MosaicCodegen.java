@@ -163,11 +163,11 @@ public final class MosaicCodegen {
     /** Which bindings and helpers the emitted code needs. */
     private record Needs(boolean ray, boolean scene, boolean depth, boolean world, boolean buffer, boolean lut, int maxPush, boolean noise,
                          java.util.Set<Integer> buffers, boolean history, boolean worldInfo, boolean blur, boolean prev, boolean taa, boolean height,
-                         boolean accumulate, boolean atrous, boolean voxelRays, boolean average) {
+                         boolean accumulate, boolean atrous, boolean voxelRays, boolean average, boolean ssr) {
         /** Ray helpers on the world volume instead of the acceleration structure (Options.voxelRays). */
         Needs voxel() {
             return new Needs(false, scene, depth, true, buffer, lut, maxPush, noise, buffers, history, worldInfo, blur, prev, taa, height,
-                accumulate, atrous, true, average);
+                accumulate, atrous, true, average, ssr);
         }
     }
 
@@ -188,7 +188,7 @@ public final class MosaicCodegen {
 
     private static Needs needs(MosaicGraph g, Plan p) {
         boolean ray = false, scene = false, depth = false, world = false, buffer = false, lut = false, noise = false, history = false, info = false,
-            blur = false, prev = false, taa = false, height = false, accumulate = false, atrous = false, average = false;
+            blur = false, prev = false, taa = false, height = false, accumulate = false, atrous = false, average = false, ssr = false;
         java.util.Set<Integer> buffers = new java.util.TreeSet<>();
         int push = -1;
         for (Node n : p.emit) {
@@ -219,6 +219,10 @@ public final class MosaicCodegen {
                     buffers.add(n.index());
                     depth = atrous = true;
                 }
+                case "mosaic.ssr" -> {
+                    buffers.add(n.index());
+                    depth = world = ssr = true;
+                }
                 case "mosaic.average" -> {
                     buffers.add(n.index());
                     average = true;
@@ -247,7 +251,7 @@ public final class MosaicCodegen {
             noise |= mentions(body, NOISE_HELPERS);
             height |= body.contains("mosaicHeightAt(") || body.contains("mosaicFarShadow(");
         }
-        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur, prev, taa, height, accumulate, atrous, false, average);
+        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur, prev, taa, height, accumulate, atrous, false, average, ssr);
     }
 
     /** Header of a stats comment so authors see what the optimizer did. */
@@ -425,6 +429,7 @@ public final class MosaicCodegen {
         if (nd.accumulate()) o.a(GLSL_ACCUMULATE);
         if (nd.atrous()) o.a(GLSL_ATROUS);
         if (nd.average()) o.a(GLSL_AVERAGE);
+        if (nd.ssr()) o.a(GLSL_SSR);
         if (nd.height()) o.a(MosaicHeight.GLSL);
         if (nd.voxelRays()) o.a("""
             // preview: rays walk the world volume (no acceleration structure in Studio)
@@ -667,6 +672,104 @@ public final class MosaicCodegen {
                         wsum += w;
                     }
                 return float4(wsum > 0.0 ? sum / wsum : c0.rgb, c0.a);
+            }
+            """;
+    /**
+     * Screen-space reflections from a buffer: the reflected ray (wave normals on water) is marched with quadratically
+     * growing steps, projected with the frame's camera and compared with the ray distance there; a hit within the
+     * thickness reads the buffer (faded at the screen edge), otherwise the sky model. Fresnel (Schlick, f0) mixes it in.
+     */
+    private static final String GLSL_SSR = """
+            vec4 mosaicSsr(sampler2D s, vec2 uv, float material, float strength, float maxDist, float steps, float thickness,
+                    float f0, float waves, float waveScale, float waveSpeed, float waveHeight, float edgeFade) {
+                vec4 base = texture(s, uv);
+                float t = mosaicDepth(uv);
+                if (t >= 1.0e5) return base;
+                if (material >= 0.0 && mosaicHitMaterial(uv) != floor(material + 0.5)) return base;
+                vec3 p = mosaicHitPos(uv), n = mosaicNormal(uv);
+                if (waves > 0.0 && n.y > 0.5) {
+                    vec3 w = mosaicWorldPos(uv) * waveScale;
+                    float tm = frame.timing.x * waveSpeed;
+                    float hx = sin(w.x * 1.7 + tm * 1.3) * 0.5 + sin(w.z * 2.3 - tm * 1.1 + w.x * 0.7) * 0.35 + sin((w.x + w.z) * 4.1 + tm * 2.1) * 0.15;
+                    float hz = cos(w.z * 1.9 + tm * 1.2) * 0.5 + cos(w.x * 2.1 + tm * 0.9 - w.z * 0.6) * 0.35 + cos((w.x - w.z) * 3.7 - tm * 1.7) * 0.15;
+                    n = normalize(vec3(-hx * waveHeight * waves, 1.0, -hz * waveHeight * waves));
+                }
+                vec3 eye = mosaicEye();
+                vec3 v = normalize(p - eye);
+                vec3 r = reflect(v, n);
+                if (r.y < 0.02 && n.y > 0.5) r.y = 0.02;
+                r = normalize(r);
+                vec3 refl = mosaicSky(r);
+                float found = 0.0;
+                int k = int(clamp(steps, 4.0, 128.0));
+                for (int i = 0; i < 128; i++) {
+                    if (i >= k) break;
+                    float f = (float(i) + 1.0) / float(k);
+                    vec3 q = p + n * 0.05 + r * (maxDist * f * f);
+                    vec4 clip = frame.projection * (frame.modelView * vec4(q, 1.0));
+                    if (clip.w <= 0.0) break;
+                    vec2 suv = clip.xy / clip.w * 0.5 + 0.5;
+                    if (suv.x < 0.0 || suv.y < 0.0 || suv.x > 1.0 || suv.y > 1.0) break;
+                    float sceneT = mosaicDepth(suv);
+                    float rayT = length(q - eye);
+                    if (sceneT >= 1.0e5) continue;
+                    if (rayT > sceneT && rayT - sceneT < thickness * (1.0 + rayT * 0.02)) {
+                        float edge = min(min(suv.x, 1.0 - suv.x), min(suv.y, 1.0 - suv.y));
+                        float fade = clamp(edge / max(edgeFade, 1e-3), 0.0, 1.0);
+                        refl = mix(refl, texture(s, suv).rgb, fade);
+                        found = 1.0;
+                        break;
+                    }
+                }
+                float fres = f0 + (1.0 - f0) * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
+                return vec4(mix(base.rgb, refl, clamp(fres * strength, 0.0, 1.0)), base.a);
+            }
+            """;
+    private static final String SLANG_SSR = """
+            float4 mosaicSsr(Sampler2D s, float2 uv, float material, float strength, float maxDist, float steps, float thickness,
+                    float f0, float waves, float waveScale, float waveSpeed, float waveHeight, float edgeFade)
+            {
+                float4 base = s.SampleLevel(uv, 0.0);
+                float t = mosaicDepth(uv);
+                if (t >= 1.0e5) return base;
+                if (material >= 0.0 && mosaicHitMaterial(uv) != floor(material + 0.5)) return base;
+                float3 p = mosaicHitPos(uv), n = mosaicNormal(uv);
+                if (waves > 0.0 && n.y > 0.5) {
+                    float3 w = mosaicWorldPos(uv) * waveScale;
+                    float tm = frame.timing.x * waveSpeed;
+                    float hx = sin(w.x * 1.7 + tm * 1.3) * 0.5 + sin(w.z * 2.3 - tm * 1.1 + w.x * 0.7) * 0.35 + sin((w.x + w.z) * 4.1 + tm * 2.1) * 0.15;
+                    float hz = cos(w.z * 1.9 + tm * 1.2) * 0.5 + cos(w.x * 2.1 + tm * 0.9 - w.z * 0.6) * 0.35 + cos((w.x - w.z) * 3.7 - tm * 1.7) * 0.15;
+                    n = normalize(float3(-hx * waveHeight * waves, 1.0, -hz * waveHeight * waves));
+                }
+                float3 eye = mosaicEye();
+                float3 v = normalize(p - eye);
+                float3 r = reflect(v, n);
+                if (r.y < 0.02 && n.y > 0.5) r.y = 0.02;
+                r = normalize(r);
+                float3 refl = mosaicSky(r);
+                float found = 0.0;
+                int k = int(clamp(steps, 4.0, 128.0));
+                for (int i = 0; i < 128; i++) {
+                    if (i >= k) break;
+                    float f = (float(i) + 1.0) / float(k);
+                    float3 q = p + n * 0.05 + r * (maxDist * f * f);
+                    float4 clip = mul(frame.projection, mul(frame.modelView, float4(q, 1.0)));
+                    if (clip.w <= 0.0) break;
+                    float2 suv = clip.xy / clip.w * 0.5 + 0.5;
+                    if (suv.x < 0.0 || suv.y < 0.0 || suv.x > 1.0 || suv.y > 1.0) break;
+                    float sceneT = mosaicDepth(suv);
+                    float rayT = length(q - eye);
+                    if (sceneT >= 1.0e5) continue;
+                    if (rayT > sceneT && rayT - sceneT < thickness * (1.0 + rayT * 0.02)) {
+                        float edge = min(min(suv.x, 1.0 - suv.x), min(suv.y, 1.0 - suv.y));
+                        float fade = clamp(edge / max(edgeFade, 1e-3), 0.0, 1.0);
+                        refl = lerp(refl, s.SampleLevel(suv, 0.0).rgb, fade);
+                        found = 1.0;
+                        break;
+                    }
+                }
+                float fres = f0 + (1.0 - f0) * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
+                return float4(lerp(base.rgb, refl, clamp(fres * strength, 0.0, 1.0)), base.a);
             }
             """;
     /** Average of a buffer: 8 x 8 bilinear taps over its central area (spread), the centre weighted (auto exposure). */
@@ -1162,6 +1265,9 @@ public final class MosaicCodegen {
             case "mosaic.bufferPrev" -> sl ? "bedrayBuf" + n.index() + ".SampleLevel(" + uv + ", 0.0)" : "texture(bedrayBuf" + n.index() + ", " + uv + ")";
             case "mosaic.accumulate" -> "mosaicAccumulate(bedrayBuf" + n.index() + ", bedrayBuf" + (n.value() != null && n.value().length > 0 ? (int) n.value()[0] : n.index())
                 + ", " + in(p, n, "color") + ", " + uv + ", " + in(p, n, "frames") + ", " + in(p, n, "depthTolerance") + ", " + in(p, n, "depthToleranceBase") + ")";
+            case "mosaic.ssr" -> "mosaicSsr(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "material") + ", " + in(p, n, "strength") + ", "
+                + in(p, n, "maxDistance") + ", " + in(p, n, "steps") + ", " + in(p, n, "thickness") + ", " + in(p, n, "f0") + ", " + in(p, n, "waves")
+                + ", " + in(p, n, "waveScale") + ", " + in(p, n, "waveSpeed") + ", " + in(p, n, "waveHeight") + ", " + in(p, n, "edgeFade") + ")";
             case "mosaic.average" -> "mosaicAverage(bedrayBuf" + n.index() + ", " + in(p, n, "spread") + ", " + in(p, n, "centerWeight") + ")";
             case "mosaic.atrous" -> "mosaicAtrous(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "step") + ", " + in(p, n, "edges") + ", "
                 + in(p, n, "planeTolerance") + ", " + in(p, n, "planeTolerancePerBlock") + ", " + in(p, n, "colorTolerance") + ", " + in(p, n, "colorToleranceBase") + ")";
@@ -1554,6 +1660,7 @@ public final class MosaicCodegen {
         if (nd.accumulate()) o.a(SLANG_ACCUMULATE);
         if (nd.atrous()) o.a(SLANG_ATROUS);
         if (nd.average()) o.a(SLANG_AVERAGE);
+        if (nd.ssr()) o.a(SLANG_SSR);
         if (nd.height()) o.a(MosaicHeight.SLANG);
         if (nd.voxelRays()) o.a("""
             static const float3 MOSAIC_SKY_DIRECTION = ms_shadowDirection;
