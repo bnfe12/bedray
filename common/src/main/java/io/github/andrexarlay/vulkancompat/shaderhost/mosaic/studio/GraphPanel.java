@@ -149,6 +149,29 @@ final class GraphPanel extends JComponent {
         });
         model.listen(listener);
         if (model.activeGraph == null) model.activeGraph = this;
+        // resizing the area keeps what was in the middle in the middle; a graph that ends up out of sight is fitted again
+        addComponentListener(new java.awt.event.ComponentAdapter() {
+            int lastW = -1, lastH = -1;
+            @Override public void componentResized(java.awt.event.ComponentEvent e) {
+                int w = getWidth(), h = getHeight();
+                if (lastW > 0 && w > 0 && fitted) {
+                    panX += (w - lastW) / 2.0;
+                    panY += (h - lastH) / 2.0;
+                    if (!anyNodeVisible()) fitReadable();
+                    repaint();
+                }
+                lastW = w;
+                lastH = h;
+            }
+        });
+    }
+
+    private boolean anyNodeVisible() {
+        for (MosaicDocument.ENode n : model.doc.nodes) {
+            double x = n.x * zoom + panX, y = n.y * zoom + panY;
+            if (x + W() * zoom > 0 && x < getWidth() && y + height(n) * zoom > 0 && y < getHeight()) return true;
+        }
+        return model.doc.nodes.isEmpty();
     }
 
     /** The view was restored from project metadata: do not auto-fit on the first paint. */
