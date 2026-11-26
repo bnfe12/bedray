@@ -1007,14 +1007,16 @@ public final class MosaicEffects {
             "Every block of the world (terrain, buildings, water and lava), the far land beyond maxDistance (the reach of the world volume) included."),
         new Part("partNotBlocks", "Entities, particles and hand", "(mosaicDepth(uv) < 1.0e5 && mosaicDepth(uv) < maxDistance && mosaicHitMaterial(uv) == 0.0) ? 1.0 : 0.0",
             "What is in front of the camera but is not a block: mobs, players, items, particles, the hand (within maxDistance, the reach of the world volume)."),
-        new Part("partUnderwater", "Underwater view", "mosaicUnderwater()", "The whole picture while the camera is under water."));
+        new Part("partUnderwater", "Underwater view", "mosaicUnderwater()", "The whole picture while the camera is under water."),
+        new Part("partClouds", "Clouds", "(mosaicDepth(uv) < 1.0e5 && mosaicWorldPos(uv).y > cloudHeight - 0.6 && mosaicWorldPos(uv).y < cloudHeight + cloudThickness + 0.6 && mosaicHitMaterial(uv) < 1.0) ? 1.0 : 0.0",
+            "The game's clouds: what is seen at the cloud layer's height that is not a block (cloudHeight 192.33 and cloudThickness 4 like the game)."));
 
     static {
         for (Part p : PARTS) {
-            boolean dist = p.mask().contains("maxDistance");
+            boolean dist = p.mask().contains("maxDistance"), clouds = p.mask().contains("cloudHeight");
+            String extra = (dist ? ", float maxDistance = 48" : "") + (clouds ? ", float cloudHeight = 192.33, float cloudThickness = 4" : "");
             add("Minecraft parts", "vec4 " + p.name() + "(vec4 color, vec2 uv, vec4 look = vec4(0.0, 0.0, 0.0, 1.0), float lookAmount = 0, vec3 tint = vec3(1.0, 1.0, 1.0),"
-                    + " float brightness = 1, float saturation = 1, float contrast = 1, float contrastPivot = 0.5, float strength = 1"
-                    + (dist ? ", float maxDistance = 48" : "") + ")",
+                    + " float brightness = 1, float saturation = 1, float contrast = 1, float contrastPivot = 0.5, float strength = 1" + extra + ")",
                 p.label(), p.help() + " Wire your shader for this part into look and set lookAmount to 1, or adjust it with tint,"
                     + " brightness, saturation and contrast; strength fades the change.", """
                 float m = clamp(%s, 0.0, 1.0) * strength;
@@ -1024,7 +1026,7 @@ public final class MosaicEffects {
                 c = mix(vec3(l), c, saturation);
                 c = (c - vec3(contrastPivot)) * contrast + vec3(contrastPivot);
                 return vec4(mix(color.rgb, max(c, vec3(0.0)), m), color.a);""".formatted(p.mask()));
-            add("Minecraft parts", "float " + p.name() + "Mask(vec2 uv" + (dist ? ", float maxDistance = 48" : "") + ")", p.label() + " (mask)",
+            add("Minecraft parts", "float " + p.name() + "Mask(vec2 uv" + extra + ")", p.label() + " (mask)",
                 "1 where the pixel shows " + p.label().toLowerCase(java.util.Locale.ROOT) + ", 0 elsewhere: to mix your own nodes by part.",
                 "return clamp(" + p.mask() + ", 0.0, 1.0);");
         }

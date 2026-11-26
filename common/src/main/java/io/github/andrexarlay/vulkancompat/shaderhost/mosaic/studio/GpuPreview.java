@@ -1299,6 +1299,7 @@ final class GpuPreview implements AutoCloseable {
             // clouds; 0 draws the flat layer), with brighter tops and darker sides and bottoms; they cover the sky and
             // whatever lies behind them
             bool cloudHit = false;
+            float cloudT = 1.0e6;
             vec3 cloudCol = vec3(0.0);
             float cloudA = 0.0;
             if (HAS_CLOUDS && pw_clouds > 0.5) {
@@ -1333,6 +1334,7 @@ final class GpuPreview implements AutoCloseable {
                             float dayC = clamp(sunDir().y * pw_dayRise + pw_dayOffset, pw_nightLevel, 1.0);
                             float fade = 1.0 - smoothstep(pw_farDistance * 0.5, pw_farDistance, t);
                             cloudHit = true;
+                            cloudT = t;
                             cloudCol = vec3(dayC) * shade;
                             cloudA = pw_cloudOpacity * fade;
                             break;
@@ -1346,7 +1348,10 @@ final class GpuPreview implements AutoCloseable {
             float rain = pw_rain > 1.5 ? 1.0 : pw_rain > 0.5 ? WORLD_RAIN : 0.0;
             skyCol *= 1.0 - rain * pw_rainDarken * 2.0;
             if (trans > 0.0) acc += trans * skyCol;
-            if (cloudHit) acc = mix(acc, cloudCol * (1.0 - rain * pw_rainDarken), cloudA);
+            if (cloudHit) {
+                acc = mix(acc, cloudCol * (1.0 - rain * pw_rainDarken), cloudA);
+                depth = min(depth, cloudT); // the game's clouds have depth: graphs (and the Clouds part) find them
+            }
             acc *= 1.0 - rain * pw_rainDarken;
             // the game's rain: its texture on cylinders around the camera, falling
             // cold biome at the camera: snow (slow, white) instead of rain, like the game

@@ -58,7 +58,7 @@ or a thumbnail of the preview is kept until you choose one).
 The **Scene** panel shows the graph the way Blender's outliner shows a scene: groups (the graph's frames, like
 collections), and in them the **Minecraft parts** - Sky, Water, Lava, Leaves, Plants and flowers, Stone and ore, Dirt and
 grass blocks, Wood, Sand and gravel, Snow, Ice, Glass, Metal, Light sources, Other blocks, All blocks, Entities particles
-and hand, Underwater view - then effects and lights, passes (buffers), Bedray and the Output, each with a line saying
+and hand, Underwater view, Clouds (the game's clouds have depth; found by the cloud layer's height) - then effects and lights, passes (buffers), Bedray and the Output, each with a line saying
 what it does. Click shows a node, the dot turns it on / off, double click renames.
 
 Right click a part in Scene for its ready **looks** (Sunset glow, Tropical water, Autumn leaves, Warm glow lights, Noir
