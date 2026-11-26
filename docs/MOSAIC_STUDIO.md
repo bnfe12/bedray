@@ -141,7 +141,10 @@ variant, or every multipart part whose condition holds. Water, lava, fire and ot
 Rain, Rain opacity / speed / darkening, Animated textures); the game's cloud layer (clouds.png at y 192.33, drifting) and
 distance fog are drawn too (Clouds, Cloud height / speed / opacity, Fog, Fog start).
 
-Chests (normal, trapped, ender, copper) and bells are drawn by the game's entity models, turned to their facing.
+Chests (normal, trapped, ender, copper) and bells are drawn by the game's entity models, turned to their facing. The sky is
+the game's: the camera biome's sky colour overhead and fog colour at the horizon, dimmed by the time of day, an orange
+glow towards the sun at dawn and dusk, the sun and moon textures as squares and stars at night (World look: The game's
+sky, Sunrise / sunset glow, Stars; 0 uses the graph's own sky model). Cold biomes get snow instead of rain.
 
 It is still Studio's own renderer: particles, signs, banners, beds and thunder flashes are not drawn, and lighting follows the game's light map rather than its exact shader. The game's own frame with your graph is in Result (and Preview > Game frame)
 while the game runs with the pack.

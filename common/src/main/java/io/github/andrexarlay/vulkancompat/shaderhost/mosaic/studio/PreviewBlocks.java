@@ -37,10 +37,13 @@ final class PreviewBlocks {
      * edge 1, edge 2 in volume cells with the atlas rect packed in their w; uv origin and edges; rect height, flags) and per
      * cell (start << 8 | count) into the quad id list that follows the cells.
      */
-    record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh, int[] biome, int[] clouds, int[] rain, int[] snow) {
-        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null, null, null, null, null); }
+    record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh, int[] biome, int[] clouds, int[] rain, int[] snow,
+                 int[] sun, int[] moon, int skyColor, int fogColor) {
+        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null, null, null, null, null, null, null, 0x78A7FF, 0xC0D8FF); }
 
-        Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) { this(argb, w, h, info, signature, quads, mesh, null, null, null, null); }
+        Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) {
+            this(argb, w, h, info, signature, quads, mesh, null, null, null, null, null, null, 0x78A7FF, 0xC0D8FF);
+        }
 
         /** The rect (x, y, w, h) of the game's clouds.png in the atlas, or null. */
         int[] cloudRect() { return clouds; }
@@ -462,6 +465,27 @@ final class PreviewBlocks {
         });
     }
 
+    /** Sky and fog colour of a biome (26.x attributes; the overworld defaults when it has none). */
+    static int[] skyOf(List<Pack> packs, String biome) {
+        int sky = 0x78A7FF, fog = 0xC0D8FF;
+        String ns = biome.contains(":") ? biome.substring(0, biome.indexOf(':')) : "minecraft", name = biome.substring(biome.indexOf(':') + 1);
+        byte[] json = readFirst(packs, "data/" + ns + "/worldgen/biome/" + name + ".json");
+        if (json != null) {
+            try {
+                JsonObject o = JsonParser.parseString(new String(json, StandardCharsets.UTF_8)).getAsJsonObject();
+                JsonObject at = o.has("attributes") ? o.getAsJsonObject("attributes") : new JsonObject();
+                JsonObject fx = o.has("effects") ? o.getAsJsonObject("effects") : new JsonObject();
+                JsonElement s = at.has("minecraft:visual/sky_color") ? at.get("minecraft:visual/sky_color") : fx.get("sky_color");
+                JsonElement f = at.has("minecraft:visual/fog_color") ? at.get("minecraft:visual/fog_color") : fx.get("fog_color");
+                if (s != null && s.isJsonPrimitive()) sky = colour(s);
+                if (f != null && f.isJsonPrimitive()) fog = colour(f);
+            } catch (Exception ignored) {
+                // defaults
+            }
+        }
+        return new int[] {sky, fog};
+    }
+
     private static Integer colour(JsonElement e) {
         if (e.isJsonPrimitive() && e.getAsJsonPrimitive().isNumber()) return e.getAsInt() & 0xFFFFFF;
         String s = e.getAsString().trim();
@@ -868,6 +892,28 @@ final class PreviewBlocks {
             cloudRect = new int[] {0, 0, cw, ch};
             placed.add(cloudRect);
         }
+        java.util.function.Function<String, int[]> envRect = tex -> {
+            BufferedImage im = image(packs, tex);
+            if (im == null) return null;
+            int ew = Math.min(64, im.getWidth()), eh = Math.min(64, im.getHeight());
+            int[] px = new int[ew * eh];
+            for (int yy = 0; yy < eh; yy++) for (int xx = 0; xx < ew; xx++) px[yy * ew + xx] = im.getRGB(xx * im.getWidth() / ew, yy * im.getHeight() / eh);
+            pixels.add(px);
+            int[] rr = {0, 0, ew, eh};
+            placed.add(rr);
+            return rr;
+        };
+        int[] sunRect = envRect.apply("minecraft:environment/celestial/sun");
+        int[] moonRect = envRect.apply("minecraft:environment/celestial/moon/full_moon");
+        // the sky and fog colour of the camera's biome (attributes minecraft:visual/sky_color, fog_color)
+        int skyColor = 0x78A7FF, fogColor = 0xC0D8FF;
+        if (biomes != null) {
+            int cx0 = (int) Math.floor(s.camX()) - s.ox(), cz0 = (int) Math.floor(s.camZ()) - s.oz();
+            int ci = Math.clamp(cz0, 0, s.sz() - 1) * s.sx() + Math.clamp(cx0, 0, s.sx() - 1);
+            int[] sf = skyOf(packs, biomes.names().get(biomes.column()[ci]));
+            skyColor = sf[0];
+            fogColor = sf[1];
+        }
         int[] snowRect = null;
         BufferedImage snowImg = image(packs, "minecraft:environment/snow");
         if (snowImg != null) {
@@ -965,7 +1011,7 @@ final class PreviewBlocks {
         }
         for (int k = 0; k < cellQuads.size(); k++) mesh[cells + k] = cellQuads.get(k)[1];
         perColumnTint = false;
-        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh, biomeCols, cloudRect, rainRect, snowRect);
+        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh, biomeCols, cloudRect, rainRect, snowRect, sunRect, moonRect, skyColor, fogColor);
         if (CACHE.size() > 4) CACHE.clear();
         CACHE.put(sig, a);
         return a;

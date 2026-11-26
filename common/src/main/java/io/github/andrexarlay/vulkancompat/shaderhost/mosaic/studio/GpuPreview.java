@@ -515,6 +515,7 @@ final class GpuPreview implements AutoCloseable {
         return GBUFFER_GLSL.replace("%CONSTANTS%", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.constants(view.graphSettings(), false)
             + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\nconst bool HAS_MESH = " + mesh + ";\nconst bool HAS_BIOMES = " + view.atlas().hasBiomes() + ";\n" + cloudConstants(view.atlas().cloudRect())
             + rainConstants(view.atlas().rain(), PreviewWorld.weatherOf(view.world()))
+            + skyConstants(view.atlas())
             + "const bool HAS_SNOW_TEX = " + (view.atlas().snow() != null) + ";\nconst vec4 SNOW_RECT = " + (view.atlas().snow() == null ? "vec4(0.0)"
             : "vec4(" + view.atlas().snow()[0] + ".0, " + view.atlas().snow()[1] + ".0, " + view.atlas().snow()[2] + ".0, " + view.atlas().snow()[3] + ".0)") + ";\n");
     }
@@ -538,6 +539,21 @@ final class GpuPreview implements AutoCloseable {
         }
         return new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Snapshot(s.sx(), s.sy(), s.sz(), s.ox(), s.oy(), s.oz(), cells,
             s.camX(), s.camY(), s.camZ(), s.yaw(), s.pitch(), s.timeOfDay(), s.far());
+    }
+
+    private static String rect(String name, int[] r) {
+        return "const bool HAS_" + name + " = " + (r != null) + ";\nconst vec4 " + name + "_RECT = "
+            + (r == null ? "vec4(0.0)" : "vec4(" + r[0] + ".0, " + r[1] + ".0, " + r[2] + ".0, " + r[3] + ".0)") + ";\n";
+    }
+
+    private static String rgb(int c) {
+        return "vec3(" + ((c >> 16) & 255) / 255.0 + ", " + ((c >> 8) & 255) / 255.0 + ", " + (c & 255) / 255.0 + ")";
+    }
+
+    /** The game's sky: the camera biome's sky and fog colour, the sun and moon textures. */
+    private static String skyConstants(PreviewBlocks.Atlas a) {
+        return rect("SUN", a.sun()) + rect("MOON", a.moon()) + "const vec3 VANILLA_SKY = " + rgb(a.skyColor()) + ";\nconst vec3 VANILLA_FOG = "
+            + rgb(a.fogColor()) + ";\n";
     }
 
     private static String rainConstants(int[] r, float[] w) {
@@ -921,8 +937,41 @@ final class GpuPreview implements AutoCloseable {
             return (world.cells[i >> 1] >> uint((i & 1) * 16)) & 0xFFFFu;
         }
         vec3 sunDir() { float a = frame.timing.w * 6.2831853; return normalize(vec3(-sin(a), cos(a), ms_sunTilt)); }
+        float starHash(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
+        // a celestial square (the game's sun / moon quads): its texture where the direction falls inside it
+        vec4 celestial(vec3 dir, vec3 c, float halfSize, vec4 rect) {
+            float k = dot(dir, c);
+            if (k <= 0.0) return vec4(0.0);
+            vec3 right = normalize(cross(c, abs(c.y) > 0.99 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.0, 1.0)));
+            vec3 up = cross(right, c);
+            vec2 uv = vec2(dot(dir, right), dot(dir, up)) / k / halfSize * 0.5 + 0.5;
+            if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec4(0.0);
+            return textureLod(atlas, (rect.xy + uv * rect.zw) / vec2(textureSize(atlas, 0)), 0.0);
+        }
+        // the game's sky: the biome's sky colour overhead, its fog colour at the horizon, a sunrise / sunset glow,
+        // the sun and moon squares and stars, all dimmed by the time of day
+        vec3 vanillaSky(vec3 dir) {
+            vec3 sun = sunDir();
+            float day = clamp(sun.y * 2.0 + 0.5, 0.0, 1.0);
+            vec3 top = VANILLA_SKY * day, fog = VANILLA_FOG * (day * 0.94 + 0.06);
+            vec3 c = mix(fog, top, smoothstep(-0.05, 0.45, dir.y));
+            // sunrise / sunset: orange towards the sun while it is near the horizon
+            float low = clamp(1.0 - abs(sun.y) / 0.4, 0.0, 1.0);
+            vec2 sh = normalize(sun.xz + vec2(1e-5)), dh = normalize(dir.xz + vec2(1e-5));
+            float toward = pow(max(dot(sh, dh), 0.0), 3.0) * clamp(1.0 - dir.y * 2.5, 0.0, 1.0);
+            c = mix(c, vec3(1.0, 0.52, 0.24) * max(day, 0.3), low * toward * pw_sunsetGlow);
+            if (day < 0.6) { // stars
+                vec3 cell = floor(dir * 220.0);
+                float st = starHash(cell);
+                if (st > 0.9975 && dir.y > 0.0) c += vec3((st - 0.9975) * 400.0 * (0.6 - day) * pw_stars);
+            }
+            if (HAS_SUN) { vec4 s = celestial(dir, sun, 0.15, SUN_RECT); c += s.rgb * s.a * 1.2; }
+            if (HAS_MOON) { vec4 m = celestial(dir, -sun, 0.10, MOON_RECT); c += m.rgb * m.a * (1.0 - day * 0.8); }
+            return c;
+        }
         // the graph's own sky model (graph settings) plus a moon
         vec3 sky(vec3 dir) {
+            if (pw_vanillaSky > 0.5) return vanillaSky(dir);
             vec3 sun = sunDir();
             float day = clamp(sun.y * ms_skyDayRise + ms_skyDayOffset, ms_skyNight, 1.0);
             vec3 c = mix(ms_skyHorizon, ms_skyZenith, clamp(dir.y, 0.0, 1.0)) * day;
