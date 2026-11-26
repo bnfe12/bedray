@@ -89,6 +89,18 @@ final class CustomRtExecutor implements AutoCloseable {
     private final boolean usesTlas, usesWorld;
     private RtMemory.Buf worldBuffer;
     private final int worldBytes;
+    /**
+     * GPU timings of the passes (Mosaic Studio's profile in F3): a ring of timestamp pools, each read back (without
+     * waiting) right before it is reused a few frames later. Labels name the passes in dispatch order.
+     */
+    private static final int TIMING_RING = 3;
+    private final long[] timingPools = new long[TIMING_RING];
+    private final boolean[] timingUsed = new boolean[TIMING_RING];
+    private int timingFrame;
+    private float timestampPeriod;
+    List<String> passLabels = List.of();
+    /** Smoothed GPU ms per pass in dispatch order (raster depth excluded), or null before the first readback. */
+    volatile double[] passMs;
 
     int worldBytes() { return worldBytes; }
     private long worldVersion = -1;
@@ -242,6 +254,7 @@ final class CustomRtExecutor implements AutoCloseable {
             var props = VkPhysicalDeviceProperties.calloc(stack);
             vkGetPhysicalDeviceProperties(device.getPhysicalDevice(), props);
             maxPush = props.limits().maxPushConstantsSize() & ~3;
+            timestampPeriod = props.limits().timestampPeriod();
 
             var handle = stack.mallocLong(1);
             check(vkCreateSampler(device, VkSamplerCreateInfo.calloc(stack).sType$Default().magFilter(VK_FILTER_NEAREST)
@@ -832,21 +845,26 @@ final class CustomRtExecutor implements AutoCloseable {
             VkBarriers.fullMemoryBarrier(cmd);
 
             recordRasterDepth(cmd, stack);
+            long pool = timingBegin(cmd, stack);
+            int stamp = 1;
             // Buffer passes in plan order (each reads only passes before it), then the final image
             for (int i = 0; i < chain.size(); i++) {
                 if (chain.get(i).after()) continue;
                 int[] ls = chain.get(i).compiled().module().localSize();
                 dispatch(cmd, stack, chainPipelines[i], chainSets[i], ls, chainImages[i].width, chainImages[i].height);
                 VkBarriers.fullMemoryBarrier(cmd);
+                if (pool != 0) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, stamp++);
             }
             dispatch(cmd, stack, pipeline, set, localSize, color.width(), color.height());
             VkBarriers.fullMemoryBarrier(cmd);
+            if (pool != 0) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, stamp++);
             // history copies for the next frame (Accumulate, Buffer last frame): after everything that reads them
             for (int i = 0; i < chain.size(); i++) {
                 if (!chain.get(i).after()) continue;
                 int[] ls = chain.get(i).compiled().module().localSize();
                 dispatch(cmd, stack, chainPipelines[i], chainSets[i], ls, chainImages[i].width, chainImages[i].height);
                 VkBarriers.fullMemoryBarrier(cmd);
+                if (pool != 0) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, stamp++);
             }
             if (history != null) {
                 // the final image is the next frame's "previous frame" (binding 19)
@@ -865,6 +883,58 @@ final class CustomRtExecutor implements AutoCloseable {
             vkCmdBlitImage(cmd, output.image, VK_IMAGE_LAYOUT_GENERAL, color.image(), VK_IMAGE_LAYOUT_GENERAL, blit, VK_FILTER_NEAREST);
             if (captureRequested) recordCapture(cmd, stack);
         }
+    }
+
+    /**
+     * Picks this frame's timestamp pool: reads the timings it held from a few frames ago (when ready; never waits),
+     * resets it and writes the start stamp. 0 when timestamps are unavailable.
+     */
+    private long timingBegin(VkCommandBuffer cmd, MemoryStack stack) {
+        if (!(timestampPeriod > 0f)) return 0L;
+        int slot = timingFrame++ % TIMING_RING, count = chain.size() + 2;
+        if (timingPools[slot] == 0L) {
+            var lp = stack.mallocLong(1);
+            if (vkCreateQueryPool(device, org.lwjgl.vulkan.VkQueryPoolCreateInfo.calloc(stack).sType$Default()
+                    .queryType(VK_QUERY_TYPE_TIMESTAMP).queryCount(count), null, lp) != VK_SUCCESS) {
+                timestampPeriod = 0f;
+                return 0L;
+            }
+            timingPools[slot] = lp.get(0);
+        } else if (timingUsed[slot]) {
+            var ts = stack.mallocLong(count);
+            if (vkGetQueryPoolResults(device, timingPools[slot], 0, count, ts, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+                double[] prev = passMs, now = new double[count - 1];
+                for (int q = 1; q < count; q++) {
+                    double ms = Math.max(0, ts.get(q) - ts.get(q - 1)) * timestampPeriod / 1.0e6;
+                    now[q - 1] = prev == null || prev.length != now.length ? ms : prev[q - 1] * 0.9 + ms * 0.1;
+                }
+                passMs = now;
+            }
+        }
+        vkCmdResetQueryPool(cmd, timingPools[slot], 0, count);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timingPools[slot], 0);
+        timingUsed[slot] = true;
+        return timingPools[slot];
+    }
+
+    /** The profile for F3: total GPU ms and the most expensive passes. */
+    String timingLine() {
+        double[] ms = passMs;
+        if (ms == null) return null;
+        double total = 0;
+        Integer[] order = new Integer[ms.length];
+        for (int i = 0; i < ms.length; i++) {
+            total += ms[i];
+            order[i] = i;
+        }
+        java.util.Arrays.sort(order, (x, y) -> Double.compare(ms[y], ms[x]));
+        StringBuilder sb = new StringBuilder(String.format(java.util.Locale.ROOT, "[CUSTOM-RT] gpu=%.2fms", total));
+        for (int k = 0; k < Math.min(5, order.length); k++) {
+            int i = order[k];
+            String label = i < passLabels.size() ? passLabels.get(i) : "pass" + i;
+            sb.append(String.format(java.util.Locale.ROOT, " %s=%.2f", label, ms[i]));
+        }
+        return sb.toString();
     }
 
     private void dispatch(VkCommandBuffer cmd, MemoryStack stack, long pipe, long descriptors, int[] ls, int w, int h) {
@@ -999,6 +1069,10 @@ final class CustomRtExecutor implements AutoCloseable {
 
     @Override
     public void close() {
+        for (int i = 0; i < TIMING_RING; i++) {
+            if (timingPools[i] != 0L) vkDestroyQueryPool(device, timingPools[i], null);
+            timingPools[i] = 0L;
+        }
         for (int i = 0; i < userBuffers.length; i++) {
             if (userBuffers[i] != null) {
                 memory.destroy(userBuffers[i]);

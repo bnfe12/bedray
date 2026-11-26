@@ -172,6 +172,11 @@ index = 1..64 runs, optional `init` and `uv` inputs) emits `acc = f(acc, i)` in 
 name or none for the scene colour, inputs `blend`, default 0.9, and `maxBlend`, default 0.98) blends the reprojected previous frame clamped to the
 3x3 neighbourhood of its source.
 
+**GPU profile.** The custom RT stage times its passes with Vulkan timestamps (a ring of query pools read back a few
+frames later, never waiting) and adds an F3 line `[CUSTOM-RT] gpu=<total>ms <pass>=<ms> ...` with the five most expensive
+passes (smoothed; labels `<buffer>/<scale>`, `final`). Mosaic Studio's preview shows the same for its own run, and
+`mosaic render --profile` prints every pass.
+
 **Graph settings.** An optional `"settings": {key: [numbers]}` object sets the numbers the generated helpers use
 (`MosaicSettings`): `sunTilt`, `skyHorizon`, `skyZenith`, `skyNight`, `skyDayRise`, `skyDayOffset`, `sunDiscColor`,
 `sunDiscSharpness`, `sunDiscBrightness`, `shadowDirection`, `shadowRayStart`, `shadowRayLength`, `hitOffset`,

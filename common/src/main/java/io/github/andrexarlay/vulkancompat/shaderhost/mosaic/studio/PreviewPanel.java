@@ -301,8 +301,9 @@ final class PreviewPanel extends Panels.Listening {
                 int passes = runs == null ? 1 : runs.size();
                 String where = wv == null ? "game frame (no depth)" : PreviewWorld.fromGame(wv.world())
                     ? "world from the game" : "built-in world (open Studio from the game for yours)";
+                String gpuLine = gpuProfile(gpu.lastTimings, wv != null);
                 SwingUtilities.invokeLater(() -> info.setText(gpu.deviceName + "   -   " + out.getWidth() + "x" + out.getHeight() + "   -   "
-                    + (passes > 1 ? passes + " passes, " : "") + ms + " ms   -   " + where));
+                    + (passes > 1 ? passes + " passes, " : "") + ms + " ms" + gpuLine + "   -   " + where));
                 Thread.sleep(Math.max(15, 50 - ms));
             } catch (InterruptedException e) {
                 return;
@@ -321,6 +322,25 @@ final class PreviewPanel extends Panels.Listening {
         return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.toJson(model.doc.settings) + "|"
             + io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.toJson(StudioUi.settings.previewLook) + "|"
             + StudioUi.settings.previewWidth + "x" + StudioUi.settings.previewHeight;
+    }
+
+    /** GPU time of the last run and its three most expensive passes (names from the pass plan), or "". */
+    private String gpuProfile(double[] t, boolean world) {
+        if (t == null || t.length == 0) return "";
+        double total = 0;
+        for (double v : t) total += v;
+        var plan = model.plan;
+        java.util.List<String> names = new java.util.ArrayList<>();
+        names.add(world ? "world" : "input");
+        if (plan != null) for (var p : plan.all()) names.add(p.name() == null ? "final" : p.name());
+        else names.add("final");
+        Integer[] order = new Integer[t.length];
+        for (int i = 0; i < t.length; i++) order[i] = i;
+        java.util.Arrays.sort(order, (a, b) -> Double.compare(t[b], t[a]));
+        StringBuilder sb = new StringBuilder(String.format(java.util.Locale.ROOT, " (GPU %.1f ms:", total));
+        for (int k = 0; k < Math.min(3, order.length); k++)
+            sb.append(String.format(java.util.Locale.ROOT, " %s %.1f", order[k] < names.size() ? names.get(order[k]) : "pass", t[order[k]]));
+        return sb.append(")").toString();
     }
 
     private Path extrasFrom;

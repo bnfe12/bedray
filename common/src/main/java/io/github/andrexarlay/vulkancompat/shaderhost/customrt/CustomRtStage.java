@@ -119,6 +119,7 @@ public final class CustomRtStage {
     // chain of the graph it compiled in pendingChain, adopted together with the compiled final pass.
     private static List<CustomRtExecutor.ChainPass> chain = List.of();
     static List<CustomRtExecutor.ChainPass> pendingChain = List.of();
+    static List<String> pendingLabels = List.of("final");
     /** True while the running stage comes from mosaic.json: bindings 16 and 19 are then produced by the host. */
     private static boolean mosaicEntry;
     private static Object worldLevel;
@@ -405,6 +406,12 @@ public final class CustomRtStage {
         }
         lastCompiledMosaicGlsl = signature.toString();
         pendingChain = List.copyOf(passes);
+        // profile labels in dispatch order: ordered Buffers, the final image, then the history copies
+        List<String> labels = new ArrayList<>();
+        for (var p : plan.passes()) if (p.name() != null) labels.add(p.name() + "/" + p.scale());
+        labels.add("final");
+        for (var p : plan.after()) labels.add(p.name() + "/" + p.scale());
+        pendingLabels = List.copyOf(labels);
         return last;
     }
 
@@ -528,6 +535,7 @@ public final class CustomRtStage {
             if (executor == null) {
                 owner = device;
                 executor = new CustomRtExecutor(device.vkDevice(), compiled, resources, chain, mosaicEntry, worldDims());
+                executor.passLabels = chain.isEmpty() ? List.of("final") : pendingLabels;
             }
             // Folder-pack live editing: changed rt.push / buffer<N>.bin bytes reach the next dispatch without a restart.
             if (resources != null && resources.refresh()) {
@@ -798,6 +806,9 @@ public final class CustomRtStage {
     public static synchronized void appendDebugLines(List<String> out) {
         if (state == State.DISABLED) return;
         out.add("[CUSTOM-RT] pack=" + pack + " state=" + state + " dispatches=" + dispatches + " detail=" + detail);
+        CustomRtExecutor ex = executor;
+        String timing = ex == null ? null : ex.timingLine();
+        if (timing != null) out.add(timing); // Mosaic's GPU profile: total and the most expensive passes
     }
 
     private static void waiting(String why) {
