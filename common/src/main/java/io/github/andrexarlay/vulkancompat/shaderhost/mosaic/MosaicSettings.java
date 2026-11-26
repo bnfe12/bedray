@@ -60,6 +60,7 @@ public final class MosaicSettings {
         i("worldRefresh", "World refresh per frame", "World volume", "Blocks re-read from the world every frame (1024..262144): higher follows block changes sooner, costs CPU.", 16384),
         f("hitOffset", "Surface probe offset", "World volume", "How far past a hit the material is read and before it the light (blocks).", 0.02),
         i("voxelSteps", "Voxel ray steps", "World volume", "Most blocks a voxel ray crosses (longer rays cost more).", 192),
+        f("plantsBlockRays", "Plants block rays", "World volume", "1: grass, flowers and crops stop shadow, GI and reflection rays like full blocks; 0: rays pass (they are thin, the game's shadows of them are small).", 0),
         i("materialPathSteps", "Material path steps", "World volume", "Most blocks crossed when measuring water / material thickness.", 160),
         i("farShadowSteps", "Far shadow steps", "Height field", "Most steps of a far-shadow march over the height field.", 96),
         f("farShadowStep", "Far shadow step", "Height field", "First step length of the far-shadow march (blocks).", 1.0),
@@ -78,7 +79,7 @@ public final class MosaicSettings {
         Map.entry("shadowRayStart", new double[] {0, 1}), Map.entry("shadowRayLength", new double[] {1, 4096}),
         Map.entry("worldRadius", new double[] {8, 256}), Map.entry("worldHeight", new double[] {16, 256}),
         Map.entry("worldRefresh", new double[] {1024, 262144}), Map.entry("hitOffset", new double[] {0, 0.5}),
-        Map.entry("voxelSteps", new double[] {8, 1024}), Map.entry("materialPathSteps", new double[] {8, 1024}),
+        Map.entry("voxelSteps", new double[] {8, 1024}), Map.entry("plantsBlockRays", new double[] {0, 1}), Map.entry("materialPathSteps", new double[] {8, 1024}),
         Map.entry("farShadowSteps", new double[] {8, 512}), Map.entry("farShadowStep", new double[] {0.05, 16}),
         Map.entry("farShadowGrowth", new double[] {0, 0.5}), Map.entry("farShadowBias", new double[] {0, 2}),
         Map.entry("materialColors", new double[] {0, 1}));

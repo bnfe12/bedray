@@ -160,6 +160,7 @@ final class InspectorPanel extends Panels.Listening {
         content.add(text(n.id + "   " + (fn ? "node code" : e.category().label) + (n.label != null ? "   (" + typeLabel + ")" : ""), MUTED));
         content.add(Box.createVerticalStrut(4));
         content.add(text(fn ? (def == null || def.help == null ? "" : def.help) : e.help(), MUTED));
+        if (fn) partLooks(n);
         if (MosaicRenderer.isStage(n.type)) {
             stageEditor(n);
             return;
@@ -878,6 +879,32 @@ final class InspectorPanel extends Panels.Listening {
             model.edit("Reset graph settings", () -> model.doc.settings.clear());
             rebuild();
         }));
+    }
+
+    /** A Minecraft part node: its ready looks as buttons, and back to unchanged. */
+    private void partLooks(MosaicDocument.ENode n) {
+        var looks = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicEffects.looksOf(MosaicFunction.nameOf(n.type));
+        if (looks.isEmpty()) return;
+        content.add(section("Look"));
+        JPanel row = new JPanel(new GridLayout(0, 2, 4, 4));
+        row.setOpaque(false);
+        row.setAlignmentX(0);
+        for (var l : looks)
+            row.add(button(l.label(), "Sets " + String.join(", ", l.values().keySet()), () -> {
+                model.edit(n.id + ": " + l.label(), () -> {
+                    for (String k : java.util.List.of("tint", "brightness", "saturation", "contrast")) n.defaults.remove(k);
+                    l.values().forEach((k, v) -> n.defaults.put(k, v.clone()));
+                });
+                rebuild();
+            }));
+        row.add(button("Unchanged", "Every look value back to its default", () -> {
+            model.edit(n.id + ": unchanged", () -> {
+                for (String k : java.util.List.of("tint", "brightness", "saturation", "contrast", "contrastPivot", "strength", "lookAmount")) n.defaults.remove(k);
+            });
+            rebuild();
+        }));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+        content.add(row);
     }
 
     /** Presets (built in and your own, ~/.bedray/studio/setting-presets), copy / paste as JSON. */

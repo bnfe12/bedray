@@ -536,7 +536,7 @@ public final class MosaicCodegen {
                     else { t = nextT.z; cell.z += stp.z; nextT.z += delta.z; normal = vec3(0.0, 0.0, -float(stp.z)); }
                     if (t > tMax) break;
                     uint c = mosaicCell(cell) & 0xFFu;
-                    if (c >= 2u) { material = float(c); return t; }
+                    if (c >= 2u && (c != 6u || ms_plantsBlockRays > 0.5)) { material = float(c); return t; } // plants: thin, they let rays through
                 }
                 return -1.0;
             }
@@ -1019,7 +1019,7 @@ public final class MosaicCodegen {
                     else { t = nextT.z; cell.z += stp.z; nextT.z += delta.z; normal = float3(0.0, 0.0, -float(stp.z)); }
                     if (t > tMax) break;
                     uint c = mosaicCell(cell) & 0xFFu;
-                    if (c >= 2u) { material = float(c); return t; }
+                    if (c >= 2u && (c != 6u || ms_plantsBlockRays > 0.5)) { material = float(c); return t; } // plants: thin, they let rays through
                 }
                 return -1.0;
             }
