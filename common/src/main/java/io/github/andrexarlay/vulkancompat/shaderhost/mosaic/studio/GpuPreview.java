@@ -515,7 +515,7 @@ final class GpuPreview implements AutoCloseable {
         return GBUFFER_GLSL.replace("%CONSTANTS%", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.constants(view.graphSettings(), false)
             + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\nconst bool HAS_MESH = " + mesh + ";\nconst bool HAS_BIOMES = " + view.atlas().hasBiomes() + ";\n" + cloudConstants(view.atlas().cloudRect())
             + rainConstants(view.atlas().rain(), PreviewWorld.weatherOf(view.world()))
-            + skyConstants(view.atlas())
+            + skyConstants(view.atlas()) + shadowConstants(view.atlas().shadows())
             + "const bool HAS_SNOW_TEX = " + (view.atlas().snow() != null) + ";\nconst vec4 SNOW_RECT = " + (view.atlas().snow() == null ? "vec4(0.0)"
             : "vec4(" + view.atlas().snow()[0] + ".0, " + view.atlas().snow()[1] + ".0, " + view.atlas().snow()[2] + ".0, " + view.atlas().snow()[3] + ".0)") + ";\n");
     }
@@ -539,6 +539,19 @@ final class GpuPreview implements AutoCloseable {
         }
         return new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Snapshot(s.sx(), s.sy(), s.sz(), s.ox(), s.oy(), s.oz(), cells,
             s.camX(), s.camY(), s.camZ(), s.yaw(), s.pitch(), s.timeOfDay(), s.far());
+    }
+
+    /** Entity shadows as a constant array (at most 64): x, y, z relative to the volume, radius. */
+    private static String shadowConstants(float[] s) {
+        int n = s == null ? 0 : s.length / 4;
+        StringBuilder sb = new StringBuilder("const int SHADOW_COUNT = " + n + ";\n");
+        sb.append("const vec4 SHADOWS[").append(Math.max(1, n)).append("] = vec4[](");
+        if (n == 0) sb.append("vec4(0.0)");
+        for (int i = 0; i < n; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(String.format(java.util.Locale.ROOT, "vec4(%.3f, %.3f, %.3f, %.3f)", s[i * 4], s[i * 4 + 1], s[i * 4 + 2], s[i * 4 + 3]));
+        }
+        return sb.append(");\n").toString();
     }
 
     private static String rect(String name, int[] r) {
@@ -1211,6 +1224,21 @@ final class GpuPreview implements AutoCloseable {
                 prev = m;
                 if ((m == 5u || m == 6u || m == 11u) && tx.a < pw_cutout) continue; // cutout leaves, plants, glass
                 vec3 col = (m == 2u || m == 13u) ? tx.rgb : tx.rgb * smoothLight(back, n, q);
+                // the round shadow of entities standing on this top face
+                if (SHADOW_COUNT > 0 && n.y > 0.5 && pw_entityShadows > 0.0) {
+                    vec3 vq = q - vec3(world.originRel.xyz);
+                    for (int si = 0; si < SHADOW_COUNT; si++) {
+                        vec4 e = SHADOWS[si];
+                        float dy = vq.y - e.y;
+                        if (dy > 0.1 || dy < -1.2) continue;
+                        float r = length(vq.xz - e.xz) / e.w;
+                        if (r < 1.0) {
+                            // full out to 70 % of the radius, then a narrow soft rim (the game's shadow reaches past the mob's body)
+                            float inner = clamp((1.0 - r) / 0.3, 0.0, 1.0) * clamp(1.0 + dy, 0.0, 1.0);
+                            col *= 1.0 - pw_entityShadows * inner;
+                        }
+                    }
+                }
                 depth = min(depth, t);
                 if (m == 11u || m == 10u) {
                     acc += trans * pw_glassOpacity * col;

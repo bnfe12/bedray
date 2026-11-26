@@ -657,7 +657,7 @@ final class PreviewPanel extends Panels.Listening {
         {"Light", "lightCurve,dayRise,dayOffset,nightLevel,brightness,nightSkyColor,blockColor,blockBoost,ambient,smoothLighting,aoStrength,faceTop,faceBottom,faceX,faceZ"},
         {"Sky and weather", "vanillaSky,sunsetGlow,stars,moonSharpness,moonBrightness,clouds,cloudHeight,cloudThickness,cloudSpeed,cloudOpacity,fog,fogStart,rain,rainOpacity,rainSpeed,rainDarken,snowTemperature,snowSpeed"},
         {"Water and glass", "waterOpacity,waterReflection,glassOpacity,cutout"},
-        {"World", "models,animate,maxDistance,farDistance,farStep,canopyDepth,trunkWidth"}};
+        {"World", "models,entityShadows,animate,maxDistance,farDistance,farStep,canopyDepth,trunkWidth"}};
 
     /** Ranges of the look numbers for their sliders. */
     private static final java.util.Map<String, double[]> LOOK_RANGES = java.util.Map.ofEntries(
@@ -673,7 +673,7 @@ final class PreviewPanel extends Panels.Listening {
         java.util.Map.entry("cutout", new double[] {0, 1}), java.util.Map.entry("moonSharpness", new double[] {50, 4000}),
         java.util.Map.entry("moonBrightness", new double[] {0, 6}), java.util.Map.entry("aoStrength", new double[] {0, 1}),
         java.util.Map.entry("fogStart", new double[] {0, 1}), java.util.Map.entry("cloudHeight", new double[] {64, 320}),
-        java.util.Map.entry("cloudSpeed", new double[] {0, 5}), java.util.Map.entry("cloudThickness", new double[] {0, 12}), java.util.Map.entry("cloudOpacity", new double[] {0, 1}),
+        java.util.Map.entry("cloudSpeed", new double[] {0, 5}), java.util.Map.entry("entityShadows", new double[] {0, 1}), java.util.Map.entry("cloudThickness", new double[] {0, 12}), java.util.Map.entry("cloudOpacity", new double[] {0, 1}),
         java.util.Map.entry("rainOpacity", new double[] {0, 1}), java.util.Map.entry("rainSpeed", new double[] {0, 5}),
         java.util.Map.entry("rainDarken", new double[] {0, 1}), java.util.Map.entry("sunsetGlow", new double[] {0, 2}),
         java.util.Map.entry("stars", new double[] {0, 3}), java.util.Map.entry("snowTemperature", new double[] {-0.5, 1}),

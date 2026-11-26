@@ -38,11 +38,11 @@ final class PreviewBlocks {
      * cell (start << 8 | count) into the quad id list that follows the cells.
      */
     record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh, int[] biome, int[] clouds, int[] rain, int[] snow,
-                 int[] sun, int[] moon, int skyColor, int fogColor) {
-        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null, null, null, null, null, null, null, 0x78A7FF, 0xC0D8FF); }
+                 int[] sun, int[] moon, int skyColor, int fogColor, float[] shadows) {
+        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null, null, null, null, null, null, null, 0x78A7FF, 0xC0D8FF, null); }
 
         Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) {
-            this(argb, w, h, info, signature, quads, mesh, null, null, null, null, null, null, 0x78A7FF, 0xC0D8FF);
+            this(argb, w, h, info, signature, quads, mesh, null, null, null, null, null, null, 0x78A7FF, 0xC0D8FF, null);
         }
 
         /** The rect (x, y, w, h) of the game's clouds.png in the atlas, or null. */
@@ -1055,10 +1055,31 @@ final class PreviewBlocks {
         }
         for (int k = 0; k < cellQuads.size(); k++) mesh[cells + k] = cellQuads.get(k)[1];
         perColumnTint = false;
-        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh, biomeCols, cloudRect, rainRect, snowRect, sunRect, moonRect, skyColor, fogColor);
+        // the round shadow under every entity (x, y, z relative to the volume, radius), like the game's
+        float[] shadows = new float[Math.min(64, ents.size()) * 4];
+        for (int k = 0; k < shadows.length / 4; k++) {
+            PreviewWorld.Entity e = ents.get(k);
+            shadows[k * 4] = (float) (e.x() - s.ox());
+            shadows[k * 4 + 1] = (float) (e.y() - s.oy());
+            shadows[k * 4 + 2] = (float) (e.z() - s.oz());
+            shadows[k * 4 + 3] = (float) shadowRadius(e.id());
+        }
+        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh, biomeCols, cloudRect, rainRect, snowRect, sunRect, moonRect, skyColor, fogColor, shadows);
         if (CACHE.size() > 4) CACHE.clear();
         CACHE.put(sig, a);
         return a;
+    }
+
+    /** The game's shadow radius of an entity type (blocks). */
+    static double shadowRadius(String id) {
+        String n = id.substring(id.indexOf(':') + 1);
+        return switch (n) {
+            case "cow", "mooshroom", "sheep", "pig", "horse", "donkey", "mule", "llama", "camel", "polar_bear", "panda", "goat" -> 0.7;
+            case "chicken", "rabbit", "bat", "parrot", "frog", "silverfish", "endermite" -> 0.3;
+            case "spider", "cave_spider", "wolf", "fox", "cat", "ocelot", "turtle" -> 0.6;
+            case "iron_golem", "ravager", "warden" -> 1.0;
+            default -> 0.5;
+        };
     }
 
     private static double[] add(double[] a, double[] b) { return new double[] {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
