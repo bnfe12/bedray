@@ -465,6 +465,7 @@ final class PreviewWorld {
         look("faceBottom", "Bottom face shade", "Brightness of faces looking down.", 0.5),
         look("faceX", "East / west face shade", "Brightness of faces along x.", 0.6),
         look("faceZ", "North / south face shade", "Brightness of faces along z.", 0.8),
+        look("waterLevel", "Water level", "Height of the water surface in its top block (the game: about 0.89).", 0.889),
         look("waterOpacity", "Water opacity", "How much of the water surface covers what lies under it.", 0.55),
         look("waterReflection", "Water sky reflection", "How much sky the water surface reflects.", 0.25),
         look("glassOpacity", "Glass and ice opacity", "How much glass and ice cover what lies behind.", 0.35),

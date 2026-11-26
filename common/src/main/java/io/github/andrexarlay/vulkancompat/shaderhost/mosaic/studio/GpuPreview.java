@@ -615,9 +615,13 @@ final class GpuPreview implements AutoCloseable {
         fill(c.atlas, rgba, 4);
         try (MemoryStack s = MemoryStack.stackPush()) {
             LongBuffer lp = s.mallocLong(1);
-            ByteBuffer code = s.malloc(spirv.length);
+            ByteBuffer code = MemoryUtil.memAlloc(spirv.length); // the world shader outgrew the 64 KB stack
             code.put(spirv).flip();
-            check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(code), null, lp), "world shader module");
+            try {
+                check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(code), null, lp), "world shader module");
+            } finally {
+                MemoryUtil.memFree(code);
+            }
             c.gbModule = lp.get(0);
             int[][] binds = {{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, {15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                 {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
@@ -1182,6 +1186,21 @@ final class GpuPreview implements AutoCloseable {
                 tx.rgb *= cubeTint(cell, n);
                 if (m == 1u) {
                     if (prev == 1u) continue;
+                    // the top water block: its surface sits below the block's top, like the game's (World look: Water level)
+                    if ((cellAt(cell + ivec3(0, 1, 0)) & 0x3Fu) != 1u && pw_waterLevel < 0.999) {
+                        float top = float(cell.y) + pw_waterLevel;
+                        if (q.y > top + 1e-4) {
+                            if (d.y >= 0.0) continue;
+                            float ts = (top - o.y) / d.y;
+                            if (ts > tOut) continue; // leaves the cell above the water
+                            t = ts;
+                            n = vec3(0.0, 1.0, 0.0);
+                            q = o + d * t;
+                            tx = texel(tileFor(cell, m, n), q, n);
+                            tx.rgb *= cubeTint(cell, n);
+                            front = cellAt(cell + ivec3(0, 1, 0)); // the light above the surface
+                        }
+                    }
                     prev = 1u;
                     depth = min(depth, t);
                     vec3 w = tx.rgb * light(front, n) + sky(reflect(d, n)) * pw_waterReflection;
