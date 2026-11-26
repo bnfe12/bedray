@@ -1075,7 +1075,10 @@ public final class MosaicEffects {
         look("partNotBlocks", "Highlight mobs", "brightness", v(1.25), "saturation", v(1.2)),
         look("partNotBlocks", "Silhouettes", "brightness", v(0.15), "saturation", v(0.0)),
         look("partUnderwater", "Clear", "tint", v(0.85, 1.0, 1.05), "contrast", v(1.1)),
-        look("partUnderwater", "Deep murk", "tint", v(0.5, 0.7, 0.75), "brightness", v(0.7)));
+        look("partUnderwater", "Deep murk", "tint", v(0.5, 0.7, 0.75), "brightness", v(0.7)),
+        look("partClouds", "Sunset clouds", "tint", v(1.25, 0.82, 0.62), "saturation", v(1.2)),
+        look("partClouds", "Storm", "brightness", v(0.55), "saturation", v(0.4), "contrast", v(1.15)),
+        look("partClouds", "Pastel", "tint", v(1.0, 0.9, 1.05), "contrast", v(0.85)));
 
     /** The looks of one part. */
     public static List<PartLook> looksOf(String part) { return PART_LOOKS.stream().filter(l -> l.part().equals(part)).toList(); }
