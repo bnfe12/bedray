@@ -163,9 +163,22 @@ final class Panels {
 
     static final class ProblemsPanel extends Listening {
         final DefaultListModel<MosaicGraph.Problem> lm = new DefaultListModel<>();
-        final JList<MosaicGraph.Problem> list = new JList<>(lm);
+        final JList<MosaicGraph.Problem> list = new JList<>(lm) {
+            @Override protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                if (getModel().getSize() > 0) return;
+                // the empty state says so, instead of a blank area
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                g2.setFont(UI_S);
+                g2.setColor(FAINT);
+                String s = model.analysis != null && model.analysis.ok() ? "No problems" : "";
+                g2.drawString(s, 10, 18);
+                g2.dispose();
+            }
+        };
         final JPanel root = new JPanel(new BorderLayout());
-        final JCheckBox hints = new JCheckBox("Show hints", false);
+        final JCheckBox hints = new JCheckBox("Hints", false);
 
         ProblemsPanel(StudioModel m) {
             super(m);

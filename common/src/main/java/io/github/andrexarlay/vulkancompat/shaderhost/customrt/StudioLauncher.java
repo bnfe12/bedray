@@ -121,6 +121,12 @@ public final class StudioLauncher {
         }
         out.add("-Xmx" + mb + "m");
         out.add("-XX:+UseSerialGC"); // the smallest collector footprint: Studio is an editor, not a server
+        try {
+            int scale = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.studio.StudioSettings.load().uiScale;
+            if (scale > 0) out.add("-Dsun.java2d.uiScale=" + scale / 100.0); // Settings > Look > Interface scale
+        } catch (RuntimeException | LinkageError ignored) {
+            // the system's scale
+        }
         if (hostWindow != 0) out.add("-Dmosaic.embed.hwnd=" + hostWindow);
         if (libraryPath != null && !libraryPath.isBlank()) out.add("-Djava.library.path=" + libraryPath);
         if (lwjglPath != null && !lwjglPath.isBlank()) out.add("-Dorg.lwjgl.librarypath=" + lwjglPath);

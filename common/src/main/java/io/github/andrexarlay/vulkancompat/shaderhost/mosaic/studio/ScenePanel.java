@@ -43,22 +43,25 @@ final class ScenePanel extends Panels.Listening {
     ScenePanel(StudioModel m) {
         super(m);
         root.setBackground(PANEL);
-        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
-        bar.setBackground(PANEL2);
+        JPanel barBox = new JPanel(new BorderLayout());
+        barBox.setBackground(PANEL2);
+        barBox.setBorder(new EmptyBorder(3, 4, 3, 4));
+        StudioWidgets.OverflowBar bar = new StudioWidgets.OverflowBar(4); // a narrow Scene keeps its buttons behind »
+        barBox.add(bar, BorderLayout.CENTER);
         JButton add = button("Add part", "Put a part of Minecraft's picture (water, sky, leaves...) into the chain before the output", () -> { });
         add.addActionListener(e -> {
             JPopupMenu pm = addMenu();
             StudioWidgets.fitToScreen(pm, add);
             pm.show(add, 0, add.getHeight());
         });
-        bar.add(add);
-        bar.add(button("Group", "Put the selected nodes into a group (a frame), like a collection", () -> model.runAction.accept(StudioKeys.Action.GROUP)));
-        bar.add(button("By parts", "Start from the template Minecraft by parts: every part of the picture as one node", () -> {
+        bar.tool(add);
+        bar.tool(button("Group", "Put the selected nodes into a group (a frame), like a collection", () -> model.runAction.accept(StudioKeys.Action.GROUP)));
+        bar.tool(button("By parts", "Start from the template Minecraft by parts: every part of the picture as one node", () -> {
             var t = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicTemplates.all().stream()
                 .filter(x -> x.name().equals("Minecraft by parts")).findFirst().orElse(null);
             if (t != null) model.loadTemplate(t);
         }));
-        root.add(bar, BorderLayout.NORTH);
+        root.add(barBox, BorderLayout.NORTH);
         tree.setRootVisible(false);
         tree.setShowsRootHandles(true);
         tree.setBackground(PANEL);

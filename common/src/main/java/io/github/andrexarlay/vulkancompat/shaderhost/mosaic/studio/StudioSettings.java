@@ -159,6 +159,12 @@ public final class StudioSettings {
     public String vanillaJar = "";
     /** Preview resolution (the G-buffer and every pass of the graph run at this size). */
     public int previewWidth = 640, previewHeight = 360;
+    /** The preview renders at the panel's own size and shape (times previewScale) instead of previewWidth x previewHeight. */
+    public boolean previewFit = true;
+    /** Fit panel: percent of the panel's pixels the world and the graph run at (lower = faster on a laptop). */
+    public int previewScale = 60;
+    /** Fit panel: the longest side never goes over this many pixels. */
+    public int previewMaxSide = 1920;
     /** Look of the preview world (PreviewWorld.LOOK keys); missing keys use their defaults. */
     public java.util.Map<String, double[]> previewLook = new java.util.LinkedHashMap<>();
     // ---------------------------------------------------------------- editor
@@ -227,6 +233,8 @@ public final class StudioSettings {
     public java.util.Map<String, double[]> previewViews = new java.util.LinkedHashMap<>();
 
     /** Heap of the Studio process the game starts (J), in MB: the game runs beside it. */
+    /** Interface scale of every window in percent (0: the system's own scale); applies next start. */
+    public int uiScale = 0;
     public int studioMemoryMb = 1024;     // 384..8192
 
     /** The start screen (projects) when Studio starts without a file. */
@@ -303,6 +311,8 @@ public final class StudioSettings {
         if (hiddenLibraries == null) hiddenLibraries = new java.util.LinkedHashSet<>();
         if (collapsed == null) collapsed = new java.util.LinkedHashSet<>();
         previewWidth = Math.clamp(previewWidth, 160, 3840);
+        previewScale = Math.clamp(previewScale, 20, 200);
+        previewMaxSide = Math.clamp(previewMaxSide, 320, 3840);
         previewHeight = Math.clamp(previewHeight, 90, 2160);
         if (previewLook == null) previewLook = new java.util.LinkedHashMap<>();
         if (layoutVersion < LAYOUT_VERSION) { // 2: the Preview in the default layout; 3: the Scene (outliner) beside the nodes
@@ -335,6 +345,7 @@ public final class StudioSettings {
         if (previewWorld == null) previewWorld = "";
         if (projectsDir == null) projectsDir = "";
         studioMemoryMb = Math.clamp(studioMemoryMb, 384, 8192);
+        if (uiScale != 0) uiScale = Math.clamp(uiScale, 75, 200);
         if (projectAuthor == null) projectAuthor = "";
         previewFarSize = Math.clamp(previewFarSize, 0, 1024);
         previewBiomeTemperature = Math.clamp(previewBiomeTemperature, -1.0, 2.0);

@@ -161,14 +161,21 @@ final class PreviewPanel extends Panels.Listening {
         row2.setBorder(new EmptyBorder(4, 0, 0, 0));
         row2.add(label("Time", FAINT));
         row2.add(time);
-        JComboBox<String> size = new JComboBox<>(new String[] {"320 x 180", "640 x 360", "960 x 540", "1280 x 720", "1600 x 900", "1920 x 1080",
+        JComboBox<String> size = new JComboBox<>(new String[] {FIT, "320 x 180", "640 x 360", "960 x 540", "1280 x 720", "1600 x 900", "1920 x 1080",
             "2560 x 1440", "Custom..."});
         String current = StudioUi.settings.previewWidth + " x " + StudioUi.settings.previewHeight;
         if (((DefaultComboBoxModel<String>) size.getModel()).getIndexOf(current) < 0) size.insertItemAt(current, 0);
-        size.setToolTipText("Preview resolution: the world and every pass of the graph run at this size");
-        size.setSelectedItem(StudioUi.settings.previewWidth + " x " + StudioUi.settings.previewHeight);
+        size.setToolTipText("<html>Preview resolution: the world and every pass of the graph run at this size.<br>"
+            + "Fit panel: the panel's own size and shape (Settings &gt; Preview: how many percent of its pixels)</html>");
+        size.setSelectedItem(StudioUi.settings.previewFit ? FIT : StudioUi.settings.previewWidth + " x " + StudioUi.settings.previewHeight);
         size.addActionListener(e -> {
             String pick = (String) size.getSelectedItem();
+            if (FIT.equals(pick)) {
+                StudioUi.settings.previewFit = true;
+                StudioUi.settings.save();
+                lastKey = null;
+                return;
+            }
             if ("Custom...".equals(pick)) {
                 String t = JOptionPane.showInputDialog(root, "Preview size (width x height, 160..3840 x 90..2160)",
                     StudioUi.settings.previewWidth + " x " + StudioUi.settings.previewHeight);
@@ -183,6 +190,7 @@ final class PreviewPanel extends Panels.Listening {
                 return;
             }
             String[] wh = pick.split(" x ");
+            StudioUi.settings.previewFit = false;
             StudioUi.settings.previewWidth = Integer.parseInt(wh[0]);
             StudioUi.settings.previewHeight = Integer.parseInt(wh[1]);
             StudioUi.settings.save();
@@ -256,17 +264,25 @@ final class PreviewPanel extends Panels.Listening {
         image.addActionListener(e -> imageMenu().show(image, 0, image.getHeight()));
         row3.add(image);
         // one flowing row of tools: a single line on a wide panel, wrapping on a narrow one (small screens keep the picture big)
-        JPanel rows = new JPanel(new StartScreen.WrapLayout(FlowLayout.LEFT, 4, 3));
-        rows.setOpaque(false);
-        for (Component comp : row2.getComponents()) rows.add(comp);
-        for (Component comp : row3.getComponents()) rows.add(comp);
-        for (Component comp : rows.getComponents()) { // compact: small text and margins, so more of the picture shows
+        // one row of tools under the source switch; what a narrow panel has no room for waits behind »
+        StudioWidgets.OverflowBar rows = new StudioWidgets.OverflowBar(4);
+        rows.setBorder(new EmptyBorder(4, 0, 0, 0));
+        java.util.List<Component> order = new java.util.ArrayList<>();
+        for (Component comp : row3.getComponents()) order.add(comp);
+        for (Component comp : row2.getComponents()) order.add(comp);
+        // the most used first: Bypass, Node, Views, World, size, view mode, compare..., time last
+        order.sort(java.util.Comparator.comparingInt(c -> {
+            String t = c instanceof AbstractButton ab ? ab.getText() : c instanceof JLabel jl ? jl.getText() : "";
+            return switch (t) {
+                case "Bypass" -> 0; case "Node" -> 1; case "Views" -> 2; case "World" -> 3; case "Export" -> 9; case "Time" -> 10;
+                default -> c == time ? 11 : c instanceof JComboBox<?> ? 5 : 8;
+            };
+        }));
+        for (Component comp : order) { // compact: small text and margins, so more of the picture shows
             comp.setFont(UI_S);
             if (comp instanceof AbstractButton ab) ab.setMargin(new Insets(2, 8, 2, 8));
+            rows.tool(comp);
         }
-        bar.addComponentListener(new java.awt.event.ComponentAdapter() {
-            @Override public void componentResized(java.awt.event.ComponentEvent e) { rows.revalidate(); }
-        });
         bar.add(right, BorderLayout.EAST);
         bar.add(rows, BorderLayout.SOUTH);
         root.add(bar, BorderLayout.NORTH);
@@ -1103,8 +1119,9 @@ final class PreviewPanel extends Panels.Listening {
                 BufferedImage out;
                 try {
                     float t = (System.nanoTime() - start) / 1e9f;
-                    gpu.worldWidth = StudioUi.settings.previewWidth;
-                    gpu.worldHeight = StudioUi.settings.previewHeight;
+                    int[] wh = renderSize();
+                    gpu.worldWidth = wh[0];
+                    gpu.worldHeight = wh[1];
                     var list = (bypass || materialWorld) && passThrough() != null ? passThrough()
                         : runs != null ? runs : java.util.List.of(new GpuPreview.PassRun(c.spirv(), 1, -1));
                     if (!bypass && !materialWorld && nodeMode) {
@@ -1165,7 +1182,26 @@ final class PreviewPanel extends Panels.Listening {
     private String lookKey() {
         return io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.toJson(model.doc.settings) + "|"
             + io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.toJson(StudioUi.settings.previewLook) + "|"
-            + StudioUi.settings.previewWidth + "x" + StudioUi.settings.previewHeight;
+            + java.util.Arrays.toString(renderSize());
+    }
+
+    static final String FIT = "Fit panel";
+
+    /** The size the preview renders at: the panel's own pixels (HiDPI included) times the scale, or the fixed size. */
+    int[] renderSize() {
+        StudioSettings s = StudioUi.settings;
+        JComponent v = view;
+        if (!s.previewFit || v == null || v.getWidth() < 16 || v.getHeight() < 16) return new int[] {s.previewWidth, s.previewHeight};
+        double dpi = 1;
+        GraphicsConfiguration gc = v.getGraphicsConfiguration();
+        if (gc != null) dpi = gc.getDefaultTransform().getScaleX();
+        double k = dpi * s.previewScale / 100.0;
+        double w = v.getWidth() * k, h = v.getHeight() * k;
+        double over = Math.max(w, h) / s.previewMaxSide;
+        if (over > 1) { w /= over; h /= over; }
+        // multiples of 8 (whole work groups), so a resize by a pixel or two does not rebuild every buffer
+        int iw = Math.max(160, (int) Math.round(w / 8) * 8), ih = Math.max(96, (int) Math.round(h / 8) * 8);
+        return new int[] {iw, ih};
     }
 
     /** GPU time of the last run and its three most expensive passes (names from the pass plan), or "". */

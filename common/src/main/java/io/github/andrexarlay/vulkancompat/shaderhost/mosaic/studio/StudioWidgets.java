@@ -814,6 +814,114 @@ final class StudioWidgets {
      * Makes a popup menu fit the screen it opens on (small screens such as 1366 x 720): items with a line of help become
      * one line (the help moves to the tooltip), and a menu still taller than the screen is laid out in columns.
      */
+    /**
+     * One row of tools that never wraps and never gets in the picture's way: what does not fit goes behind a » button
+     * (the tools themselves move into its menu while it is open). Any panel width works, down to the » alone.
+     */
+    static final class OverflowBar extends JPanel {
+        private final JButton more = new JButton("»");
+        private final java.util.List<Component> tools = new java.util.ArrayList<>();
+        private final java.util.List<Component> hidden = new java.util.ArrayList<>();
+        private final int gap;
+
+        OverflowBar(int gap) {
+            this.gap = gap;
+            setOpaque(false);
+            setLayout(null);
+            more.setFocusable(false);
+            more.setMargin(new Insets(2, 8, 2, 8));
+            more.setToolTipText("More tools (the panel is narrow)");
+            more.addActionListener(e -> openMore());
+            super.add(more);
+        }
+
+        void tool(Component c) {
+            tools.add(c);
+            super.add(c);
+        }
+
+        @Override public Dimension getPreferredSize() {
+            int w = 0, h = more.getPreferredSize().height;
+            for (Component c : tools) if (c.isVisible() || hidden.contains(c)) {
+                Dimension d = c.getPreferredSize();
+                w += d.width + gap;
+                h = Math.max(h, d.height);
+            }
+            Insets in = getInsets();
+            return new Dimension(w + in.left + in.right, h + in.top + in.bottom);
+        }
+
+        @Override public Dimension getMinimumSize() {
+            Dimension p = getPreferredSize();
+            return new Dimension(more.getPreferredSize().width, p.height);
+        }
+
+        @Override public void doLayout() {
+            Insets in = getInsets();
+            int x = in.left, h = getHeight() - in.top - in.bottom, limit = getWidth() - in.right;
+            int moreW = more.getPreferredSize().width;
+            // does everything fit without the » button?
+            int all = 0;
+            for (Component c : tools) if (shown(c)) all += c.getPreferredSize().width + gap;
+            boolean overflow = in.left + all - gap > limit;
+            hidden.clear();
+            for (Component c : tools) {
+                if (!shown(c)) continue;
+                Dimension d = c.getPreferredSize();
+                int room = overflow ? limit - moreW - gap : limit;
+                if (hidden.isEmpty() && x + d.width <= room) {
+                    c.setBounds(x, in.top + (h - d.height) / 2, d.width, d.height);
+                    x += d.width + gap;
+                } else {
+                    hidden.add(c);
+                    c.setBounds(0, 0, 0, 0);
+                }
+            }
+            Dimension md = more.getPreferredSize();
+            more.setVisible(!hidden.isEmpty());
+            more.setBounds(Math.max(in.left, limit - md.width), in.top + (h - md.height) / 2, md.width, md.height);
+        }
+
+        private boolean shown(Component c) {
+            return c.isVisible() || hidden.contains(c);
+        }
+
+        private void openMore() {
+            if (hidden.isEmpty()) return;
+            java.util.List<Component> moved = new java.util.ArrayList<>(hidden);
+            JPanel box = new JPanel(new GridBagLayout());
+            box.setOpaque(false);
+            box.setBorder(new javax.swing.border.EmptyBorder(6, 6, 6, 6));
+            GridBagConstraints gc = new GridBagConstraints();
+            gc.gridx = 0;
+            gc.fill = GridBagConstraints.HORIZONTAL;
+            gc.insets = new Insets(2, 0, 2, 0);
+            for (Component c : moved) {
+                remove(c);
+                c.setVisible(true);
+                box.add(c, gc);
+            }
+            JPopupMenu m = new JPopupMenu();
+            m.add(box);
+            m.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
+                @Override public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent e) { }
+                @Override public void popupMenuCanceled(javax.swing.event.PopupMenuEvent e) { }
+                @Override public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent e) {
+                    // the tools go back into the bar, in their order
+                    for (Component c : moved) box.remove(c);
+                    OverflowBar.this.removeAll();
+                    OverflowBar.super.add(more);
+                    for (Component c : tools) OverflowBar.super.add(c);
+                    hidden.clear();
+                    revalidate();
+                    repaint();
+                }
+            });
+            fitToScreen(m, more);
+            m.show(more, more.getWidth() - box.getPreferredSize().width - 12, more.getHeight());
+        }
+    }
+
     static void fitToScreen(JPopupMenu m, Component invoker) {
         GraphicsConfiguration gc = invoker == null ? null : invoker.getGraphicsConfiguration();
         Rectangle screen = gc == null ? GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds() : gc.getBounds();

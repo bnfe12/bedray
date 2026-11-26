@@ -27,6 +27,9 @@ final class Dock {
     // ================================================================== area
 
     static final class Area extends JPanel {
+        /** Any area can be made as small as you like: its own tools fold away (overflow menus, scrolling). */
+        @Override public Dimension getMinimumSize() { return new Dimension(60, 40); }
+
         final StudioModel model;
         Panels.Type type;
         Panels.Panel panel;
@@ -157,7 +160,11 @@ final class Dock {
             @Override public void componentResized(java.awt.event.ComponentEvent e) {
                 if (sp.getWidth() <= 0 || sp.getHeight() <= 0) return;
                 sp.removeComponentListener(this);
-                sp.setDividerLocation(ratio);
+                // a saved ratio never squeezes an area below a usable size (a panel cut to "Prob" helps nobody)
+                int whole = sideBySide ? sp.getWidth() : sp.getHeight(), least = sideBySide ? 170 : 80;
+                int at = (int) Math.round(whole * ratio);
+                if (whole > 2 * least) at = Math.clamp(at, least, whole - least);
+                sp.setDividerLocation(at);
             }
         });
         SwingUtilities.invokeLater(() -> {

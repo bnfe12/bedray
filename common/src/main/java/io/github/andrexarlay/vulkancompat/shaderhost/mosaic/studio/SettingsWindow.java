@@ -338,6 +338,11 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.row("Accent", "Selection, focus and highlights", combo(StudioSettings.Accent.values(), draft.accent, v -> draft.accent = v));
         f.row("Window buttons", "Mosaic set on the right or traffic lights on the left", combo(StudioSettings.WindowButtons.values(), draft.windowButtons, v -> draft.windowButtons = v));
         f.row("Text size", "Scales every font of the studio", slider(80, 160, draft.fontPercent, v -> draft.fontPercent = v));
+        String[] scales = {"System", "75 %", "90 %", "100 %", "110 %", "125 %", "150 %", "175 %", "200 %"};
+        String curScale = draft.uiScale == 0 ? "System" : draft.uiScale + " %";
+        f.row("Interface scale", "Every window, icon and gap bigger or smaller (System: the Windows display scale); applies next start",
+            combo(scales, java.util.Arrays.asList(scales).contains(curScale) ? curScale : "System",
+                v -> draft.uiScale = v.equals("System") ? 0 : Integer.parseInt(v.replace(" %", ""))));
         f.section("Nodes and wires");
         f.row("Wires", "Curved, straight or angled", combo(StudioSettings.WireStyle.values(), draft.wires, v -> draft.wires = v));
         f.row("Wire thickness", null, slider(10, 50, Math.round(draft.wireWidth * 10), v -> draft.wireWidth = v / 10f, SettingsWindow::tenth));
@@ -438,6 +443,9 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.row("Frames per second at most", "The GPU may give fewer; lower saves power", slider(2, 120, draft.previewFps, v -> draft.previewFps = v));
         f.row("GPU share", "Most of the GPU's time the preview may take; lower keeps the studio smooth on laptops",
             slider(10, 100, draft.previewGpuShare, v -> draft.previewGpuShare = v, v -> v + " %"));
+        f.row("Fit panel resolution", "Percent of the panel's pixels; lower is faster on a laptop, 100 is sharp",
+            slider(20, 200, draft.previewScale, v -> draft.previewScale = v, v -> v + " %"));
+        f.row("Fit panel: longest side", "Never more pixels than this on the long side", slider(320, 3840, draft.previewMaxSide, v -> draft.previewMaxSide = v));
         f.wide(check("Draw rarely while the studio is in the background", draft.previewIdleInBackground, v -> draft.previewIdleInBackground = v));
         f.row("Background frame interval", "How often the preview draws while another window is in front",
             slider(250, 30000, draft.previewBackgroundMs, v -> draft.previewBackgroundMs = v, v -> String.format(java.util.Locale.ROOT, "%.1f s", v / 1000.0)));

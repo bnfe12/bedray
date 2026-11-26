@@ -158,7 +158,15 @@ final class StudioApp {
         }
         String shotPanel = System.getProperty("mosaic.selfshot.panel"); // e.g. GUIDE: verification aid
         if (shot != null && shotPanel != null) {
-            Timer pT = new Timer(1500, e -> popOut(Panels.Type.valueOf(shotPanel)));
+            Timer pT = new Timer(1500, e -> {
+                popOut(Panels.Type.valueOf(shotPanel));
+                String ps = System.getProperty("mosaic.selfshot.popSize"); // e.g. 300x400: verification aid
+                if (ps != null && windows.size() > 1) {
+                    String[] wh = ps.split("x");
+                    windows.get(windows.size() - 1).setSize(Integer.parseInt(wh[0]), Integer.parseInt(wh[1]));
+                    windows.get(windows.size() - 1).validate();
+                }
+            });
             pT.setRepeats(false);
             pT.start();
         }
@@ -1374,6 +1382,7 @@ final class StudioApp {
         next.previewLook = settings.previewLook;
         next.layoutVersion = settings.layoutVersion;
         next.previewWidth = settings.previewWidth;    // the preview's size list changes these
+        next.previewFit = settings.previewFit;
         next.previewHeight = settings.previewHeight;
         settings = next;
         List<BufferedImage> pictures = new ArrayList<>();
