@@ -79,7 +79,7 @@ final class ScenePanel extends Panels.Listening {
                     int avail = Math.max(60, t.getVisibleRect().width - depth * 20 - 34);
                     FontMetrics fb = l.getFontMetrics(UI_B), fs = l.getFontMetrics(UI_S);
                     String head = StartScreen.fit(r.title(), fb, avail - fb.stringWidth(dot));
-                    String role = r.role().isEmpty() ? "" : StartScreen.fit(r.role(), fs, avail);
+                    String role = r.role().isEmpty() || !StudioUi.settings.showHints ? "" : StartScreen.fit(r.role(), fs, avail);
                     l.setText("<html><span style='color:" + hex(muted ? FAINT : r.color()) + "'>" + dot + "</span>"
                         + "<b>" + esc(head) + "</b>" + (role.isEmpty() ? "" : "<br><span style='color:" + hex(FAINT) + "; font-size:smaller'>"
                         + esc(role) + "</span>") + "</html>");
@@ -139,7 +139,7 @@ final class ScenePanel extends Panels.Listening {
         JLabel hint = label("Click: show it. The dot: on / off. Double click: rename.", FAINT);
         hint.setFont(UI_S);
         hint.setBorder(new EmptyBorder(3, 8, 3, 8));
-        root.add(hint, BorderLayout.SOUTH);
+        if (StudioUi.settings.showHints) root.add(hint, BorderLayout.SOUTH);
         refresh();
     }
 

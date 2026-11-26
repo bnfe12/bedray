@@ -170,6 +170,12 @@ public final class StudioSettings {
     public int compileDelayMs = 350;       // 100..3000
     /** Fit the view to the graph when a graph or template is opened. */
     public boolean fitOnOpen = true;
+    /** Hints and second lines (what a Scene row does, how to use a panel); off keeps the studio quiet - tooltips still tell. */
+    public boolean showHints = false;
+    /** Area header buttons (split, maximize, pop out, close) only on the area under the pointer. */
+    public boolean hoverAreaButtons = true;
+    /** Status bar and preview footer in full (node counts, folding, GPU per pass) or short. */
+    public boolean detailedStatus = false;
     /** Most recent files (File > Open recent, command palette). */
     public java.util.List<String> recentFiles = new java.util.ArrayList<>();
     /** Commands used last in the command palette (shown first). */

@@ -145,10 +145,12 @@ final class InspectorPanel extends Panels.Listening {
             content.add(title("Graph"));
             content.add(text(model.doc.nodes.size() + " nodes, " + model.doc.functions.size() + " node functions, "
                 + model.doc.frames.size() + " frames.", MUTED));
-            content.add(Box.createVerticalStrut(8));
-            content.add(text("Click a node (or Tab / Alt+arrows) to edit it. Enter focuses this panel.", MUTED));
-            content.add(Box.createVerticalStrut(8));
-            content.add(text("Socket colors: grey float, green vec2, amber vec3, violet vec4, white several.", FAINT));
+            if (StudioUi.settings.showHints) {
+                content.add(Box.createVerticalStrut(8));
+                content.add(text("Click a node (or Tab / Alt+arrows) to edit it. Enter focuses this panel.", MUTED));
+                content.add(Box.createVerticalStrut(8));
+                content.add(text("Socket colors: grey float, green vec2, amber vec3, violet vec4, white several.", FAINT));
+            }
             if (!model.rendererDoc() && !model.materialDoc()) graphSettings();
             return;
         }
@@ -157,7 +159,10 @@ final class InspectorPanel extends Panels.Listening {
         MosaicCatalog.Entry e = MosaicCatalog.of(n.type);
         String typeLabel = fn ? (def != null && def.label != null ? def.label : n.type) : e.label();
         content.add(title(n.label != null ? n.label : typeLabel));
-        content.add(text(n.id + "   " + (fn ? "node code" : e.category().label) + (n.label != null ? "   (" + typeLabel + ")" : ""), MUTED));
+        JLabel kindLine = text((fn ? (io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicEffects.part(MosaicFunction.nameOf(n.type)) != null ? "Minecraft part" : "Function") : e.category().label)
+            + (n.label != null ? "  ·  " + typeLabel : ""), MUTED);
+        kindLine.setToolTipText("Node id: " + n.id + " (the name the CLI and the code use)");
+        content.add(kindLine);
         content.add(Box.createVerticalStrut(4));
         content.add(text(fn ? (def == null || def.help == null ? "" : def.help) : e.help(), MUTED));
         if (fn) partLooks(n);
@@ -855,8 +860,9 @@ final class InspectorPanel extends Panels.Listening {
      */
     private void graphSettings() {
         content.add(section("Graph settings"));
-        content.add(text("Numbers every node builds on (sky, sun path, ray lengths, material colours). Saved with this graph; Enter applies,"
-            + " the slider applies on release, Reset puts one value back. A dot marks a changed value.", FAINT));
+        if (StudioUi.settings.showHints)
+            content.add(text("Numbers every node builds on (sky, sun path, ray lengths, material colours). Saved with this graph; Enter applies,"
+                + " the slider applies on release, Reset puts one value back. A dot marks a changed value.", FAINT));
         java.util.List<Object[]> rows = new java.util.ArrayList<>(); // {lower-case text, components...}
         JTextField filter = field("");
         filter.setToolTipText("Filter the graph settings by name, group or help");

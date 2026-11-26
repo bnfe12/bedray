@@ -300,7 +300,7 @@ final class GraphPanel extends JComponent {
     String paramText(MosaicDocument.ENode n) {
         String base = baseParamText(n);
         int hidden = base.isEmpty() ? hiddenInputs(n) : 0;
-        return hidden > 0 ? "+" + hidden + " more (Ctrl+H)" : base;
+        return hidden > 0 ? "+" + hidden + " more" : base;
     }
 
     private String baseParamText(MosaicDocument.ENode n) {

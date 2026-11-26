@@ -194,6 +194,16 @@ final class StudioApp {
             s.setRepeats(false);
             s.start();
         }
+        String shotStart = System.getProperty("mosaic.selfshot.start"); // a start-screen page, "settings" opens settings from it: verification aid
+        if (shot != null && shotStart != null) {
+            Timer st = new Timer(1500, e -> {
+                StartScreen ss = new StartScreen(p -> { }, false);
+                ss.setVisible(true);
+                if (shotStart.equals("settings")) ss.openSettings();
+            });
+            st.setRepeats(false);
+            st.start();
+        }
         String shotPalette = System.getProperty("mosaic.selfshot.palette"); // a query: verification aid
         if (shot != null && shotPalette != null) {
             Timer pa = new Timer(2200, e -> CommandPalette.open(this, false, shotPalette));
@@ -221,6 +231,15 @@ final class StudioApp {
                         pg.dispose();
                         javax.imageio.ImageIO.write(pi, "png", new java.io.File(shot.replace(".png", "-palette.png")));
                     }
+                    int on = 0;
+                    for (Window ow : Window.getWindows()) // the start screen and settings opened from it
+                        if (ow.isShowing() && (ow instanceof StartScreen || (ow instanceof SettingsWindow sw && sw != settingsWindow))) {
+                            java.awt.image.BufferedImage oi = new java.awt.image.BufferedImage(ow.getWidth(), ow.getHeight(), java.awt.image.BufferedImage.TYPE_INT_RGB);
+                            java.awt.Graphics2D og = oi.createGraphics();
+                            ow.paint(og);
+                            og.dispose();
+                            javax.imageio.ImageIO.write(oi, "png", new java.io.File(shot.replace(".png", "-win" + on++ + ".png")));
+                        }
                     if (settingsWindow != null && settingsWindow.isShowing()) {
                         java.awt.image.BufferedImage si = settingsWindow.snapshot();
                         if (si != null) javax.imageio.ImageIO.write(si, "png", new java.io.File(shot.replace(".png", "-settings.png")));
@@ -1003,15 +1022,18 @@ final class StudioApp {
             statusLeft.setForeground(b == null || !b.warnings().isEmpty() ? WARN : OK);
         } else if (a.ok() && model.generated != null) {
             var s = model.generated.stats();
-            statusLeft.setText("Valid   " + model.doc.nodes.size() + " nodes -> " + s.emitted() + " in the shader   (" + s.unused() + " unused, "
-                + s.folded() + " folded, " + s.merged() + " merged)   per pixel: " + s.cost().rays() + " rays, " + s.cost().samples() + " samples"
-                + (model.doc.dirty ? "   - unsaved" : ""));
+            String full = "Valid   " + model.doc.nodes.size() + " nodes -> " + s.emitted() + " in the shader   (" + s.unused() + " unused, "
+                + s.folded() + " folded, " + s.merged() + " merged)   per pixel: " + s.cost().rays() + " rays, " + s.cost().samples() + " samples";
+            statusLeft.setText((settings.detailedStatus ? full : "Valid  ·  " + model.doc.nodes.size() + " nodes") + (model.doc.dirty ? "  ·  unsaved" : ""));
             statusLeft.setForeground(OK);
         } else {
             statusLeft.setText(a.errors().size() + " error(s): " + a.firstError());
             statusLeft.setForeground(BAD);
         }
-        statusLeft.setToolTipText(statusLeft.getText());
+        statusLeft.setToolTipText(model.generated != null ? "<html>" + model.doc.nodes.size() + " nodes -> " + model.generated.stats().emitted()
+            + " in the shader (" + model.generated.stats().unused() + " unused, " + model.generated.stats().folded() + " folded, "
+            + model.generated.stats().merged() + " merged)<br>per pixel: " + model.generated.stats().cost().rays() + " rays, "
+            + model.generated.stats().cost().samples() + " samples</html>" : statusLeft.getText());
         if (model.compiling) {
             statusMid.setText("compiling...");
             statusMid.setForeground(MUTED);
@@ -1023,11 +1045,15 @@ final class StudioApp {
             statusMid.setText(model.materialStatus);
             statusMid.setForeground(model.materialStatus.startsWith("Could not") ? BAD : OK);
         } else if (model.compile != null && model.generated != null) {
-            statusMid.setText(model.compile.ok() ? "compiles: " + model.compile.spirvBytes() + " B SPIR-V, " + model.compile.micros() / 1000 + " ms"
-                : "compile error: " + model.compile.errors().get(0).where());
+            statusMid.setText(model.compile.ok() ? (settings.detailedStatus ? "compiles: " + model.compile.spirvBytes() + " B SPIR-V, " + model.compile.micros() / 1000 + " ms"
+                : "Compiled  ·  " + Math.max(1, model.compile.spirvBytes() / 1024) + " KB") : "Compile error: " + model.compile.errors().get(0).where());
+            statusMid.setToolTipText(model.compile.ok() ? model.compile.spirvBytes() + " B SPIR-V, compiled in " + model.compile.micros() / 1000 + " ms" : null);
             statusMid.setForeground(model.compile.ok() ? OK : BAD);
         }
-        statusRight.setText((model.slangStatus.isEmpty() ? "" : model.slangStatus + "    ") + "game: " + model.gameStatus + "    F1 keys");
+        boolean gameIdle = model.gameStatus == null || model.gameStatus.startsWith("save the graph");
+        statusRight.setText(settings.detailedStatus ? (model.slangStatus.isEmpty() ? "" : model.slangStatus + "    ") + "game: " + model.gameStatus + "    F1 keys"
+            : gameIdle ? "" : "Game: " + model.gameStatus);
+        statusRight.setToolTipText("<html>Game: " + model.gameStatus + (model.slangStatus.isEmpty() ? "" : "<br>" + model.slangStatus) + "<br>F1: keys</html>");
         String t = (model.doc.dirty ? "• " : "") + (model.doc.file == null ? "untitled" : packName(model.doc.file) + "  /  " + model.doc.file.getFileName());
         if (main != null && !main.titleLabel.getText().equals(t)) {
             main.titleLabel.setText(t);
@@ -1275,6 +1301,34 @@ final class StudioApp {
         GraphPanel g = graph();
         if (g != null) g.center(n);
         model.say((problemAt + 1) + " / " + ps.size() + "  " + p.message(), p.severity() == MosaicGraph.Severity.ERROR ? BAD : WARN);
+    }
+
+    /** The settings window's view of the editor. */
+    SettingsWindow.Host settingsHost() {
+        return new SettingsWindow.Host() {
+            @Override public StudioSettings settings() { return settings; }
+            @Override public void restyle(StudioSettings next) { StudioApp.this.restyle(next); }
+            @Override public void saveSettings() { StudioApp.this.saveSettings(); }
+            @Override public Window owner() { return main; }
+            @Override public StudioKeys keys() { return model.keys; }
+            @Override public void capturingKeys(boolean on) { capturingKeys = on; }
+            @Override public void say(String text, Color c) { model.say(text, c); }
+            @Override public void runGame() { StudioApp.this.runGame(); }
+            @Override public void resetLayout() {
+                for (Dock.StudioWindow w : new java.util.ArrayList<>(windows)) if (!w.main) {
+                    windows.remove(w);
+                    w.dispose();
+                }
+                settings.layout = Dock.defaultLayout();
+                windows.removeIf(w -> !w.main);
+                main.root.removeAll();
+                main.root.add(Dock.load(model, Dock.parseWindows(Dock.defaultLayout()).get(0).getAsJsonObject().getAsJsonObject("tree")),
+                    BorderLayout.CENTER);
+                main.root.revalidate();
+                main.root.repaint();
+                saveSettings();
+            }
+        };
     }
 
     /** The menu bar of the main window (the command palette lists every item of it). */

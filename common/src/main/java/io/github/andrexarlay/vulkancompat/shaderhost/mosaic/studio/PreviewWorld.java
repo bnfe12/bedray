@@ -495,6 +495,7 @@ final class PreviewWorld {
         look("snowSpeed", "Snow speed", "How fast snow falls compared to rain.", 0.15),
         look("animate", "Animated textures", "1: water, lava, fire, sea lanterns... play their animations like the game; 0: the first frame.", 1),
         look("entityShadows", "Entity shadows", "Darkness of the round shadow under mobs (the game's entity shadows; 0: none).", 0.55),
+        look("brickSkip", "Skip empty space", "1: rays fly over empty 4 x 4 x 4 bricks in one step (faster, same picture); 0: block by block.", 1),
         look("models", "Block models and entities", "1: stairs, slabs, torches, flowers, fences... and the world's entities drawn by their models; 0: cubes.", 1));
 
     private static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting look(String key, String label, String help, double def) {

@@ -48,7 +48,7 @@ final class PreviewPanel extends Panels.Listening {
 
     /** How the image is shown: as it is, or a view that makes brightness, clipping or one channel readable. */
     enum Show {
-        IMAGE("Image"), FALSE_COLOUR("False colour"), CLIPPING("Clipping"), LUMA("Brightness"), RED("Red"), GREEN("Green"), BLUE("Blue");
+        IMAGE("Colour"), FALSE_COLOUR("False colour"), CLIPPING("Clipping"), LUMA("Brightness"), RED("Red"), GREEN("Green"), BLUE("Blue");
         final String label;
         Show(String l) { label = l; }
         @Override public String toString() { return label; }
@@ -207,7 +207,7 @@ final class PreviewPanel extends Panels.Listening {
             showMode = Show.valueOf(forcedShow);
             shows.setSelectedItem(showMode);
         }
-        shows.setToolTipText("<html>Image: as the graph draws it<br>False colour: brightness from blue (dark) to red and white (bright)"
+        shows.setToolTipText("<html>Colour: as the graph draws it<br>False colour: brightness from blue (dark) to red and white (bright)"
             + "<br>Clipping: red where a channel is at 255, blue where all are near 0<br>Brightness, Red, Green, Blue: one value as grey</html>");
         shows.addActionListener(e -> {
             showMode = (Show) shows.getSelectedItem();
@@ -221,8 +221,14 @@ final class PreviewPanel extends Panels.Listening {
             redraw();
         });
         row3.add(compareBox);
-        row3.add(button("Keep A", "Keep the frame shown now as A to compare against (change something, then look at Split or Difference)",
-            this::keepReference));
+        JButton keepA = button("Keep A", "Keep the frame shown now as A to compare against (change something, then look at Split or Difference)",
+            this::keepReference);
+        keepA.setVisible(compare != Compare.OFF); // only while comparing
+        compareBox.addActionListener(e -> {
+            keepA.setVisible(compare != Compare.OFF);
+            keepA.getParent().revalidate();
+        });
+        row3.add(keepA);
         JToggleButton bypassBtn = toggle("Bypass");
         bypassBtn.setToolTipText("The world without your graph, as the game draws it before your nodes (B). Keep A + Split compares them.");
         bypassBtn.addActionListener(e -> {
@@ -246,7 +252,7 @@ final class PreviewPanel extends Panels.Listening {
             vm.show(views, 0, views.getHeight());
         });
         row3.add(views);
-        JButton image = button("Image", "Save the frame as PNG, copy it", () -> { });
+        JButton image = button("Export", "Save the frame as PNG, copy it, make it the project's picture", () -> { });
         image.addActionListener(e -> imageMenu().show(image, 0, image.getHeight()));
         row3.add(image);
         // one flowing row of tools: a single line on a wide panel, wrapping on a narrow one (small screens keep the picture big)
@@ -783,7 +789,7 @@ final class PreviewPanel extends Panels.Listening {
         java.util.Map.entry("snowSpeed", new double[] {0, 1}), java.util.Map.entry("brightness", new double[] {0, 1}));
 
     /** Look numbers that are switches. */
-    private static final java.util.Set<String> LOOK_SWITCHES = java.util.Set.of("smoothLighting", "models", "fog", "clouds", "animate", "vanillaSky");
+    private static final java.util.Set<String> LOOK_SWITCHES = java.util.Set.of("smoothLighting", "models", "fog", "clouds", "animate", "vanillaSky", "brickSkip");
 
     private JDialog lookWindow;
     private final javax.swing.Timer lookSave = new javax.swing.Timer(600, e -> StudioUi.settings.save());
@@ -1117,8 +1123,13 @@ final class PreviewPanel extends Panels.Listening {
                 String where = wv == null ? "game frame (no depth)" : PreviewWorld.originOf(wv.world())
                     + (wv.blocks() != null ? ", block textures" : ", material textures");
                 String gpuLine = gpuProfile(gpu.lastTimings, wv != null);
-                SwingUtilities.invokeLater(() -> info.setText(gpu.deviceName + "   -   " + out.getWidth() + "x" + out.getHeight() + "   -   "
-                    + (passes > 1 ? passes + " passes, " : "") + ms + " ms" + gpuLine + "   -   " + where));
+                String full = gpu.deviceName + "   -   " + out.getWidth() + "x" + out.getHeight() + "   -   "
+                    + (passes > 1 ? passes + " passes, " : "") + ms + " ms" + gpuLine + "   -   " + where;
+                String brief = out.getWidth() + " × " + out.getHeight() + "  ·  " + ms + " ms  ·  " + PreviewWorld.originOf(wv == null ? null : wv.world());
+                SwingUtilities.invokeLater(() -> {
+                    info.setText(StudioUi.settings.detailedStatus ? full : brief);
+                    info.setToolTipText(full);
+                });
                 lastLoop = System.nanoTime();
                 // keep the studio smooth on small GPUs: after a heavy frame wait so the preview takes at most its share of the GPU,
                 // and draw rarely while another window is in front

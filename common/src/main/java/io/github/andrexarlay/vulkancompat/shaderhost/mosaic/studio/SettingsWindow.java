@@ -14,21 +14,37 @@ import static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.studio.Studio
 /** Mosaic Studio settings: look, input, keys, layout and compiler. Look changes apply at once with a cross-fade. */
 final class SettingsWindow extends Dock.StudioWindow {
 
-    private final StudioApp app;
+    /** What the settings change: the editor, or the start screen before any editor exists. */
+    interface Host {
+        StudioSettings settings();
+        void restyle(StudioSettings next);
+        void saveSettings();
+        Window owner();
+        StudioKeys keys();
+        void capturingKeys(boolean on);
+        void say(String text, Color c);
+        void resetLayout();
+        void runGame();
+    }
+
+    private final Host app;
     private StudioSettings draft;
     private final Timer apply;
     private int tab;
 
-    SettingsWindow(StudioApp app) {
+    SettingsWindow(StudioApp studio) { this(studio.settingsHost()); }
+
+    SettingsWindow(Host app) {
         super(false, false, "Mosaic Studio - settings");
         this.app = app;
         apply = new Timer(160, e -> {
             app.restyle(draft.copy());
-            app.settings.save();
+            app.settings().save();
         });
         apply.setRepeats(false);
-        setSize(820, 640);
-        setLocationRelativeTo(app.main);
+        Rectangle scr = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+        setSize(Math.min(820, scr.width - 40), Math.min(640, scr.height - 30));
+        setLocationRelativeTo(app.owner());
         build();
     }
 
@@ -44,7 +60,7 @@ final class SettingsWindow extends Dock.StudioWindow {
 
     /** Re-creates this window's content in the current look (the window itself stays). */
     private void build() {
-        draft = app.settings.copy();
+        draft = app.settings().copy();
         root.removeAll();
         root.setBackground(BG);
         pages.clear();
@@ -370,6 +386,8 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.row("Minimap width", "Pixels at most (and a third of the canvas)", slider(80, 600, draft.minimapWidth, v -> draft.minimapWidth = v));
         f.row("Minimap height", null, slider(50, 400, draft.minimapHeight, v -> draft.minimapHeight = v));
         f.wide(check("Fit the view to the graph when a graph or template is opened", draft.fitOnOpen, v -> draft.fitOnOpen = v));
+        f.wide(check("Hints in the panels and a second line under each Scene row (tooltips tell either way)", draft.showHints, v -> draft.showHints = v));
+        f.wide(check("Detailed status bar and preview footer (node folding, GPU time per pass, the device)", draft.detailedStatus, v -> draft.detailedStatus = v));
         f.section("Projects");
         f.wide(check("Start on the projects screen (when Studio opens without a file)", draft.showStartScreen, v -> draft.showStartScreen = v));
         JTextField author = field(draft.projectAuthor);
@@ -395,12 +413,12 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.row("Palette history kept", "Commands remembered by Ctrl+Shift+P (0: none)", slider(0, 100, draft.paletteRecentMax, v -> draft.paletteRecentMax = v));
         f.row("Recent files", draft.recentFiles.size() + " in File > Open recent and the command palette", button("Clear", null, () -> {
             draft.recentFiles.clear();
-            app.settings.recentFiles.clear();
+            app.settings().recentFiles.clear();
             changed();
         }));
         f.row("Command palette history", "Commands used last come first in Ctrl+Shift+P", button("Clear", null, () -> {
             draft.paletteRecent.clear();
-            app.settings.paletteRecent.clear();
+            app.settings().paletteRecent.clear();
             changed();
         }));
         f.wide(wrapped("Ctrl+Shift+P (or F3) opens the command palette: every command, menu item, template, node type and file. Ctrl+F finds a"
@@ -452,7 +470,7 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.section("Saved views");
         f.row("Saved cameras", draft.previewViews.size() + " (Preview > Views; keys 1..9 in the preview)", button("Delete all", null, () -> {
             draft.previewViews.clear();
-            app.settings.previewViews.clear();
+            app.settings().previewViews.clear();
             changed();
         }));
         f.section("Reset");
@@ -492,7 +510,7 @@ final class SettingsWindow extends Dock.StudioWindow {
             @Override public Component getListCellRendererComponent(JList<?> l, Object v, int i, boolean s, boolean f) {
                 JLabel c = (JLabel) super.getListCellRendererComponent(l, v, i, s, false);
                 StudioKeys.Action a = (StudioKeys.Action) v;
-                String keys = String.join(", ", app.model.keys.get(a).stream().map(StudioKeys::human).toList());
+                String keys = String.join(", ", app.keys().get(a).stream().map(StudioKeys::human).toList());
                 c.setText("<html><span style='color:#8B93A8'>" + esc(a.group) + "</span>&nbsp;&nbsp;" + esc(a.label)
                     + "&nbsp;&nbsp;&nbsp;<b>" + esc(keys.isEmpty() ? "-" : keys) + "</b></html>");
                 c.setBackground(s ? SELECT.darker().darker() : PANEL);
@@ -510,21 +528,21 @@ final class SettingsWindow extends Dock.StudioWindow {
             StudioKeys.Action a = list.getSelectedValue();
             if (a == null) return;
             capture.setText("Press the new keys for \"" + a.label + "\"...");
-            app.capturingKeys = true;
+            app.capturingKeys(true);
             list.requestFocusInWindow();
             list.addKeyListener(new KeyAdapter() {
                 @Override public void keyPressed(KeyEvent ev) {
                     int code = ev.getKeyCode();
                     if (code == KeyEvent.VK_SHIFT || code == KeyEvent.VK_CONTROL || code == KeyEvent.VK_ALT || code == KeyEvent.VK_META) return;
                     list.removeKeyListener(this);
-                    app.capturingKeys = false;
+                    app.capturingKeys(false);
                     ev.consume();
                     if (code == KeyEvent.VK_ESCAPE) {
                         capture.setText("Cancelled.");
                         return;
                     }
                     KeyStroke k = StudioApp.layoutIndependent(ev);
-                    StudioKeys.Action stolen = app.model.keys.bind(a, Integer.MAX_VALUE, k);
+                    StudioKeys.Action stolen = app.keys().bind(a, Integer.MAX_VALUE, k);
                     capture.setText(StudioKeys.human(k) + " -> " + a.label + (stolen != null ? "   (taken from " + stolen.label + ")" : ""));
                     app.saveSettings();
                     list.repaint();
@@ -535,12 +553,12 @@ final class SettingsWindow extends Dock.StudioWindow {
         buttons.add(button("Clear keys", "Remove every key of the selected action", () -> {
             StudioKeys.Action a = list.getSelectedValue();
             if (a == null) return;
-            while (!app.model.keys.get(a).isEmpty()) app.model.keys.unbind(a, 0);
+            while (!app.keys().get(a).isEmpty()) app.keys().unbind(a, 0);
             app.saveSettings();
             list.repaint();
         }));
         buttons.add(button("Reset all", "Every action back to its default keys", () -> {
-            app.model.keys.reset();
+            app.keys().reset();
             app.saveSettings();
             list.repaint();
         }));
@@ -556,31 +574,15 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.wide(wrapped("Areas: change an area's editor in its header, split it side by side or top/bottom, maximize it, pop it "
             + "out into its own window or close it. Pop-out windows have a Dock back button. The layout of every window is saved "
             + "when the studio closes.", MUTED, 440));
+        f.wide(check("Area buttons (split, maximize, pop out, close) only on the area under the pointer", draft.hoverAreaButtons, v -> draft.hoverAreaButtons = v));
         f.wide(button("Save the current layout now", null, () -> {
             app.saveSettings();
-            app.model.say("Layout saved", OK);
+            app.say("Layout saved", OK);
         }));
         f.wide(button("Reset to the default layout", null, this::resetLayout));
     }
 
-    void resetLayout() {
-        {
-            for (Dock.StudioWindow w : new java.util.ArrayList<>(app.windows)) if (!w.main) {
-                app.windows.remove(w);
-                w.dispose();
-            }
-            app.settings.layout = Dock.defaultLayout();
-            StudioSettings s = app.settings.copy();
-            s.layout = Dock.defaultLayout();
-            app.windows.removeIf(w -> !w.main);
-            app.main.root.removeAll();
-            app.main.root.add(Dock.load(app.model, Dock.parseWindows(Dock.defaultLayout()).get(0).getAsJsonObject().getAsJsonObject("tree")),
-                BorderLayout.CENTER);
-            app.main.root.revalidate();
-            app.main.root.repaint();
-            app.saveSettings();
-        }
-    }
+    void resetLayout() { app.resetLayout(); }
 
     /** Quiet JVM: the shader compiler's native access is expected. */
     static final String JVM_FLAGS = "--enable-native-access=ALL-UNNAMED -XX:+IgnoreUnrecognizedVMOptions --sun-misc-unsafe-memory-access=allow";
@@ -610,9 +612,9 @@ final class SettingsWindow extends Dock.StudioWindow {
                 java.nio.file.Path sh = bin.resolve("mosaic");
                 java.nio.file.Files.writeString(sh, "#!/bin/sh\nexec \"" + javaExe + "\" " + JVM_FLAGS + " -cp \"" + cp + "\" " + AgentCli.class.getName() + " \"$@\"\n");
                 sh.toFile().setExecutable(true);
-                app.model.say("Created " + bin.resolve("mosaic.cmd") + " (add " + bin + " to PATH)", OK);
+                app.say("Created " + bin.resolve("mosaic.cmd") + " (add " + bin + " to PATH)", OK);
             } catch (Exception ex) {
-                app.model.say("Could not create the command: " + ex.getMessage(), BAD);
+                app.say("Could not create the command: " + ex.getMessage(), BAD);
             }
         }));
         f.section("Recent agent activity");
@@ -645,11 +647,11 @@ final class SettingsWindow extends Dock.StudioWindow {
     }
 
     private void game(Form f) {
-        JTextField cmd = field(app.settings.gameCommand == null ? "" : app.settings.gameCommand);
+        JTextField cmd = field(app.settings().gameCommand == null ? "" : app.settings().gameCommand);
         cmd.addActionListener(e -> {
-            app.settings.gameCommand = cmd.getText().trim();
+            app.settings().gameCommand = cmd.getText().trim();
             app.saveSettings();
-            app.model.say("Game command saved", OK);
+            app.say("Game command saved", OK);
         });
         f.row("Start command", cmd);
         java.nio.file.Path prism = StudioApp.findPrism();

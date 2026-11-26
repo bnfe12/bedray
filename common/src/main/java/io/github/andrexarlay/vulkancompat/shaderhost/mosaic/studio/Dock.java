@@ -69,8 +69,13 @@ final class Dock {
             header.add(left, BorderLayout.WEST);
             header.add(buttons, BorderLayout.EAST);
             add(header, BorderLayout.NORTH);
+            this.buttons = buttons;
+            buttons.setVisible(!StudioUi.settings.hoverAreaButtons);
+            HoverButtons.install();
             show(type);
         }
+
+        JPanel buttons;
 
         void show(Panels.Type t) {
             if (panel != null) {
@@ -220,6 +225,32 @@ final class Dock {
         main.root.revalidate();
         StudioApp.get().windows.remove(w);
         w.dispose();
+    }
+
+    /** Split / maximize / pop out / close appear on the area under the pointer only: quieter headers. */
+    static final class HoverButtons {
+        private static boolean installed;
+        private static java.lang.ref.WeakReference<Area> shown = new java.lang.ref.WeakReference<>(null);
+
+        static void install() {
+            if (installed) return;
+            installed = true;
+            Toolkit.getDefaultToolkit().addAWTEventListener(ev -> {
+                if (!(ev instanceof MouseEvent me)) return;
+                if (me.getID() != MouseEvent.MOUSE_MOVED && me.getID() != MouseEvent.MOUSE_ENTERED) return;
+                Area a = (Area) SwingUtilities.getAncestorOfClass(Area.class, me.getComponent());
+                if (me.getComponent() instanceof Area ar) a = ar;
+                if (!StudioUi.settings.hoverAreaButtons) { // switched off: every area shows them again as the pointer passes
+                    if (a != null && !a.buttons.isVisible()) a.buttons.setVisible(true);
+                    return;
+                }
+                Area old = shown.get();
+                if (a == old) return;
+                if (old != null) old.buttons.setVisible(false);
+                if (a != null) a.buttons.setVisible(true);
+                shown = new java.lang.ref.WeakReference<>(a);
+            }, AWTEvent.MOUSE_MOTION_EVENT_MASK | AWTEvent.MOUSE_EVENT_MASK);
+        }
     }
 
     static void maximize(Area a) {

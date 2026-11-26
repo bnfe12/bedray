@@ -156,6 +156,9 @@ final class StartScreen extends JFrame {
             p.add(Box.createVerticalStrut(4));
         }
         p.add(Box.createVerticalGlue());
+        Nav settingsNav = new Nav("Settings", "gear", this::openSettings);
+        p.add(settingsNav);
+        p.add(Box.createVerticalStrut(10));
         // the game folder: where projects are found and new ones go
         JPanel game = new JPanel(new BorderLayout(0, 6)) {
             @Override protected void paintComponent(Graphics g0) {
@@ -287,15 +290,15 @@ final class StartScreen extends JFrame {
         boolean session = !StudioUi.settings.openTabs.isEmpty();
         JPanel actions = new JPanel(new GridLayout(1, session ? 5 : 4, 14, 0));
         if (session)
-            actions.add(new Action("Continue", "Last session (" + StudioUi.settings.openTabs.size() + " tabs)", "page", new Color(0xE0605A), () -> {
+            actions.add(new Action("Continue", StudioUi.settings.openTabs.size() + (StudioUi.settings.openTabs.size() == 1 ? " tab" : " tabs"), "page", new Color(0xE0605A), () -> {
                 continueSession = true;
                 finish(null);
             }));
         actions.setOpaque(false);
-        actions.add(new Action("New project", "From a template  Ctrl+N", "plus", new Color(0x4F8BF0), this::newProject));
-        actions.add(new Action("Open", "Project or graph  Ctrl+O", "folder", new Color(0xD69A3C), this::openOther));
+        actions.add(new Action("New project", "From a template", "plus", new Color(0x4F8BF0), this::newProject));
+        actions.add(new Action("Open", "A folder or file", "folder", new Color(0xD69A3C), this::openOther));
         actions.add(new Action("Clone", "From GitHub", "branch", new Color(0x8B6FD8), this::cloneProject));
-        actions.add(new Action("Empty graph", "Save it later", "page", new Color(0x3FAE86), () -> finish(null)));
+        actions.add(new Action("Blank", "No project", "page", new Color(0x3FAE86), () -> finish(null)));
         actions.setBorder(new EmptyBorder(0, 16, 0, 0));
         actions.setAlignmentX(0);
         actions.setMaximumSize(new Dimension(Integer.MAX_VALUE, 84));
@@ -747,6 +750,14 @@ final class StartScreen extends JFrame {
                 g.drawLine(cx - 3, cy - 3, cx + 3, cy - 3);
                 g.drawLine(cx - 3, cy + 1, cx + 3, cy + 1);
             }
+            case "gear" -> {
+                g.drawOval(cx - 5, cy - 5, 10, 10);
+                for (int i = 0; i < 8; i++) {
+                    double a = Math.PI / 4 * i;
+                    g.drawLine((int) Math.round(cx + Math.cos(a) * 6), (int) Math.round(cy + Math.sin(a) * 6),
+                        (int) Math.round(cx + Math.cos(a) * 9), (int) Math.round(cy + Math.sin(a) * 9));
+                }
+            }
             case "home" -> {
                 g.drawLine(cx - 7, cy, cx, cy - 7);
                 g.drawLine(cx, cy - 7, cx + 7, cy);
@@ -1016,6 +1027,53 @@ final class StartScreen extends JFrame {
         JMenuItem i = new JMenuItem(label);
         i.addActionListener(e -> r.run());
         m.add(i);
+    }
+
+    private SettingsWindow settingsWindow;
+
+    /** Settings from the start screen: the same window as in the editor; a new look rebuilds this screen. */
+    void openSettings() {
+        if (settingsWindow != null && settingsWindow.isDisplayable()) {
+            settingsWindow.toFront();
+            return;
+        }
+        StudioKeys keys = new StudioKeys(StudioUi.settings.keys);
+        StartScreen self = this;
+        settingsWindow = new SettingsWindow(new SettingsWindow.Host() {
+            @Override public StudioSettings settings() { return StudioUi.settings; }
+            @Override public void restyle(StudioSettings next) {
+                next.keys = keys.toText();
+                StudioUi.apply(next);
+                next.save();
+                if (settingsWindow != null) settingsWindow.restyle();
+                // the start screen again in the new look
+                if (self.isDisplayable()) {
+                    Rectangle at = self.getBounds();
+                    StartScreen fresh = new StartScreen(onOpen, quitOnClose);
+                    fresh.setBounds(at);
+                    fresh.settingsWindow = settingsWindow;
+                    fresh.setVisible(true);
+                    self.done = true;
+                    self.dispose();
+                }
+            }
+            @Override public void saveSettings() {
+                StudioUi.settings.keys = keys.toText();
+                StudioUi.settings.save();
+            }
+            @Override public Window owner() { return self; }
+            @Override public StudioKeys keys() { return keys; }
+            @Override public void capturingKeys(boolean on) { }
+            @Override public void say(String text, Color c) { }
+            @Override public void resetLayout() {
+                StudioUi.settings.layout = null;
+                StudioUi.settings.save();
+            }
+            @Override public void runGame() {
+                JOptionPane.showMessageDialog(self, "Open a project first: Run game starts Minecraft with its pack.");
+            }
+        });
+        settingsWindow.setVisible(true);
     }
 
     private void finish(Path graph) {

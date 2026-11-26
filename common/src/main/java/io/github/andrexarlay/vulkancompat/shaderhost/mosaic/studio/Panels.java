@@ -131,7 +131,8 @@ final class Panels {
             JPanel top = new JPanel(new BorderLayout(0, 4));
             top.setOpaque(false);
             top.add(search, BorderLayout.NORTH);
-            top.add(hint, BorderLayout.SOUTH);
+            if (StudioUi.settings.showHints) top.add(hint, BorderLayout.SOUTH);
+            search.setToolTipText("Search nodes; Enter adds the first, or drag a node onto the graph");
             root.add(top, BorderLayout.NORTH);
             root.add(scroll(tree), BorderLayout.CENTER);
         }

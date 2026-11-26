@@ -175,7 +175,7 @@ final class GpuPreview implements AutoCloseable {
         io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Snapshot gbWorld;
         Img scene, dist, atlas;
         Buf farBuf;
-        Buf blockIds, blockInfo, meshBuf, quadBuf, biomeBuf;
+        Buf blockIds, blockInfo, meshBuf, quadBuf, biomeBuf, brickBuf;
         /** Far shadows in the preview: the far land as the height field of binding 18 (MosaicHeight), following the camera. */
         Buf heightBuf;
         io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field heightField;
@@ -198,7 +198,7 @@ final class GpuPreview implements AutoCloseable {
             if (gbSetLayout != 0) vkDestroyDescriptorSetLayout(device, gbSetLayout, null);
             if (gbModule != 0) vkDestroyShaderModule(device, gbModule, null);
             if (lastCamera != null) MemoryUtil.memFree(lastCamera);
-            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, gbWorldBuf, farBuf, heightBuf, blockIds, blockInfo, meshBuf, quadBuf, biomeBuf}) free(b);
+            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, gbWorldBuf, farBuf, heightBuf, blockIds, blockInfo, meshBuf, quadBuf, biomeBuf, brickBuf}) free(b);
             for (Img i : new Img[] {input, depth, one, history, scene, dist, atlas}) free(i);
         }
     }
@@ -639,7 +639,7 @@ final class GpuPreview implements AutoCloseable {
             int[][] binds = {{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, {15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                 {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
                 {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}};
+                {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}};
             VkDescriptorSetLayoutBinding.Buffer lb = VkDescriptorSetLayoutBinding.calloc(binds.length, s);
             for (int i = 0; i < binds.length; i++)
                 lb.get(i).binding(binds[i][0]).descriptorType(binds[i][1]).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
@@ -654,7 +654,7 @@ final class GpuPreview implements AutoCloseable {
             c.gbPipeline = lp.get(0);
             VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(4, s);
             sizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
-            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(7);
+            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(8);
             sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
             sizes.get(3).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(2);
             check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(sizes), null, lp), "world pool");
@@ -662,7 +662,9 @@ final class GpuPreview implements AutoCloseable {
             check(vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(c.gbPool)
                 .pSetLayouts(s.longs(c.gbSetLayout)), lp), "world set");
             c.gbSet = lp.get(0);
-            VkWriteDescriptorSet.Buffer wr = VkWriteDescriptorSet.calloc(11, s);
+            VkWriteDescriptorSet.Buffer wr = VkWriteDescriptorSet.calloc(12, s);
+            VkDescriptorBufferInfo.Buffer brb = VkDescriptorBufferInfo.calloc(1, s);
+            brb.get(0).buffer(c.brickBuf.handle()).offset(0).range(c.brickBuf.size());
             VkDescriptorBufferInfo.Buffer bib = VkDescriptorBufferInfo.calloc(1, s);
             bib.get(0).buffer(c.biomeBuf.handle()).offset(0).range(c.biomeBuf.size());
             VkDescriptorBufferInfo.Buffer meb = VkDescriptorBufferInfo.calloc(1, s);
@@ -696,6 +698,7 @@ final class GpuPreview implements AutoCloseable {
             wr.get(8).sType$Default().dstSet(c.gbSet).dstBinding(11).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(meb);
             wr.get(9).sType$Default().dstSet(c.gbSet).dstBinding(12).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(qub);
             wr.get(10).sType$Default().dstSet(c.gbSet).dstBinding(13).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(bib);
+            wr.get(11).sType$Default().dstSet(c.gbSet).dstBinding(14).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(brb);
             vkUpdateDescriptorSets(device, wr, null);
         }
     }
@@ -738,6 +741,21 @@ final class GpuPreview implements AutoCloseable {
                 c.worldBuf = buffer(view.world().bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 c.gbWorldBuf = buffer(view.world().bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 c.gbWorld = flagged(view);
+                // 4 x 4 x 4 bricks with nothing in them (air, no quads): rays fly over them in one step
+                var gw = c.gbWorld;
+                int bx = (gw.sx() + 3) / 4, by = (gw.sy() + 3) / 4, bz = (gw.sz() + 3) / 4;
+                int[] bits = new int[(bx * by * bz + 31) / 32];
+                for (int y = 0; y < gw.sy(); y++)
+                    for (int z = 0; z < gw.sz(); z++)
+                        for (int x = 0; x < gw.sx(); x++) {
+                            int cell = gw.cells()[(y * gw.sz() + z) * gw.sx() + x] & 0xFFFF;
+                            if ((cell & 0x3F) == 0 && (cell & 0x80) == 0) continue;
+                            int bi = ((y >> 2) * bz + (z >> 2)) * bx + (x >> 2);
+                            bits[bi >> 5] |= 1 << (bi & 31); // occupied
+                        }
+                c.brickBuf = buffer(Math.max(16, bits.length * 4L), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                ByteBuffer kb = MemoryUtil.memByteBuffer(c.brickBuf.mapped(), (int) c.brickBuf.size()).order(ByteOrder.LITTLE_ENDIAN);
+                for (int i = 0; i < bits.length; i++) kb.putInt(i * 4, bits[i]);
                 c.farBuf = buffer(view.world().far() == null ? 64 : view.world().far().bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 c.heightBuf = buffer(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 c.heightField = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field();
@@ -942,6 +960,14 @@ final class GpuPreview implements AutoCloseable {
         layout(std430, set = 0, binding = 11) readonly buffer Mesh { uint v[]; } mesh;
         layout(std430, set = 0, binding = 12) readonly buffer Quads { vec4 q[]; } quads;
         layout(std430, set = 0, binding = 13) readonly buffer Biomes { uvec4 c[]; } biomes;
+        layout(std430, set = 0, binding = 14) readonly buffer Bricks { uint bits[]; } bricks;
+        // a 4 x 4 x 4 brick of the volume with nothing in it (air, no model or entity quads)
+        bool brickEmpty(ivec3 cell) {
+            ivec3 b = (cell - world.originRel.xyz) >> 2;
+            ivec3 bs = (world.size.xyz + 3) >> 2;
+            int i = (b.y * bs.z + b.z) * bs.x + b.x;
+            return (bricks.bits[i >> 5] & (1u << uint(i & 31))) == 0u;
+        }
         %CONSTANTS%
         bool inside(ivec3 c) {
             ivec3 p = c - world.originRel.xyz;
@@ -1177,6 +1203,23 @@ final class GpuPreview implements AutoCloseable {
                 bool in_ = inside(cell);
                 if (!in_) { if (entered) { tExit = t; break; } else continue; }
                 entered = true;
+                if (pw_brickSkip > 0.5 && brickEmpty(cell)) {
+                    // fly over the empty brick: to the last cell before its far side, then step on as usual
+                    ivec3 bmin = (((cell - world.originRel.xyz) >> 2) << 2) + world.originRel.xyz;
+                    vec3 lo = vec3(bmin), hi = lo + 4.0;
+                    vec3 tb = vec3(d.x > 0.0 ? (hi.x - o.x) / d.x : d.x < 0.0 ? (lo.x - o.x) / d.x : 1e30,
+                                   d.y > 0.0 ? (hi.y - o.y) / d.y : d.y < 0.0 ? (lo.y - o.y) / d.y : 1e30,
+                                   d.z > 0.0 ? (hi.z - o.z) / d.z : d.z < 0.0 ? (lo.z - o.z) / d.z : 1e30);
+                    float te = min(tb.x, min(tb.y, tb.z)) - 1e-3;
+                    if (te > t) {
+                        cell = clamp(ivec3(floor(o + d * te)), bmin, bmin + 3);
+                        nextT = vec3(d.x > 0.0 ? (float(cell.x + 1) - o.x) / d.x : d.x < 0.0 ? (float(cell.x) - o.x) / d.x : 1e30,
+                                     d.y > 0.0 ? (float(cell.y + 1) - o.y) / d.y : d.y < 0.0 ? (float(cell.y) - o.y) / d.y : 1e30,
+                                     d.z > 0.0 ? (float(cell.z + 1) - o.z) / d.z : d.z < 0.0 ? (float(cell.z) - o.z) / d.z : 1e30);
+                    }
+                    prev = 0u;
+                    continue;
+                }
                 uint c = cellAt(cell), m = c & 0x3Fu;
                 // models (stairs, slabs, torches, plants...) and entities: their quads inside this cell
                 float tOut = min(nextT.x, min(nextT.y, nextT.z));
