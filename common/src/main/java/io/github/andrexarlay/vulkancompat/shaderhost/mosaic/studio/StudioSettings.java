@@ -192,7 +192,7 @@ public final class StudioSettings {
     /** View > False colour: the brightness shown as white (1 = the brightest pixel value). */
     public double previewFalseColourMax = 1.0; // 0.05..1
     /** Minimap size in pixels at most. */
-    public int minimapWidth = 200, minimapHeight = 130;
+    public int minimapWidth = 170, minimapHeight = 110;
     /** Length of File > Open recent and of the command palette's history. */
     public int recentMax = 12, paletteRecentMax = 16;
     /** Degrees the preview camera turns per pixel of mouse drag. */
