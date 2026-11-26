@@ -146,10 +146,10 @@ public final class MosaicGraph {
         // procedural textures
         "mosaic.noise", "mosaic.voronoi", "mosaic.whiteNoise", "mosaic.checker", "mosaic.wave", "mosaic.gradient",
         // multi-pass: write a named buffer, read it (any uv), the previous frame; weather and sky (binding 16)
-        "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.reproject", "mosaic.taa", "mosaic.repeat", "mosaic.bufferPrev", "mosaic.accumulate", "mosaic.atrous", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
+        "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.history", "mosaic.reproject", "mosaic.taa", "mosaic.repeat", "mosaic.bufferPrev", "mosaic.accumulate", "mosaic.atrous", "mosaic.average", "mosaic.rain", "mosaic.thunder", "mosaic.temperature", "mosaic.skyColor",
         "mosaic.fogColor",
         // Bedray's renderer as nodes (MosaicRenderer): stages of the real pipeline and the frame they produce
-        "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.voxels", "bedray.raster", "bedray.upscaler", "bedray.output", "bedray.stageMap", "user.post", "user.hdr", "user.sky", "user.material", "user.light", "user.skyLight", "user.medium",
+        "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt", "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post", "bedray.voxels", "bedray.raster", "bedray.upscaler", "bedray.output", "bedray.stageMap", "user.post", "user.hdr", "user.sky", "user.material", "user.light", "user.skyLight", "user.medium", "user.emission", "user.bounce", "user.roulette", "user.pathOutput",
         // the Slang pack map (MosaicPack): modules wired by their imports into the passes of a frame
         "slang.module", "slang.pack",
         // output
@@ -178,7 +178,7 @@ public final class MosaicGraph {
     /** Node types that read a Buffer pass by its name (mask): Read buffer, Blur buffer, Kawase blur. */
     public static boolean readsBuffer(String type) {
         return type.equals("mosaic.bufferIn") || type.equals("mosaic.blur") || type.equals("mosaic.kawase") || type.equals("mosaic.taa")
-            || type.equals("mosaic.atrous");
+            || type.equals("mosaic.atrous") || type.equals("mosaic.average");
     }
 
     /**
@@ -216,7 +216,7 @@ public final class MosaicGraph {
         for (MosaicRenderer.Stage s : MosaicRenderer.stages())
             m.put(s.type(), s.rank() == 0 ? List.of() : List.of(new Port("frame", Kind.V4, s.rank() >= 30)));
         // a stage of your own: its inside is a function graph run in Bedray's frame (user.post: after the tone curve and looks)
-        for (String t : List.of("user.post", "user.hdr", "user.sky", "user.material", "user.light", "user.skyLight", "user.medium")) m.put(t, List.of(new Port("frame", Kind.V4, true)));
+        for (String t : List.of("user.post", "user.hdr", "user.sky", "user.material", "user.light", "user.skyLight", "user.medium", "user.emission", "user.bounce", "user.roulette", "user.pathOutput")) m.put(t, List.of(new Port("frame", Kind.V4, true)));
         m.put(MosaicRenderer.OUTPUT, List.of(new Port("frame", Kind.V4, true)));
         m.put("mosaic.pass", List.of(new Port("color", Kind.V4, true)));
         m.put("mosaic.bufferIn", List.of(new Port("uv", Kind.V2, false)));
@@ -227,6 +227,7 @@ public final class MosaicGraph {
         m.put("mosaic.repeat", List.of(new Port("init", Kind.V4, false), new Port("uv", Kind.V2, false)));
         m.put("mosaic.taa", List.of(new Port("uv", Kind.V2, false), new Port("blend", Kind.F, false), new Port("maxBlend", Kind.F, false)));
         m.put("mosaic.bufferPrev", List.of(new Port("uv", Kind.V2, false)));
+        m.put("mosaic.average", List.of(new Port("spread", Kind.F, false), new Port("centerWeight", Kind.F, false)));
         m.put("mosaic.accumulate", List.of(new Port("color", Kind.V4, true), new Port("uv", Kind.V2, false), new Port("frames", Kind.F, false),
             new Port("depthTolerance", Kind.F, false), new Port("depthToleranceBase", Kind.F, false)));
         m.put("mosaic.atrous", List.of(new Port("uv", Kind.V2, false), new Port("step", Kind.F, false), new Port("edges", Kind.F, false),
@@ -972,14 +973,14 @@ public final class MosaicGraph {
                 case "mosaic.vec" -> Kind.ofSize(n.index());
                 case "mosaic.swizzle" -> swizzleKind(n, visiting);
                 case "mosaic.output", "mat.output", "mat.texture", "mat.image", "mat.bsdf", "mosaic.pass", "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.taa", "mosaic.repeat", "mosaic.history",
-                     "mosaic.bufferPrev", "mosaic.accumulate", "mosaic.atrous" -> Kind.V4;
+                     "mosaic.bufferPrev", "mosaic.accumulate", "mosaic.atrous", "mosaic.average" -> Kind.V4;
                 case "mosaic.rain", "mosaic.thunder", "mosaic.temperature" -> Kind.F;
                 case "mosaic.reproject" -> Kind.V2;
                 case "bedray.output", "slang.module", "slang.pack", "bedray.stageMap" -> Kind.V4;
                 case "mosaic.skyColor", "mosaic.fogColor" -> Kind.V3;
                 case "bedray.scene", "bedray.materials", "bedray.sky", "bedray.pathTracer", "bedray.restirDi", "bedray.restirPt",
                      "bedray.radianceCascades", "bedray.rays", "bedray.fog", "bedray.denoiser", "bedray.exposure", "bedray.post",
-                     "bedray.voxels", "bedray.raster", "bedray.upscaler", "user.post", "user.hdr", "user.sky", "user.material", "user.light", "user.skyLight", "user.medium" -> Kind.V4;
+                     "bedray.voxels", "bedray.raster", "bedray.upscaler", "user.post", "user.hdr", "user.sky", "user.material", "user.light", "user.skyLight", "user.medium", "user.emission", "user.bounce", "user.roulette", "user.pathOutput" -> Kind.V4;
                 case "mosaic.gt", "mosaic.lt", "mosaic.dot", "mosaic.length", "mosaic.lum" -> Kind.F;
                 case "mosaic.cross", "mosaic.reflect" -> Kind.V3;
                 case "mosaic.math" -> {

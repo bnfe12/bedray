@@ -179,10 +179,18 @@ final class StudioModel {
     /** The function a "Your post stage" node is the graph of (post_cinema.slang: identity in Bedray's own build). */
     static final String POST_HOOK = "post_cinema/postStudio";
     /** Your stages: node type -> the hook function of Bedray's pack its graph is ({@code user.*}). */
-    static final java.util.Map<String, String> USER_STAGES = java.util.Map.of("user.post", POST_HOOK, "user.hdr", "post_cinema/hdrStudio",
-        "user.sky", "light/frame_sky/skyStudio", "user.material", "pathtrace/path_tracer/materialStudio",
-        "user.light", "pathtrace/path_tracer/lightStudio", "user.skyLight", "pathtrace/path_tracer/skyLightStudio",
-        "user.medium", "pathtrace/path_tracer/mediumStudio");
+    static final java.util.Map<String, String> USER_STAGES = java.util.Map.ofEntries(
+        java.util.Map.entry("user.post", POST_HOOK),
+        java.util.Map.entry("user.hdr", "post_cinema/hdrStudio"),
+        java.util.Map.entry("user.sky", "light/frame_sky/skyStudio"),
+        java.util.Map.entry("user.material", "pathtrace/path_tracer/materialStudio"),
+        java.util.Map.entry("user.light", "pathtrace/path_tracer/lightStudio"),
+        java.util.Map.entry("user.skyLight", "pathtrace/path_tracer/skyLightStudio"),
+        java.util.Map.entry("user.medium", "pathtrace/path_tracer/mediumStudio"),
+        java.util.Map.entry("user.emission", "pathtrace/path_tracer/emissionStudio"),
+        java.util.Map.entry("user.bounce", "pathtrace/path_tracer/bounceStudio"),
+        java.util.Map.entry("user.roulette", "pathtrace/path_tracer/rouletteStudio"),
+        java.util.Map.entry("user.pathOutput", "pathtrace/path_tracer/pathOutputStudio"));
 
     /** Opens a pack function ("light/sun/sunSolidAngle") in a tab of its own; set by the app. */
     java.util.function.Consumer<String> openFunction;

@@ -163,11 +163,11 @@ public final class MosaicCodegen {
     /** Which bindings and helpers the emitted code needs. */
     private record Needs(boolean ray, boolean scene, boolean depth, boolean world, boolean buffer, boolean lut, int maxPush, boolean noise,
                          java.util.Set<Integer> buffers, boolean history, boolean worldInfo, boolean blur, boolean prev, boolean taa, boolean height,
-                         boolean accumulate, boolean atrous, boolean voxelRays) {
+                         boolean accumulate, boolean atrous, boolean voxelRays, boolean average) {
         /** Ray helpers on the world volume instead of the acceleration structure (Options.voxelRays). */
         Needs voxel() {
             return new Needs(false, scene, depth, true, buffer, lut, maxPush, noise, buffers, history, worldInfo, blur, prev, taa, height,
-                accumulate, atrous, true);
+                accumulate, atrous, true, average);
         }
     }
 
@@ -188,7 +188,7 @@ public final class MosaicCodegen {
 
     private static Needs needs(MosaicGraph g, Plan p) {
         boolean ray = false, scene = false, depth = false, world = false, buffer = false, lut = false, noise = false, history = false, info = false,
-            blur = false, prev = false, taa = false, height = false, accumulate = false, atrous = false;
+            blur = false, prev = false, taa = false, height = false, accumulate = false, atrous = false, average = false;
         java.util.Set<Integer> buffers = new java.util.TreeSet<>();
         int push = -1;
         for (Node n : p.emit) {
@@ -219,6 +219,10 @@ public final class MosaicCodegen {
                     buffers.add(n.index());
                     depth = atrous = true;
                 }
+                case "mosaic.average" -> {
+                    buffers.add(n.index());
+                    average = true;
+                }
                 case "mosaic.reproject" -> prev = depth = true;
                 case "mosaic.taa" -> {
                     prev = depth = history = taa = true;
@@ -243,7 +247,7 @@ public final class MosaicCodegen {
             noise |= mentions(body, NOISE_HELPERS);
             height |= body.contains("mosaicHeightAt(") || body.contains("mosaicFarShadow(");
         }
-        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur, prev, taa, height, accumulate, atrous, false);
+        return new Needs(ray, scene, depth, world, buffer, lut, push, noise, buffers, history, info, blur, prev, taa, height, accumulate, atrous, false, average);
     }
 
     /** Header of a stats comment so authors see what the optimizer did. */
@@ -420,6 +424,7 @@ public final class MosaicCodegen {
         if (nd.taa()) o.a(GLSL_TAA);
         if (nd.accumulate()) o.a(GLSL_ACCUMULATE);
         if (nd.atrous()) o.a(GLSL_ATROUS);
+        if (nd.average()) o.a(GLSL_AVERAGE);
         if (nd.height()) o.a(MosaicHeight.GLSL);
         if (nd.voxelRays()) o.a("""
             // preview: rays walk the world volume (no acceleration structure in Studio)
@@ -662,6 +667,36 @@ public final class MosaicCodegen {
                         wsum += w;
                     }
                 return float4(wsum > 0.0 ? sum / wsum : c0.rgb, c0.a);
+            }
+            """;
+    /** Average of a buffer: 8 x 8 bilinear taps over its central area (spread), the centre weighted (auto exposure). */
+    private static final String GLSL_AVERAGE = """
+            vec4 mosaicAverage(sampler2D s, float spread, float centerWeight) {
+                vec4 sum = vec4(0.0);
+                float wsum = 0.0;
+                for (int y = 0; y < 8; y++)
+                    for (int x = 0; x < 8; x++) {
+                        vec2 q = vec2(0.5) + (vec2(float(x), float(y)) + 0.5 - 4.0) / 8.0 * clamp(spread, 0.05, 1.0);
+                        float w = mix(1.0, max(centerWeight, 0.0), 1.0 - clamp(length(q - 0.5) * 2.0, 0.0, 1.0));
+                        sum += textureLod(s, q, 0.0) * w;
+                        wsum += w;
+                    }
+                return sum / max(wsum, 1e-4);
+            }
+            """;
+    private static final String SLANG_AVERAGE = """
+            float4 mosaicAverage(Sampler2D s, float spread, float centerWeight)
+            {
+                float4 sum = float4(0.0);
+                float wsum = 0.0;
+                for (int y = 0; y < 8; y++)
+                    for (int x = 0; x < 8; x++) {
+                        float2 q = float2(0.5) + (float2(float(x), float(y)) + 0.5 - 4.0) / 8.0 * clamp(spread, 0.05, 1.0);
+                        float w = lerp(1.0, max(centerWeight, 0.0), 1.0 - clamp(length(q - 0.5) * 2.0, 0.0, 1.0));
+                        sum += s.SampleLevel(q, 0.0) * w;
+                        wsum += w;
+                    }
+                return sum / max(wsum, 1e-4);
             }
             """;
     /** Temporal AA: reprojected history clamped to the current 3x3 neighbourhood (no ghosting), off-screen history dropped. */
@@ -1127,6 +1162,7 @@ public final class MosaicCodegen {
             case "mosaic.bufferPrev" -> sl ? "bedrayBuf" + n.index() + ".SampleLevel(" + uv + ", 0.0)" : "texture(bedrayBuf" + n.index() + ", " + uv + ")";
             case "mosaic.accumulate" -> "mosaicAccumulate(bedrayBuf" + n.index() + ", bedrayBuf" + (n.value() != null && n.value().length > 0 ? (int) n.value()[0] : n.index())
                 + ", " + in(p, n, "color") + ", " + uv + ", " + in(p, n, "frames") + ", " + in(p, n, "depthTolerance") + ", " + in(p, n, "depthToleranceBase") + ")";
+            case "mosaic.average" -> "mosaicAverage(bedrayBuf" + n.index() + ", " + in(p, n, "spread") + ", " + in(p, n, "centerWeight") + ")";
             case "mosaic.atrous" -> "mosaicAtrous(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "step") + ", " + in(p, n, "edges") + ", "
                 + in(p, n, "planeTolerance") + ", " + in(p, n, "planeTolerancePerBlock") + ", " + in(p, n, "colorTolerance") + ", " + in(p, n, "colorToleranceBase") + ")";
             case "mosaic.rain" -> "worldInfo.weather.x";
@@ -1517,6 +1553,7 @@ public final class MosaicCodegen {
         if (nd.taa()) o.a(SLANG_TAA);
         if (nd.accumulate()) o.a(SLANG_ACCUMULATE);
         if (nd.atrous()) o.a(SLANG_ATROUS);
+        if (nd.average()) o.a(SLANG_AVERAGE);
         if (nd.height()) o.a(MosaicHeight.SLANG);
         if (nd.voxelRays()) o.a("""
             static const float3 MOSAIC_SKY_DIRECTION = ms_shadowDirection;

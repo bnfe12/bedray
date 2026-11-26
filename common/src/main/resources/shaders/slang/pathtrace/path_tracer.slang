@@ -209,6 +209,29 @@ void mediumStudio(inout float3 inScatter, inout float3 transmittance, float3 sta
                   float inWater) {
 }
 
+// Mosaic Studio's emission stage ("Your emission (path tracer)"): the emission a path sees on a glowing surface (lava,
+// lamps, emissive textures) before it is added; bounce 0 is what the camera sees. NEE lighting from emitters is the light
+// stage. Identity in Bedray's own build.
+void emissionStudio(inout float3 emission, float3 worldPosition, float bounce) {
+}
+
+// Mosaic Studio's bounce stage ("Your bounce (path tracer)"): the weight a path carries on after a BSDF sample (lobe 1
+// diffuse, 2 specular, 4 transmission), with the new direction, the shading normal and the depth. Scaling it is an
+// artistic, not a physical change (energy may be gained or lost). Identity in Bedray's own build.
+void bounceStudio(inout float3 weight, float lobe, float3 direction, float3 normal, float depth) {
+}
+
+// Mosaic Studio's roulette stage ("Your roulette (path tracer)"): the survival probability of Russian roulette at a depth
+// (the estimate stays unbiased for any value in (0, 1]: lower ends paths sooner, faster and noisier). Identity in
+// Bedray's own build.
+void rouletteStudio(inout float survival, float depth, float3 throughput) {
+}
+
+// Mosaic Studio's path output stage ("Your path output (path tracer)"): the radiance one path brings back, before
+// Bedray's firefly clamp and the denoiser, with its depth and surface hits. Identity in Bedray's own build.
+void pathOutputStudio(inout float3 radiance, float depth, float surfaceHits) {
+}
+
 // The emitter decision of a first vertex, made on the decoded material - the twin of ptTerminalEmits in
 // experimental/restir_pt.slang.  HIT_FLAG_EMISSIVE is a backend hint the hardware traversal never sets.
 bool ptTerminalEmitsMaterial(MaterialSample material) {
@@ -892,7 +915,9 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         if (pathSeesEmission(result.surfaceHits, glossyEscape, options.emitterNeeAvailable)
             || (any(surface.material.emission > 0.0)
                 && pathEmitterOutsideNeeRadius(options, segmentAdvance + hit.t, ray.direction))) {
-            result.radiance += throughput * surface.material.emission;
+            float3 seenEmission = surface.material.emission;
+            emissionStudio(seenEmission, surface.hit.worldPosition, float(result.surfaceHits)); // Mosaic Studio's emission stage
+            result.radiance += throughput * max(seenEmission, float3(0.0));
         }
 
         // ---- Next-event estimation ----
@@ -1113,7 +1138,9 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             }
         }
 
-        throughput *= bsdf.weight;
+        float3 bounceWeight = bsdf.weight;
+        bounceStudio(bounceWeight, float(bsdf.lobe), bsdf.direction, normal, float(result.depth)); // Mosaic Studio's bounce stage
+        throughput *= max(bounceWeight, float3(0.0));
         // A pane must sample its Fresnel reflection, including a clear centre texel with alpha zero: alpha controls
         // the colour absorption, not the existence of the dielectric interface. Only the selected straight-through
         // lobe is a free continuation. Counting that lobe as a scattering event exhausted the bounce budget inside
@@ -1150,6 +1177,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         if (result.depth >= options.minRussianDepth) {
             float survival = clamp(pathMaxComponent(throughput),
                 options.russianMinProbability, 0.95);
+            rouletteStudio(survival, float(result.depth), throughput); // Mosaic Studio's roulette stage
+            survival = clamp(survival, 1.0e-3, 1.0);
             if (rand01(seed) >= survival) {
                 result.flags |= PATH_TRACE_FLAG_RUSSIAN_ROULETTE;
                 break;
@@ -1237,6 +1266,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             weight.g > 0.0 ? radianceSuffix.g / weight.g : 0.0,
             weight.b > 0.0 ? radianceSuffix.b / weight.b : 0.0);
     }
+    pathOutputStudio(result.radiance, float(result.depth), float(result.surfaceHits)); // Mosaic Studio's path output stage
+    result.radiance = max(result.radiance, float3(0.0));
     float3 radianceBeforeClamp = result.radiance;
     result.radiance = clampRadiance(result.radiance, options.maxRadiance);
     if (wantDenoiserSignals)

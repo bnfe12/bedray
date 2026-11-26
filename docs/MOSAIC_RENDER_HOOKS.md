@@ -12,6 +12,10 @@ module and rebuilt into the game's passes with **Apply to Bedray** (`mosaic pack
 | Your material | `materialStudio` | every surface a path reaches (camera hit and every bounce), before shading | inout albedo, roughness, metallic, emission; in world position, shading normal, material id. Clamped to physical ranges after. |
 | Your light | `lightStudio` | every direct-light (NEE) sample of a vertex: sun, moon, block emitters | inout radiance; in direction to the light, world position, light kind (0 block, 1 sun, 2 moon). Kept non-negative. |
 | Your sky light | `skyLightStudio` | every path that escapes to the sky | inout radiance; in direction, bounce (0 = the camera sees the sky). |
+| Your emission | `emissionStudio` | emission a path sees on a glowing surface (before NEE takes over emitter light) | inout emission; in world position, bounce (0 = camera). |
+| Your bounce | `bounceStudio` | after every BSDF sample, before the throughput update | inout weight (kept >= 0; artistic: may gain or lose energy); in lobe (1 diffuse, 2 specular, 4 transmission), new direction, shading normal, depth. |
+| Your roulette | `rouletteStudio` | Russian roulette at every depth past the minimum | inout survival (clamped 0.001..1; unbiased for any value); in depth, throughput. |
+| Your path output | `pathOutputStudio` | once per path, before the firefly clamp and the denoiser | inout radiance (kept >= 0); in depth, surface hits. |
 | Your medium | `mediumStudio` | every segment a path flies, in air and in water (also the open tail of an escaping ray) | inout inScatter (added at the segment's start throughput), inout transmittance (multiplied, clamped 0..1); in camera-relative start, direction, length in blocks, inWater. |
 
 Earlier stages: `light/frame_sky/skyStudio` (the sky an eye or a glossy reflection sees), `post_cinema/hdrStudio`

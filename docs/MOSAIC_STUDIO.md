@@ -75,7 +75,9 @@ GPU (voxel rays through the world volume, no ray tracing hardware needed):
   Sun specular (GGX), Roughness (by material), Block light, Sky ambient, Emission, Diffuse GI (voxel paths), Reflection
   (voxels), Reflective surface (water), Atmosphere (aerial perspective toward the sky and the sun), Block light
   (directional, shadowed: light from where the block light rises, with a shadow ray toward it), Sky (procedural) and
-  Sky background (gradient, sunset, sun / moon discs, stars, drifting cloud layer), Bright pass and Bloom mix.
+  Sky background (gradient, sunset, sun / moon discs, stars, drifting cloud layer), Clouds (volumetric: ray-marched slab,
+  light marched toward the sun, forward scattering), Bright pass and Bloom mix, Log luminance + Average (buffer) + Adapt
+  exposure + Auto exposure (eye adaptation).
 - Passes: Buffer (1/1..1/8), **Accumulate** (temporal accumulation with reprojection and disocclusion reset),
   **Buffer (last frame)** (feedback), **Denoise (a-trous)** steps, Temporal AA.
 - Combine (shade), **Tone map** (ACES, Reinhard, Hable, exponential, clip).

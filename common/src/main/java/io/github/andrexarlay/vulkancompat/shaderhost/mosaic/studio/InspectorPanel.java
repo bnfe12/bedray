@@ -165,6 +165,10 @@ final class InspectorPanel extends Panels.Listening {
                     case "user.light" -> "every direct-light sample of the path tracer (sun, moon, block emitters): radiance in and out, with the direction to the light, world position and light kind (0 block, 1 sun, 2 moon).";
                     case "user.skyLight" -> "the sky radiance a path collects when it escapes: radiance in and out, with the direction and the bounce (0 = the camera sees the sky).";
                     case "user.medium" -> "every segment a path flies: inScatter (added) and transmittance (multiplied) in and out, with the camera-relative start, direction, length in blocks and inWater.";
+                    case "user.emission" -> "the emission a path sees on glowing surfaces: emission in and out, with world position and bounce (0 = camera).";
+                    case "user.bounce" -> "the path weight after each BSDF sample: weight in and out, with lobe (1 diffuse, 2 specular, 4 transmission), new direction, normal and depth.";
+                    case "user.roulette" -> "Russian roulette: the survival probability in and out (kept in 0.001..1), with depth and throughput.";
+                    case "user.pathOutput" -> "the radiance of one path before the firefly clamp and the denoiser: radiance in and out, with depth and surface hits.";
                     case "user.material" -> "every surface the path tracer reaches: albedo, roughness, metallic and emission in and out (inout), with its world position, normal and material id - it changes how light bounces, not just the picture.";
                     case "user.sky" -> "the direction and Bedray's sky colour in, the sky an eye or a reflection sees out (lighting keeps Bedray's dome).";
                     default -> "the display colour after the tone curve and Bedray's looks in, your colour out.";
@@ -917,7 +921,7 @@ final class InspectorPanel extends Panels.Listening {
             case "mat.texture" -> textureInfo();
             case "mosaic.gradient" -> modeCombo(n, "Type", MosaicGraph.GRADIENT_MODES, "linear");
             case "mosaic.pass" -> bufferEditor(n);
-            case "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.taa", "mosaic.bufferPrev", "mosaic.accumulate", "mosaic.atrous" -> bufferChoice(n);
+            case "mosaic.bufferIn", "mosaic.blur", "mosaic.kawase", "mosaic.taa", "mosaic.bufferPrev", "mosaic.accumulate", "mosaic.atrous", "mosaic.average" -> bufferChoice(n);
             case "mosaic.repeat" -> repeatEditor(n);
             case "mosaic.wave" -> modeCombo(n, "Type", MosaicGraph.WAVE_MODES, "bands");
             default -> { }
