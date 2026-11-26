@@ -60,9 +60,17 @@ public final class MosaicWorld {
      * yaw / pitch in Minecraft's degrees; time of day as the shaders take it (0 noon, 0.25 sunset, 0.5 midnight).
      */
     public record Snapshot(int sx, int sy, int sz, int ox, int oy, int oz, short[] cells, double camX, double camY, double camZ,
-                           float yaw, float pitch, float timeOfDay) {
+                           float yaw, float pitch, float timeOfDay, Far far) {
         public static final int MAGIC = 0x3157534D; // "MSW1"
+        public static final int FAR_MAGIC = 0x3152414D; // "MAR1"
         public static final int HEADER = 64;
+
+        public Snapshot(int sx, int sy, int sz, int ox, int oy, int oz, short[] cells, double camX, double camY, double camZ,
+                        float yaw, float pitch, float timeOfDay) {
+            this(sx, sy, sz, ox, oy, oz, cells, camX, camY, camZ, yaw, pitch, timeOfDay, null);
+        }
+
+        public Snapshot withFar(Far f) { return new Snapshot(sx, sy, sz, ox, oy, oz, cells, camX, camY, camZ, yaw, pitch, timeOfDay, f); }
 
         public int cellCount() { return sx * sy * sz; }
 
@@ -75,11 +83,17 @@ public final class MosaicWorld {
         }
 
         public byte[] toBytes() {
-            ByteBuffer b = ByteBuffer.allocate(HEADER + cells.length * 2).order(ByteOrder.LITTLE_ENDIAN);
+            int farBytes = far == null ? 0 : 16 + far.size() * far.size() * 3;
+            ByteBuffer b = ByteBuffer.allocate(HEADER + cells.length * 2 + farBytes).order(ByteOrder.LITTLE_ENDIAN);
             b.putInt(MAGIC).putInt(sx).putInt(sy).putInt(sz).putInt(ox).putInt(oy).putInt(oz);
             b.putDouble(camX).putDouble(camY).putDouble(camZ).putFloat(yaw).putFloat(pitch).putFloat(timeOfDay);
             b.position(HEADER);
             for (short c : cells) b.putShort(c);
+            if (far != null) {
+                b.putInt(FAR_MAGIC).putInt(far.size()).putInt(far.ox()).putInt(far.oz());
+                for (short h : far.heights()) b.putShort(h);
+                b.put(far.materials());
+            }
             return b.array();
         }
 
@@ -90,14 +104,25 @@ public final class MosaicWorld {
             if (b.getInt() != MAGIC) return null;
             int sx = b.getInt(), sy = b.getInt(), sz = b.getInt();
             if (sx < 8 || sy < 8 || sz < 8 || sx > 512 || sy > 512 || sz > 512) return null;
-            if (data.length != HEADER + sx * sy * sz * 2) return null;
+            if (data.length < HEADER + sx * sy * sz * 2) return null;
             int ox = b.getInt(), oy = b.getInt(), oz = b.getInt();
             double x = b.getDouble(), y = b.getDouble(), z = b.getDouble();
             float yaw = b.getFloat(), pitch = b.getFloat(), tod = b.getFloat();
             short[] cells = new short[sx * sy * sz];
             b.position(HEADER);
             for (int i = 0; i < cells.length; i++) cells[i] = b.getShort();
-            return new Snapshot(sx, sy, sz, ox, oy, oz, cells, x, y, z, yaw, pitch, tod);
+            Far far = null;
+            if (b.remaining() >= 16 && b.getInt() == FAR_MAGIC) {
+                int fs = b.getInt(), fox = b.getInt(), foz = b.getInt();
+                if (fs > 0 && fs <= 2048 && b.remaining() >= fs * fs * 3) {
+                    short[] hs = new short[fs * fs];
+                    for (int i = 0; i < hs.length; i++) hs[i] = b.getShort();
+                    byte[] ms = new byte[fs * fs];
+                    b.get(ms);
+                    far = new Far(fs, fox, foz, hs, ms);
+                }
+            }
+            return new Snapshot(sx, sy, sz, ox, oy, oz, cells, x, y, z, yaw, pitch, tod, far);
         }
 
         /** The storage-buffer contents for a camera at (x, y, z): the 48-byte header of {@link Volume#writeHeader}, then cells. */
@@ -109,6 +134,27 @@ public final class MosaicWorld {
             b.putInt(32, sx).putInt(36, sy).putInt(40, sz).putInt(44, 0);
             for (int i = 0; i < cells.length; i++) b.putShort(HEADER_BYTES + i * 2, cells[i]);
         }
+    }
+
+    /**
+     * The land beyond the volume, for the preview's far view: a size x size grid around the camera (x fastest), the
+     * absolute y of the top block of each column (Short.MIN_VALUE unknown) and its material class.
+     */
+    public record Far(int size, int ox, int oz, short[] heights, byte[] materials) {
+        /**
+         * Storage-buffer form: ivec4 (origin x / z - floor(camera), size, 1), ivec4 (floor(camera y), 0, 0, 0), then one
+         * uint per column: height + 32768 | material << 16. {@code cells} false writes only the camera-relative header.
+         */
+        public void writeBuffer(ByteBuffer b, double camX, double camY, double camZ, boolean cells) {
+            b.order(ByteOrder.LITTLE_ENDIAN);
+            int fx = (int) Math.floor(camX), fz = (int) Math.floor(camZ);
+            b.putInt(0, ox - fx).putInt(4, oz - fz).putInt(8, size).putInt(12, 1);
+            b.putInt(16, (int) Math.floor(camY)).putInt(20, 0).putInt(24, 0).putInt(28, 0);
+            if (cells) for (int i = 0; i < size * size; i++)
+                b.putInt(32 + i * 4, ((heights[i] + 32768) & 0xFFFF) | ((materials[i] & 0xFF) << 16));
+        }
+
+        public int bytes() { return 32 + size * size * 4; }
     }
 
     /**

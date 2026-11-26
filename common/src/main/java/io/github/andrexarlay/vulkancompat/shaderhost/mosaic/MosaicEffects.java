@@ -234,7 +234,7 @@ public final class MosaicEffects {
             vec3 c = albedo * light;
             if (m == 2.0 || m == 13.0) c += albedo * glowStrength;
             return vec4(c, 1.0);""");
-        add("Rendering", "vec4 voxelSunShadow(vec4 color, vec2 uv, float darkness = 0.55, float maxDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35, float moonStrength = 0.35, float horizonFade = 0.15)",
+        add("Rendering", "vec4 voxelSunShadow(vec4 color, vec2 uv, float darkness = 0.55, float maxDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35, float moonStrength = 0.35, float horizonFade = 0.15, float sunAngularRadius = 0.02)",
             "Sun shadows (voxels)", "Shadows of the sun (the moon at night) through the world volume up to maxDistance, then the height field"
                 + " from farShadowFrom to farShadowTo blocks for far hills and trees; bias pushes the start off the surface (more far away),"
                 + " hits closer than selfHit are the pixel's own block. Works with every renderer; caves keep their own darkness.", """
@@ -245,6 +245,13 @@ public final class MosaicEffects {
             vec3 L = mosaicSunDir();
             float strength = L.y > 0.0 ? smoothstep(0.0, horizonFade, L.y) : moonStrength * smoothstep(0.0, horizonFade, -L.y);
             if (L.y < 0.0) L = -L;
+            if (sunAngularRadius > 0.0) { // soft shadows: a point of the sun's disc, a new one every frame (TAA / Accumulate average them)
+                vec3 jh = mosaicHash33(vec3(uv * frame.viewSize.xy, 0.0) + vec3(frame.timing.z * 0.6180339, frame.timing.z * 0.4142135, 0.0));
+                vec3 jt = normalize(abs(L.y) < 0.99 ? cross(L, vec3(0.0, 1.0, 0.0)) : cross(L, vec3(1.0, 0.0, 0.0)));
+                vec3 jb = cross(L, jt);
+                float ja = jh.y * 6.2831853, jr = sqrt(jh.x) * sunAngularRadius;
+                L = normalize(L + (jt * cos(ja) + jb * sin(ja)) * jr);
+            }
             float lit = 0.0;
             if (dot(n, L) > 0.0) {
                 vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * (bias + t * biasPerBlock);
@@ -392,7 +399,7 @@ public final class MosaicEffects {
             return mosaicSky(normalize(dir));""");
         add("Shading", "vec3 materialColor(float material)", "Material color", "Typical colour of a material class.", """
             return mosaicAlbedo(material);""");
-        add("Shading", "float sunVisibility(vec2 uv, float maxDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35)",
+        add("Shading", "float sunVisibility(vec2 uv, float maxDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35, float sunAngularRadius = 0.02)",
             "Sun visibility (voxels)", "1 where the sun (the moon at night) reaches the pixel's surface, 0 in shadow: a ray through the world"
                 + " volume up to maxDistance, then the height field from farShadowFrom to farShadowTo; works without hardware ray tracing.", """
             float t = mosaicDepth(uv);
@@ -402,6 +409,13 @@ public final class MosaicEffects {
             vec3 L = mosaicSunDir();
             if (L.y < 0.0) L = -L;
             if (dot(n, L) <= 0.0) return 0.0;
+            if (sunAngularRadius > 0.0) { // soft shadows: a point of the sun's disc, a new one every frame (TAA / Accumulate average them)
+                vec3 jh = mosaicHash33(vec3(uv * frame.viewSize.xy, 0.0) + vec3(frame.timing.z * 0.6180339, frame.timing.z * 0.4142135, 0.0));
+                vec3 jt = normalize(abs(L.y) < 0.99 ? cross(L, vec3(0.0, 1.0, 0.0)) : cross(L, vec3(1.0, 0.0, 0.0)));
+                vec3 jb = cross(L, jt);
+                float ja = jh.y * 6.2831853, jr = sqrt(jh.x) * sunAngularRadius;
+                L = normalize(L + (jt * cos(ja) + jb * sin(ja)) * jr);
+            }
             // positions rebuilt from depth drift with distance: the start moves off the surface by more far away, and a
             // hit right at the start is the pixel's own block, not a caster
             vec3 p = mosaicEye() + mosaicViewDir(uv) * t + n * (bias + t * biasPerBlock);
@@ -431,7 +445,7 @@ public final class MosaicEffects {
             float lm = max(max(sky * day, lamp), minLight);
             lm = pow(lm, lightCurve) * (1.0 - ambientFloor) + ambientFloor;
             return clamp(c / lm, vec3(0.0), vec3(1.0)) * brightness;""");
-        add("Render pipeline", "vec3 sunLight(vec3 position, vec3 normal, float shadows = 1, float intensity = 2.2, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), float sunsetHeight = 0.35, vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float horizonFade = 0.08, float shadowDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35, float visibility = -1)",
+        add("Render pipeline", "vec3 sunLight(vec3 position, vec3 normal, float shadows = 1, float intensity = 2.2, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), float sunsetHeight = 0.35, vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float horizonFade = 0.08, float shadowDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35, float visibility = -1, float sunAngularRadius = 0.02)",
             "Sun & moon light", "Direct light of the sun (the moon at night) on a surface: colours by day, at sunset (below sunsetHeight)"
                 + " and at night (moonColor x moonLevel), fading at the horizon; shadows through the world volume up to shadowDistance,"
                 + " then the height field from farShadowFrom to farShadowTo blocks; bias, biasPerBlock and selfHit keep surfaces from"
@@ -448,18 +462,34 @@ public final class MosaicEffects {
                 float m2;
                 float d = length(position);
                 vec3 p = position + normal * (bias + d * biasPerBlock);
+                vec3 L0 = L;
+            if (sunAngularRadius > 0.0) { // soft shadows: a point of the sun's disc, a new one every frame (TAA / Accumulate average them)
+                vec3 jh = mosaicHash33(position * 7.13 + vec3(frame.timing.z * 0.6180339, frame.timing.z * 0.4142135, 0.0));
+                vec3 jt = normalize(abs(L.y) < 0.99 ? cross(L, vec3(0.0, 1.0, 0.0)) : cross(L, vec3(1.0, 0.0, 0.0)));
+                vec3 jb = cross(L, jt);
+                float ja = jh.y * 6.2831853, jr = sqrt(jh.x) * sunAngularRadius;
+                L = normalize(L + (jt * cos(ja) + jb * sin(ja)) * jr);
+            }
                 float h = mosaicVoxelTrace(p, L, shadowDistance, n2, m2);
                 vis = h >= selfHit ? 0.0 : mosaicFarShadow(p, L, d > farShadowFrom ? 1.5 : farShadowFrom, farShadowTo);
+                L = L0;
             }
             vec3 col = mix(sunsetColor, sunColor, smoothstep(0.0, sunsetHeight, L.y));
             col = mix(col, moonColor * moonLevel, moon);
             return col * ndl * vis * intensity * smoothstep(0.0, horizonFade, L.y);""");
-        add("Render pipeline", "float sunShadow(vec3 position, vec3 normal, float shadowDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35)",
+        add("Render pipeline", "float sunShadow(vec3 position, vec3 normal, float shadowDistance = 64, float farShadowFrom = 40, float farShadowTo = 192, float bias = 0.03, float biasPerBlock = 0.004, float selfHit = 0.35, float sunAngularRadius = 0.02)",
             "Sun shadow", "1 where the sun (the moon at night) reaches a surface, 0 in shadow: through the world volume up to shadowDistance,"
                 + " then the height field from farShadowFrom to farShadowTo. Wire it into Sun & moon light and Sun specular (visibility)"
-                + " so both use one shadow ray.", """
+                + " so both use one shadow ray. sunAngularRadius (radians) softens the shadow edges like a real sun disc.", """
             vec3 L = mosaicSunDir();
             if (L.y < 0.0) L = -L;
+            if (sunAngularRadius > 0.0) { // soft shadows: a point of the sun's disc, a new one every frame (TAA / Accumulate average them)
+                vec3 jh = mosaicHash33(position * 7.13 + vec3(frame.timing.z * 0.6180339, frame.timing.z * 0.4142135, 0.0));
+                vec3 jt = normalize(abs(L.y) < 0.99 ? cross(L, vec3(0.0, 1.0, 0.0)) : cross(L, vec3(1.0, 0.0, 0.0)));
+                vec3 jb = cross(L, jt);
+                float ja = jh.y * 6.2831853, jr = sqrt(jh.x) * sunAngularRadius;
+                L = normalize(L + (jt * cos(ja) + jb * sin(ja)) * jr);
+            }
             if (dot(normal, L) <= 0.0 || length(position) > 4000.0) return 0.0;
             vec3 n2;
             float m2;

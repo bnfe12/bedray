@@ -53,11 +53,7 @@ final class PreviewWorld {
         int[][] height = new int[SX][SZ];
         for (int x = 0; x < SX; x++)
             for (int z = 0; z < SZ; z++) {
-                double h = 64 + 4.5 * Math.sin(x * 0.09) * Math.cos(z * 0.07) + 2.5 * Math.sin((x + z) * 0.05 + 1.3)
-                    + 1.2 * Math.cos(x * 0.21 - z * 0.17) + Math.max(0, 9 - Math.hypot(x - 78, z - 20) * 0.45) * 1.6;
-                double lake = Math.hypot(x - 30, z - 58);
-                if (lake < 15) h -= (15 - lake) * 0.6;
-                height[x][z] = (int) Math.round(h) - oy;
+                height[x][z] = (int) Math.round(demoHeight(x, z)) - oy;
             }
         for (int x = 0; x < SX; x++)
             for (int z = 0; z < SZ; z++) {
@@ -117,8 +113,43 @@ final class PreviewWorld {
         for (int y = 1; y < 6; y++) set(m, 18, height[18][30] + y, 30, Material.STONE);
         set(m, 18, height[18][30] + 6, 30, Material.SNOW);
         short[] cells = light(m);
-        DEMO = new MosaicWorld.Snapshot(SX, SY, SZ, ox, oy, oz, cells, ox + 44.5, oy + height[44][92] + 9.6, oz + 92.5, 160f, 20f, 0.06f);
+        DEMO = demoFar(new MosaicWorld.Snapshot(SX, SY, SZ, ox, oy, oz, cells, ox + 44.5, oy + height[44][92] + 9.6, oz + 92.5, 160f, 20f, 0.06f));
         return DEMO;
+    }
+
+    /** The built-in landscape's ground height at an absolute column (hills, a ridge, a lake), also beyond the volume. */
+    static double demoHeight(int x, int z) {
+        double h = 64 + 4.5 * Math.sin(x * 0.09) * Math.cos(z * 0.07) + 2.5 * Math.sin((x + z) * 0.05 + 1.3)
+            + 1.2 * Math.cos(x * 0.21 - z * 0.17) + Math.max(0, 9 - Math.hypot(x - 78, z - 20) * 0.45) * 1.6
+            + 9.0 * Math.sin(x * 0.013 + 0.7) * Math.cos(z * 0.011) * Math.min(1.0, Math.hypot(x - 48, z - 48) / 120.0);
+        double lake = Math.hypot(x - 30, z - 58);
+        if (lake < 15) h -= (15 - lake) * 0.6;
+        double sea = Math.hypot(x + 60, z - 150);
+        if (sea < 90) h -= (90 - sea) * 0.12;
+        return h;
+    }
+
+    /** The land around the volume (384 x 384 columns): ground, sand by the water, water, scattered tree tops. */
+    private static MosaicWorld.Snapshot demoFar(MosaicWorld.Snapshot s) {
+        int fs = 384, fox = s.ox() + SX / 2 - fs / 2, foz = s.oz() + SZ / 2 - fs / 2, water = 62;
+        short[] hs = new short[fs * fs];
+        byte[] ms = new byte[fs * fs];
+        for (int j = 0; j < fs; j++)
+            for (int i = 0; i < fs; i++) {
+                int x = fox + i, z = foz + j, h = (int) Math.round(demoHeight(x, z));
+                Material m = h < water ? Material.WATER : h <= water + 1 ? Material.SAND : Material.DIRT;
+                if (h < water) h = water;
+                // tree crowns: 3 x 3 blocks around a point of a 9-block grid, a little higher in the middle
+                int gx = Math.floorDiv(x, 9), gz = Math.floorDiv(z, 9), hash = (gx * 73856093) ^ (gz * 19349663);
+                int cx = gx * 9 + 3 + Math.floorMod(hash >> 3, 3), cz = gz * 9 + 3 + Math.floorMod(hash >> 6, 3);
+                if (m == Material.DIRT && Math.floorMod(hash, 3) == 0 && Math.abs(x - cx) <= 1 && Math.abs(z - cz) <= 1) {
+                    m = Material.LEAVES;
+                    h += (x == cx && z == cz) ? 6 : 5;
+                }
+                hs[j * fs + i] = (short) h;
+                ms[j * fs + i] = (byte) m.id();
+            }
+        return s.withFar(new MosaicWorld.Far(fs, fox, foz, hs, ms));
     }
 
     private static int idx(int x, int y, int z) { return (y * SZ + z) * SX + x; }
@@ -257,7 +288,9 @@ final class PreviewWorld {
      * shading, translucency. Edited in the Preview's "World look" dialog, kept in Studio settings, emitted as constants.
      */
     static final java.util.List<io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting> LOOK = java.util.List.of(
-        look("maxDistance", "View distance", "Blocks the preview camera sees.", 256),
+        look("maxDistance", "View distance (blocks)", "Blocks the preview camera sees in full detail (the volume).", 256),
+        look("farDistance", "Far view distance", "Blocks the far land (height field beyond the volume) is drawn to.", 1500),
+        look("farStep", "Far march step", "Growth of the far land's march steps with distance (smaller = finer, slower).", 0.004),
         look("lightCurve", "Light curve", "Shape of the light map: level / ((1 + k) - k x level); 3 is Minecraft's.", 3),
         look("dayRise", "Daylight rise", "How fast sky light brightens with the sun's height.", 2.5),
         look("dayOffset", "Daylight offset", "Sky light when the sun is at the horizon.", 0.55),

@@ -159,6 +159,7 @@ final class GpuPreview implements AutoCloseable {
         boolean world;
         Buf worldBuf;
         Img scene, dist, atlas;
+        Buf farBuf;
         long gbModule, gbSetLayout, gbLayout, gbPipeline, gbPool, gbSet;
         boolean gbFresh = true;
         PreviewWorld.View lastView;
@@ -174,7 +175,7 @@ final class GpuPreview implements AutoCloseable {
             if (gbSetLayout != 0) vkDestroyDescriptorSetLayout(device, gbSetLayout, null);
             if (gbModule != 0) vkDestroyShaderModule(device, gbModule, null);
             if (lastCamera != null) MemoryUtil.memFree(lastCamera);
-            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf}) free(b);
+            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, farBuf}) free(b);
             for (Img i : new Img[] {input, depth, one, history, scene, dist, atlas}) free(i);
         }
     }
@@ -292,6 +293,10 @@ final class GpuPreview implements AutoCloseable {
         MemoryUtil.memCopy(MemoryUtil.memAddress(c.lastCamera), c.prev.mapped(), 144);
         copyCamera(cam, c.lastCamera);
         if (view != null) {
+            var far = view.world().far();
+            if (far != null)
+                far.writeBuffer(MemoryUtil.memByteBuffer(c.farBuf.mapped(), (int) c.farBuf.size()), view.x(), view.y(), view.z(),
+                    c.lastView == null || c.lastView.world() != view.world());
             if (c.lastView == null || c.lastView.world() != view.world())
                 view.world().writeBuffer(MemoryUtil.memByteBuffer(c.worldBuf.mapped(), (int) c.worldBuf.size()), view.x(), view.y(), view.z());
             else { // the camera moved: only the camera-relative header changes
@@ -469,7 +474,7 @@ final class GpuPreview implements AutoCloseable {
             code.put(spirv).flip();
             check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(code), null, lp), "world shader module");
             c.gbModule = lp.get(0);
-            int[][] binds = {{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, {15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+            int[][] binds = {{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, {15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                 {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}};
             VkDescriptorSetLayoutBinding.Buffer lb = VkDescriptorSetLayoutBinding.calloc(binds.length, s);
             for (int i = 0; i < binds.length; i++)
@@ -485,7 +490,7 @@ final class GpuPreview implements AutoCloseable {
             c.gbPipeline = lp.get(0);
             VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(4, s);
             sizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
-            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1);
+            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(2);
             sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
             sizes.get(3).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(2);
             check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(sizes), null, lp), "world pool");
@@ -493,7 +498,9 @@ final class GpuPreview implements AutoCloseable {
             check(vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(c.gbPool)
                 .pSetLayouts(s.longs(c.gbSetLayout)), lp), "world set");
             c.gbSet = lp.get(0);
-            VkWriteDescriptorSet.Buffer wr = VkWriteDescriptorSet.calloc(5, s);
+            VkWriteDescriptorSet.Buffer wr = VkWriteDescriptorSet.calloc(6, s);
+            VkDescriptorBufferInfo.Buffer fb = VkDescriptorBufferInfo.calloc(1, s);
+            fb.get(0).buffer(c.farBuf.handle()).offset(0).range(c.farBuf.size());
             VkDescriptorBufferInfo.Buffer ub = VkDescriptorBufferInfo.calloc(1, s);
             ub.get(0).buffer(c.ubo.handle()).offset(0).range(c.ubo.size());
             VkDescriptorBufferInfo.Buffer wb = VkDescriptorBufferInfo.calloc(1, s);
@@ -509,6 +516,7 @@ final class GpuPreview implements AutoCloseable {
             wr.get(2).sType$Default().dstSet(c.gbSet).dstBinding(6).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(at);
             wr.get(3).sType$Default().dstSet(c.gbSet).dstBinding(3).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(so);
             wr.get(4).sType$Default().dstSet(c.gbSet).dstBinding(7).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(dout);
+            wr.get(5).sType$Default().dstSet(c.gbSet).dstBinding(8).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(fb);
             vkUpdateDescriptorSets(device, wr, null);
         }
     }
@@ -549,6 +557,7 @@ final class GpuPreview implements AutoCloseable {
             if (view != null) {
                 c.world = true;
                 c.worldBuf = buffer(view.world().bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                c.farBuf = buffer(view.world().far() == null ? 64 : view.world().far().bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 c.scene = image(w, h, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
                 c.dist = image(w, h, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
             }
@@ -737,6 +746,7 @@ final class GpuPreview implements AutoCloseable {
         layout(set = 0, binding = 6) uniform sampler2D atlas;
         layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D sceneOut;
         layout(set = 0, binding = 7, r32f) uniform writeonly image2D distOut;
+        layout(std430, set = 0, binding = 8) readonly buffer FarField { ivec4 head; ivec4 camY; uint cells[]; } farField;
         %CONSTANTS%
         const float TILES = 18.0;
         bool inside(ivec3 c) {
@@ -798,6 +808,7 @@ final class GpuPreview implements AutoCloseable {
             float trans = 1.0, depth = 1.0e6;
             uint prev = cellAt(cell) & 0xFFu;
             bool entered = inside(cell);
+            float tExit = 0.0;
             for (int i = 0; i < 4096; i++) {
                 float t;
                 vec3 n;
@@ -807,7 +818,7 @@ final class GpuPreview implements AutoCloseable {
                 else { t = nextT.z; cell.z += stp.z; nextT.z += delta.z; n = vec3(0.0, 0.0, -float(stp.z)); }
                 if (t > pw_maxDistance) break;
                 bool in_ = inside(cell);
-                if (!in_) { if (entered) break; else continue; }
+                if (!in_) { if (entered) { tExit = t; break; } else continue; }
                 entered = true;
                 uint c = cellAt(cell), m = c & 0xFFu;
                 if (m == 0u) { prev = 0u; continue; }
@@ -835,6 +846,37 @@ final class GpuPreview implements AutoCloseable {
                 acc += trans * col;
                 trans = 0.0;
                 break;
+            }
+            // beyond the volume: the far field (top block height and class of every column) marched with growing steps
+            if (trans > 0.0 && farField.head.w == 1) {
+                float t = max(tExit, 0.5), lastY = 1e9;
+                int fsz = farField.head.z;
+                for (int i = 0; i < 1024; i++) {
+                    if (t > pw_farDistance) break;
+                    vec3 q = o + d * t;
+                    ivec2 c = ivec2(floor(q.xz)) - farField.head.xy;
+                    if (c.x < 0 || c.y < 0 || c.x >= fsz || c.y >= fsz) break;
+                    uint fc = farField.cells[c.y * fsz + c.x];
+                    int hAbs = int(fc & 0xFFFFu) - 32768;
+                    if (hAbs > -32000) {
+                        float top = float(hAbs - farField.camY.x) + 1.0;
+                        if (q.y < top) {
+                            uint m = (fc >> 16) & 0xFFu;
+                            vec3 n = lastY >= top ? vec3(0.0, 1.0, 0.0)
+                                : (abs(d.x) > abs(d.z) ? vec3(-sign(d.x), 0.0, 0.0) : vec3(0.0, 0.0, -sign(d.z)));
+                            vec3 qs = n.y > 0.5 ? vec3(q.x, top, q.z) : q;
+                            vec4 tx = texel(tileOf(m, n), qs, n);
+                            vec3 col = (m == 2u || m == 13u) ? tx.rgb : tx.rgb * light(0xF000u, n);
+                            if (m == 1u) col = col * pw_waterOpacity + sky(reflect(d, n)) * pw_waterReflection;
+                            acc += trans * col;
+                            depth = min(depth, t);
+                            trans = 0.0;
+                            break;
+                        }
+                        lastY = q.y;
+                    }
+                    t += max(0.35, t * pw_farStep);
+                }
             }
             if (trans > 0.0) acc += trans * sky(d);
             imageStore(sceneOut, px, vec4(acc, 1.0));

@@ -45,8 +45,23 @@ public final class MosaicStudioScreen extends Screen {
             volume.update(new MosaicWorldFeed(level), x, y, z, volume.cellCount());
             float tod = (float) (Math.floorMod(level.getDefaultClockTime() - 6000L, 24000L) / 24000.0);
             java.nio.file.Path dir = java.nio.file.Files.createDirectories(mc.gameDirectory.toPath().resolve("bedray-studio"));
+            // the land beyond the volume: 384 x 384 columns, top block height and class
+            int fs = 384, fox = (int) Math.floor(x) - fs / 2, foz = (int) Math.floor(z) - fs / 2;
+            short[] hs = new short[fs * fs];
+            byte[] ms = new byte[fs * fs];
+            var pos = new net.minecraft.core.BlockPos.MutableBlockPos();
+            for (int j = 0; j < fs; j++)
+                for (int i = 0; i < fs; i++) {
+                    int bx = fox + i, bz = foz + j;
+                    int top = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, bx, bz) - 1;
+                    pos.set(bx, top, bz);
+                    var state = level.getBlockState(pos);
+                    hs[j * fs + i] = state.isAir() ? Short.MIN_VALUE : (short) Math.clamp(top, -32767, 32767);
+                    ms[j * fs + i] = (byte) MosaicWorldFeed.classify(state).id();
+                }
+            var far = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Far(fs, fox, foz, hs, ms);
             java.nio.file.Files.write(dir.resolve("preview-world.bin"),
-                volume.snapshot(x, y, z, player.getYRot(), player.getXRot(), tod).toBytes());
+                volume.snapshot(x, y, z, player.getYRot(), player.getXRot(), tod).withFar(far).toBytes());
         } catch (java.io.IOException | RuntimeException e) {
             org.slf4j.LoggerFactory.getLogger("bedray").warn("[mosaic-studio] could not save the preview world: {}", e.toString());
         }

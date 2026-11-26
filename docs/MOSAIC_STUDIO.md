@@ -56,10 +56,15 @@ volume, the camera and the previous camera (Accumulate, TAA). Drag to look aroun
 Shift to fly, the Time slider for the time of day. Graphs that trace rays (Trace / Shadow ray nodes, RT functions) run
 in the preview with their rays walking the world volume; in the game they use the hardware rays.
 
+Beyond the 96 x 48 x 96 volume the preview draws the **far land**: a 384 x 384 height field with the top block class of
+every column (the game captures it with the world; the built-in landscape generates hills, a sea and tree crowns),
+marched with growing steps (World look: far view distance, far march step), so the world does not end at the volume.
+
 File contract: when J opens Studio the game writes `<game>/bedray-studio/preview-world.bin` (little endian: int magic
 `0x3157534D`, int size x / y / z, int origin x / y / z (absolute blocks), double camera x / y / z, float yaw, pitch
 (Minecraft degrees), time of day (0 noon, 0.25 sunset); cells from byte 64, one 16-bit cell per block, x fastest, then z,
-then y, cell = material | blockLight << 8 | skyLight << 12). "Reload world" reads it again.
+then y, cell = material | blockLight << 8 | skyLight << 12), then optionally the far land: int magic `0x3152414D`, int size,
+int origin x / z, size x size shorts (absolute y of the top block, -32768 unknown), size x size bytes (material class). "Reload world" reads it again.
 
 ## A renderer of your own
 
