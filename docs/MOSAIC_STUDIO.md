@@ -114,7 +114,9 @@ value has a reset, and All to defaults puts the game-like look back.
 
 ## Preview tools
 
-- **View**: Image, False colour (brightness as a heat ramp), Clipping (red where a channel is at 255, blue where all are
+- **Tools in one row**: what a narrow panel has no room for waits behind », so any panel size works and the picture keeps
+  its space. Every area can be made as small as you like; the graph keeps its middle when the area is resized.
+- **View**: Colour, False colour (brightness as a heat ramp), Clipping (red where a channel is at 255, blue where all are
   near 0), Brightness, Red, Green, Blue.
 - **Compare**: Keep A stores the frame shown now; Split shows A and the current frame side by side (drag the line, or
   Shift+drag anywhere), Difference shows |now - A| brightened (Settings > Preview > Difference gain).
@@ -124,8 +126,12 @@ value has a reset, and All to defaults puts the game-like look back.
 - **Rest**: with nothing changing for a while (Settings > Preview > Rest after) the preview slows to a few frames per
   second, so the laptop's GPU stays cool.
 - **Views**: save the camera under a name, go back with keys 1..9, R returns to the start view, P pauses.
-- **Image**: save the frame as PNG (as it is, or as shown with the view and compare), copy it to the clipboard.
-- **Size**: 320 x 180 up to 2560 x 1440, or Custom... (any size 160..3840 x 90..2160).
+- **Export**: save the frame as PNG (as it is, or as shown with the view and compare), copy it to the clipboard.
+- **Size**: Fit panel (default: the panel's own size and shape times Settings > Preview > Fit panel resolution, capped by
+  the longest side - no black bars), 320 x 180 up to 2560 x 1440, or Custom... (any size 160..3840 x 90..2160).
+- **Settings > Look > Interface scale**: every window bigger or smaller (System, 75..200 %), applies next start.
+- **Quiet by default**: hints, second lines and the detailed status bar are off (Settings > Editor turns them on; tooltips
+  always tell); area buttons show on the area under the pointer (Settings > Layout).
 - **Settings > Preview**: look, fly and wheel speed, invert up / down, frames per second, GPU share (the preview waits after
   a heavy frame so the studio stays smooth on laptops), background frame interval, shortest pause, day speed (the time of
   day runs while the preview plays), smooth or exact-pixel scaling, the info line, difference gain, clipping thresholds,
