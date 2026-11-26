@@ -170,7 +170,9 @@ final class GpuPreview implements AutoCloseable {
         ByteBuffer lastCamera;
         // preview world: G-buffer pass (scene colour, ray distance) over the world volume
         boolean world;
-        Buf worldBuf;
+        Buf worldBuf, gbWorldBuf;
+        /** The world volume as the G-buffer reads it: cells with flags (0x80: model or entity quads here, 0x40: a block drawn by its model). */
+        io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Snapshot gbWorld;
         Img scene, dist, atlas;
         Buf farBuf;
         Buf blockIds, blockInfo, meshBuf, quadBuf, biomeBuf;
@@ -196,7 +198,7 @@ final class GpuPreview implements AutoCloseable {
             if (gbSetLayout != 0) vkDestroyDescriptorSetLayout(device, gbSetLayout, null);
             if (gbModule != 0) vkDestroyShaderModule(device, gbModule, null);
             if (lastCamera != null) MemoryUtil.memFree(lastCamera);
-            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, farBuf, heightBuf, blockIds, blockInfo, meshBuf, quadBuf, biomeBuf}) free(b);
+            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, gbWorldBuf, farBuf, heightBuf, blockIds, blockInfo, meshBuf, quadBuf, biomeBuf}) free(b);
             for (Img i : new Img[] {input, depth, one, history, scene, dist, atlas}) free(i);
         }
     }
@@ -336,13 +338,16 @@ final class GpuPreview implements AutoCloseable {
             if (far != null)
                 far.writeBuffer(MemoryUtil.memByteBuffer(c.farBuf.mapped(), (int) c.farBuf.size()), view.x(), view.y(), view.z(),
                     c.lastView == null || c.lastView.world() != view.world());
-            if (c.lastView == null || c.lastView.world() != view.world())
+            if (c.lastView == null || c.lastView.world() != view.world()) {
                 view.world().writeBuffer(MemoryUtil.memByteBuffer(c.worldBuf.mapped(), (int) c.worldBuf.size()), view.x(), view.y(), view.z());
-            else { // the camera moved: only the camera-relative header changes
-                ByteBuffer hb = MemoryUtil.memByteBuffer(c.worldBuf.mapped(), 48).order(ByteOrder.LITTLE_ENDIAN);
+                c.gbWorld.writeBuffer(MemoryUtil.memByteBuffer(c.gbWorldBuf.mapped(), (int) c.gbWorldBuf.size()), view.x(), view.y(), view.z());
+            } else { // the camera moved: only the camera-relative header changes
                 int fx = (int) Math.floor(view.x()), fy = (int) Math.floor(view.y()), fz = (int) Math.floor(view.z());
-                hb.putInt(0, view.world().ox() - fx).putInt(4, view.world().oy() - fy).putInt(8, view.world().oz() - fz);
-                hb.putFloat(16, (float) (view.x() - fx)).putFloat(20, (float) (view.y() - fy)).putFloat(24, (float) (view.z() - fz));
+                for (Buf wb0 : new Buf[] {c.worldBuf, c.gbWorldBuf}) {
+                    ByteBuffer hb = MemoryUtil.memByteBuffer(wb0.mapped(), 48).order(ByteOrder.LITTLE_ENDIAN);
+                    hb.putInt(0, view.world().ox() - fx).putInt(4, view.world().oy() - fy).putInt(8, view.world().oz() - fz);
+                    hb.putFloat(16, (float) (view.x() - fx)).putFloat(20, (float) (view.y() - fy)).putFloat(24, (float) (view.z() - fz));
+                }
             }
             c.lastView = view;
         } else {
@@ -512,6 +517,27 @@ final class GpuPreview implements AutoCloseable {
             + rainConstants(view.atlas().rain(), PreviewWorld.weatherOf(view.world())));
     }
 
+    /** The snapshot with the G-buffer's flags in the spare material bits: 0x80 quads in this cell, 0x40 a block drawn by its model. */
+    private static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Snapshot flagged(PreviewWorld.View view) {
+        var s = view.world();
+        int[] mesh = view.atlas().mesh();
+        var table = view.blocks();
+        int[] info = view.atlas().info();
+        if (mesh == null || !view.atlas().hasMesh()) return s;
+        short[] cells = s.cells().clone();
+        for (int i = 0; i < cells.length; i++) {
+            int f = 0;
+            if (i < mesh.length && (mesh[i] & 0xFF) != 0) f |= 0x80;
+            if (table != null && i < table.index().length) {
+                int b = table.index()[i] & 0xFFFF;
+                if (b != 0 && b * 4 + 3 < info.length && (info[b * 4 + 3] & 2) != 0) f |= 0x40;
+            }
+            cells[i] = (short) (cells[i] | f);
+        }
+        return new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Snapshot(s.sx(), s.sy(), s.sz(), s.ox(), s.oy(), s.oz(), cells,
+            s.camX(), s.camY(), s.camZ(), s.yaw(), s.pitch(), s.timeOfDay(), s.far());
+    }
+
     private static String rainConstants(int[] r, float[] w) {
         String rect = r == null ? "vec4(0.0)" : "vec4(" + r[0] + ".0, " + r[1] + ".0, " + r[2] + ".0, " + r[3] + ".0)";
         return "const bool HAS_RAIN_TEX = " + (r != null) + ";\nconst vec4 RAIN_RECT = " + rect + ";\nconst float WORLD_RAIN = " + w[0] + ";\n";
@@ -617,7 +643,7 @@ final class GpuPreview implements AutoCloseable {
             VkDescriptorBufferInfo.Buffer ub = VkDescriptorBufferInfo.calloc(1, s);
             ub.get(0).buffer(c.ubo.handle()).offset(0).range(c.ubo.size());
             VkDescriptorBufferInfo.Buffer wb = VkDescriptorBufferInfo.calloc(1, s);
-            wb.get(0).buffer(c.worldBuf.handle()).offset(0).range(c.worldBuf.size());
+            wb.get(0).buffer(c.gbWorldBuf.handle()).offset(0).range(c.gbWorldBuf.size());
             VkDescriptorImageInfo.Buffer at = VkDescriptorImageInfo.calloc(1, s);
             at.get(0).sampler(c.nearest).imageView(c.atlas.view()).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             VkDescriptorImageInfo.Buffer so = VkDescriptorImageInfo.calloc(1, s);
@@ -675,6 +701,8 @@ final class GpuPreview implements AutoCloseable {
             if (view != null) {
                 c.world = true;
                 c.worldBuf = buffer(view.world().bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                c.gbWorldBuf = buffer(view.world().bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                c.gbWorld = flagged(view);
                 c.farBuf = buffer(view.world().far() == null ? 64 : view.world().far().bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 c.heightBuf = buffer(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 c.heightField = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field();
@@ -938,10 +966,10 @@ final class GpuPreview implements AutoCloseable {
         }
         // the game's light map: sky light by the time of day, coloured block light, per-face shading (all from the look)
         float curve(float l) { return l / ((1.0 + pw_lightCurve) - pw_lightCurve * l); }
+        float g_day = 1.0; // daylight of this frame, set once at the start of main()
         vec3 lightOf(uint front) {
             float s = float((front >> 12) & 15u) / 15.0, b = float((front >> 8) & 15u) / 15.0;
-            float day = clamp(sunDir().y * pw_dayRise + pw_dayOffset, pw_nightLevel, 1.0);
-            return min(max(vec3(curve(s) * day), pw_blockColor * curve(b) * pw_blockBoost) + pw_ambient, vec3(1.0));
+            return min(max(vec3(curve(s) * g_day), pw_blockColor * curve(b) * pw_blockBoost) + pw_ambient, vec3(1.0));
         }
         float faceShade(vec3 n) {
             float ax = abs(n.x), ay = abs(n.y), az = abs(n.z);
@@ -949,26 +977,34 @@ final class GpuPreview implements AutoCloseable {
         }
         vec3 light(uint front, vec3 n) { return lightOf(front) * faceShade(n); }
         bool solidCell(ivec3 c) {
-            uint m = cellAt(c) & 0xFFu;
+            uint m = cellAt(c) & 0x3Fu;
             return !(m == 0u || m == 1u || m == 2u || m == 5u || m == 6u || m == 10u || m == 11u || m == 13u);
         }
         // smooth lighting: the light of the four cells around each corner of the face, blended across it, with ambient occlusion
+        bool solidOf(uint c) {
+            uint m = c & 0x3Fu;
+            return !(m == 0u || m == 1u || m == 2u || m == 5u || m == 6u || m == 10u || m == 11u || m == 13u || (c & 0x40u) != 0u);
+        }
         vec3 smoothLight(ivec3 front, vec3 n, vec3 q) {
             if (pw_smoothLighting < 0.5) return light(cellAt(front), n);
             ivec3 tu = abs(n.x) > 0.5 ? ivec3(0, 0, 1) : ivec3(1, 0, 0);
             ivec3 tv = abs(n.y) > 0.5 ? ivec3(0, 0, 1) : ivec3(0, 1, 0);
             vec3 fq = fract(q);
             vec2 f = vec2(dot(fq, vec3(tu)), dot(fq, vec3(tv)));
+            // the 3 x 3 cells in front of the face, read once
+            uint nb[9];
+            for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) nb[j * 3 + i] = cellAt(front + tu * (i - 1) + tv * (j - 1));
+            vec3 l0 = lightOf(nb[4]);
             vec3 corner[4];
             for (int k = 0; k < 4; k++) {
-                int su = (k & 1) == 0 ? -1 : 1, sv = (k & 2) == 0 ? -1 : 1;
-                ivec3 a = front + tu * su, b = front + tv * sv, d = front + tu * su + tv * sv;
-                bool sa = solidCell(a), sb = solidCell(b), sd = sa && sb ? true : solidCell(d);
-                vec3 sum = lightOf(cellAt(front));
+                int su = (k & 1) == 0 ? 0 : 2, sv = (k & 2) == 0 ? 0 : 2;
+                uint ca = nb[3 + su], cb = nb[sv * 3 + 1], cd = nb[sv * 3 + su];
+                bool sa = solidOf(ca), sb = solidOf(cb), sd = sa && sb ? true : solidOf(cd);
+                vec3 sum = l0;
                 float cnt = 1.0;
-                if (!sa) { sum += lightOf(cellAt(a)); cnt += 1.0; }
-                if (!sb) { sum += lightOf(cellAt(b)); cnt += 1.0; }
-                if (!sd) { sum += lightOf(cellAt(d)); cnt += 1.0; }
+                if (!sa) { sum += lightOf(ca); cnt += 1.0; }
+                if (!sb) { sum += lightOf(cb); cnt += 1.0; }
+                if (!sd) { sum += lightOf(cd); cnt += 1.0; }
                 float occ = (sa ? 1.0 : 0.0) + (sb ? 1.0 : 0.0) + (sd ? 1.0 : 0.0);
                 corner[k] = sum / cnt * (1.0 - occ * pw_aoStrength / 3.0);
             }
@@ -990,13 +1026,13 @@ final class GpuPreview implements AutoCloseable {
             ivec3 p = cell - world.originRel.xyz;
             int ci = (p.y * world.size.z + p.z) * world.size.x + p.x;
             uint mc = mesh.v[ci];
-            if (mc == 0u) return false;
+            if ((mc & 255u) == 0u) return false;
             int cells = world.size.x * world.size.y * world.size.z;
             vec3 org = vec3(world.originRel.xyz);
             vec2 asz = vec2(textureSize(atlas, 0));
             bool hit = false;
             for (uint k = 0u; k < (mc & 255u); k++) {
-                int qi = int(mesh.v[cells + int(mc >> 8) + int(k)]) * 5;
+                int qi = int(mesh.v[cells + int((mc >> 8) & 0x3FFFFFu) + int(k)]) * 5;
                 vec4 a = quads.q[qi], b = quads.q[qi + 1], c2 = quads.q[qi + 2], uvq = quads.q[qi + 3], e = quads.q[qi + 4];
                 vec3 p0 = a.xyz + org, e1 = b.xyz, e2 = c2.xyz;
                 vec3 nq = cross(e1, e2);
@@ -1043,6 +1079,7 @@ final class GpuPreview implements AutoCloseable {
             ivec2 px = ivec2(gl_GlobalInvocationID.xy);
             ivec2 size = imageSize(sceneOut);
             if (px.x >= size.x || px.y >= size.y) return;
+            g_day = clamp(sunDir().y * pw_dayRise + pw_dayOffset, pw_nightLevel, 1.0);
             vec2 uv = (vec2(px) + 0.5) / vec2(size);
             vec3 d = viewDir(uv);
             vec3 o = world.camFrac.xyz;
@@ -1053,7 +1090,7 @@ final class GpuPreview implements AutoCloseable {
             vec3 nextT = vec3(d.x > 0.0 ? 1.0 - f.x : f.x, d.y > 0.0 ? 1.0 - f.y : f.y, d.z > 0.0 ? 1.0 - f.z : f.z) * delta;
             vec3 acc = vec3(0.0);
             float trans = 1.0, depth = 1.0e6;
-            uint prev = cellAt(cell) & 0xFFu;
+            uint prev = cellAt(cell) & 0x3Fu;
             bool entered = inside(cell);
             float tExit = 0.0;
             for (int i = 0; i < 4096; i++) {
@@ -1067,11 +1104,11 @@ final class GpuPreview implements AutoCloseable {
                 bool in_ = inside(cell);
                 if (!in_) { if (entered) { tExit = t; break; } else continue; }
                 entered = true;
-                uint c = cellAt(cell), m = c & 0xFFu;
+                uint c = cellAt(cell), m = c & 0x3Fu;
                 // models (stairs, slabs, torches, plants...) and entities: their quads inside this cell
                 float tOut = min(nextT.x, min(nextT.y, nextT.z));
                 float tm; vec3 nm; vec4 cm;
-                if (meshHit(cell, o, d, t, tOut, tm, nm, cm)) {
+                if ((c & 0x80u) != 0u && meshHit(cell, o, d, t, tOut, tm, nm, cm)) {
                     ivec3 lc = ivec3(floor(o + d * tm + nm * 0.02));
                     uint l0 = cellAt(cell), l1 = cellAt(lc), l2 = cellAt(cell + ivec3(0, 1, 0));
                     uint sky = max(max((l0 >> 12) & 15u, (l1 >> 12) & 15u), (l2 >> 12) & 15u);
@@ -1082,7 +1119,7 @@ final class GpuPreview implements AutoCloseable {
                     trans = 0.0;
                     break;
                 }
-                if (m == 0u || modelCell(cell)) { prev = m == 0u ? 0u : prev; continue; }
+                if (m == 0u || ((c & 0x40u) != 0u && HAS_MESH && pw_models > 0.5)) { prev = m == 0u ? 0u : prev; continue; }
                 uint front = cellAt(back);
                 vec3 q = o + d * t;
                 vec4 tx = texel(tileFor(cell, m, n), q, n);

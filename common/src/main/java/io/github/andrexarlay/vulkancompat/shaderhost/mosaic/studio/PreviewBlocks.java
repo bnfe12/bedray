@@ -558,6 +558,7 @@ final class PreviewBlocks {
         int kind = perColumnTint ? tintKind(block) : 0;
         int tint = kind != 0 ? -kind : tint(packs, block); // < 0: coloured per column by the shader (grass, foliage)
         List<Q> out = new ArrayList<>();
+        java.util.Set<String> planes = new java.util.HashSet<>(); // a face and its back on the same rectangle: once (both sides are drawn)
         for (JsonElement el : elements) {
             JsonObject e = el.getAsJsonObject();
             if (!e.has("faces")) continue;
@@ -577,6 +578,11 @@ final class PreviewBlocks {
                 double[] a = BlockModels.uvAt(q, 0, 0), b = BlockModels.uvAt(q, 1, 0), c = BlockModels.uvAt(q, 0, 1);
                 double[] p0 = scale(p[0]), p1 = scale(p[1]), p3 = scale(p[3]);
                 boolean tinted = face.has("tintindex") && tint != 0;
+                double[][] cs = {p0, p1, p3, add(p1, sub(p3, p0))};
+                java.util.List<String> pts = new java.util.ArrayList<>();
+                for (double[] cc : cs) pts.add(Math.round(cc[0] * 1000) + "," + Math.round(cc[1] * 1000) + "," + Math.round(cc[2] * 1000));
+                java.util.Collections.sort(pts);
+                if (!planes.add(String.join(";", pts) + "|" + texture)) continue;
                 out.add(new Q(p0, sub(p1, p0), sub(p3, p0), new double[] {a[0] / 16, a[1] / 16}, new double[] {(b[0] - a[0]) / 16, (b[1] - a[1]) / 16},
                     new double[] {(c[0] - a[0]) / 16, (c[1] - a[1]) / 16}, norm(texture), tinted ? tint : 0));
             }

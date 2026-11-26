@@ -74,10 +74,16 @@ final class ScenePanel extends Panels.Listening {
                 if (u instanceof Row r) {
                     boolean muted = r.node() != null && r.node().muted;
                     String dot = r.node() == null ? "" : muted ? "○ " : "● ";
-                    int w = Math.max(160, t.getWidth() - 60);
-                    l.setText("<html><div style='width:" + w + "px'><span style='color:" + hex(muted ? FAINT : r.color()) + "'>" + dot + "</span>"
-                        + "<b>" + esc(r.title()) + "</b>" + (r.role().isEmpty() ? "" : "<br><span style='color:" + hex(FAINT) + "'>"
-                        + esc(r.role()) + "</span>") + "</div></html>");
+                    // one line each, cut to the panel's width (no sideways scrolling)
+                    int depth = ((DefaultMutableTreeNode) v).getLevel();
+                    int avail = Math.max(60, t.getVisibleRect().width - depth * 20 - 34);
+                    FontMetrics fb = l.getFontMetrics(UI_B), fs = l.getFontMetrics(UI_S);
+                    String head = StartScreen.fit(r.title(), fb, avail - fb.stringWidth(dot));
+                    String role = r.role().isEmpty() ? "" : StartScreen.fit(r.role(), fs, avail);
+                    l.setText("<html><span style='color:" + hex(muted ? FAINT : r.color()) + "'>" + dot + "</span>"
+                        + "<b>" + esc(head) + "</b>" + (role.isEmpty() ? "" : "<br><span style='color:" + hex(FAINT) + "; font-size:smaller'>"
+                        + esc(role) + "</span>") + "</html>");
+                    l.setToolTipText(r.role().isEmpty() ? null : "<html><div style='width:320px'>" + esc(r.role()) + "</div></html>");
                     l.setForeground(muted ? FAINT : TEXT);
                 } else {
                     l.setText(String.valueOf(u));
@@ -120,7 +126,16 @@ final class ScenePanel extends Panels.Listening {
                 }
             }
         });
-        root.add(scroll(tree), BorderLayout.CENTER);
+        JScrollPane sp = scroll(tree);
+        sp.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        sp.getViewport().addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override public void componentResized(java.awt.event.ComponentEvent e) {
+                shownKey = "";
+                refresh();
+            }
+        });
+        javax.swing.ToolTipManager.sharedInstance().registerComponent(tree);
+        root.add(sp, BorderLayout.CENTER);
         JLabel hint = label("Click: show it. The dot: on / off. Double click: rename.", FAINT);
         hint.setFont(UI_S);
         hint.setBorder(new EmptyBorder(3, 8, 3, 8));
@@ -233,11 +248,18 @@ final class ScenePanel extends Panels.Listening {
         shownKey = k.toString();
         top.removeAllChildren();
         java.util.Set<MosaicDocument.ENode> grouped = new java.util.HashSet<>();
+        // overlapping frames: a node belongs to the smallest frame around it
+        java.util.Map<MosaicDocument.ENode, MosaicDocument.Frame> owner = new java.util.HashMap<>();
+        for (MosaicDocument.Frame f : model.doc.frames)
+            for (MosaicDocument.ENode n : model.doc.nodesIn(f)) {
+                MosaicDocument.Frame cur = owner.get(n);
+                if (cur == null || (long) f.w * f.h < (long) cur.w * cur.h) owner.put(n, f);
+            }
         for (MosaicDocument.Frame f : model.doc.frames) {
             DefaultMutableTreeNode g = new DefaultMutableTreeNode(new Row(null, f, f.title == null ? "Group" : f.title,
                 model.doc.nodesIn(f).size() + " nodes", new Color(f.color)));
             for (MosaicDocument.ENode n : model.doc.nodesIn(f)) {
-                if (kind(n) == null) continue;
+                if (kind(n) == null || owner.get(n) != f) continue;
                 g.add(new DefaultMutableTreeNode(new Row(n, null, title(n), role(n), colorOf(n))));
                 grouped.add(n);
             }
