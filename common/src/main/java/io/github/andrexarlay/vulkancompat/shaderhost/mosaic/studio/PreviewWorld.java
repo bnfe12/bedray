@@ -459,6 +459,12 @@ final class PreviewWorld {
         look("moonBrightness", "Moon brightness", "Brightness of the moon disc.", 2),
         look("smoothLighting", "Smooth lighting", "1: light blended across faces with ambient occlusion in corners, like the game's Smooth Lighting; 0: flat.", 1),
         look("aoStrength", "Ambient occlusion", "How much a corner darkens per block touching it (the game: about 0.6).", 0.6),
+        look("fog", "Fog", "1: the game's distance fog towards the sky colour; 0: none.", 1),
+        look("fogStart", "Fog start", "Fraction of the view distance where the fog begins (the game: about 0.9 of the render distance).", 0.75),
+        look("clouds", "Clouds", "1: the game's cloud layer (clouds.png) drawn over the world; 0: none.", 1),
+        look("cloudHeight", "Cloud height", "Absolute y of the cloud layer (the game: 192.33).", 192.33),
+        look("cloudSpeed", "Cloud speed", "Blocks per second the clouds drift along x (the game: about 0.6).", 0.6),
+        look("cloudOpacity", "Cloud opacity", "How much the clouds cover the sky.", 0.8),
         look("models", "Block models and entities", "1: stairs, slabs, torches, flowers, fences... and the world's entities drawn by their models; 0: cubes.", 1));
 
     private static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting look(String key, String label, String help, double def) {

@@ -37,10 +37,13 @@ final class PreviewBlocks {
      * edge 1, edge 2 in volume cells with the atlas rect packed in their w; uv origin and edges; rect height, flags) and per
      * cell (start << 8 | count) into the quad id list that follows the cells.
      */
-    record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh, int[] biome) {
-        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null, null); }
+    record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh, int[] biome, int[] clouds) {
+        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null, null, null); }
 
-        Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) { this(argb, w, h, info, signature, quads, mesh, null); }
+        Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) { this(argb, w, h, info, signature, quads, mesh, null, null); }
+
+        /** The rect (x, y, w, h) of the game's clouds.png in the atlas, or null. */
+        int[] cloudRect() { return clouds; }
 
         /** Per column of the volume: grass, foliage and water colour of its biome (null: the textures carry one biome's colour). */
         boolean hasBiomes() { return biome != null && biome.length > 0; }
@@ -663,6 +666,16 @@ final class PreviewBlocks {
             placed.add(r);
             return r;
         });
+        int[] cloudRect = null;
+        BufferedImage cloudImg = image(packs, "minecraft:environment/clouds");
+        if (cloudImg != null) {
+            int cw = Math.min(256, cloudImg.getWidth()), ch = Math.min(256, cloudImg.getHeight());
+            int[] px = new int[cw * ch];
+            for (int yy = 0; yy < ch; yy++) for (int xx = 0; xx < cw; xx++) px[yy * cw + xx] = cloudImg.getRGB(xx * cloudImg.getWidth() / cw, yy * cloudImg.getHeight() / ch);
+            pixels.add(px);
+            cloudRect = new int[] {0, 0, cw, ch};
+            placed.add(cloudRect);
+        }
         List<int[]> cellQuads = new ArrayList<>(); // {cell index, quad index}
         List<float[]> quads = new ArrayList<>();
         int sx = s.sx(), sy = s.sy(), sz = s.sz();
@@ -740,7 +753,7 @@ final class PreviewBlocks {
         }
         for (int k = 0; k < cellQuads.size(); k++) mesh[cells + k] = cellQuads.get(k)[1];
         perColumnTint = false;
-        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh, biomeCols);
+        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh, biomeCols, cloudRect);
         if (CACHE.size() > 4) CACHE.clear();
         CACHE.put(sig, a);
         return a;

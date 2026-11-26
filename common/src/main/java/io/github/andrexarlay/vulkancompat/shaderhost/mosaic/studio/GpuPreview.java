@@ -508,7 +508,12 @@ final class GpuPreview implements AutoCloseable {
     static String gbufferSource(PreviewWorld.View view) {
         boolean blocks = view.blocks() != null, mesh = view.atlas().hasMesh();
         return GBUFFER_GLSL.replace("%CONSTANTS%", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.constants(view.graphSettings(), false)
-            + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\nconst bool HAS_MESH = " + mesh + ";\nconst bool HAS_BIOMES = " + view.atlas().hasBiomes() + ";\n");
+            + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\nconst bool HAS_MESH = " + mesh + ";\nconst bool HAS_BIOMES = " + view.atlas().hasBiomes() + ";\n" + cloudConstants(view.atlas().cloudRect()));
+    }
+
+    private static String cloudConstants(int[] r) {
+        return r == null ? "const bool HAS_CLOUDS = false;\nconst vec4 CLOUD_RECT = vec4(0.0);\n"
+            : "const bool HAS_CLOUDS = true;\nconst vec4 CLOUD_RECT = vec4(" + r[0] + ".0, " + r[1] + ".0, " + r[2] + ".0, " + r[3] + ".0);\n";
     }
 
     private static synchronized byte[] gbufferSpirv(String source) {
@@ -1137,7 +1142,29 @@ final class GpuPreview implements AutoCloseable {
                     t += max(0.35, t * pw_farStep);
                 }
             }
-            if (trans > 0.0) acc += trans * sky(d);
+            vec3 skyCol = sky(d);
+            // the game's flat cloud layer (clouds.png, 12 blocks per texel) where the ray reaches it before anything else
+            if (HAS_CLOUDS && pw_clouds > 0.5 && abs(d.y) > 1e-4) {
+                float camY = frame.cameraPosition.y;
+                float tc = (pw_cloudHeight - camY) / d.y;
+                if (tc > 0.0 && tc < depth && tc < pw_farDistance) {
+                    vec3 wp = vec3(frame.cameraPosition.x, camY, frame.cameraPosition.z) + d * tc;
+                    vec2 cuv = fract(vec2(wp.x + frame.timing.x * pw_cloudSpeed, wp.z) / (12.0 * CLOUD_RECT.zw));
+                    vec4 cl = textureLod(atlas, (CLOUD_RECT.xy + cuv * CLOUD_RECT.zw) / vec2(textureSize(atlas, 0)), 0.0);
+                    if (cl.a > 0.5) {
+                        float day = clamp(sunDir().y * pw_dayRise + pw_dayOffset, pw_nightLevel, 1.0);
+                        float fade = 1.0 - smoothstep(pw_farDistance * 0.5, pw_farDistance, tc);
+                        skyCol = mix(skyCol, vec3(day) * (d.y < 0.0 ? 0.75 : 1.0), pw_cloudOpacity * fade);
+                    }
+                }
+            }
+            if (trans > 0.0) acc += trans * skyCol;
+            // the game's distance fog towards the sky colour at the horizon
+            if (pw_fog > 0.5 && depth < 1.0e5) {
+                float end = pw_maxDistance;
+                float fogT = smoothstep(end * pw_fogStart, end, depth);
+                acc = mix(acc, sky(normalize(vec3(d.x, 0.0, d.z) + vec3(0.0, 0.05, 0.0))), fogT);
+            }
             imageStore(sceneOut, px, vec4(acc, 1.0));
             imageStore(distOut, px, vec4(depth));
         }

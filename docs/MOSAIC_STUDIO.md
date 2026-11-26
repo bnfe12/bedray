@@ -132,7 +132,9 @@ Grass, leaves and water take the colours of each column's biome (from the save, 
 game from the biome's temperature, downfall and colour overrides in the client jar's worldgen data.
 
 It is still Studio's own renderer, so a few things differ from the game: saves of 26.x keep only block names, so stairs,
-logs and doors use their default orientation; the game's own clouds, fog, particles and animations are not drawn. The game's own frame with your graph is in Result (and Preview > Game frame)
+logs and doors use their default orientation; particles, weather and animated textures are not drawn. The game's cloud
+layer (clouds.png at y 192.33, drifting) and distance fog are (World look: Clouds, Cloud height / speed / opacity, Fog,
+Fog start). The game's own frame with your graph is in Result (and Preview > Game frame)
 while the game runs with the pack.
 
 The Preview renders the open graph over a **real scene**, not a picture: the blocks around the player when the game
