@@ -34,6 +34,17 @@ final class PreviewWorld {
 
     static MosaicWorld.BlockTable blocksOf(MosaicWorld.Snapshot s) { return s == null ? null : BLOCKS.get(s); }
 
+    /** An entity of a loaded world: id (minecraft:cow), feet position (absolute blocks), body yaw (Minecraft degrees). */
+    record Entity(String id, double x, double y, double z, float yaw) {}
+
+    private static final java.util.Map<MosaicWorld.Snapshot, java.util.List<Entity>> ENTITIES =
+        java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    static java.util.List<Entity> entitiesOf(MosaicWorld.Snapshot s) {
+        java.util.List<Entity> e = s == null ? null : ENTITIES.get(s);
+        return e == null ? java.util.List.of() : e;
+    }
+
     static String originOf(MosaicWorld.Snapshot s) {
         String o = s == null ? null : ORIGIN.get(s);
         return o != null ? o : s == DEMO ? "built-in world" : "world from the game";
@@ -51,6 +62,7 @@ final class PreviewWorld {
                 try {
                     SaveWorld.Loaded l = SaveWorld.load(save, sx, sy, sz);
                     BLOCKS.put(l.snapshot(), l.blocks());
+                    ENTITIES.put(l.snapshot(), l.entities());
                     ORIGIN.put(l.snapshot(), "save " + save.getFileName());
                     return l.snapshot();
                 } catch (Exception e) {
@@ -155,8 +167,66 @@ final class PreviewWorld {
         set(m, 50, height[50][44] + 1, 44, Material.METAL);
         for (int y = 1; y < 6; y++) set(m, 18, height[18][30] + y, 30, Material.STONE);
         set(m, 18, height[18][30] + 6, 30, Material.SNOW);
+        // grass and flowers on the open ground
+        java.util.Map<Long, String> plants = new java.util.HashMap<>();
+        String[] flora = {"minecraft:short_grass", "minecraft:short_grass", "minecraft:short_grass", "minecraft:poppy", "minecraft:dandelion",
+            "minecraft:fern", "minecraft:oxeye_daisy", "minecraft:cornflower"};
+        for (int x = 1; x < SX - 1; x++)
+            for (int z = 1; z < SZ - 1; z++) {
+                int top = height[x][z], hsh = (x * 73428767) ^ (z * 912931);
+                if (top + 1 >= SY || get(m, x, top, z) != Material.DIRT || get(m, x, top + 1, z) != Material.AIR || Math.floorMod(hsh, 7) != 0) continue;
+                set(m, x, top + 1, z, Material.PLANT);
+                plants.put((long) idx(x, top + 1, z), flora[Math.floorMod(hsh >> 5, flora.length)]);
+            }
         short[] cells = light(m);
         DEMO = demoFar(new MosaicWorld.Snapshot(SX, SY, SZ, ox, oy, oz, cells, ox + 44.5, oy + height[44][92] + 9.6, oz + 92.5, 160f, 20f, 0.06f));
+        // real block names, so the built-in world is drawn with each block's own textures and models
+        java.util.List<String> names = new java.util.ArrayList<>(java.util.List.of("minecraft:air"));
+        java.util.Map<String, Integer> ids = new java.util.HashMap<>(java.util.Map.of("minecraft:air", 0));
+        short[] index = new short[m.length];
+        for (int y = 0; y < SY; y++)
+            for (int z = 0; z < SZ; z++)
+                for (int x = 0; x < SX; x++) {
+                    int i = idx(x, y, z);
+                    String n = switch (m[i]) {
+                        case AIR -> null;
+                        case DIRT -> y == height[x][z] && (y + 1 >= SY || m[idx(x, y + 1, z)] == Material.AIR || m[idx(x, y + 1, z)] == Material.PLANT)
+                            ? "minecraft:grass_block" : "minecraft:dirt";
+                        case STONE -> "minecraft:stone";
+                        case OTHER -> "minecraft:stone_bricks";
+                        case SAND -> "minecraft:sand";
+                        case WATER -> "minecraft:water";
+                        case LAVA -> "minecraft:lava";
+                        case WOOD -> "minecraft:oak_log";
+                        case LEAVES -> "minecraft:oak_leaves";
+                        case GLASS -> "minecraft:glass";
+                        case LIGHT -> "minecraft:torch";
+                        case METAL -> "minecraft:iron_block";
+                        case SNOW -> "minecraft:snow_block";
+                        case ICE -> "minecraft:ice";
+                        case PLANT -> plants.getOrDefault((long) i, "minecraft:short_grass");
+                    };
+                    if (n == null) continue;
+                    Integer id = ids.get(n);
+                    if (id == null) {
+                        id = names.size();
+                        names.add(n);
+                        ids.put(n, id);
+                    }
+                    index[i] = (short) id.intValue();
+                }
+        BLOCKS.put(DEMO, new MosaicWorld.BlockTable(java.util.List.copyOf(names), index));
+        // a few animals on the meadow in front of the camera (drawn by their exported models)
+        java.util.List<Entity> animals = new java.util.ArrayList<>();
+        int[][] spots = {{40, 82, 30}, {47, 80, 200}, {36, 76, 120}, {52, 74, 300}};
+        String[] kinds = {"minecraft:cow", "minecraft:sheep", "minecraft:pig", "minecraft:cow"};
+        for (int k = 0; k < spots.length; k++) {
+            int x = spots[k][0], z = spots[k][1];
+            int top = height[x][z];
+            if (top + 1 <= 62 - oy + 1 || get(m, x, top + 1, z) == Material.WOOD) continue;
+            animals.add(new Entity(kinds[k], ox + x + 0.5, oy + top + 1, oz + z + 0.5, spots[k][2]));
+        }
+        ENTITIES.put(DEMO, animals);
         return DEMO;
     }
 
@@ -355,7 +425,10 @@ final class PreviewWorld {
         look("glassOpacity", "Glass and ice opacity", "How much glass and ice cover what lies behind.", 0.35),
         look("cutout", "Cutout threshold", "Texture alpha below which leaves, plants and glass are see-through.", 0.5),
         look("moonSharpness", "Moon size", "Higher = smaller moon disc.", 900),
-        look("moonBrightness", "Moon brightness", "Brightness of the moon disc.", 2));
+        look("moonBrightness", "Moon brightness", "Brightness of the moon disc.", 2),
+        look("smoothLighting", "Smooth lighting", "1: light blended across faces with ambient occlusion in corners, like the game's Smooth Lighting; 0: flat.", 1),
+        look("aoStrength", "Ambient occlusion", "How much a corner darkens per block touching it (the game: about 0.6).", 0.6),
+        look("models", "Block models and entities", "1: stairs, slabs, torches, flowers, fences... and the world's entities drawn by their models; 0: cubes.", 1));
 
     private static io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting look(String key, String label, String help, double def) {
         return new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting(key, label, "Preview", help, 1, new double[] {def}, false);
@@ -385,9 +458,7 @@ final class PreviewWorld {
 
         /** The view of a snapshot with the atlas of its blocks and the game folder's resource packs. */
         static View of(MosaicWorld.Snapshot s, Path gameDir) {
-            MosaicWorld.BlockTable t = blocksOf(s);
-            return new View(s, s.camX(), s.camY(), s.camZ(), s.yaw(), s.pitch(), s.timeOfDay(),
-                PreviewBlocks.atlas(t == null ? null : t.names(), gameDir));
+            return new View(s, s.camX(), s.camY(), s.camZ(), s.yaw(), s.pitch(), s.timeOfDay(), PreviewBlocks.atlasFor(s, gameDir));
         }
 
         View withAtlas(PreviewBlocks.Atlas a) { return new View(world, x, y, z, yaw, pitch, timeOfDay, a, graphSettings, look); }

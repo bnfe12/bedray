@@ -29,8 +29,8 @@ final class SaveWorld {
     /** Size of the far land read around the camera (columns per side). */
     static int farSize = 384;
 
-    /** A loaded save: the snapshot the preview renders and which block every cell is. */
-    record Loaded(MosaicWorld.Snapshot snapshot, MosaicWorld.BlockTable blocks) {}
+    /** A loaded save: the snapshot the preview renders, which block every cell is, and the entities in the volume. */
+    record Loaded(MosaicWorld.Snapshot snapshot, MosaicWorld.BlockTable blocks, List<PreviewWorld.Entity> entities) {}
 
     static boolean isSave(Path dir) { return dir != null && Files.isRegularFile(dir.resolve("level.dat")); }
 
@@ -129,7 +129,8 @@ final class SaveWorld {
             if (computeLight) light(cells, tops, sx, sy, sz, oy);
             MosaicWorld.Snapshot snap = new MosaicWorld.Snapshot(sx, sy, sz, ox, oy, oz, cells, x, y, z, yaw, pitch, tod);
             if (farSize > 0) snap = snap.withFar(far(r, fx, fz, farSize));
-            return new Loaded(snap, new MosaicWorld.BlockTable(List.copyOf(ids.keySet()), index));
+            List<PreviewWorld.Entity> ents = entities(regions.resolveSibling("entities"), ox, oy, oz, sx, sy, sz);
+            return new Loaded(snap, new MosaicWorld.BlockTable(List.copyOf(ids.keySet()), index), ents);
         }
     }
 
@@ -251,6 +252,33 @@ final class SaveWorld {
         } catch (Exception e) {
             return 6000;
         }
+    }
+
+    /** Entities saved in the volume (entities/r.*.mca: id, position, body yaw), the player left out. */
+    @SuppressWarnings("unchecked")
+    static List<PreviewWorld.Entity> entities(Path dir, int ox, int oy, int oz, int sx, int sy, int sz) {
+        List<PreviewWorld.Entity> out = new ArrayList<>();
+        if (!Files.isDirectory(dir)) return out;
+        try (Reader r = new Reader(dir, true)) {
+            for (int cz = Math.floorDiv(oz, 16); cz <= Math.floorDiv(oz + sz - 1, 16); cz++)
+                for (int cx = Math.floorDiv(ox, 16); cx <= Math.floorDiv(ox + sx - 1, 16); cx++) {
+                    Map<String, Object> root = r.raw(cx, cz);
+                    if (root == null || !(root.get("Entities") instanceof List<?> list)) continue;
+                    for (Object o : list) {
+                        if (!(o instanceof Map<?, ?> e0)) continue;
+                        Map<String, Object> e = (Map<String, Object>) e0;
+                        if (!(e.get("id") instanceof String id) || !(e.get("Pos") instanceof List<?> pos) || pos.size() != 3) continue;
+                        double x = num(pos.get(0)), y = num(pos.get(1)), z = num(pos.get(2));
+                        if (x < ox || y < oy || z < oz || x >= ox + sx || y >= oy + sy || z >= oz + sz) continue;
+                        float yaw = e.get("Rotation") instanceof List<?> rot && !rot.isEmpty() ? (float) num(rot.get(0)) : 0f;
+                        out.add(new PreviewWorld.Entity(id, x, y, z, yaw));
+                        if (out.size() >= 256) return out;
+                    }
+                }
+        } catch (Exception ignored) {
+            // entities are a bonus
+        }
+        return out;
     }
 
     private static Path regionDir(Path save, String dim) {
@@ -376,7 +404,23 @@ final class SaveWorld {
         private final Map<Long, RandomAccessFile> files = new HashMap<>();
         private final Map<Long, Chunk> chunks = new HashMap<>();
 
-        Reader(Path dir) { this.dir = dir; }
+        private final boolean raw;
+
+        Reader(Path dir) { this(dir, false); }
+
+        Reader(Path dir, boolean raw) {
+            this.dir = dir;
+            this.raw = raw;
+        }
+
+        /** A chunk's whole NBT (entity chunks), or null. */
+        Map<String, Object> raw(int cx, int cz) {
+            try {
+                return readRoot(cx, cz);
+            } catch (Exception e) {
+                return null;
+            }
+        }
 
         Chunk chunk(int cx, int cz) throws IOException {
             long key = ((long) cx << 32) ^ (cz & 0xFFFFFFFFL);
@@ -392,6 +436,14 @@ final class SaveWorld {
         }
 
         private Chunk readChunk(int cx, int cz) throws IOException {
+            Map<String, Object> root = readRoot(cx, cz);
+            if (root == null) return null;
+            if (root.get("Status") instanceof String st && !st.endsWith("full") && !st.endsWith("spawn") && !st.endsWith("light")
+                && !st.endsWith("features") && !st.endsWith("initialize_light")) return null;
+            return new Chunk(root);
+        }
+
+        private Map<String, Object> readRoot(int cx, int cz) throws IOException {
             int rx = Math.floorDiv(cx, 32), rz = Math.floorDiv(cz, 32);
             long rk = ((long) rx << 32) ^ (rz & 0xFFFFFFFFL);
             RandomAccessFile f = files.get(rk);
@@ -418,10 +470,7 @@ final class SaveWorld {
                 default -> null; // LZ4 or custom compression: not supported here
             };
             if (in == null) return null;
-            Map<String, Object> root = root(in.readAllBytes());
-            if (root.get("Status") instanceof String st && !st.endsWith("full") && !st.endsWith("spawn") && !st.endsWith("light")
-                && !st.endsWith("features") && !st.endsWith("initialize_light")) return null;
-            return new Chunk(root);
+            return root(in.readAllBytes());
         }
 
         @Override public void close() {

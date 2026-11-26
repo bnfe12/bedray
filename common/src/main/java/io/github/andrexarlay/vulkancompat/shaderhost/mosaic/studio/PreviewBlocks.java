@@ -31,8 +31,17 @@ final class PreviewBlocks {
 
     static final int COLS = 64;
 
-    /** argb rows of {@code w x h} (tiles of 16 x 16, each stored bottom-up), and per block: top, side, bottom tile, flags. */
-    record Atlas(int[] argb, int w, int h, int[] info, String signature) {}
+    /**
+     * argb rows of w x h (tiles of 16 x 16, each stored bottom-up, then larger textures top-down), per block: top, side,
+     * bottom tile, flags (1 textured cube, 2 drawn by its model's quads), and the mesh: quads (5 x vec4 each: corner,
+     * edge 1, edge 2 in volume cells with the atlas rect packed in their w; uv origin and edges; rect height, flags) and per
+     * cell (start << 8 | count) into the quad id list that follows the cells.
+     */
+    record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) {
+        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null); }
+
+        boolean hasMesh() { return mesh != null && quads != null && quads.length > 0; }
+    }
 
     /** A place textures are read from: a resource pack folder or zip, or a jar. */
     private record Pack(Path path, boolean zip) {}
@@ -196,7 +205,7 @@ final class PreviewBlocks {
             } catch (Exception e) {
                 break;
             }
-            if (o.has("textures")) for (var e : o.getAsJsonObject("textures").entrySet()) tex.putIfAbsent(e.getKey(), e.getValue().getAsString());
+            if (o.has("textures")) for (var e : o.getAsJsonObject("textures").entrySet()) tex.putIfAbsent(e.getKey(), texRef(e.getValue()));
             if (!elements && o.has("elements")) {
                 elements = true;
                 for (JsonElement el : o.getAsJsonArray("elements")) {
@@ -214,6 +223,13 @@ final class PreviewBlocks {
         if (any == null) any = resolve("#particle", tex);
         if (any == null) return null;
         return new String[] {norm(up != null ? up : any), norm(side != null ? side : any), norm(down != null ? down : any)};
+    }
+
+    /** A model texture entry: a name, or (26.x) an object with its sprite. */
+    private static String texRef(JsonElement v) {
+        if (v.isJsonPrimitive()) return v.getAsString();
+        if (v.isJsonObject() && v.getAsJsonObject().has("sprite")) return v.getAsJsonObject().get("sprite").getAsString();
+        return null;
     }
 
     private static String norm(String t) { return t.contains(":") ? t : "minecraft:" + t; }
@@ -322,6 +338,356 @@ final class PreviewBlocks {
         int x = (int) ((1 - t) * (map.getWidth() - 1)), y = (int) ((1 - d) * (map.getHeight() - 1));
         return map.getRGB(x, y) & 0xFFFFFF;
     }
+
+    // ------------------------------------------------------------------ models and entities as quads
+
+    /** One textured quad of a model in 0..1 block units: corner p0, corners p1 (s = 1) and p3 (t = 1), uv at p0 and its steps. */
+    record Q(double[] p0, double[] e1, double[] e2, double[] uv0, double[] du, double[] dv, String texture, int tint) {}
+
+    /** A block's model as quads (null when it is a plain full cube, drawn by the cube path). */
+    static List<Q> modelQuads(List<Pack> packs, String block) {
+        String ns = block.contains(":") ? block.substring(0, block.indexOf(':')) : "minecraft";
+        String name = block.substring(block.indexOf(':') + 1);
+        if (name.equals("water") || name.equals("lava")) return null;
+        String[] variant = variantOf(packs, ns, name);
+        if (variant == null) return null;
+        Map<String, String> tex = new LinkedHashMap<>();
+        com.google.gson.JsonArray elements = null;
+        String id = variant[0];
+        for (int depth = 0; depth < 12 && id != null; depth++) {
+            String mns = id.contains(":") ? id.substring(0, id.indexOf(':')) : "minecraft";
+            String p = id.substring(id.indexOf(':') + 1);
+            if (p.startsWith("builtin/")) break;
+            byte[] json = readFirst(packs, "assets/" + mns + "/models/" + p + ".json");
+            if (json == null) break;
+            JsonObject o;
+            try {
+                o = JsonParser.parseString(new String(json, StandardCharsets.UTF_8)).getAsJsonObject();
+            } catch (Exception e) {
+                break;
+            }
+            if (o.has("textures")) for (var e : o.getAsJsonObject("textures").entrySet()) tex.putIfAbsent(e.getKey(), texRef(e.getValue()));
+            if (elements == null && o.has("elements")) elements = o.getAsJsonArray("elements");
+            id = o.has("parent") ? o.get("parent").getAsString() : null;
+        }
+        if (elements == null || elements.isEmpty()) return null;
+        boolean cube = true; // every element a full cube (grass block: the dirt and its overlay): the cube path draws it
+        for (JsonElement el : elements) {
+            JsonObject e = el.getAsJsonObject();
+            double[] f = vec(e.getAsJsonArray("from")), t = vec(e.getAsJsonArray("to"));
+            if (e.has("rotation") || f[0] != 0 || f[1] != 0 || f[2] != 0 || t[0] != 16 || t[1] != 16 || t[2] != 16) cube = false;
+        }
+        if (cube) return null;
+        int rx = Integer.parseInt(variant[1]), ry = Integer.parseInt(variant[2]);
+        int tint = tint(packs, block);
+        List<Q> out = new ArrayList<>();
+        for (JsonElement el : elements) {
+            JsonObject e = el.getAsJsonObject();
+            if (!e.has("faces")) continue;
+            double[] f = vec(e.getAsJsonArray("from")), t = vec(e.getAsJsonArray("to"));
+            JsonObject rot = e.has("rotation") ? e.getAsJsonObject("rotation") : null;
+            for (var fe : e.getAsJsonObject("faces").entrySet()) {
+                JsonObject face = fe.getValue().getAsJsonObject();
+                String texture = resolve(face.get("texture").getAsString(), tex);
+                double[][] p = BlockModels.corners(fe.getKey(), f, t);
+                if (texture == null || p == null) continue;
+                if (rot != null) rotate(p, vec(rot.getAsJsonArray("origin")), rot.get("angle").getAsDouble(), rot.get("axis").getAsString());
+                if (rx != 0) rotate(p, new double[] {8, 8, 8}, -rx, "x");
+                if (ry != 0) rotate(p, new double[] {8, 8, 8}, -ry, "y");
+                double[] uv = face.has("uv") ? vec4(face.getAsJsonArray("uv")) : BlockModels.defaultUv(fe.getKey(), f, t);
+                var q = new BlockModels.Quad(p, uv[0], uv[1], uv[2], uv[3], face.has("rotation") ? face.get("rotation").getAsInt() : 0,
+                    texture, fe.getKey(), null);
+                double[] a = BlockModels.uvAt(q, 0, 0), b = BlockModels.uvAt(q, 1, 0), c = BlockModels.uvAt(q, 0, 1);
+                double[] p0 = scale(p[0]), p1 = scale(p[1]), p3 = scale(p[3]);
+                boolean tinted = face.has("tintindex") && tint != 0;
+                out.add(new Q(p0, sub(p1, p0), sub(p3, p0), new double[] {a[0] / 16, a[1] / 16}, new double[] {(b[0] - a[0]) / 16, (b[1] - a[1]) / 16},
+                    new double[] {(c[0] - a[0]) / 16, (c[1] - a[1]) / 16}, norm(texture), tinted ? tint : 0));
+            }
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    private static double[] scale(double[] p) { return new double[] {p[0] / 16, p[1] / 16, p[2] / 16}; }
+
+    private static double[] sub(double[] a, double[] b) { return new double[] {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
+
+    private static double[] vec(com.google.gson.JsonArray a) { return new double[] {a.get(0).getAsDouble(), a.get(1).getAsDouble(), a.get(2).getAsDouble()}; }
+
+    private static double[] vec4(com.google.gson.JsonArray a) {
+        return new double[] {a.get(0).getAsDouble(), a.get(1).getAsDouble(), a.get(2).getAsDouble(), a.get(3).getAsDouble()};
+    }
+
+    private static void rotate(double[][] p, double[] o, double deg, String axis) {
+        double a = Math.toRadians(deg), c = Math.cos(a), s = Math.sin(a);
+        for (double[] q : p) {
+            double x = q[0] - o[0], y = q[1] - o[1], z = q[2] - o[2];
+            switch (axis) {
+                case "x" -> { q[1] = o[1] + y * c - z * s; q[2] = o[2] + y * s + z * c; }
+                case "y" -> { q[0] = o[0] + x * c + z * s; q[2] = o[2] - x * s + z * c; }
+                default -> { q[0] = o[0] + x * c - y * s; q[1] = o[1] + x * s + y * c; }
+            }
+        }
+    }
+
+    /** The default-looking variant of a block: {model, x rotation, y rotation}, or null. */
+    private static String[] variantOf(List<Pack> packs, String ns, String name) {
+        byte[] json = readFirst(packs, "assets/" + ns + "/blockstates/" + name + ".json");
+        if (json == null) return null;
+        try {
+            JsonObject o = JsonParser.parseString(new String(json, StandardCharsets.UTF_8)).getAsJsonObject();
+            JsonElement v = null;
+            if (o.has("variants")) {
+                JsonObject vs = o.getAsJsonObject("variants");
+                String pick = null;
+                for (String k : vs.keySet()) {
+                    if (pick == null) pick = k;
+                    if (k.isEmpty() || k.contains("axis=y") || k.contains("facing=north") || k.contains("half=bottom") && !k.contains("open=true")
+                        || k.contains("snowy=false") || k.contains("type=bottom")) {
+                        pick = k;
+                        break;
+                    }
+                }
+                v = vs.get(pick);
+            } else if (o.has("multipart")) {
+                for (JsonElement part : o.getAsJsonArray("multipart"))
+                    if (!part.getAsJsonObject().has("when")) {
+                        v = part.getAsJsonObject().get("apply");
+                        break;
+                    }
+                if (v == null && !o.getAsJsonArray("multipart").isEmpty()) v = o.getAsJsonArray("multipart").get(0).getAsJsonObject().get("apply");
+            }
+            if (v != null && v.isJsonArray()) v = v.getAsJsonArray().isEmpty() ? null : v.getAsJsonArray().get(0);
+            if (v == null || !v.isJsonObject() || !v.getAsJsonObject().has("model")) return null;
+            JsonObject m = v.getAsJsonObject();
+            return new String[] {m.get("model").getAsString(), String.valueOf(m.has("x") ? m.get("x").getAsInt() : 0),
+                String.valueOf(m.has("y") ? m.get("y").getAsInt() : 0)};
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** The texture of an entity type (entity/cow/cow.png, entity/pig.png, the first texture of its folder...). */
+    static String entityTexture(List<Pack> packs, String entityId) {
+        String n = entityId.substring(entityId.indexOf(':') + 1);
+        for (String c : new String[] {"entity/" + n + "/" + n, "entity/" + n, "entity/" + n + "/" + n + "_temperate", "entity/" + n + "/temperate_" + n,
+            "entity/" + n + "/" + n + "_base"})
+            if (readFirst(packs, "assets/minecraft/textures/" + c + ".png") != null) return "minecraft:" + c;
+        for (Pack p : packs) {
+            if (!p.zip()) continue;
+            try {
+                ZipFile z;
+                synchronized (PreviewBlocks.class) {
+                    z = ZIPS.get(p.path());
+                    if (z == null) ZIPS.put(p.path(), z = new ZipFile(p.path().toFile()));
+                }
+                String prefix = "assets/minecraft/textures/entity/" + n + "/";
+                var e = z.stream().filter(x -> x.getName().startsWith(prefix) && x.getName().endsWith(".png")).findFirst().orElse(null);
+                if (e != null) return "minecraft:" + e.getName().substring("assets/minecraft/textures/".length(), e.getName().length() - 4);
+            } catch (Exception ignored) {
+                // next pack
+            }
+        }
+        return null;
+    }
+
+    /** An entity's quads in world space relative to the volume origin (its exported model posed like the game draws it). */
+    static List<Q> entityQuads(PreviewWorld.Entity e, Map<String, double[]> layers, List<Pack> packs, MosaicWorld.Snapshot s) {
+        String tex = entityTexture(packs, e.id());
+        double[] v = layers.get(e.id() + "#main");
+        List<Q> out = new ArrayList<>();
+        double yr = Math.toRadians(180 - e.yaw()), cy = Math.cos(yr), sy = Math.sin(yr);
+        double bx = e.x() - s.ox(), by = e.y() - s.oy(), bz = e.z() - s.oz();
+        if (v == null || tex == null) {
+            // no exported model yet: a box of a mob's size in the colour of its texture
+            double w = 0.3, h = 1.8;
+            double[][] faces = {{-w, 0, -w, 2 * w, 0, 0, 0, h, 0}, {w, 0, w, -2 * w, 0, 0, 0, h, 0}, {-w, 0, w, 0, 0, -2 * w, 0, h, 0},
+                {w, 0, -w, 0, 0, 2 * w, 0, h, 0}, {-w, h, -w, 2 * w, 0, 0, 0, 0, 2 * w}};
+            for (double[] f : faces)
+                out.add(new Q(new double[] {bx + f[0], by + f[1], bz + f[2]}, new double[] {f[3], f[4], f[5]}, new double[] {f[6], f[7], f[8]},
+                    new double[] {0.25, 0.25}, new double[] {0.5, 0}, new double[] {0, 0.5}, tex == null ? "minecraft:block/white_wool" : tex, 0));
+            return out;
+        }
+        for (int i = 0; i + 19 < v.length; i += 20) {
+            double[][] p = new double[4][];
+            double[][] uv = new double[4][];
+            for (int c = 0; c < 4; c++) {
+                int o = i + c * 5;
+                // the export is posed and in blocks, in model space (y down): the game draws it scaled by (-1, -1, 1) and lifted by 1.501
+                double x = -v[o], y = 1.501 - v[o + 1], z = v[o + 2];
+                p[c] = new double[] {bx + x * cy + z * sy, by + y, bz - x * sy + z * cy};
+                uv[c] = new double[] {v[o + 3], v[o + 4]};
+            }
+            out.add(new Q(p[0], sub(p[1], p[0]), sub(p[3], p[0]), uv[0], new double[] {uv[1][0] - uv[0][0], uv[1][1] - uv[0][1]},
+                new double[] {uv[3][0] - uv[0][0], uv[3][1] - uv[0][1]}, tex, 0));
+        }
+        return out;
+    }
+
+    private static boolean exportAsked;
+
+    /**
+     * The atlas of a loaded world with its mesh: block textures, the quads of every block drawn by its model (stairs,
+     * slabs, torches, flowers, fences...) and of the world's entities (their exported models), listed per cell.
+     */
+    static synchronized Atlas atlasFor(MosaicWorld.Snapshot s, Path gameDir) {
+        MosaicWorld.BlockTable t = PreviewWorld.blocksOf(s);
+        List<PreviewWorld.Entity> ents = PreviewWorld.entitiesOf(s);
+        Path export = BlockModels.offlineFile();
+        String sig = signature(gameDir, t == null ? null : t.names()) + "|" + System.identityHashCode(s) + "|"
+            + (export == null ? 0 : newest(export)) + "|" + ents.size();
+        Atlas cached = CACHE.get(sig);
+        if (cached != null) return cached;
+        Atlas base = atlas(t == null ? null : t.names(), gameDir);
+        if (t == null && ents.isEmpty()) return base;
+        List<Pack> packs = packs(gameDir);
+        Map<String, double[]> layers = ents.isEmpty() ? Map.of() : BlockModels.entityLayers(gameDir);
+        if (!ents.isEmpty() && layers.isEmpty() && !exportAsked) {
+            exportAsked = true;
+            BlockModels.exportOffline(() -> { }); // entity models from the client jar, once; the preview picks them up when ready
+        }
+        int n = t == null ? 0 : t.names().size();
+        List<List<Q>> models = new ArrayList<>();
+        int[] info = base.info().clone();
+        for (int b = 0; b < n; b++) {
+            List<Q> q = b == 0 ? null : modelQuads(packs, t.names().get(b));
+            models.add(q);
+            if (q != null && b * 4 + 3 < info.length) info[b * 4 + 3] |= 2;
+        }
+        // textures: the base atlas tiles stay; model and entity textures get their own rects after them
+        Map<String, int[]> rects = new HashMap<>();
+        List<int[]> pixels = new ArrayList<>();
+        List<int[]> placed = new ArrayList<>();
+        int w = base.w(), y0 = base.h(), cx = 0, cy = y0, rowH = 0;
+        java.util.function.Function<String, int[]> rectOf = key -> rects.computeIfAbsent(key, k -> {
+            String texture = k.substring(0, k.indexOf('#'));
+            int tint = Integer.parseInt(k.substring(k.indexOf('#') + 1));
+            BufferedImage img = image(packs, texture);
+            if (img == null) return null;
+            boolean entity = texture.contains(":entity/");
+            int tw = entity ? Math.min(128, img.getWidth()) : 16, th = entity ? Math.max(1, img.getHeight() * tw / img.getWidth()) : 16;
+            int frameH = entity ? img.getHeight() : Math.min(img.getWidth(), img.getHeight());
+            int[] px = new int[tw * th];
+            for (int yy = 0; yy < th; yy++)
+                for (int xx = 0; xx < tw; xx++) {
+                    int argb = img.getRGB(xx * img.getWidth() / tw, yy * frameH / th);
+                    px[yy * tw + xx] = tint != 0 ? mul(argb, tint) : argb;
+                }
+            pixels.add(px);
+            int[] r = {0, 0, tw, th};
+            placed.add(r);
+            return r;
+        });
+        List<int[]> cellQuads = new ArrayList<>(); // {cell index, quad index}
+        List<float[]> quads = new ArrayList<>();
+        int sx = s.sx(), sy = s.sy(), sz = s.sz();
+        for (int ly = 0, i = 0; ly < sy; ly++)
+            for (int lz = 0; lz < sz; lz++)
+                for (int lx = 0; lx < sx; lx++, i++) {
+                    int b = t == null ? 0 : t.index()[i] & 0xFFFF;
+                    if (b == 0 || b >= models.size() || models.get(b) == null) continue;
+                    for (Q q : models.get(b)) {
+                        int[] r = rectOf.apply(q.texture() + "#" + q.tint());
+                        if (r == null) continue;
+                        quads.add(pack(q, lx, ly, lz, r, false));
+                        cellQuads.add(new int[] {i, quads.size() - 1});
+                    }
+                }
+        for (PreviewWorld.Entity e : ents)
+            for (Q q : entityQuads(e, layers, packs, s)) {
+                int[] r = rectOf.apply(q.texture() + "#0");
+                if (r == null) continue;
+                quads.add(pack(q, 0, 0, 0, r, true));
+                int qi = quads.size() - 1;
+                double[] lo = {Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE}, hi = {-Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
+                for (double[] c : new double[][] {q.p0(), add(q.p0(), q.e1()), add(q.p0(), q.e2()), add(add(q.p0(), q.e1()), q.e2())})
+                    for (int k = 0; k < 3; k++) {
+                        lo[k] = Math.min(lo[k], c[k]);
+                        hi[k] = Math.max(hi[k], c[k]);
+                    }
+                for (int yy = (int) Math.floor(lo[1]); yy <= (int) Math.floor(hi[1]); yy++)
+                    for (int zz = (int) Math.floor(lo[2]); zz <= (int) Math.floor(hi[2]); zz++)
+                        for (int xx = (int) Math.floor(lo[0]); xx <= (int) Math.floor(hi[0]); xx++)
+                            if (xx >= 0 && yy >= 0 && zz >= 0 && xx < sx && yy < sy && zz < sz) cellQuads.add(new int[] {(yy * sz + zz) * sx + xx, qi});
+            }
+        // shelf-pack the extra textures under the tiles
+        for (int[] r : placed) {
+            if (cx + r[2] > w) {
+                cx = 0;
+                cy += rowH;
+                rowH = 0;
+            }
+            r[0] = cx;
+            r[1] = cy;
+            cx += r[2];
+            rowH = Math.max(rowH, r[3]);
+        }
+        int h = Math.max(base.h(), cy + rowH);
+        int[] argb = java.util.Arrays.copyOf(base.argb(), w * h);
+        for (int k = 0; k < placed.size(); k++) {
+            int[] r = placed.get(k), px = pixels.get(k);
+            for (int yy = 0; yy < r[3]; yy++) System.arraycopy(px, yy * r[2], argb, (r[1] + yy) * w + r[0], r[2]);
+        }
+        // the rects were only known now: write them into the quads
+        float[] qa = new float[quads.size() * 20];
+        for (int k = 0; k < quads.size(); k++) {
+            float[] f = quads.get(k);
+            int[] r = RECTS.get(f);
+            f[3] = r[0];
+            f[7] = r[1];
+            f[11] = r[2];
+            f[18] = r[3];
+            System.arraycopy(f, 0, qa, k * 20, 20);
+        }
+        RECTS.clear();
+        cellQuads.sort((a, b) -> Integer.compare(a[0], b[0]));
+        int cells = sx * sy * sz;
+        int[] mesh = new int[cells + cellQuads.size()];
+        for (int k = 0; k < cellQuads.size(); ) {
+            int cell = cellQuads.get(k)[0], start = k, count = 0;
+            while (k < cellQuads.size() && cellQuads.get(k)[0] == cell) {
+                k++;
+                count++;
+            }
+            mesh[cell] = (start << 8) | Math.min(255, count);
+        }
+        for (int k = 0; k < cellQuads.size(); k++) mesh[cells + k] = cellQuads.get(k)[1];
+        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh);
+        if (CACHE.size() > 4) CACHE.clear();
+        CACHE.put(sig, a);
+        return a;
+    }
+
+    private static double[] add(double[] a, double[] b) { return new double[] {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
+
+    /**
+     * A quad for the GPU (5 x vec4): (p0, rect x), (edge 1, rect y), (edge 2, rect w), (uv0, du), (dv, rect h, flags). Tiles are
+     * its own rect (top-down); the rect is filled in after shelf packing.
+     */
+    private static float[] pack(Q q, int lx, int ly, int lz, int[] rect, boolean entity) {
+        float[] f = new float[20];
+        double[] uv0 = q.uv0().clone(), du = q.du().clone(), dv = q.dv().clone();
+        f[0] = (float) (q.p0()[0] + lx);
+        f[1] = (float) (q.p0()[1] + ly);
+        f[2] = (float) (q.p0()[2] + lz);
+        f[4] = (float) q.e1()[0];
+        f[5] = (float) q.e1()[1];
+        f[6] = (float) q.e1()[2];
+        f[8] = (float) q.e2()[0];
+        f[9] = (float) q.e2()[1];
+        f[10] = (float) q.e2()[2];
+        f[12] = (float) uv0[0];
+        f[13] = (float) uv0[1];
+        f[14] = (float) du[0];
+        f[15] = (float) du[1];
+        f[16] = (float) dv[0];
+        f[17] = (float) dv[1];
+        f[19] = entity ? 1 : 0;
+        RECTS.put(f, rect);
+        return f;
+    }
+
+    /** Quad -> its rect until the atlas is laid out (identity keys). */
+    private static final Map<float[], int[]> RECTS = new java.util.IdentityHashMap<>();
 
     /** Material class fallback for blocks of a world without names (unused here, kept for tools). */
     static MosaicWorld.Material classOf(String block) { return SaveWorld.classify(block); }

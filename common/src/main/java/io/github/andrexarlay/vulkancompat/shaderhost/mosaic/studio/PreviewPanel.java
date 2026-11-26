@@ -713,9 +713,9 @@ final class PreviewPanel extends Panels.Listening {
                         atlasChecked = System.nanoTime();
                         PreviewWorld.View v1 = worldView;
                         var t = v1.blocks();
-                        String sig = PreviewBlocks.signature(StudioLibrary.gameDir(model), t == null ? null : t.names());
-                        if (!sig.equals(v1.atlas().signature())) {
-                            worldView = v1.withAtlas(PreviewBlocks.atlas(t == null ? null : t.names(), StudioLibrary.gameDir(model)));
+                        PreviewBlocks.Atlas fresh = PreviewBlocks.atlasFor(v1.world(), StudioLibrary.gameDir(model));
+                        if (fresh != v1.atlas()) {
+                            worldView = v1.withAtlas(fresh);
                             model.say("Preview: textures reloaded (resource packs / materials changed)", MUTED);
                         }
                     }

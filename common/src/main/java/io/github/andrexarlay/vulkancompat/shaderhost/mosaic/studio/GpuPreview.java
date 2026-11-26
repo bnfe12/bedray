@@ -173,7 +173,7 @@ final class GpuPreview implements AutoCloseable {
         Buf worldBuf;
         Img scene, dist, atlas;
         Buf farBuf;
-        Buf blockIds, blockInfo;
+        Buf blockIds, blockInfo, meshBuf, quadBuf;
         /** Far shadows in the preview: the far land as the height field of binding 18 (MosaicHeight), following the camera. */
         Buf heightBuf;
         io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field heightField;
@@ -196,7 +196,7 @@ final class GpuPreview implements AutoCloseable {
             if (gbSetLayout != 0) vkDestroyDescriptorSetLayout(device, gbSetLayout, null);
             if (gbModule != 0) vkDestroyShaderModule(device, gbModule, null);
             if (lastCamera != null) MemoryUtil.memFree(lastCamera);
-            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, farBuf, heightBuf, blockIds, blockInfo}) free(b);
+            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, farBuf, heightBuf, blockIds, blockInfo, meshBuf, quadBuf}) free(b);
             for (Img i : new Img[] {input, depth, one, history, scene, dist, atlas}) free(i);
         }
     }
@@ -506,9 +506,9 @@ final class GpuPreview implements AutoCloseable {
 
     /** The G-buffer shader with the graph's settings (sky model) and the preview look as constants. */
     static String gbufferSource(PreviewWorld.View view) {
-        boolean blocks = view.blocks() != null;
+        boolean blocks = view.blocks() != null, mesh = view.atlas().hasMesh();
         return GBUFFER_GLSL.replace("%CONSTANTS%", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.constants(view.graphSettings(), false)
-            + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\n");
+            + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\nconst bool HAS_MESH = " + mesh + ";\n");
     }
 
     private static synchronized byte[] gbufferSpirv(String source) {
@@ -536,6 +536,19 @@ final class GpuPreview implements AutoCloseable {
         c.blockInfo = buffer(Math.max(16, info.length * 4L), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         ByteBuffer nb = MemoryUtil.memByteBuffer(c.blockInfo.mapped(), (int) c.blockInfo.size()).order(ByteOrder.LITTLE_ENDIAN);
         for (int i = 0; i < info.length; i++) nb.putInt(i * 4, info[i]);
+        // the quads of blocks drawn by their models and of entities, listed per cell
+        int[] mesh = view.atlas().mesh();
+        float[] quads = view.atlas().quads();
+        c.meshBuf = buffer(Math.max(16, mesh == null ? 16 : mesh.length * 4L), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (mesh != null) {
+            ByteBuffer mb = MemoryUtil.memByteBuffer(c.meshBuf.mapped(), (int) c.meshBuf.size()).order(ByteOrder.LITTLE_ENDIAN);
+            for (int i = 0; i < mesh.length; i++) mb.putInt(i * 4, mesh[i]);
+        }
+        c.quadBuf = buffer(Math.max(16, quads == null ? 16 : quads.length * 4L), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (quads != null) {
+            ByteBuffer qb = MemoryUtil.memByteBuffer(c.quadBuf.mapped(), (int) c.quadBuf.size()).order(ByteOrder.LITTLE_ENDIAN);
+            for (int i = 0; i < quads.length; i++) qb.putFloat(i * 4, quads[i]);
+        }
         int[] rgba = new int[atlas.length];
         for (int i = 0; i < atlas.length; i++) rgba[i] = (atlas[i] & 0xFF00FF00) | (atlas[i] >> 16 & 0xFF) | (atlas[i] & 0xFF) << 16;
         fill(c.atlas, rgba, 4);
@@ -547,7 +560,8 @@ final class GpuPreview implements AutoCloseable {
             c.gbModule = lp.get(0);
             int[][] binds = {{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, {15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                 {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
-                {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}};
+                {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}};
             VkDescriptorSetLayoutBinding.Buffer lb = VkDescriptorSetLayoutBinding.calloc(binds.length, s);
             for (int i = 0; i < binds.length; i++)
                 lb.get(i).binding(binds[i][0]).descriptorType(binds[i][1]).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
@@ -562,7 +576,7 @@ final class GpuPreview implements AutoCloseable {
             c.gbPipeline = lp.get(0);
             VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(4, s);
             sizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
-            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(4);
+            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(6);
             sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
             sizes.get(3).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(2);
             check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(sizes), null, lp), "world pool");
@@ -570,7 +584,11 @@ final class GpuPreview implements AutoCloseable {
             check(vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(c.gbPool)
                 .pSetLayouts(s.longs(c.gbSetLayout)), lp), "world set");
             c.gbSet = lp.get(0);
-            VkWriteDescriptorSet.Buffer wr = VkWriteDescriptorSet.calloc(8, s);
+            VkWriteDescriptorSet.Buffer wr = VkWriteDescriptorSet.calloc(10, s);
+            VkDescriptorBufferInfo.Buffer meb = VkDescriptorBufferInfo.calloc(1, s);
+            meb.get(0).buffer(c.meshBuf.handle()).offset(0).range(c.meshBuf.size());
+            VkDescriptorBufferInfo.Buffer qub = VkDescriptorBufferInfo.calloc(1, s);
+            qub.get(0).buffer(c.quadBuf.handle()).offset(0).range(c.quadBuf.size());
             VkDescriptorBufferInfo.Buffer idb = VkDescriptorBufferInfo.calloc(1, s);
             idb.get(0).buffer(c.blockIds.handle()).offset(0).range(c.blockIds.size());
             VkDescriptorBufferInfo.Buffer inb = VkDescriptorBufferInfo.calloc(1, s);
@@ -595,6 +613,8 @@ final class GpuPreview implements AutoCloseable {
             wr.get(5).sType$Default().dstSet(c.gbSet).dstBinding(8).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(fb);
             wr.get(6).sType$Default().dstSet(c.gbSet).dstBinding(9).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(idb);
             wr.get(7).sType$Default().dstSet(c.gbSet).dstBinding(10).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(inb);
+            wr.get(8).sType$Default().dstSet(c.gbSet).dstBinding(11).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(meb);
+            wr.get(9).sType$Default().dstSet(c.gbSet).dstBinding(12).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(qub);
             vkUpdateDescriptorSets(device, wr, null);
         }
     }
@@ -836,6 +856,8 @@ final class GpuPreview implements AutoCloseable {
         layout(std430, set = 0, binding = 8) readonly buffer FarField { ivec4 head; ivec4 camY; uint cells[]; } farField;
         layout(std430, set = 0, binding = 9) readonly buffer BlockIds { uint ids[]; } blockIds;
         layout(std430, set = 0, binding = 10) readonly buffer BlockInfo { uvec4 info[]; } blockInfo;
+        layout(std430, set = 0, binding = 11) readonly buffer Mesh { uint v[]; } mesh;
+        layout(std430, set = 0, binding = 12) readonly buffer Quads { vec4 q[]; } quads;
         %CONSTANTS%
         bool inside(ivec3 c) {
             ivec3 p = c - world.originRel.xyz;
@@ -889,12 +911,86 @@ final class GpuPreview implements AutoCloseable {
         }
         // the game's light map: sky light by the time of day, coloured block light, per-face shading (all from the look)
         float curve(float l) { return l / ((1.0 + pw_lightCurve) - pw_lightCurve * l); }
-        vec3 light(uint front, vec3 n) {
+        vec3 lightOf(uint front) {
             float s = float((front >> 12) & 15u) / 15.0, b = float((front >> 8) & 15u) / 15.0;
             float day = clamp(sunDir().y * pw_dayRise + pw_dayOffset, pw_nightLevel, 1.0);
-            vec3 l = max(vec3(curve(s) * day), pw_blockColor * curve(b) * pw_blockBoost) + pw_ambient;
-            float face = n.y > 0.5 ? pw_faceTop : (n.y < -0.5 ? pw_faceBottom : (abs(n.x) > 0.5 ? pw_faceX : pw_faceZ));
-            return min(l, vec3(1.0)) * face;
+            return min(max(vec3(curve(s) * day), pw_blockColor * curve(b) * pw_blockBoost) + pw_ambient, vec3(1.0));
+        }
+        float faceShade(vec3 n) {
+            float ax = abs(n.x), ay = abs(n.y), az = abs(n.z);
+            return ay >= ax && ay >= az ? (n.y > 0.0 ? pw_faceTop : pw_faceBottom) : (ax >= az ? pw_faceX : pw_faceZ);
+        }
+        vec3 light(uint front, vec3 n) { return lightOf(front) * faceShade(n); }
+        bool solidCell(ivec3 c) {
+            uint m = cellAt(c) & 0xFFu;
+            return !(m == 0u || m == 1u || m == 2u || m == 5u || m == 6u || m == 10u || m == 11u || m == 13u);
+        }
+        // smooth lighting: the light of the four cells around each corner of the face, blended across it, with ambient occlusion
+        vec3 smoothLight(ivec3 front, vec3 n, vec3 q) {
+            if (pw_smoothLighting < 0.5) return light(cellAt(front), n);
+            ivec3 tu = abs(n.x) > 0.5 ? ivec3(0, 0, 1) : ivec3(1, 0, 0);
+            ivec3 tv = abs(n.y) > 0.5 ? ivec3(0, 0, 1) : ivec3(0, 1, 0);
+            vec3 fq = fract(q);
+            vec2 f = vec2(dot(fq, vec3(tu)), dot(fq, vec3(tv)));
+            vec3 corner[4];
+            for (int k = 0; k < 4; k++) {
+                int su = (k & 1) == 0 ? -1 : 1, sv = (k & 2) == 0 ? -1 : 1;
+                ivec3 a = front + tu * su, b = front + tv * sv, d = front + tu * su + tv * sv;
+                bool sa = solidCell(a), sb = solidCell(b), sd = sa && sb ? true : solidCell(d);
+                vec3 sum = lightOf(cellAt(front));
+                float cnt = 1.0;
+                if (!sa) { sum += lightOf(cellAt(a)); cnt += 1.0; }
+                if (!sb) { sum += lightOf(cellAt(b)); cnt += 1.0; }
+                if (!sd) { sum += lightOf(cellAt(d)); cnt += 1.0; }
+                float occ = (sa ? 1.0 : 0.0) + (sb ? 1.0 : 0.0) + (sd ? 1.0 : 0.0);
+                corner[k] = sum / cnt * (1.0 - occ * pw_aoStrength / 3.0);
+            }
+            vec3 l = mix(mix(corner[0], corner[1], f.x), mix(corner[2], corner[3], f.x), f.y);
+            return l * faceShade(n);
+        }
+        // the quads of models (stairs, torches, flowers...) and entities listed in a cell: the nearest opaque texel between tIn and tOut
+        bool meshHit(ivec3 cell, vec3 o, vec3 d, float tIn, float tOut, out float tHit, out vec3 nHit, out vec4 col) {
+            tHit = 1e30;
+            if (!HAS_MESH || pw_models < 0.5) return false;
+            ivec3 p = cell - world.originRel.xyz;
+            int ci = (p.y * world.size.z + p.z) * world.size.x + p.x;
+            uint mc = mesh.v[ci];
+            if (mc == 0u) return false;
+            int cells = world.size.x * world.size.y * world.size.z;
+            vec3 org = vec3(world.originRel.xyz);
+            vec2 asz = vec2(textureSize(atlas, 0));
+            bool hit = false;
+            for (uint k = 0u; k < (mc & 255u); k++) {
+                int qi = int(mesh.v[cells + int(mc >> 8) + int(k)]) * 5;
+                vec4 a = quads.q[qi], b = quads.q[qi + 1], c2 = quads.q[qi + 2], uvq = quads.q[qi + 3], e = quads.q[qi + 4];
+                vec3 p0 = a.xyz + org, e1 = b.xyz, e2 = c2.xyz;
+                vec3 nq = cross(e1, e2);
+                float den = dot(d, nq);
+                if (abs(den) < 1e-9) continue;
+                float t = dot(p0 - o, nq) / den;
+                if (t < tIn - 1e-4 || t > tOut + 1e-4 || t >= tHit || t <= 0.0) continue;
+                vec3 h = o + d * t - p0;
+                float d11 = dot(e1, e1), d12 = dot(e1, e2), d22 = dot(e2, e2), h1 = dot(h, e1), h2 = dot(h, e2), det = d11 * d22 - d12 * d12;
+                if (abs(det) < 1e-12) continue;
+                float s = (d22 * h1 - d12 * h2) / det, w = (d11 * h2 - d12 * h1) / det;
+                if (s < 0.0 || s > 1.0 || w < 0.0 || w > 1.0) continue;
+                vec2 uv = clamp(uvq.xy + uvq.zw * s + e.xy * w, vec2(0.0005), vec2(0.9995));
+                vec2 px = vec2(a.w, b.w) + uv * vec2(c2.w, e.z);
+                vec4 tx = textureLod(atlas, px / asz, 0.0);
+                if (tx.a < pw_cutout) continue;
+                tHit = t;
+                nHit = normalize(nq) * (den > 0.0 ? -1.0 : 1.0);
+                col = tx;
+                hit = true;
+            }
+            return hit;
+        }
+        bool modelCell(ivec3 c) {
+            if (!HAS_BLOCKS || !HAS_MESH || pw_models < 0.5) return false;
+            ivec3 p = c - world.originRel.xyz;
+            int i = (p.y * world.size.z + p.z) * world.size.x + p.x;
+            uint b = (blockIds.ids[i >> 1] >> uint((i & 1) * 16)) & 0xFFFFu;
+            return b != 0u && (blockInfo.info[b].w & 2u) != 0u;
         }
         void main() {
             ivec2 px = ivec2(gl_GlobalInvocationID.xy);
@@ -925,7 +1021,21 @@ final class GpuPreview implements AutoCloseable {
                 if (!in_) { if (entered) { tExit = t; break; } else continue; }
                 entered = true;
                 uint c = cellAt(cell), m = c & 0xFFu;
-                if (m == 0u) { prev = 0u; continue; }
+                // models (stairs, slabs, torches, plants...) and entities: their quads inside this cell
+                float tOut = min(nextT.x, min(nextT.y, nextT.z));
+                float tm; vec3 nm; vec4 cm;
+                if (meshHit(cell, o, d, t, tOut, tm, nm, cm)) {
+                    ivec3 lc = ivec3(floor(o + d * tm + nm * 0.02));
+                    uint l0 = cellAt(cell), l1 = cellAt(lc), l2 = cellAt(cell + ivec3(0, 1, 0));
+                    uint sky = max(max((l0 >> 12) & 15u, (l1 >> 12) & 15u), (l2 >> 12) & 15u);
+                    uint blk = max(max((l0 >> 8) & 15u, (l1 >> 8) & 15u), (l2 >> 8) & 15u);
+                    vec3 col = m == 13u ? cm.rgb : cm.rgb * lightOf((sky << 12) | (blk << 8)) * faceShade(nm);
+                    depth = min(depth, tm);
+                    acc += trans * col;
+                    trans = 0.0;
+                    break;
+                }
+                if (m == 0u || modelCell(cell)) { prev = m == 0u ? 0u : prev; continue; }
                 uint front = cellAt(back);
                 vec3 q = o + d * t;
                 vec4 tx = texel(tileFor(cell, m, n), q, n);
@@ -940,7 +1050,7 @@ final class GpuPreview implements AutoCloseable {
                 }
                 prev = m;
                 if ((m == 5u || m == 6u || m == 11u) && tx.a < pw_cutout) continue; // cutout leaves, plants, glass
-                vec3 col = (m == 2u || m == 13u) ? tx.rgb : tx.rgb * light(front, n);
+                vec3 col = (m == 2u || m == 13u) ? tx.rgb : tx.rgb * smoothLight(back, n, q);
                 depth = min(depth, t);
                 if (m == 11u || m == 10u) {
                     acc += trans * pw_glassOpacity * col;

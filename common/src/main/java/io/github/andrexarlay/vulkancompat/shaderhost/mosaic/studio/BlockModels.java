@@ -277,11 +277,31 @@ final class BlockModels {
 
     /** The studio's own export from the newest client jar (26.3 first), or null when not made yet. */
     static Path offlineFile() {
+        List<Path> dirs = List.of(StudioSettings.file().resolveSibling("studio").resolve("models"),
+            Path.of(System.getProperty("user.home"), ".bedray", "studio", "models"));
         List<StudioLibrary.Source> jars = StudioLibrary.vanillaJars();
-        if (jars.isEmpty()) return null;
-        String v = jars.get(0).label().replaceAll("^Minecraft ([0-9.]+).*$", "$1");
-        Path f = StudioSettings.file().resolveSibling("studio").resolve("models").resolve("entities-" + v + ".json");
-        return java.nio.file.Files.exists(f) ? f : null;
+        for (StudioLibrary.Source j : jars) {
+            String v = j.label().replaceAll("^Minecraft ([0-9.]+).*$", "$1");
+            for (Path d : dirs) if (java.nio.file.Files.exists(d.resolve("entities-" + v + ".json"))) return d.resolve("entities-" + v + ".json");
+        }
+        // no export for these jars: the newest export there is (entity geometry changes little between versions)
+        Path best = null;
+        long bestTime = -1;
+        for (Path d : dirs) {
+            if (!java.nio.file.Files.isDirectory(d)) continue;
+            try (var s = java.nio.file.Files.list(d)) {
+                for (Path f : s.filter(p -> p.getFileName().toString().matches("entities-.*\\.json")).toList()) {
+                    long t = java.nio.file.Files.getLastModifiedTime(f).toMillis();
+                    if (t > bestTime) {
+                        bestTime = t;
+                        best = f;
+                    }
+                }
+            } catch (Exception ignored) {
+                // next folder
+            }
+        }
+        return best;
     }
 
     /**

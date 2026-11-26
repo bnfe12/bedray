@@ -123,9 +123,15 @@ game's colour maps for the biome set in Settings > Preview > World), taken from 
 (options.txt, in its order, Mosaic Materials included) before the vanilla jar, so material edits show on the world; the
 preview reloads them when a pack changes. `mosaic render ... --world <save folder>` does the same headlessly.
 
-The preview is Studio's own renderer (voxel rays over full blocks: no block models such as stairs or torches, no smooth
-lighting, no entities), so it is close to the game but not the same picture. The game's own frame with your graph is in
-Result (and Preview > Game frame) while the game runs with the pack.
+Blocks that are not full cubes (stairs, slabs, torches, flowers and grass, fences, doors, lanterns...) are drawn by the
+quads of their models, the world's entities by the game's own entity models (exported once from the client jar) with
+their textures, and faces get the game's smooth lighting and ambient occlusion (World look: Smooth lighting, Ambient
+occlusion, Block models and entities). The built-in landscape has grass, flowers and animals too.
+
+It is still Studio's own renderer, so a few things differ from the game: saves of 26.x keep only block names, so stairs,
+logs and doors use their default orientation; grass and leaves take one biome's colour; the game's own clouds, fog,
+particles and animations are not drawn. The game's own frame with your graph is in Result (and Preview > Game frame)
+while the game runs with the pack.
 
 The Preview renders the open graph over a **real scene**, not a picture: the blocks around the player when the game
 opened Studio (J), or a built-in landscape (hills, a lake, a forest, a stone house with glass and torches, lava) until
