@@ -1070,7 +1070,7 @@ final class InspectorPanel extends Panels.Listening {
         reset.setFocusable(false);
         reset.setMargin(new Insets(0, 6, 0, 6));
         reset.setToolTipText("Back to the default: " + numbers(def));
-        reset.setEnabled(changed);
+        reset.setVisible(changed); // only on changed values: an untouched list stays quiet
         reset.addActionListener(ev -> {
             commit.accept(def.clone());
             rebuild();

@@ -887,8 +887,14 @@ final class StudioApp {
         liveButton = chip("", "Save every valid change so a game running this pack reloads it (" + model.keys.humanFor(StudioKeys.Action.TOGGLE_LIVE) + ")",
             () -> run(StudioKeys.Action.TOGGLE_LIVE));
         p.add(liveButton);
-        p.add(chip("Result", "The real render from the game", () -> popOut(Panels.Type.RESULT)));
-        p.add(chip("Run game", "Start Minecraft with Bedray to see this graph for real (command in Settings > Game)", this::runGame));
+        p.add(chip("Game view", "The real render from the running game: before / after / compare", () -> popOut(Panels.Type.RESULT)));
+        JButton run = chip("Run game", "Start Minecraft with Bedray to see this graph for real (command in Settings > Game)", this::runGame);
+        Color accent = SELECT.darker(); // the main action: filled with the accent, readable white text
+        run.setBackground(accent);
+        run.setForeground(Color.WHITE);
+        run.setFont(UI_B.deriveFont(UI_S.getSize2D()));
+        run.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(accent), new EmptyBorder(0, 12, 0, 12)));
+        p.add(run);
         updateLive();
         return p;
     }
@@ -955,9 +961,11 @@ final class StudioApp {
 
     private void updateLive() {
         if (liveButton == null) return;
-        liveButton.setText(model.live ? "Live: on" : "Live: off");
-        liveButton.setBackground(model.live ? LIVE : BUTTON);
-        liveButton.setForeground(model.live ? Color.WHITE : TEXT);
+        // a status dot, not a big green block: green while every valid change goes to the game
+        liveButton.setText("<html><span style='color:" + String.format("#%06X", (model.live ? new Color(0x4CC38A) : FAINT).getRGB() & 0xFFFFFF)
+            + "'>●</span>&nbsp; Live</html>");
+        liveButton.setBackground(BUTTON);
+        liveButton.setForeground(model.live ? TEXT : MUTED);
     }
 
     private JComponent statusBar() {
