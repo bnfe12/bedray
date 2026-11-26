@@ -119,7 +119,7 @@ public final class AgentCli {
           mosaic project refresh <folder>             git pull and the description / topics from GitHub
           mosaic project clone <owner/repo> <into>    a Mosaic project from GitHub (publishing: Studio > File > This project)
         Rendering and Bedray hooks (for people and agents)
-          mosaic render <graph.json> <out.png> [--time ticks] [--pitch deg] [--yaw deg] [--pos x,y,z] [--size WxH] [--frames N] [--world file|save folder] [--profile]
+          mosaic render <graph.json> <out.png> [--time ticks] [--pitch deg] [--yaw deg] [--pos x,y,z] [--size WxH] [--frames N] [--world file|save folder|save name] [--profile]
                                                      the graph over the preview world, headless, to a PNG
           mosaic hook <function|user.stage> --slang <body.slang>   a Bedray function / your stage from Slang text
           mosaic hook <function|user.stage> --reset                back to Bedray's own
@@ -924,6 +924,9 @@ public final class AgentCli {
         }
         StudioUi.settings = settings;
         String worldFile = opt(a, "--world", null);
+        if (worldFile != null && !Files.exists(Path.of(worldFile)) && gameDirOf(graphFile) != null
+            && Files.isDirectory(gameDirOf(graphFile).resolve("saves").resolve(worldFile)))
+            worldFile = gameDirOf(graphFile).resolve("saves").resolve(worldFile).toString(); // a save by its name
         int wr = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.intValue(g.settings(), "worldRadius", 8, 256);
         int wh0 = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.intValue(g.settings(), "worldHeight", 16, 256);
         var snap = worldFile == null ? PreviewWorld.load(gameDirOf(graphFile))
