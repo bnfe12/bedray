@@ -45,6 +45,9 @@ final class StartScreen extends JFrame {
 
     static final int CW = 232, CH = 130;
 
+    /** Set when the user picks Continue: the editor restores the tabs of the last session. */
+    static boolean continueSession;
+
     StartScreen(Consumer<Path> onOpen) { this(onOpen, true); }
 
     StartScreen(Consumer<Path> onOpen, boolean quitOnClose) {
@@ -281,12 +284,18 @@ final class StartScreen extends JFrame {
         String hello = hour < 5 ? "Good night" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
         c.add(heading(hello, "Shaders, renderers and materials for Bedray - pick up a project or start a new one."));
         c.add(Box.createVerticalStrut(20));
-        JPanel actions = new JPanel(new GridLayout(1, 4, 14, 0));
+        boolean session = !StudioUi.settings.openTabs.isEmpty();
+        JPanel actions = new JPanel(new GridLayout(1, session ? 5 : 4, 14, 0));
+        if (session)
+            actions.add(new Action("Continue", "Last session (" + StudioUi.settings.openTabs.size() + " tabs)", "page", new Color(0xE0605A), () -> {
+                continueSession = true;
+                finish(null);
+            }));
         actions.setOpaque(false);
-        actions.add(new Action("New project", "From a template, with a picture  (Ctrl+N)", "plus", new Color(0x4F8BF0), this::newProject));
-        actions.add(new Action("Open", "A project, a pack or a graph  (Ctrl+O)", "folder", new Color(0xD69A3C), this::openOther));
-        actions.add(new Action("Clone from GitHub", "A Mosaic project repository", "branch", new Color(0x8B6FD8), this::cloneProject));
-        actions.add(new Action("Empty graph", "No project, save it later", "page", new Color(0x3FAE86), () -> finish(null)));
+        actions.add(new Action("New project", "From a template  Ctrl+N", "plus", new Color(0x4F8BF0), this::newProject));
+        actions.add(new Action("Open", "Project or graph  Ctrl+O", "folder", new Color(0xD69A3C), this::openOther));
+        actions.add(new Action("Clone", "From GitHub", "branch", new Color(0x8B6FD8), this::cloneProject));
+        actions.add(new Action("Empty graph", "Save it later", "page", new Color(0x3FAE86), () -> finish(null)));
         actions.setBorder(new EmptyBorder(0, 16, 0, 0));
         actions.setAlignmentX(0);
         actions.setMaximumSize(new Dimension(Integer.MAX_VALUE, 84));

@@ -554,9 +554,13 @@ final class StudioApp {
     DocTabs tabStrip;
 
     /** The first tab is the document the studio started with; tabs of the last session follow (loaded when opened). */
+    /** False when the start screen opened one project: only it, not the tabs of the last session. */
+    static boolean restoreSession = true;
+
     void initTabs() {
         active = new DocTabs.Tab(model.workspace, model.doc.file);
         tabs.add(active);
+        if (!restoreSession) return;
         for (String s : settings.openTabs) {
             int bar = s.indexOf('|');
             if (bar < 0) continue;
@@ -1422,6 +1426,11 @@ final class StudioApp {
         if (args.length == 0 && s.showStartScreen && !embedded() && System.getProperty("mosaic.selfshot") == null) {
             SwingUtilities.invokeLater(() -> new StartScreen(graph -> {
                 try {
+                    restoreSession = StartScreen.continueSession; // a chosen project opens alone; Continue brings the last session back
+                    if (StartScreen.continueSession && graph == null && !s.openTabs.isEmpty()) {
+                        String first = s.openTabs.get(0);
+                        graph = Path.of(first.substring(first.indexOf('|') + 1));
+                    }
                     start(graph == null ? new String[0] : new String[] {graph.toString()}, s);
                 } catch (Exception e) {
                     throw new IllegalStateException(e);
