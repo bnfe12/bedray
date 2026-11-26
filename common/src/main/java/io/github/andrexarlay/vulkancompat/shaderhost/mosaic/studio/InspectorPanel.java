@@ -210,10 +210,10 @@ final class InspectorPanel extends Panels.Listening {
         label.addActionListener(ev -> model.rename(label.getText()));
         content.add(label);
         params(n);
-        if (def != null) code(def);
         content.add(section("Inputs"));
         Map<String, MosaicFunction> fns = model.functions();
         for (MosaicGraph.Port port : MosaicGraph.portsOf(n.type, fns)) inputRow(n, port, fns);
+        if (def != null) code(def); // the node's code after its inputs: what you change most comes first
         content.add(action("Feed an input from...", StudioKeys.Action.CONNECT_INTO, () -> {
             if (model.activeGraph != null) model.activeGraph.connectInto();
         }));
