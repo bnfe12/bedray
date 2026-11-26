@@ -141,8 +141,9 @@ variant, or every multipart part whose condition holds. Water, lava, fire and ot
 Rain, Rain opacity / speed / darkening, Animated textures); the game's cloud layer (clouds.png at y 192.33, drifting) and
 distance fog are drawn too (Clouds, Cloud height / speed / opacity, Fog, Fog start).
 
-It is still Studio's own renderer: particles, block entities with special renderers (chests, signs, banners) and
-thunder flashes are not drawn, and lighting follows the game's light map rather than its exact shader. The game's own frame with your graph is in Result (and Preview > Game frame)
+Chests (normal, trapped, ender, copper) and bells are drawn by the game's entity models, turned to their facing.
+
+It is still Studio's own renderer: particles, signs, banners, beds and thunder flashes are not drawn, and lighting follows the game's light map rather than its exact shader. The game's own frame with your graph is in Result (and Preview > Game frame)
 while the game runs with the pack.
 
 The Preview renders the open graph over a **real scene**, not a picture: the blocks around the player when the game

@@ -752,6 +752,38 @@ final class PreviewBlocks {
 
     private static boolean exportAsked;
 
+    /** Blocks the game draws with an entity model (chests, bells): layer and texture. */
+    static final Map<String, String[]> BLOCK_ENTITIES = Map.of(
+        "minecraft:chest", new String[] {"minecraft:chest#main", "minecraft:entity/chest/normal"},
+        "minecraft:trapped_chest", new String[] {"minecraft:chest#main", "minecraft:entity/chest/trapped"},
+        "minecraft:ender_chest", new String[] {"minecraft:chest#main", "minecraft:entity/chest/ender"},
+        "minecraft:copper_chest", new String[] {"minecraft:chest#main", "minecraft:entity/chest/copper"},
+        "minecraft:bell", new String[] {"minecraft:bell#main", "minecraft:entity/bell/bell_body"});
+
+    /** A chest or bell of the world drawn by its entity model, turned to its facing (south: as exported). */
+    static List<Q> blockEntityQuads(String state, Map<String, double[]> layers, List<Pack> packs) {
+        String[] be = BLOCK_ENTITIES.get(baseName(state));
+        if (be == null) return null;
+        double[] v = layers.get(be[0]);
+        if (v == null || image(packs, be[1]) == null) return null;
+        String facing = props(state).getOrDefault("facing", "south");
+        double deg = switch (facing) { case "west" -> 90; case "north" -> 180; case "east" -> 270; default -> 0; };
+        double r = Math.toRadians(-deg), c = Math.cos(r), s = Math.sin(r);
+        List<Q> out = new ArrayList<>();
+        for (int i = 0; i + 19 < v.length; i += 20) {
+            double[][] p = new double[4][], uv = new double[4][];
+            for (int k = 0; k < 4; k++) {
+                int o = i + k * 5;
+                double x = v[o] - 0.5, y = v[o + 1], z = v[o + 2] - 0.5;
+                p[k] = new double[] {0.5 + x * c + z * s, y, 0.5 - x * s + z * c};
+                uv[k] = new double[] {v[o + 3], v[o + 4]};
+            }
+            out.add(new Q(p[0], sub(p[1], p[0]), sub(p[3], p[0]), uv[0], new double[] {uv[1][0] - uv[0][0], uv[1][1] - uv[0][1]},
+                new double[] {uv[3][0] - uv[0][0], uv[3][1] - uv[0][1]}, be[1], 0));
+        }
+        return out;
+    }
+
     /**
      * The atlas of a loaded world with its mesh: block textures, the quads of every block drawn by its model (stairs,
      * slabs, torches, flowers, fences...) and of the world's entities (their exported models), listed per cell.
@@ -786,8 +818,9 @@ final class PreviewBlocks {
                 biomeCols[i * 4 + 2] = c[2];
             }
         }
-        Map<String, double[]> layers = ents.isEmpty() ? Map.of() : BlockModels.entityLayers(gameDir);
-        if (!ents.isEmpty() && layers.isEmpty() && !exportAsked) {
+        boolean blockEntities = t != null && t.names().stream().anyMatch(n -> BLOCK_ENTITIES.containsKey(baseName(n)));
+        Map<String, double[]> layers = ents.isEmpty() && !blockEntities ? Map.of() : BlockModels.entityLayers(gameDir);
+        if ((!ents.isEmpty() || blockEntities) && layers.isEmpty() && !exportAsked) {
             exportAsked = true;
             BlockModels.exportOffline(() -> { }); // entity models from the client jar, once; the preview picks them up when ready
         }
@@ -795,7 +828,8 @@ final class PreviewBlocks {
         List<List<Q>> models = new ArrayList<>();
         int[] info = base.info().clone();
         for (int b = 0; b < n; b++) {
-            List<Q> q = b == 0 ? null : modelQuads(packs, t.names().get(b));
+            List<Q> q = b == 0 ? null : blockEntityQuads(t.names().get(b), layers, packs);
+            if (q == null && b != 0) q = modelQuads(packs, t.names().get(b));
             models.add(q);
             if (q != null && b * 4 + 3 < info.length) info[b * 4 + 3] |= 2;
         }

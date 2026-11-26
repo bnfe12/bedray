@@ -199,6 +199,8 @@ final class PreviewWorld {
         set(m, hx + 5, hb + 2, hz + 5, Material.GLASS);
         set(m, hx + 6, hb + 2, hz + 2, Material.GLASS);
         set(m, hx + 1, hb + 1, hz + 1, Material.LIGHT);
+        set(m, hx + 4, hb, hz + 6, Material.WOOD);      // a chest by the door (named below)
+        set(m, hx + 2, hb, hz + 1, Material.WOOD);      // and one inside
         set(m, hx + 2, hb + 1, hz + 6, Material.LIGHT);
         // lava pool, an iron block and a snowy stone pillar
         for (int x = 64; x < 67; x++) for (int z = 56; z < 59; z++) set(m, x, height[x][z], z, Material.LAVA);
@@ -244,6 +246,8 @@ final class PreviewWorld {
                         case ICE -> "minecraft:ice";
                         case PLANT -> plants.getOrDefault((long) i, "minecraft:short_grass");
                     };
+                    if (m[i] == Material.WOOD && y == hb && ((x == hx + 4 && z == hz + 6) || (x == hx + 2 && z == hz + 1)))
+                        n = z == hz + 6 ? "minecraft:chest[facing=south]" : "minecraft:chest[facing=east]";
                     if (n == null) continue;
                     Integer id = ids.get(n);
                     if (id == null) {
