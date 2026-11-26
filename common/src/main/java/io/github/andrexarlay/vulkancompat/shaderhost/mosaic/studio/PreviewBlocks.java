@@ -37,8 +37,13 @@ final class PreviewBlocks {
      * edge 1, edge 2 in volume cells with the atlas rect packed in their w; uv origin and edges; rect height, flags) and per
      * cell (start << 8 | count) into the quad id list that follows the cells.
      */
-    record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) {
-        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null); }
+    record Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh, int[] biome) {
+        Atlas(int[] argb, int w, int h, int[] info, String signature) { this(argb, w, h, info, signature, null, null, null); }
+
+        Atlas(int[] argb, int w, int h, int[] info, String signature, float[] quads, int[] mesh) { this(argb, w, h, info, signature, quads, mesh, null); }
+
+        /** Per column of the volume: grass, foliage and water colour of its biome (null: the textures carry one biome's colour). */
+        boolean hasBiomes() { return biome != null && biome.length > 0; }
 
         boolean hasMesh() { return mesh != null && quads != null && quads.length > 0; }
     }
@@ -125,7 +130,7 @@ final class PreviewBlocks {
 
     /** The atlas for these block names (null: material tiles only) with the packs of this game folder. */
     static synchronized Atlas atlas(List<String> blocks, Path gameDir) {
-        String sig = signature(gameDir, blocks);
+        String sig = signature(gameDir, blocks) + (perColumnTint ? "|biomes" : "");
         Atlas cached = CACHE.get(sig);
         if (cached != null) return cached;
         List<Pack> packs = packs(gameDir);
@@ -144,14 +149,15 @@ final class PreviewBlocks {
             String name = blocks.get(b);
             String[] faces = faces(packs, name);
             if (faces == null) continue;
-            int tint = tint(packs, name);
+            int kind = perColumnTint ? tintKind(name) : 0;
+            int tint = kind != 0 ? 0 : tint(packs, name);
             int[] ids = new int[3];
             for (int f = 0; f < 3; f++) {
-                String key = faces[f] + "#" + Integer.toHexString(f == 1 && name.endsWith("grass_block") ? -1 : tint);
+                boolean grassSide = f == 1 && name.endsWith("grass_block");
+                String key = faces[f] + "#" + Integer.toHexString(grassSide ? -1 : tint);
                 Integer id = byKey.get(key);
                 if (id == null) {
-                    int[] tile = tile(packs, faces[f], f == 1 && name.endsWith("grass_block") ? 0 : tint,
-                        f == 1 && name.endsWith("grass_block") ? tint(packs, "minecraft:grass_block") : 0);
+                    int[] tile = tile(packs, faces[f], grassSide ? 0 : tint, grassSide ? tint(packs, "minecraft:grass_block") : 0);
                     if (tile == null) {
                         ids = null;
                         break;
@@ -166,7 +172,8 @@ final class PreviewBlocks {
             info[b * 4] = ids[0];
             info[b * 4 + 1] = ids[1];
             info[b * 4 + 2] = ids[2];
-            info[b * 4 + 3] = 1;
+            // 4 grass, 8 foliage, 16 water colour of the column's biome; 32: the top face only (grass block)
+            info[b * 4 + 3] = 1 | (kind == 1 ? 4 : kind == 2 ? 8 : kind == 3 ? 16 : 0) | (name.endsWith("grass_block") ? 32 : 0);
         }
         int rows = Math.max(1, (tiles.size() + COLS - 1) / COLS), w = COLS * 16, h = rows * 16;
         int[] argb = new int[w * h];
@@ -317,6 +324,65 @@ final class PreviewBlocks {
         return (argb & 0xFF000000) | r << 16 | g << 8 | b;
     }
 
+    /** How a block takes its biome's colour: 0 none, 1 grass, 2 foliage, 3 water (fixed-colour leaves are 0: tint() bakes them). */
+    static int tintKind(String block) {
+        String n = block.substring(block.indexOf(':') + 1);
+        if (n.equals("water")) return 3;
+        if (n.equals("grass_block") || n.equals("short_grass") || n.equals("tall_grass") || n.contains("fern") || n.equals("sugar_cane") || n.equals("bush"))
+            return 1;
+        if (n.equals("oak_leaves") || n.equals("jungle_leaves") || n.equals("acacia_leaves") || n.equals("dark_oak_leaves") || n.equals("mangrove_leaves")
+            || n.equals("vine")) return 2;
+        return 0;
+    }
+
+    /** Set while building an atlas for a world with biomes: tinted blocks keep grey textures and the shader colours them per column. */
+    private static boolean perColumnTint;
+
+    private static final Map<String, int[]> BIOME_COLOURS = new HashMap<>();
+
+    /** Grass, foliage and water colour of a biome from its worldgen JSON (temperature, downfall, effects), like the game. */
+    static int[] biomeColours(List<Pack> packs, String biome) {
+        return BIOME_COLOURS.computeIfAbsent(biome, b -> {
+            double temp = biomeTemperature, down = biomeDownfall;
+            Integer grass = null, foliage = null, water = null;
+            String modifier = "";
+            String ns = b.contains(":") ? b.substring(0, b.indexOf(':')) : "minecraft", name = b.substring(b.indexOf(':') + 1);
+            byte[] json = readFirst(packs, "data/" + ns + "/worldgen/biome/" + name + ".json");
+            if (json != null) {
+                try {
+                    JsonObject o = JsonParser.parseString(new String(json, StandardCharsets.UTF_8)).getAsJsonObject();
+                    if (o.has("temperature")) temp = o.get("temperature").getAsDouble();
+                    if (o.has("downfall")) down = o.get("downfall").getAsDouble();
+                    JsonObject fx = o.has("effects") ? o.getAsJsonObject("effects") : new JsonObject();
+                    if (fx.has("grass_color")) grass = colour(fx.get("grass_color"));
+                    if (fx.has("foliage_color")) foliage = colour(fx.get("foliage_color"));
+                    if (fx.has("water_color")) water = colour(fx.get("water_color"));
+                    if (fx.has("grass_color_modifier")) modifier = fx.get("grass_color_modifier").getAsString();
+                } catch (Exception ignored) {
+                    // defaults
+                }
+            }
+            int g = grass != null ? grass : colormap(packs, "minecraft:colormap/grass", temp, down, 0x91BD59);
+            if (modifier.equals("swamp")) g = 0x6A7039;
+            else if (modifier.equals("dark_forest")) g = ((g & 0xFEFEFE) + 0x28340A) >> 1;
+            int f = foliage != null ? foliage : colormap(packs, "minecraft:colormap/foliage", temp, down, 0x77AB2F);
+            return new int[] {g, f, water != null ? water : 0x3F76E4};
+        });
+    }
+
+    private static Integer colour(JsonElement e) {
+        if (e.isJsonPrimitive() && e.getAsJsonPrimitive().isNumber()) return e.getAsInt() & 0xFFFFFF;
+        String s = e.getAsString().trim();
+        return s.startsWith("#") ? Integer.parseInt(s.substring(1), 16) : Integer.parseInt(s);
+    }
+
+    private static int colormap(List<Pack> packs, String map, double temp, double down, int fallback) {
+        BufferedImage img = image(packs, map);
+        if (img == null) return fallback;
+        double t = Math.clamp(temp, 0, 1), d = Math.clamp(down, 0, 1) * t;
+        return img.getRGB((int) ((1 - t) * (img.getWidth() - 1)), (int) ((1 - d) * (img.getHeight() - 1))) & 0xFFFFFF;
+    }
+
     /** Plains: temperature 0.8, downfall 0.4. */
     static double biomeTemperature = 0.8, biomeDownfall = 0.4;
 
@@ -379,7 +445,8 @@ final class PreviewBlocks {
         }
         if (cube) return null;
         int rx = Integer.parseInt(variant[1]), ry = Integer.parseInt(variant[2]);
-        int tint = tint(packs, block);
+        int kind = perColumnTint ? tintKind(block) : 0;
+        int tint = kind != 0 ? -kind : tint(packs, block); // < 0: coloured per column by the shader (grass, foliage)
         List<Q> out = new ArrayList<>();
         for (JsonElement el : elements) {
             JsonObject e = el.getAsJsonObject();
@@ -537,9 +604,28 @@ final class PreviewBlocks {
             + (export == null ? 0 : newest(export)) + "|" + ents.size();
         Atlas cached = CACHE.get(sig);
         if (cached != null) return cached;
-        Atlas base = atlas(t == null ? null : t.names(), gameDir);
+        PreviewWorld.Biomes biomes = PreviewWorld.biomesOf(s);
+        perColumnTint = biomes != null;
+        Atlas base;
+        try {
+            base = atlas(t == null ? null : t.names(), gameDir);
+        } finally {
+            if (t == null && ents.isEmpty()) perColumnTint = false;
+        }
         if (t == null && ents.isEmpty()) return base;
         List<Pack> packs = packs(gameDir);
+        int[] biomeCols = null;
+        if (biomes != null) {
+            biomeCols = new int[biomes.column().length * 4];
+            List<int[]> byBiome = new ArrayList<>();
+            for (String name : biomes.names()) byBiome.add(biomeColours(packs, name));
+            for (int i = 0; i < biomes.column().length; i++) {
+                int[] c = byBiome.get(biomes.column()[i]);
+                biomeCols[i * 4] = c[0];
+                biomeCols[i * 4 + 1] = c[1];
+                biomeCols[i * 4 + 2] = c[2];
+            }
+        }
         Map<String, double[]> layers = ents.isEmpty() ? Map.of() : BlockModels.entityLayers(gameDir);
         if (!ents.isEmpty() && layers.isEmpty() && !exportAsked) {
             exportAsked = true;
@@ -560,7 +646,7 @@ final class PreviewBlocks {
         int w = base.w(), y0 = base.h(), cx = 0, cy = y0, rowH = 0;
         java.util.function.Function<String, int[]> rectOf = key -> rects.computeIfAbsent(key, k -> {
             String texture = k.substring(0, k.indexOf('#'));
-            int tint = Integer.parseInt(k.substring(k.indexOf('#') + 1));
+            int tint = Math.max(0, Integer.parseInt(k.substring(k.indexOf('#') + 1)));
             BufferedImage img = image(packs, texture);
             if (img == null) return null;
             boolean entity = texture.contains(":entity/");
@@ -586,9 +672,11 @@ final class PreviewBlocks {
                     int b = t == null ? 0 : t.index()[i] & 0xFFFF;
                     if (b == 0 || b >= models.size() || models.get(b) == null) continue;
                     for (Q q : models.get(b)) {
-                        int[] r = rectOf.apply(q.texture() + "#" + q.tint());
+                        int[] r = rectOf.apply(q.texture() + "#" + Math.max(0, q.tint()));
                         if (r == null) continue;
-                        quads.add(pack(q, lx, ly, lz, r, false));
+                        float[] packed = pack(q, lx, ly, lz, r, false);
+                        if (q.tint() < 0) packed[19] = q.tint() == -1 ? 2 : 4; // grass / foliage colour of the column
+                        quads.add(packed);
                         cellQuads.add(new int[] {i, quads.size() - 1});
                     }
                 }
@@ -651,7 +739,8 @@ final class PreviewBlocks {
             mesh[cell] = (start << 8) | Math.min(255, count);
         }
         for (int k = 0; k < cellQuads.size(); k++) mesh[cells + k] = cellQuads.get(k)[1];
-        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh);
+        perColumnTint = false;
+        Atlas a = new Atlas(argb, w, h, info, sig, qa, mesh, biomeCols);
         if (CACHE.size() > 4) CACHE.clear();
         CACHE.put(sig, a);
         return a;

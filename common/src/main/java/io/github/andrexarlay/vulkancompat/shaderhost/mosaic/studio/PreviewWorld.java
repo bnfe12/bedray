@@ -34,6 +34,31 @@ final class PreviewWorld {
 
     static MosaicWorld.BlockTable blocksOf(MosaicWorld.Snapshot s) { return s == null ? null : BLOCKS.get(s); }
 
+    /** The biome of every column of a loaded world (names, index per column x fastest), for grass, leaf and water colours. */
+    record Biomes(java.util.List<String> names, short[] column) {
+        static Biomes of(String[] perColumn) {
+            java.util.List<String> names = new java.util.ArrayList<>();
+            java.util.Map<String, Integer> ids = new java.util.HashMap<>();
+            short[] col = new short[perColumn.length];
+            for (int i = 0; i < perColumn.length; i++) {
+                String b = perColumn[i] == null ? "minecraft:plains" : perColumn[i];
+                Integer id = ids.get(b);
+                if (id == null) {
+                    id = names.size();
+                    names.add(b);
+                    ids.put(b, id);
+                }
+                col[i] = (short) id.intValue();
+            }
+            return new Biomes(java.util.List.copyOf(names), col);
+        }
+    }
+
+    private static final java.util.Map<MosaicWorld.Snapshot, Biomes> BIOMES =
+        java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    static Biomes biomesOf(MosaicWorld.Snapshot s) { return s == null ? null : BIOMES.get(s); }
+
     /** An entity of a loaded world: id (minecraft:cow), feet position (absolute blocks), body yaw (Minecraft degrees). */
     record Entity(String id, double x, double y, double z, float yaw) {}
 
@@ -63,6 +88,7 @@ final class PreviewWorld {
                     SaveWorld.Loaded l = SaveWorld.load(save, sx, sy, sz);
                     BLOCKS.put(l.snapshot(), l.blocks());
                     ENTITIES.put(l.snapshot(), l.entities());
+                    BIOMES.put(l.snapshot(), l.biomes());
                     ORIGIN.put(l.snapshot(), "save " + save.getFileName());
                     return l.snapshot();
                 } catch (Exception e) {
@@ -79,6 +105,8 @@ final class PreviewWorld {
                     if (s != null) {
                         MosaicWorld.BlockTable t = MosaicWorld.BlockTable.read(data);
                         if (t != null && t.index().length == s.cellCount()) BLOCKS.put(s, t);
+                        if (t != null && t.biomeNames() != null && t.biomeColumns().length == s.sx() * s.sz())
+                            BIOMES.put(s, new Biomes(t.biomeNames(), t.biomeColumns()));
                         ORIGIN.put(s, "world from the game (J)");
                         return s;
                     }
@@ -227,6 +255,9 @@ final class PreviewWorld {
             animals.add(new Entity(kinds[k], ox + x + 0.5, oy + top + 1, oz + z + 0.5, spots[k][2]));
         }
         ENTITIES.put(DEMO, animals);
+        String[] plainsEverywhere = new String[SX * SZ];
+        java.util.Arrays.fill(plainsEverywhere, "minecraft:plains");
+        BIOMES.put(DEMO, Biomes.of(plainsEverywhere));
         return DEMO;
     }
 

@@ -83,8 +83,19 @@ public final class MosaicStudioScreen extends Screen {
                         if (id == null && ids.size() < 65535) ids.put(name, id = ids.size());
                         idx[i] = (short) (id == null ? 0 : id.intValue());
                     }
-            byte[] bytes = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BlockTable(java.util.List.copyOf(ids.keySet()), idx)
-                .appendTo(snap.toBytes());
+            // the biome of every column at the camera's height (grass, leaf and water colours in Studio)
+            java.util.Map<String, Integer> bids = new java.util.LinkedHashMap<>();
+            short[] bcol = new short[snap.sx() * snap.sz()];
+            for (int lz = 0; lz < snap.sz(); lz++)
+                for (int lx = 0; lx < snap.sx(); lx++) {
+                    pos.set(snap.ox() + lx, (int) Math.floor(y), snap.oz() + lz);
+                    String bn = level.getBiome(pos).unwrapKey().map(k -> k.identifier().toString()).orElse("minecraft:plains");
+                    Integer bid = bids.get(bn);
+                    if (bid == null) bids.put(bn, bid = bids.size());
+                    bcol[lz * snap.sx() + lx] = (short) bid.intValue();
+                }
+            byte[] bytes = new io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.BlockTable(java.util.List.copyOf(ids.keySet()), idx,
+                java.util.List.copyOf(bids.keySet()), bcol).appendTo(snap.toBytes());
             java.nio.file.Files.write(dir.resolve("preview-world.bin"), bytes);
         } catch (java.io.IOException | RuntimeException e) {
             org.slf4j.LoggerFactory.getLogger("bedray").warn("[mosaic-studio] could not save the preview world: {}", e.toString());

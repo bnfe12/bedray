@@ -128,9 +128,11 @@ quads of their models, the world's entities by the game's own entity models (exp
 their textures, and faces get the game's smooth lighting and ambient occlusion (World look: Smooth lighting, Ambient
 occlusion, Block models and entities). The built-in landscape has grass, flowers and animals too.
 
+Grass, leaves and water take the colours of each column's biome (from the save, or the game's capture), computed like the
+game from the biome's temperature, downfall and colour overrides in the client jar's worldgen data.
+
 It is still Studio's own renderer, so a few things differ from the game: saves of 26.x keep only block names, so stairs,
-logs and doors use their default orientation; grass and leaves take one biome's colour; the game's own clouds, fog,
-particles and animations are not drawn. The game's own frame with your graph is in Result (and Preview > Game frame)
+logs and doors use their default orientation; the game's own clouds, fog, particles and animations are not drawn. The game's own frame with your graph is in Result (and Preview > Game frame)
 while the game runs with the pack.
 
 The Preview renders the open graph over a **real scene**, not a picture: the blocks around the player when the game

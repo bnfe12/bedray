@@ -173,7 +173,7 @@ final class GpuPreview implements AutoCloseable {
         Buf worldBuf;
         Img scene, dist, atlas;
         Buf farBuf;
-        Buf blockIds, blockInfo, meshBuf, quadBuf;
+        Buf blockIds, blockInfo, meshBuf, quadBuf, biomeBuf;
         /** Far shadows in the preview: the far land as the height field of binding 18 (MosaicHeight), following the camera. */
         Buf heightBuf;
         io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicHeight.Field heightField;
@@ -196,7 +196,7 @@ final class GpuPreview implements AutoCloseable {
             if (gbSetLayout != 0) vkDestroyDescriptorSetLayout(device, gbSetLayout, null);
             if (gbModule != 0) vkDestroyShaderModule(device, gbModule, null);
             if (lastCamera != null) MemoryUtil.memFree(lastCamera);
-            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, farBuf, heightBuf, blockIds, blockInfo, meshBuf, quadBuf}) free(b);
+            for (Buf b : new Buf[] {ubo, upload, readback, prev, worldBuf, farBuf, heightBuf, blockIds, blockInfo, meshBuf, quadBuf, biomeBuf}) free(b);
             for (Img i : new Img[] {input, depth, one, history, scene, dist, atlas}) free(i);
         }
     }
@@ -508,7 +508,7 @@ final class GpuPreview implements AutoCloseable {
     static String gbufferSource(PreviewWorld.View view) {
         boolean blocks = view.blocks() != null, mesh = view.atlas().hasMesh();
         return GBUFFER_GLSL.replace("%CONSTANTS%", io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.constants(view.graphSettings(), false)
-            + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\nconst bool HAS_MESH = " + mesh + ";\n");
+            + PreviewWorld.lookConstants(view.look()) + "const bool HAS_BLOCKS = " + blocks + ";\nconst bool HAS_MESH = " + mesh + ";\nconst bool HAS_BIOMES = " + view.atlas().hasBiomes() + ";\n");
     }
 
     private static synchronized byte[] gbufferSpirv(String source) {
@@ -549,6 +549,12 @@ final class GpuPreview implements AutoCloseable {
             ByteBuffer qb = MemoryUtil.memByteBuffer(c.quadBuf.mapped(), (int) c.quadBuf.size()).order(ByteOrder.LITTLE_ENDIAN);
             for (int i = 0; i < quads.length; i++) qb.putFloat(i * 4, quads[i]);
         }
+        int[] biomeCols = view.atlas().biome();
+        c.biomeBuf = buffer(Math.max(16, biomeCols == null ? 16 : biomeCols.length * 4L), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (biomeCols != null) {
+            ByteBuffer bb = MemoryUtil.memByteBuffer(c.biomeBuf.mapped(), (int) c.biomeBuf.size()).order(ByteOrder.LITTLE_ENDIAN);
+            for (int i = 0; i < biomeCols.length; i++) bb.putInt(i * 4, biomeCols[i]);
+        }
         int[] rgba = new int[atlas.length];
         for (int i = 0; i < atlas.length; i++) rgba[i] = (atlas[i] & 0xFF00FF00) | (atlas[i] >> 16 & 0xFF) | (atlas[i] & 0xFF) << 16;
         fill(c.atlas, rgba, 4);
@@ -561,7 +567,7 @@ final class GpuPreview implements AutoCloseable {
             int[][] binds = {{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, {15, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                 {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
                 {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}};
+                {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}};
             VkDescriptorSetLayoutBinding.Buffer lb = VkDescriptorSetLayoutBinding.calloc(binds.length, s);
             for (int i = 0; i < binds.length; i++)
                 lb.get(i).binding(binds[i][0]).descriptorType(binds[i][1]).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
@@ -576,7 +582,7 @@ final class GpuPreview implements AutoCloseable {
             c.gbPipeline = lp.get(0);
             VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(4, s);
             sizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
-            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(6);
+            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(7);
             sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
             sizes.get(3).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(2);
             check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(sizes), null, lp), "world pool");
@@ -584,7 +590,9 @@ final class GpuPreview implements AutoCloseable {
             check(vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(c.gbPool)
                 .pSetLayouts(s.longs(c.gbSetLayout)), lp), "world set");
             c.gbSet = lp.get(0);
-            VkWriteDescriptorSet.Buffer wr = VkWriteDescriptorSet.calloc(10, s);
+            VkWriteDescriptorSet.Buffer wr = VkWriteDescriptorSet.calloc(11, s);
+            VkDescriptorBufferInfo.Buffer bib = VkDescriptorBufferInfo.calloc(1, s);
+            bib.get(0).buffer(c.biomeBuf.handle()).offset(0).range(c.biomeBuf.size());
             VkDescriptorBufferInfo.Buffer meb = VkDescriptorBufferInfo.calloc(1, s);
             meb.get(0).buffer(c.meshBuf.handle()).offset(0).range(c.meshBuf.size());
             VkDescriptorBufferInfo.Buffer qub = VkDescriptorBufferInfo.calloc(1, s);
@@ -615,6 +623,7 @@ final class GpuPreview implements AutoCloseable {
             wr.get(7).sType$Default().dstSet(c.gbSet).dstBinding(10).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(inb);
             wr.get(8).sType$Default().dstSet(c.gbSet).dstBinding(11).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(meb);
             wr.get(9).sType$Default().dstSet(c.gbSet).dstBinding(12).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(qub);
+            wr.get(10).sType$Default().dstSet(c.gbSet).dstBinding(13).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(bib);
             vkUpdateDescriptorSets(device, wr, null);
         }
     }
@@ -858,6 +867,7 @@ final class GpuPreview implements AutoCloseable {
         layout(std430, set = 0, binding = 10) readonly buffer BlockInfo { uvec4 info[]; } blockInfo;
         layout(std430, set = 0, binding = 11) readonly buffer Mesh { uint v[]; } mesh;
         layout(std430, set = 0, binding = 12) readonly buffer Quads { vec4 q[]; } quads;
+        layout(std430, set = 0, binding = 13) readonly buffer Biomes { uvec4 c[]; } biomes;
         %CONSTANTS%
         bool inside(ivec3 c) {
             ivec3 p = c - world.originRel.xyz;
@@ -948,6 +958,14 @@ final class GpuPreview implements AutoCloseable {
             vec3 l = mix(mix(corner[0], corner[1], f.x), mix(corner[2], corner[3], f.x), f.y);
             return l * faceShade(n);
         }
+        // the biome colour of a column: kind 1 grass, 2 foliage, 3 water
+        vec3 biomeTint(ivec3 cell, int kind) {
+            if (!HAS_BIOMES || kind == 0) return vec3(1.0);
+            ivec3 p = clamp(cell - world.originRel.xyz, ivec3(0), world.size.xyz - 1);
+            uvec4 b = biomes.c[p.z * world.size.x + p.x];
+            uint rgb = kind == 1 ? b.x : kind == 2 ? b.y : b.z;
+            return vec3(float((rgb >> 16) & 255u), float((rgb >> 8) & 255u), float(rgb & 255u)) / 255.0;
+        }
         // the quads of models (stairs, torches, flowers...) and entities listed in a cell: the nearest opaque texel between tIn and tOut
         bool meshHit(ivec3 cell, vec3 o, vec3 d, float tIn, float tOut, out float tHit, out vec3 nHit, out vec4 col) {
             tHit = 1e30;
@@ -980,10 +998,22 @@ final class GpuPreview implements AutoCloseable {
                 if (tx.a < pw_cutout) continue;
                 tHit = t;
                 nHit = normalize(nq) * (den > 0.0 ? -1.0 : 1.0);
-                col = tx;
+                int kind = e.w == 2.0 ? 1 : e.w == 4.0 ? 2 : 0;
+                col = vec4(tx.rgb * biomeTint(cell, kind), tx.a);
                 hit = true;
             }
             return hit;
+        }
+        // the colour a cube face takes from its biome (block flags 4 grass, 8 foliage, 16 water, 32 top face only)
+        vec3 cubeTint(ivec3 c, vec3 n) {
+            if (!HAS_BIOMES || !HAS_BLOCKS) return vec3(1.0);
+            ivec3 p = c - world.originRel.xyz;
+            int i = (p.y * world.size.z + p.z) * world.size.x + p.x;
+            uint b = (blockIds.ids[i >> 1] >> uint((i & 1) * 16)) & 0xFFFFu;
+            if (b == 0u) return vec3(1.0);
+            uint f = blockInfo.info[b].w;
+            if ((f & 32u) != 0u && n.y < 0.5) return vec3(1.0);
+            return biomeTint(c, (f & 4u) != 0u ? 1 : (f & 8u) != 0u ? 2 : (f & 16u) != 0u ? 3 : 0);
         }
         bool modelCell(ivec3 c) {
             if (!HAS_BLOCKS || !HAS_MESH || pw_models < 0.5) return false;
@@ -1039,6 +1069,7 @@ final class GpuPreview implements AutoCloseable {
                 uint front = cellAt(back);
                 vec3 q = o + d * t;
                 vec4 tx = texel(tileFor(cell, m, n), q, n);
+                tx.rgb *= cubeTint(cell, n);
                 if (m == 1u) {
                     if (prev == 1u) continue;
                     prev = 1u;

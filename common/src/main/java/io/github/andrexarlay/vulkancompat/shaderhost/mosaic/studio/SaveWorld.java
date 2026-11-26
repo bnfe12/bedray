@@ -30,7 +30,7 @@ final class SaveWorld {
     static int farSize = 384;
 
     /** A loaded save: the snapshot the preview renders, which block every cell is, and the entities in the volume. */
-    record Loaded(MosaicWorld.Snapshot snapshot, MosaicWorld.BlockTable blocks, List<PreviewWorld.Entity> entities) {}
+    record Loaded(MosaicWorld.Snapshot snapshot, MosaicWorld.BlockTable blocks, List<PreviewWorld.Entity> entities, PreviewWorld.Biomes biomes) {}
 
     static boolean isSave(Path dir) { return dir != null && Files.isRegularFile(dir.resolve("level.dat")); }
 
@@ -92,6 +92,7 @@ final class SaveWorld {
             int ox = fx - sx / 2, oy = fy - sy / 2, oz = fz - sz / 2;
             short[] cells = new short[sx * sy * sz];
             int[] tops = new int[sx * sz]; // the top of every column (heightmap): sky light starts above it
+            String[] colBiome = new String[sx * sz];
             short[] index = new short[cells.length];
             Map<String, Integer> ids = new LinkedHashMap<>();
             ids.put("minecraft:air", 0);
@@ -106,6 +107,7 @@ final class SaveWorld {
                             if (Math.floorDiv(bx, 16) != cx) continue;
                             int top = c == null ? Integer.MIN_VALUE : c.top(bx & 15, bz & 15, "MOTION_BLOCKING");
                             tops[lz * sx + lx] = top;
+                            if (c != null) colBiome[lz * sx + lx] = c.biome(bx & 15, top == Integer.MIN_VALUE ? fy : top, bz & 15);
                             for (int ly = 0; ly < sy; ly++) {
                                 int by = oy + ly, i = (ly * sz + lz) * sx + lx;
                                 if (c == null) {
@@ -130,7 +132,7 @@ final class SaveWorld {
             MosaicWorld.Snapshot snap = new MosaicWorld.Snapshot(sx, sy, sz, ox, oy, oz, cells, x, y, z, yaw, pitch, tod);
             if (farSize > 0) snap = snap.withFar(far(r, fx, fz, farSize));
             List<PreviewWorld.Entity> ents = entities(regions.resolveSibling("entities"), ox, oy, oz, sx, sy, sz);
-            return new Loaded(snap, new MosaicWorld.BlockTable(List.copyOf(ids.keySet()), index), ents);
+            return new Loaded(snap, new MosaicWorld.BlockTable(List.copyOf(ids.keySet()), index), ents, PreviewWorld.Biomes.of(colBiome));
         }
     }
 
@@ -371,6 +373,22 @@ final class SaveWorld {
             if (i / perLong >= data.length) return pal[0];
             int v = (int) ((data[i / perLong] >>> ((i % perLong) * bits)) & ((1L << bits) - 1));
             return v < pal.length ? pal[v] : pal[0];
+        }
+
+        /** The biome at a block (4 x 4 x 4 cells per section), or null. */
+        @SuppressWarnings("unchecked")
+        String biome(int x, int y, int z) {
+            Map<String, Object> s = sections.get(Math.floorDiv(y, 16));
+            if (s == null || !(s.get("biomes") instanceof Map<?, ?> b0)) return null;
+            Map<String, Object> b = (Map<String, Object>) b0;
+            if (!(b.get("palette") instanceof List<?> pal) || pal.isEmpty()) return null;
+            Object first = pal.get(0);
+            if (pal.size() == 1 || !(b.get("data") instanceof long[] data)) return first instanceof String f ? f : null;
+            int bits = 32 - Integer.numberOfLeadingZeros(pal.size() - 1), perLong = 64 / bits;
+            int i = (((y & 15) >> 2) * 4 + (z >> 2)) * 4 + (x >> 2);
+            if (i / perLong >= data.length) return null;
+            int v = (int) ((data[i / perLong] >>> ((i % perLong) * bits)) & ((1L << bits) - 1));
+            return v < pal.size() && pal.get(v) instanceof String n ? n : null;
         }
 
         /** Saved light (0..15) at a block, or {@code missing} when the section has none. */

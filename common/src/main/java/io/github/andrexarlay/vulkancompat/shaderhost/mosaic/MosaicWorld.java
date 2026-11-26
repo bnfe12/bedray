@@ -150,8 +150,11 @@ public final class MosaicWorld {
      * one index per cell in the snapshot's order. Appended to {@code preview-world.bin} after everything else, found by
      * its 8-byte trailer (int start of the section, int {@link #TRAILER}), so readers that do not know it skip it.
      */
-    public record BlockTable(java.util.List<String> names, short[] index) {
+    public record BlockTable(java.util.List<String> names, short[] index, java.util.List<String> biomeNames, short[] biomeColumns) {
         public static final int MAGIC = 0x314B4C42;   // "BLK1"
+        public static final int MAGIC2 = 0x324B4C42;  // "BLK2": also the biome of every column (x fastest, then z)
+
+        public BlockTable(java.util.List<String> names, short[] index) { this(names, index, null, null); }
         public static final int TRAILER = 0x544B4C42; // "BLKT"
 
         /** The section plus its trailer, to append to a snapshot's bytes that start at {@code start}. */
@@ -163,10 +166,24 @@ public final class MosaicWorld {
                 names0.write(u.length >> 8 & 255);
                 names0.write(u, 0, u.length);
             }
-            ByteBuffer b = ByteBuffer.allocate(12 + names0.size() + index.length * 2 + 8).order(ByteOrder.LITTLE_ENDIAN);
-            b.putInt(MAGIC).putInt(names.size()).putInt(index.length);
+            boolean bio = biomeNames != null && biomeColumns != null;
+            java.io.ByteArrayOutputStream bn = new java.io.ByteArrayOutputStream();
+            if (bio) for (String n : biomeNames) {
+                byte[] u = n.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                bn.write(u.length & 255);
+                bn.write(u.length >> 8 & 255);
+                bn.write(u, 0, u.length);
+            }
+            int bioBytes = bio ? 8 + bn.size() + biomeColumns.length * 2 : 0;
+            ByteBuffer b = ByteBuffer.allocate(12 + names0.size() + index.length * 2 + bioBytes + 8).order(ByteOrder.LITTLE_ENDIAN);
+            b.putInt(bio ? MAGIC2 : MAGIC).putInt(names.size()).putInt(index.length);
             b.put(names0.toByteArray());
             for (short s : index) b.putShort(s);
+            if (bio) {
+                b.putInt(biomeNames.size()).putInt(biomeColumns.length);
+                b.put(bn.toByteArray());
+                for (short s : biomeColumns) b.putShort(s);
+            }
             b.putInt(start).putInt(TRAILER);
             return b.array();
         }
@@ -179,7 +196,8 @@ public final class MosaicWorld {
             int start = b.getInt(data.length - 8);
             if (start < 0 || start > data.length - 20) return null;
             b.position(start);
-            if (b.getInt() != MAGIC) return null;
+            int magic = b.getInt();
+            if (magic != MAGIC && magic != MAGIC2) return null;
             int n = b.getInt(), cells = b.getInt();
             if (n < 1 || n > 65535 || cells < 0 || cells > 512 * 512 * 512) return null;
             java.util.List<String> names = new java.util.ArrayList<>(n);
@@ -192,6 +210,21 @@ public final class MosaicWorld {
             if (b.remaining() < cells * 2 + 8) return null;
             short[] idx = new short[cells];
             for (int i = 0; i < cells; i++) idx[i] = b.getShort();
+            if (magic == MAGIC2 && b.remaining() >= 16) {
+                int bnCount = b.getInt(), cols = b.getInt();
+                if (bnCount > 0 && bnCount < 4096 && cols > 0 && cols <= 512 * 512) {
+                    java.util.List<String> bns = new java.util.ArrayList<>(bnCount);
+                    for (int i = 0; i < bnCount; i++) {
+                        int len = (b.get() & 255) | (b.get() & 255) << 8;
+                        byte[] u = new byte[len];
+                        b.get(u);
+                        bns.add(new String(u, java.nio.charset.StandardCharsets.UTF_8));
+                    }
+                    short[] bc = new short[cols];
+                    for (int i = 0; i < cols; i++) bc[i] = b.getShort();
+                    return new BlockTable(java.util.List.copyOf(names), idx, java.util.List.copyOf(bns), bc);
+                }
+            }
             return new BlockTable(java.util.List.copyOf(names), idx);
         }
 
