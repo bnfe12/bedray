@@ -734,7 +734,7 @@ public final class MosaicEffects {
             "Light of torches, lamps and lava from the block light level (0..1, Block light node), in the colour you pick; falloff"
                 + " shapes how fast it fades from the source.", """
             return tint * pow(clamp(blockLight, 0.0, 1.0), falloff) * intensity;""");
-        add("Render pipeline", "vec4 diffuseGI(vec3 position, vec3 normal, float bounces = 1, float maxDistance = 24, float sunStrength = 2.2, float skyStrength = 1, float shadowDistance = 48, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float hitSkyAmbient = 0.3, vec3 torchColor = vec3(1.0, 0.6, 0.3), float torchStrength = 1.5, float glowStrength = 2, float bias = 0.03)",
+        add("Render pipeline", "vec4 diffuseGI(vec3 position, vec3 normal, float bounces = 1, float maxDistance = 24, float sunStrength = 2.2, float skyStrength = 1, float shadowDistance = 48, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float hitSkyAmbient = 0.3, vec3 torchColor = vec3(1.0, 0.6, 0.3), float torchStrength = 1.5, float glowStrength = 2, float bias = 0.03, float farGround = 1, float farDistance = 256, vec3 farGroundAlbedo = vec3(0.32, 0.36, 0.22))",
             "Diffuse GI (voxel paths)", "Light arriving at a surface from everywhere, one random path per pixel and frame through the"
                 + " world volume (maxDistance, up to 4 bounces): sky through openings (skyStrength), sun bounced off lit blocks (its own"
                 + " colours, shadowDistance), torch light and glowing blocks. Noisy by design: Accumulate into a Buffer (1/2 size)"
@@ -760,7 +760,10 @@ public final class MosaicEffects {
                 float hm, sm;
                 float tt = mosaicVoxelTrace(pos, dir, maxDistance, hn, hm);
                 if (tt < 0.0) {
-                    sum += through * mosaicSky(dir) * skyStrength;
+                    // past the volume the height field decides: open sky, or distant land lit by the sun and the sky
+                    float open = farGround > 0.0 && dir.y < 0.5 ? mosaicFarShadow(pos, dir, maxDistance, farDistance) : 1.0;
+                    sum += through * (mosaicSky(dir) * skyStrength * open
+                        + farGroundAlbedo * (sunCol * max(L.y, 0.0) + mosaicSky(vec3(0.0, 1.0, 0.0)) * 0.3 * skyStrength) * (1.0 - open) * farGround);
                     break;
                 }
                 vec3 hp = pos + dir * tt;
@@ -845,7 +848,7 @@ public final class MosaicEffects {
             vec3 col = mix(sunsetColor, sunColor, smoothstep(0.0, sunsetHeight, L.y));
             col = mix(col, moonColor * moonLevel, moon);
             return col * ndl * vis * intensity * smoothstep(0.0, horizonFade, L.y);""");
-        add("Render pipeline", "vec4 diffuseGIRT(vec3 position, vec3 normal, float maxDistance = 64, float sunStrength = 2.2, float skyStrength = 1, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float hitSunShare = 0.6, float hitSkyAmbient = 0.3, vec3 unknownAlbedo = vec3(0.4), vec3 torchColor = vec3(1.0, 0.6, 0.3), float torchStrength = 1.5, float glowStrength = 2, float bias = 0.03)",
+        add("Render pipeline", "vec4 diffuseGIRT(vec3 position, vec3 normal, float maxDistance = 64, float sunStrength = 2.2, float skyStrength = 1, vec3 sunColor = vec3(1.0, 0.95, 0.88), vec3 sunsetColor = vec3(1.0, 0.45, 0.18), vec3 moonColor = vec3(0.32, 0.4, 0.62), float moonLevel = 0.06, float hitSunShare = 0.6, float hitSkyAmbient = 0.3, vec3 unknownAlbedo = vec3(0.4), vec3 torchColor = vec3(1.0, 0.6, 0.3), float torchStrength = 1.5, float glowStrength = 2, float bias = 0.03, float farGround = 1, float farDistance = 256, vec3 farGroundAlbedo = vec3(0.32, 0.36, 0.22))",
             "Diffuse GI (RT)", "One-bounce light from a hardware ray per pixel and frame through the real scene geometry; the hit is shaded"
                 + " with the world volume's block colour (unknownAlbedo outside it), a shadow ray toward the sun and its sky light."
                 + " Accumulate and Denoise it like Diffuse GI. Needs hardware ray tracing.", """
@@ -863,7 +866,11 @@ public final class MosaicEffects {
             vec3 dir = normalize(tg * cos(phi) * cr + bt * sin(phi) * cr + normal * sqrt(max(1.0 - h.y, 0.0)));
             vec3 o = position + normal * bias;
             float t = mosaicTrace(o, dir, maxDistance);
-            if (t < 0.0) return vec4(mosaicSky(dir) * skyStrength, 1.0);
+            if (t < 0.0) {
+                float open = farGround > 0.0 && dir.y < 0.5 ? mosaicFarShadow(o, dir, maxDistance, farDistance) : 1.0;
+                return vec4(mosaicSky(dir) * skyStrength * open
+                    + farGroundAlbedo * (sunCol * max(L.y, 0.0) + mosaicSky(vec3(0.0, 1.0, 0.0)) * 0.3 * skyStrength) * (1.0 - open) * farGround, 1.0);
+            }
             vec3 hp = o + dir * t;
             float m = mosaicMaterialAt(hp + dir * 0.05);
             vec3 alb = m >= 2.0 ? mosaicAlbedo(m) : unknownAlbedo;
