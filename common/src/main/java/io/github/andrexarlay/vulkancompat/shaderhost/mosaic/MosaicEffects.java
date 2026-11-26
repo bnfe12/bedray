@@ -715,6 +715,123 @@ public final class MosaicEffects {
             }
             float fade = clamp(1.0 - t0 / fadeDistance, 0.0, 1.0);
             return vec4(mix(color.rgb, color.rgb * trans + light, fade), color.a);""");
+        add("Render pipeline", "vec4 voxelFog(vec4 color, vec2 uv, float density = 0.01, float heightFalloff = 0.045, float seaLevel = 63, float noiseAmount = 0.6, float noiseScale = 0.12, float maxDistance = 96, float steps = 24, vec3 fogColor = vec3(0.72, 0.8, 0.92), vec3 sunColor = vec3(1.0, 0.88, 0.7), float sunStrength = 1.4, float forwardScatter = 0.6, float sunShadows = 1, float shadowEvery = 3, float shadowDistance = 32, float skyStrength = 0.35, vec3 blockLightColor = vec3(1.0, 0.58, 0.25), float blockLightStrength = 1.6, float caveFog = 0.25, float windSpeed = 0.4)",
+            "Voxel fog", "Fog that lives in the world's blocks: every step reads its voxel - fog only in air, thicker near sea level"
+                + " (heightFalloff), patchy per block (noiseAmount), lit by the sun with shafts where blocks shade it (sunShadows:"
+                + " a voxel ray every shadowEvery steps), by the sky the voxel sees and by torches and lava in their own colour (blockLight)."
+                + " Caves keep caveFog of it. steps and maxDistance trade quality for speed; a Buffer at 1/2 makes it cheap.", """
+            float tEnd = min(mosaicDepth(uv), maxDistance);
+            vec3 d = mosaicViewDir(uv), eye = mosaicEye();
+            int n = int(clamp(steps, 4.0, 96.0));
+            float dt = tEnd / float(n);
+            float jitter = fract(52.9829189 * fract(dot(uv * frame.viewSize.xy, vec2(0.06711056, 0.00583715))) + frame.timing.z * 0.618);
+            vec3 L = mosaicSunDir();
+            float day = clamp(L.y * 4.0 + 0.3, 0.0, 1.0);
+            vec3 Ls = L.y < 0.0 ? -L : L; // the moon lights the fog at night, faintly
+            float lightLevel = L.y < 0.0 ? 0.12 : 1.0;
+            float g = clamp(forwardScatter, -0.95, 0.95);
+            float phase = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * dot(d, Ls), 1.5) * 0.25 + 0.25;
+            vec3 base = floor(frame.cameraPosition.xyz);
+            vec3 wind = vec3(1.0, 0.0, 0.35) * frame.timing.x * windSpeed;
+            vec3 light = vec3(0.0);
+            float trans = 1.0;
+            float shadowVis = 1.0;
+            int every = int(clamp(shadowEvery, 1.0, 16.0));
+            for (int i = 0; i < 96; i++) {
+                if (i >= n || trans < 0.02) break;
+                vec3 rel = eye + d * ((float(i) + jitter) * dt);
+                ivec3 cell = mosaicBlock(rel);
+                uint c = mosaicCell(cell);
+                uint m = c & 0xFFu;
+                if (m >= 2u && m != 6u) continue; // inside a block: no fog there
+                float sky = float((c >> 12) & 15u) / 15.0, blk = float((c >> 8) & 15u) / 15.0;
+                vec3 wc = base + vec3(cell); // the voxel, in world blocks: density is the same in all of it
+                float h = exp(-clamp(wc.y - seaLevel, -32.0, 256.0) * heightFalloff);
+                if (density * h < 1e-4) continue; // high above the fog: nothing to add
+                float nz = mosaicNoise((wc + floor(wind)) * noiseScale, 2.0, 0.5, 0.0);
+                float dens = density * h * mix(1.0, nz * 2.0, clamp(noiseAmount, 0.0, 1.0)) * mix(caveFog, 1.0, sky);
+                if (dens <= 0.0) continue;
+                float vis = sky * sky;
+                if (sunShadows > 0.5 && day > 0.0 && sky > 0.0) {
+                    // a voxel ray toward the sun every few steps (shadowEvery); the steps between keep its answer
+                    if (i % every == 0) {
+                        vec3 nn; float mm;
+                        shadowVis = mosaicVoxelTrace(rel, Ls, shadowDistance, nn, mm) < 0.0 ? 1.0 : 0.0;
+                    }
+                    vis = shadowVis;
+                } else if (sky <= 0.0) vis = 0.0;
+                vec3 ins = sunColor * sunStrength * phase * vis * day * lightLevel
+                    + fogColor * skyStrength * sky * max(day, 0.06)
+                    + blockLightColor * blockLightStrength * blk * blk;
+                float a = 1.0 - exp(-dens * dt);
+                light += trans * a * ins;
+                trans *= 1.0 - a;
+            }
+            return vec4(color.rgb * trans + light, color.a);""");
+        add("Render pipeline", "vec4 voxelClouds(vec4 color, vec2 uv, float bottom = 192, float layers = 3, float cellSize = 12, float cellHeight = 4, float coverage = 0.42, float noiseScale = 0.09, float detail = 2, float opacity = 0.9, vec3 cloudColor = vec3(1.0, 1.0, 1.0), vec3 shadowColor = vec3(0.56, 0.6, 0.7), float sunShading = 0.5, float faceShading = 1, vec2 windDirection = vec2(1.0, 0.0), float windSpeed = 0.6, float maxCells = 96, float fadeDistance = 2400, float nightLevel = 0.12)",
+            "Voxel clouds", "Clouds built from boxes like the game's, but in 3D: a grid of cellSize x cellHeight x cellSize boxes,"
+                + " layers deep above bottom; noise decides which boxes are cloud (coverage), the top face is lit, the sides"
+                + " shaded like vanilla (faceShading) and boxes under other boxes darker (sunShading). opacity below 1 lets you"
+                + " see through to the boxes behind. They drift with the wind and fade with distance.", """
+            vec3 d = mosaicViewDir(uv);
+            vec3 cam = frame.cameraPosition.xyz + mosaicEye();
+            float top = bottom + max(layers, 1.0) * cellHeight;
+            float tA, tB;
+            if (abs(d.y) < 1e-4) { if (cam.y < bottom || cam.y > top) return color; tA = 0.0; tB = 1e5; }
+            else {
+                float t0 = (bottom - cam.y) / d.y, t1 = (top - cam.y) / d.y;
+                tA = max(min(t0, t1), 0.0);
+                tB = max(t0, t1);
+            }
+            float tScene = mosaicDepth(uv);
+            if (tB <= tA || tA > tScene) return color;
+            vec2 drift = windDirection * frame.timing.x * windSpeed;
+            vec3 s = vec3(cellSize, cellHeight, cellSize);
+            vec3 o = vec3(cam.x - drift.x, cam.y - bottom, cam.z - drift.y) / s; // grid space: one unit per box
+            vec3 gd = d / s;
+            vec3 p = o + gd * (tA + 1e-3);
+            ivec3 cell = ivec3(floor(p));
+            ivec3 stp = ivec3(sign(gd));
+            vec3 delta = vec3(abs(gd.x) > 1e-7 ? 1.0 / abs(gd.x) : 1e30, abs(gd.y) > 1e-7 ? 1.0 / abs(gd.y) : 1e30, abs(gd.z) > 1e-7 ? 1.0 / abs(gd.z) : 1e30);
+            vec3 f = p - vec3(cell);
+            vec3 nextT = tA + vec3(gd.x > 0.0 ? 1.0 - f.x : f.x, gd.y > 0.0 ? 1.0 - f.y : f.y, gd.z > 0.0 ? 1.0 - f.z : f.z) * delta;
+            vec3 L = mosaicSunDir();
+            float day = max(clamp(L.y * 4.0 + 0.3, 0.0, 1.0), nightLevel);
+            int nL = int(max(layers, 1.0));
+            float t = tA;
+            int axis = abs(d.y) * cellSize > abs(d.x) * cellHeight && abs(d.y) * cellSize > abs(d.z) * cellHeight ? 1 : (abs(d.x) > abs(d.z) ? 0 : 2);
+            vec3 acc = vec3(0.0);
+            float trans = 1.0;
+            bool wasCloud = false; // boxes next to each other merge: only the outer faces are drawn
+            int maxN = int(clamp(maxCells, 8.0, 256.0));
+            for (int i = 0; i < 256; i++) {
+                if (i >= maxN || trans < 0.03 || t > tScene || t > tB + 1e-3) break;
+                bool isCloud = false;
+                if (cell.y >= 0 && cell.y < nL) {
+                    float ly = (float(cell.y) + 0.5) / float(nL);
+                    float want = coverage * (1.0 - 0.35 * abs(ly - 0.5) * 2.0); // fuller in the middle layers
+                    float nz = mosaicNoise(vec3(cell) * vec3(noiseScale, noiseScale * 2.0, noiseScale), detail, 0.5, 0.0);
+                    isCloud = nz > 1.0 - want;
+                    if (isCloud && !wasCloud) {
+                        // vanilla-like faces: top bright, bottom dark, the sides in between
+                        float face = axis == 1 ? (stp.y < 0 ? 1.0 : 0.7) : (axis == 0 ? 0.9 : 0.8);
+                        face = mix(1.0, face, faceShading);
+                        ivec3 up = cell + ivec3(0, 1, 0);
+                        float covered = 0.0;
+                        if (up.y < nL) covered = mosaicNoise(vec3(up) * vec3(noiseScale, noiseScale * 2.0, noiseScale), detail, 0.5, 0.0) > 1.0 - want ? 1.0 : 0.0;
+                        vec3 col = mix(shadowColor, cloudColor, face * (1.0 - sunShading * covered)) * day;
+                        float fade = clamp(1.0 - t / fadeDistance, 0.0, 1.0);
+                        float a = opacity * fade;
+                        acc += trans * a * col;
+                        trans *= 1.0 - a;
+                    }
+                }
+                wasCloud = isCloud;
+                if (nextT.x <= nextT.y && nextT.x <= nextT.z) { t = nextT.x; cell.x += stp.x; nextT.x += delta.x; axis = 0; }
+                else if (nextT.y <= nextT.z) { t = nextT.y; cell.y += stp.y; nextT.y += delta.y; axis = 1; }
+                else { t = nextT.z; cell.z += stp.z; nextT.z += delta.z; axis = 2; }
+            }
+            return vec4(color.rgb * trans + acc, color.a);""");
         add("Render pipeline", "vec4 waterBody(vec4 color, vec2 uv, vec3 deepColor = vec3(0.01, 0.06, 0.09), vec3 absorption = vec3(0.45, 0.12, 0.08), float refraction = 0.015, float clarity = 1, float gamma = 2.2, float maxDepth = 32)",
             "Water body", "What lies under a water surface, seen through it: the image refracted by the waves (refraction), colours absorbed"
                 + " per block of water (absorption per channel, clarity), fading into deepColor. Linear light; put it before reflections.", """

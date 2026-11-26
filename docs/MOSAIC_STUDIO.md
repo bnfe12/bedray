@@ -59,6 +59,19 @@ or a thumbnail of the preview is kept until you choose one).
   do not allow sharing them. Help > Licences sums up Bedray's licence, what the studio uses and the project's licence.
 - Agents: `mosaic project new | list | info | card | github | check [--ignore] | licenses | refresh | clone`.
 
+## Voxel fog and voxel clouds
+
+Two nodes of the Render pipeline group (and the template **Voxel fog and clouds**, World):
+
+- **Voxel fog** walks the world's blocks: fog only in air, the same density in all of one block (thicker near sea level,
+  patchy by noise), lit by the sun with shafts where blocks shade it (a voxel ray every `shadowEvery` steps), by the
+  sky that block sees and by torches and lava in their own colour; caves keep `caveFog` of it. `steps`, `maxDistance`
+  and `shadowEvery` trade quality for speed; in a Buffer at 1/2 it is cheap.
+- **Voxel clouds** are boxes like the game's clouds, but in 3D: a grid of `cellSize` x `cellHeight` x `cellSize` boxes,
+  `layers` deep above `bottom`; noise and `coverage` pick the cloud boxes, neighbours merge into one shape, the top
+  is lit and the sides shaded like vanilla (`faceShading`), boxes under others darker (`sunShading`), `opacity` below 1
+  shows the boxes behind; they drift with the wind and fade with distance.
+
 ## Scene: the parts of Minecraft's picture
 
 The **Scene** panel shows the graph the way Blender's outliner shows a scene: groups (the graph's frames, like

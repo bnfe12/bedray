@@ -77,6 +77,8 @@ public final class MosaicTemplates {
             chain("caveDarkness", "torchWarmth", "leafGlow")));
         ALL.add(new Template("Hot nether", "World", "Lava heat haze and a red grade.", chain("lavaHeat", "colorGrade")));
         ALL.add(new Template("Winter", "World", "Snow sparkle and cold fog.", chain("snowSparkle", "depthFog")));
+        ALL.add(new Template("Voxel fog and clouds", "World", "Fog that lives in the world's blocks, lit by the sun with shafts"
+            + " through gaps and by torches in their colour, under clouds built of 3D boxes like the game's.", chain("voxelFog", "voxelClouds")));
         ALL.add(new Template("Ray-traced sky shadow", "Ray tracing", "One ray per pixel toward the sky darkens"
             + " covered areas.", chain("skyShadow")));
         ALL.add(new Template("Sun shadows (no RT)", "Rendering", "Sun and moon shadows traced through the world volume over"
