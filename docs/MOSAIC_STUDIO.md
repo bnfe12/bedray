@@ -69,15 +69,17 @@ listed as a warning in Problems.
 - **View**: Image, False colour (brightness as a heat ramp), Clipping (red where a channel is at 255, blue where all are
   near 0), Brightness, Red, Green, Blue.
 - **Compare**: Keep A stores the frame shown now; Split shows A and the current frame side by side (drag the line, or
-  Shift+drag anywhere), Difference shows |now - A| four times brighter.
+  Shift+drag anywhere), Difference shows |now - A| brightened (Settings > Preview > Difference gain).
 - **Pixel probe**: hover the image for the pixel position, its 8-bit and 0..1 values and its brightness.
 - **Views**: save the camera under a name, go back with keys 1..9, R returns to the start view, P pauses.
 - **Image**: save the frame as PNG (as it is, or as shown with the view and compare), copy it to the clipboard.
 - **Size**: 320 x 180 up to 2560 x 1440, or Custom... (any size 160..3840 x 90..2160).
-- **Settings > Preview**: look, fly and wheel speed, invert up / down, frames per second, day speed (the time of day runs
-  while the preview plays), smooth or exact-pixel scaling, the info line.
+- **Settings > Preview**: look, fly and wheel speed, invert up / down, frames per second, GPU share (the preview waits after
+  a heavy frame so the studio stays smooth on laptops), background frame interval, shortest pause, day speed (the time of
+  day runs while the preview plays), smooth or exact-pixel scaling, the info line, difference gain, clipping thresholds,
+  false colour range.
 - **Settings > Editor**: how many inputs a node shows before it folds the rest, minimap, fit on open, how long after an
-  edit the graph compiles, recent files and palette history.
+  edit the graph compiles, minimap size, how many recent files and palette commands are kept.
 
 ## Preview world
 

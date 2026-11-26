@@ -1350,7 +1350,7 @@ final class GraphPanel extends JComponent {
         minY = Math.min(minY, vy);
         maxX = Math.max(maxX, vx + vw);
         maxY = Math.max(maxY, vy + vh);
-        int mw = Math.min(200, getWidth() / 4), mh = Math.min(130, getHeight() / 4);
+        int mw = Math.min(StudioUi.settings.minimapWidth, getWidth() / 3), mh = Math.min(StudioUi.settings.minimapHeight, getHeight() / 3);
         if (mw < 60 || mh < 40) return;
         mmScale = Math.min((mw - 8) / (maxX - minX), (mh - 8) / (maxY - minY));
         mmX0 = minX;

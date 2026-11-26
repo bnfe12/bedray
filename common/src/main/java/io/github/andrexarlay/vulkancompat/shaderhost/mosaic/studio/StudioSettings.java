@@ -180,8 +180,21 @@ public final class StudioSettings {
     public int previewFps = 12;            // 2..120
     /** Most of the GPU's time the preview may take (percent): it waits at least as long as a heavy frame took, so the studio stays smooth. */
     public int previewGpuShare = 40;       // 10..100
-    /** When the studio window is not the active one, the preview draws one frame every 2 seconds. */
+    /** When the studio window is not the active one, the preview draws one frame every {@link #previewBackgroundMs}. */
     public boolean previewIdleInBackground = true;
+    public int previewBackgroundMs = 2000;   // 250..30000
+    /** Shortest pause between two preview frames (ms). */
+    public int previewMinPauseMs = 5;        // 0..1000
+    /** Compare > Difference: how many times the difference is brightened. */
+    public double previewDiffGain = 4;       // 1..64
+    /** View > Clipping: a channel at or above this (0..255) is clipped white, all channels at or below the low one are crushed black. */
+    public int previewClipHigh = 250, previewClipLow = 5;
+    /** View > False colour: the brightness shown as white (1 = the brightest pixel value). */
+    public double previewFalseColourMax = 1.0; // 0.05..1
+    /** Minimap size in pixels at most. */
+    public int minimapWidth = 200, minimapHeight = 130;
+    /** Length of File > Open recent and of the command palette's history. */
+    public int recentMax = 12, paletteRecentMax = 16;
     /** Degrees the preview camera turns per pixel of mouse drag. */
     public double previewLookSpeed = 0.3;  // 0.05..2
     /** Blocks the preview camera moves per key press (Ctrl: x3). */
@@ -277,6 +290,16 @@ public final class StudioSettings {
         if (paletteRecent == null) paletteRecent = new java.util.ArrayList<>();
         previewFps = Math.clamp(previewFps, 2, 120);
         previewGpuShare = Math.clamp(previewGpuShare, 10, 100);
+        previewBackgroundMs = Math.clamp(previewBackgroundMs, 250, 30000);
+        previewMinPauseMs = Math.clamp(previewMinPauseMs, 0, 1000);
+        previewDiffGain = Math.clamp(previewDiffGain, 1.0, 64.0);
+        previewClipHigh = Math.clamp(previewClipHigh, 1, 255);
+        previewClipLow = Math.clamp(previewClipLow, 0, 254);
+        previewFalseColourMax = Math.clamp(previewFalseColourMax, 0.05, 1.0);
+        minimapWidth = Math.clamp(minimapWidth, 80, 600);
+        minimapHeight = Math.clamp(minimapHeight, 50, 400);
+        recentMax = Math.clamp(recentMax, 1, 50);
+        paletteRecentMax = Math.clamp(paletteRecentMax, 0, 100);
         previewLookSpeed = Math.clamp(previewLookSpeed, 0.05, 2.0);
         previewFlySpeed = Math.clamp(previewFlySpeed, 0.1, 8.0);
         previewWheelSpeed = Math.clamp(previewWheelSpeed, 0.1, 16.0);
@@ -285,13 +308,13 @@ public final class StudioSettings {
         return this;
     }
 
-    /** Puts a file first in the recent list (at most 12). */
+    /** Puts a file first in the recent list (at most {@link #recentMax}). */
     public void remember(java.nio.file.Path p) {
         if (p == null) return;
         String s = p.toAbsolutePath().normalize().toString();
         recentFiles.remove(s);
         recentFiles.add(0, s);
-        while (recentFiles.size() > 12) recentFiles.remove(recentFiles.size() - 1);
+        while (recentFiles.size() > recentMax) recentFiles.remove(recentFiles.size() - 1);
     }
 
     public StudioSettings copy() { return GSON.fromJson(GSON.toJson(this), StudioSettings.class).sanitized(); }

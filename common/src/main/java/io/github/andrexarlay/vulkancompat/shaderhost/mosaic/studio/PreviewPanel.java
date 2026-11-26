@@ -54,7 +54,7 @@ final class PreviewPanel extends Panels.Listening {
 
     /** Comparison with a kept frame (A): side by side with a movable split, or the difference made 4x brighter. */
     enum Compare {
-        OFF("No compare"), SPLIT("Split: A | now"), DIFF("Difference x4");
+        OFF("No compare"), SPLIT("Split: A | now"), DIFF("Difference");
         final String label;
         Compare(String l) { label = l; }
         @Override public String toString() { return label; }
@@ -349,7 +349,12 @@ final class PreviewPanel extends Panels.Listening {
         boolean diff = compare == Compare.DIFF && ref != null && ref.getWidth() == img.getWidth() && ref.getHeight() == img.getHeight();
         if (showMode == Show.IMAGE && !diff) return img;
         Object key = java.util.List.of(System.identityHashCode(img), showMode, diff, ref == null ? 0 : System.identityHashCode(ref));
+        StudioSettings st = StudioUi.settings;
+        key = java.util.List.of(key, st.previewDiffGain, st.previewClipHigh, st.previewClipLow, st.previewFalseColourMax);
         if (key.equals(displayKey) && displayCache != null) return displayCache;
+        double gain = st.previewDiffGain;
+        int hi = st.previewClipHigh, lo = st.previewClipLow;
+        double fcMax = st.previewFalseColourMax;
         int w = img.getWidth(), h = img.getHeight();
         int[] px = img.getRGB(0, 0, w, h, null, 0, w);
         int[] rp = diff ? ref.getRGB(0, 0, w, h, null, 0, w) : null;
@@ -357,16 +362,17 @@ final class PreviewPanel extends Panels.Listening {
             int c = px[i];
             if (rp != null) {
                 int d = rp[i];
-                c = (Math.min(255, Math.abs(((c >> 16) & 255) - ((d >> 16) & 255)) * 4) << 16)
-                    | (Math.min(255, Math.abs(((c >> 8) & 255) - ((d >> 8) & 255)) * 4) << 8) | Math.min(255, Math.abs((c & 255) - (d & 255)) * 4);
+                c = ((int) Math.min(255, Math.abs(((c >> 16) & 255) - ((d >> 16) & 255)) * gain) << 16)
+                    | ((int) Math.min(255, Math.abs(((c >> 8) & 255) - ((d >> 8) & 255)) * gain) << 8)
+                    | (int) Math.min(255, Math.abs((c & 255) - (d & 255)) * gain);
             }
             px[i] = 0xFF000000 | switch (showMode) {
                 case IMAGE -> c;
-                case FALSE_COLOUR -> falseColour(luma(c));
+                case FALSE_COLOUR -> falseColour(luma(c) / fcMax);
                 case CLIPPING -> {
                     int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
-                    if (Math.max(r, Math.max(g, b)) >= 250) yield 0xFF3030;
-                    if (Math.max(r, Math.max(g, b)) <= 5) yield 0x3060FF;
+                    if (Math.max(r, Math.max(g, b)) >= hi) yield 0xFF3030;
+                    if (Math.max(r, Math.max(g, b)) <= lo) yield 0x3060FF;
                     int l = (int) (luma(c) * 160);
                     yield l << 16 | l << 8 | l;
                 }
@@ -695,8 +701,9 @@ final class PreviewPanel extends Panels.Listening {
                 long rest = Math.max(1000 / StudioUi.settings.previewFps - ms, (long) (ms * (1 - share) / share));
                 Window win = SwingUtilities.getWindowAncestor(root);
                 if (StudioUi.settings.previewIdleInBackground && win != null && !win.isActive()
-                    && java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getActiveWindow() == null) rest = Math.max(rest, 2000);
-                Thread.sleep(Math.max(5, rest));
+                    && java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getActiveWindow() == null)
+                    rest = Math.max(rest, StudioUi.settings.previewBackgroundMs);
+                Thread.sleep(Math.max(StudioUi.settings.previewMinPauseMs, rest));
             } catch (InterruptedException e) {
                 return;
             } catch (Throwable t) {

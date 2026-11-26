@@ -93,7 +93,7 @@ final class CommandPalette {
             if (!nodesOnly) {
                 app.settings.paletteRecent.remove(e.label());
                 app.settings.paletteRecent.add(0, e.label());
-                while (app.settings.paletteRecent.size() > 16) app.settings.paletteRecent.remove(app.settings.paletteRecent.size() - 1);
+                while (app.settings.paletteRecent.size() > app.settings.paletteRecentMax) app.settings.paletteRecent.remove(app.settings.paletteRecent.size() - 1);
                 app.saveSettings();
             }
             SwingUtilities.invokeLater(e.run());

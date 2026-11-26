@@ -367,11 +367,15 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.row("Inputs shown before folding", "A node with more inputs shows only the wired, required and changed ones (Ctrl+H shows all)",
             slider(2, 24, draft.compactInputs, v -> draft.compactInputs = v));
         f.wide(check("Minimap in the corner of the canvas when the graph does not fit the view", draft.minimap, v -> draft.minimap = v));
+        f.row("Minimap width", "Pixels at most (and a third of the canvas)", slider(80, 600, draft.minimapWidth, v -> draft.minimapWidth = v));
+        f.row("Minimap height", null, slider(50, 400, draft.minimapHeight, v -> draft.minimapHeight = v));
         f.wide(check("Fit the view to the graph when a graph or template is opened", draft.fitOnOpen, v -> draft.fitOnOpen = v));
         f.section("Compiling");
         f.row("Compile after an edit (ms)", "Pause after the last change before the graph is compiled, saved and sent to the game",
             slider(100, 3000, draft.compileDelayMs, v -> draft.compileDelayMs = v));
         f.section("Files");
+        f.row("Recent files kept", null, slider(1, 50, draft.recentMax, v -> draft.recentMax = v));
+        f.row("Palette history kept", "Commands remembered by Ctrl+Shift+P (0: none)", slider(0, 100, draft.paletteRecentMax, v -> draft.paletteRecentMax = v));
         f.row("Recent files", draft.recentFiles.size() + " in File > Open recent and the command palette", button("Clear", null, () -> {
             draft.recentFiles.clear();
             app.settings.recentFiles.clear();
@@ -400,6 +404,19 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.row("GPU share", "Most of the GPU's time the preview may take; lower keeps the studio smooth on laptops",
             slider(10, 100, draft.previewGpuShare, v -> draft.previewGpuShare = v, v -> v + " %"));
         f.wide(check("Draw rarely while the studio is in the background", draft.previewIdleInBackground, v -> draft.previewIdleInBackground = v));
+        f.row("Background frame interval", "How often the preview draws while another window is in front",
+            slider(250, 30000, draft.previewBackgroundMs, v -> draft.previewBackgroundMs = v, v -> String.format(java.util.Locale.ROOT, "%.1f s", v / 1000.0)));
+        f.row("Shortest pause between frames", "Even on a fast GPU", slider(0, 1000, draft.previewMinPauseMs, v -> draft.previewMinPauseMs = v,
+            v -> v + " ms"));
+        f.section("Views and compare");
+        f.row("Difference gain", "Compare > Difference: how many times the difference is brightened",
+            slider(10, 640, (int) Math.round(draft.previewDiffGain * 10), v -> draft.previewDiffGain = v / 10.0, v -> "x" + tenth(v)));
+        f.row("Clipping: bright", "View > Clipping marks a channel at or above this red (0..255)", slider(1, 255, draft.previewClipHigh,
+            v -> draft.previewClipHigh = v));
+        f.row("Clipping: dark", "View > Clipping marks pixels with every channel at or below this blue", slider(0, 254, draft.previewClipLow,
+            v -> draft.previewClipLow = v));
+        f.row("False colour: white at", "View > False colour: the brightness drawn as white (lower spreads dark scenes)",
+            slider(5, 100, (int) Math.round(draft.previewFalseColourMax * 100), v -> draft.previewFalseColourMax = v / 100.0, SettingsWindow::hundredth));
         f.row("Day speed", "Minecraft ticks per second while the preview plays (0: time stands still, 20: the game's speed)",
             slider(0, 2400, draft.previewDaySpeed, v -> draft.previewDaySpeed = v));
         f.wide(check("Smooth scaling (off: exact pixels when the image is enlarged)", draft.previewSmooth, v -> draft.previewSmooth = v));
@@ -416,6 +433,12 @@ final class SettingsWindow extends Dock.StudioWindow {
             draft.previewFps = d.previewFps;
             draft.previewGpuShare = d.previewGpuShare;
             draft.previewIdleInBackground = d.previewIdleInBackground;
+            draft.previewBackgroundMs = d.previewBackgroundMs;
+            draft.previewMinPauseMs = d.previewMinPauseMs;
+            draft.previewDiffGain = d.previewDiffGain;
+            draft.previewClipHigh = d.previewClipHigh;
+            draft.previewClipLow = d.previewClipLow;
+            draft.previewFalseColourMax = d.previewFalseColourMax;
             draft.previewLookSpeed = d.previewLookSpeed;
             draft.previewFlySpeed = d.previewFlySpeed;
             draft.previewWheelSpeed = d.previewWheelSpeed;
