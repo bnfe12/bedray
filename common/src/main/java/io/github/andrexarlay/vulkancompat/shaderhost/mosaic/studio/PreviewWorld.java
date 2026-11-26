@@ -132,24 +132,26 @@ final class PreviewWorld {
     /** The land around the volume (384 x 384 columns): ground, sand by the water, water, scattered tree tops. */
     private static MosaicWorld.Snapshot demoFar(MosaicWorld.Snapshot s) {
         int fs = 384, fox = s.ox() + SX / 2 - fs / 2, foz = s.oz() + SZ / 2 - fs / 2, water = 62;
-        short[] hs = new short[fs * fs];
+        short[] hs = new short[fs * fs], gs = new short[fs * fs];
         byte[] ms = new byte[fs * fs];
         for (int j = 0; j < fs; j++)
             for (int i = 0; i < fs; i++) {
                 int x = fox + i, z = foz + j, h = (int) Math.round(demoHeight(x, z));
                 Material m = h < water ? Material.WATER : h <= water + 1 ? Material.SAND : Material.DIRT;
                 if (h < water) h = water;
+                gs[j * fs + i] = (short) h;
                 // tree crowns: 3 x 3 blocks around a point of a 9-block grid, a little higher in the middle
                 int gx = Math.floorDiv(x, 9), gz = Math.floorDiv(z, 9), hash = (gx * 73856093) ^ (gz * 19349663);
                 int cx = gx * 9 + 3 + Math.floorMod(hash >> 3, 3), cz = gz * 9 + 3 + Math.floorMod(hash >> 6, 3);
-                if (m == Material.DIRT && Math.floorMod(hash, 3) == 0 && Math.abs(x - cx) <= 1 && Math.abs(z - cz) <= 1) {
+                if (m == Material.DIRT && Math.floorMod(hash, 3) == 0 && Math.abs(x - cx) <= 2 && Math.abs(z - cz) <= 2
+                    && !(Math.abs(x - cx) == 2 && Math.abs(z - cz) == 2)) {
                     m = Material.LEAVES;
                     h += (x == cx && z == cz) ? 6 : 5;
                 }
                 hs[j * fs + i] = (short) h;
                 ms[j * fs + i] = (byte) m.id();
             }
-        return s.withFar(new MosaicWorld.Far(fs, fox, foz, hs, ms));
+        return s.withFar(new MosaicWorld.Far(fs, fox, foz, hs, ms, gs));
     }
 
     private static int idx(int x, int y, int z) { return (y * SZ + z) * SX + x; }
@@ -290,6 +292,7 @@ final class PreviewWorld {
     static final java.util.List<io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSettings.Setting> LOOK = java.util.List.of(
         look("maxDistance", "View distance (blocks)", "Blocks the preview camera sees in full detail (the volume).", 256),
         look("farDistance", "Far view distance", "Blocks the far land (height field beyond the volume) is drawn to.", 1500),
+        look("canopyDepth", "Far canopy depth", "Blocks of leaves drawn at the top of a far tree column (the rest down to the ground is open).", 4),
         look("farStep", "Far march step", "Growth of the far land's march steps with distance (smaller = finer, slower).", 0.004),
         look("lightCurve", "Light curve", "Shape of the light map: level / ((1 + k) - k x level); 3 is Minecraft's.", 3),
         look("dayRise", "Daylight rise", "How fast sky light brightens with the sun's height.", 2.5),

@@ -221,7 +221,7 @@ public final class MosaicCodegen {
                 }
                 case "mosaic.ssr" -> {
                     buffers.add(n.index());
-                    depth = world = ssr = true;
+                    depth = world = ssr = height = true;
                 }
                 case "mosaic.average" -> {
                     buffers.add(n.index());
@@ -429,8 +429,8 @@ public final class MosaicCodegen {
         if (nd.accumulate()) o.a(GLSL_ACCUMULATE);
         if (nd.atrous()) o.a(GLSL_ATROUS);
         if (nd.average()) o.a(GLSL_AVERAGE);
-        if (nd.ssr()) o.a(GLSL_SSR);
         if (nd.height()) o.a(MosaicHeight.GLSL);
+        if (nd.ssr()) o.a(GLSL_SSR); // after the height field: it reads mosaicFarShadow
         if (nd.voxelRays()) o.a("""
             // preview: rays walk the world volume (no acceleration structure in Studio)
             const vec3 MOSAIC_SKY_DIRECTION = ms_shadowDirection;
@@ -681,7 +681,7 @@ public final class MosaicCodegen {
      */
     private static final String GLSL_SSR = """
             vec4 mosaicSsr(sampler2D s, vec2 uv, float material, float strength, float maxDist, float steps, float thickness,
-                    float f0, float waves, float waveScale, float waveSpeed, float waveHeight, float edgeFade) {
+                    float f0, float waves, float waveScale, float waveSpeed, float waveHeight, float edgeFade, float farLand, float farDist, vec3 landColor) {
                 vec4 base = texture(s, uv);
                 float t = mosaicDepth(uv);
                 if (t >= 1.0e5) return base;
@@ -721,13 +721,19 @@ public final class MosaicCodegen {
                         break;
                     }
                 }
+                if (found < 0.5 && farLand > 0.0) { // off screen: the distant land of the height field, or the sky
+                    float open = mosaicFarShadow(p + n * 0.05, r, 8.0, farDist);
+                    vec3 sunL = mosaicSunDir();
+                    vec3 land = landColor * (vec3(1.0, 0.95, 0.88) * max(sunL.y, 0.0) * 2.0 + mosaicSky(vec3(0.0, 1.0, 0.0)) * 0.4);
+                    refl = mix(land, refl, open);
+                }
                 float fres = f0 + (1.0 - f0) * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
                 return vec4(mix(base.rgb, refl, clamp(fres * strength, 0.0, 1.0)), base.a);
             }
             """;
     private static final String SLANG_SSR = """
             float4 mosaicSsr(Sampler2D s, float2 uv, float material, float strength, float maxDist, float steps, float thickness,
-                    float f0, float waves, float waveScale, float waveSpeed, float waveHeight, float edgeFade)
+                    float f0, float waves, float waveScale, float waveSpeed, float waveHeight, float edgeFade, float farLand, float farDist, float3 landColor)
             {
                 float4 base = s.SampleLevel(uv, 0.0);
                 float t = mosaicDepth(uv);
@@ -767,6 +773,12 @@ public final class MosaicCodegen {
                         found = 1.0;
                         break;
                     }
+                }
+                if (found < 0.5 && farLand > 0.0) { // off screen: the distant land of the height field, or the sky
+                    float open = mosaicFarShadow(p + n * 0.05, r, 8.0, farDist);
+                    float3 sunL = mosaicSunDir();
+                    float3 land = landColor * (float3(1.0, 0.95, 0.88) * max(sunL.y, 0.0) * 2.0 + mosaicSky(float3(0.0, 1.0, 0.0)) * 0.4);
+                    refl = lerp(land, refl, open);
                 }
                 float fres = f0 + (1.0 - f0) * pow(1.0 - max(dot(-v, n), 0.0), 5.0);
                 return float4(lerp(base.rgb, refl, clamp(fres * strength, 0.0, 1.0)), base.a);
@@ -1267,7 +1279,8 @@ public final class MosaicCodegen {
                 + ", " + in(p, n, "color") + ", " + uv + ", " + in(p, n, "frames") + ", " + in(p, n, "depthTolerance") + ", " + in(p, n, "depthToleranceBase") + ")";
             case "mosaic.ssr" -> "mosaicSsr(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "material") + ", " + in(p, n, "strength") + ", "
                 + in(p, n, "maxDistance") + ", " + in(p, n, "steps") + ", " + in(p, n, "thickness") + ", " + in(p, n, "f0") + ", " + in(p, n, "waves")
-                + ", " + in(p, n, "waveScale") + ", " + in(p, n, "waveSpeed") + ", " + in(p, n, "waveHeight") + ", " + in(p, n, "edgeFade") + ")";
+                + ", " + in(p, n, "waveScale") + ", " + in(p, n, "waveSpeed") + ", " + in(p, n, "waveHeight") + ", " + in(p, n, "edgeFade")
+                + ", " + in(p, n, "farLand") + ", " + in(p, n, "farDistance") + ", " + in(p, n, "landColor") + ")";
             case "mosaic.average" -> "mosaicAverage(bedrayBuf" + n.index() + ", " + in(p, n, "spread") + ", " + in(p, n, "centerWeight") + ")";
             case "mosaic.atrous" -> "mosaicAtrous(bedrayBuf" + n.index() + ", " + uv + ", " + in(p, n, "step") + ", " + in(p, n, "edges") + ", "
                 + in(p, n, "planeTolerance") + ", " + in(p, n, "planeTolerancePerBlock") + ", " + in(p, n, "colorTolerance") + ", " + in(p, n, "colorToleranceBase") + ")";
@@ -1660,8 +1673,8 @@ public final class MosaicCodegen {
         if (nd.accumulate()) o.a(SLANG_ACCUMULATE);
         if (nd.atrous()) o.a(SLANG_ATROUS);
         if (nd.average()) o.a(SLANG_AVERAGE);
-        if (nd.ssr()) o.a(SLANG_SSR);
         if (nd.height()) o.a(MosaicHeight.SLANG);
+        if (nd.ssr()) o.a(SLANG_SSR);
         if (nd.voxelRays()) o.a("""
             static const float3 MOSAIC_SKY_DIRECTION = ms_shadowDirection;
             float mosaicTrace(float3 origin, float3 dir, float tMax) { float3 n; float m; return mosaicVoxelTrace(origin, dir, tMax, n, m); }

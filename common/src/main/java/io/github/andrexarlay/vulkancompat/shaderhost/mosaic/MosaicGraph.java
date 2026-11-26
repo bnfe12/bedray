@@ -230,7 +230,8 @@ public final class MosaicGraph {
         m.put("mosaic.ssr", List.of(new Port("uv", Kind.V2, false), new Port("material", Kind.F, false), new Port("strength", Kind.F, false),
             new Port("maxDistance", Kind.F, false), new Port("steps", Kind.F, false), new Port("thickness", Kind.F, false), new Port("f0", Kind.F, false),
             new Port("waves", Kind.F, false), new Port("waveScale", Kind.F, false), new Port("waveSpeed", Kind.F, false), new Port("waveHeight", Kind.F, false),
-            new Port("edgeFade", Kind.F, false)));
+            new Port("edgeFade", Kind.F, false), new Port("farLand", Kind.F, false), new Port("farDistance", Kind.F, false),
+            new Port("landColor", Kind.V3, false)));
         m.put("mosaic.average", List.of(new Port("spread", Kind.F, false), new Port("centerWeight", Kind.F, false)));
         m.put("mosaic.accumulate", List.of(new Port("color", Kind.V4, true), new Port("uv", Kind.V2, false), new Port("frames", Kind.F, false),
             new Port("depthTolerance", Kind.F, false), new Port("depthToleranceBase", Kind.F, false)));

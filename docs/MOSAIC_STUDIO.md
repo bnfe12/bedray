@@ -64,7 +64,9 @@ File contract: when J opens Studio the game writes `<game>/bedray-studio/preview
 `0x3157534D`, int size x / y / z, int origin x / y / z (absolute blocks), double camera x / y / z, float yaw, pitch
 (Minecraft degrees), time of day (0 noon, 0.25 sunset); cells from byte 64, one 16-bit cell per block, x fastest, then z,
 then y, cell = material | blockLight << 8 | skyLight << 12), then optionally the far land: int magic `0x3152414D`, int size,
-int origin x / z, size x size shorts (absolute y of the top block, -32768 unknown), size x size bytes (material class). "Reload world" reads it again.
+int origin x / z, size x size shorts (absolute y of the top block, -32768 unknown), size x size bytes (material class),
+then optionally int magic `0x31444E47` and size x size shorts: the ground under leaves (MOTION_BLOCKING_NO_LEAVES), so
+far trees are drawn as a canopy (World look: far canopy depth) over open ground. "Reload world" reads it again.
 
 ## A renderer of your own
 

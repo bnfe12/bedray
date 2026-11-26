@@ -83,7 +83,7 @@ public final class MosaicWorld {
         }
 
         public byte[] toBytes() {
-            int farBytes = far == null ? 0 : 16 + far.size() * far.size() * 3;
+            int farBytes = far == null ? 0 : 16 + far.size() * far.size() * 3 + (far.ground() == null ? 0 : 4 + far.size() * far.size() * 2);
             ByteBuffer b = ByteBuffer.allocate(HEADER + cells.length * 2 + farBytes).order(ByteOrder.LITTLE_ENDIAN);
             b.putInt(MAGIC).putInt(sx).putInt(sy).putInt(sz).putInt(ox).putInt(oy).putInt(oz);
             b.putDouble(camX).putDouble(camY).putDouble(camZ).putFloat(yaw).putFloat(pitch).putFloat(timeOfDay);
@@ -93,6 +93,10 @@ public final class MosaicWorld {
                 b.putInt(FAR_MAGIC).putInt(far.size()).putInt(far.ox()).putInt(far.oz());
                 for (short h : far.heights()) b.putShort(h);
                 b.put(far.materials());
+                if (far.ground() != null) {
+                    b.putInt(Far.GROUND_MAGIC);
+                    for (short g : far.ground()) b.putShort(g);
+                }
             }
             return b.array();
         }
@@ -119,7 +123,12 @@ public final class MosaicWorld {
                     for (int i = 0; i < hs.length; i++) hs[i] = b.getShort();
                     byte[] ms = new byte[fs * fs];
                     b.get(ms);
-                    far = new Far(fs, fox, foz, hs, ms);
+                    short[] gs = null;
+                    if (b.remaining() >= 4 + fs * fs * 2 && b.getInt() == Far.GROUND_MAGIC) {
+                        gs = new short[fs * fs];
+                        for (int i = 0; i < gs.length; i++) gs[i] = b.getShort();
+                    }
+                    far = new Far(fs, fox, foz, hs, ms, gs);
                 }
             }
             return new Snapshot(sx, sy, sz, ox, oy, oz, cells, x, y, z, yaw, pitch, tod, far);
@@ -140,7 +149,14 @@ public final class MosaicWorld {
      * The land beyond the volume, for the preview's far view: a size x size grid around the camera (x fastest), the
      * absolute y of the top block of each column (Short.MIN_VALUE unknown) and its material class.
      */
-    public record Far(int size, int ox, int oz, short[] heights, byte[] materials) {
+    public record Far(int size, int ox, int oz, short[] heights, byte[] materials, short[] ground) {
+        public static final int GROUND_MAGIC = 0x31444E47; // "GND1"
+
+        public Far(int size, int ox, int oz, short[] heights, byte[] materials) { this(size, ox, oz, heights, materials, null); }
+
+        /** Ground height of a column under its leaves (the top when unknown). */
+        public short groundAt(int i) { return ground == null ? heights[i] : ground[i]; }
+
         /**
          * Storage-buffer form: ivec4 (origin x / z - floor(camera), size, 1), ivec4 (floor(camera y), 0, 0, 0), then one
          * uint per column: height + 32768 | material << 16. {@code cells} false writes only the camera-relative header.
@@ -150,8 +166,11 @@ public final class MosaicWorld {
             int fx = (int) Math.floor(camX), fz = (int) Math.floor(camZ);
             b.putInt(0, ox - fx).putInt(4, oz - fz).putInt(8, size).putInt(12, 1);
             b.putInt(16, (int) Math.floor(camY)).putInt(20, 0).putInt(24, 0).putInt(28, 0);
-            if (cells) for (int i = 0; i < size * size; i++)
-                b.putInt(32 + i * 4, ((heights[i] + 32768) & 0xFFFF) | ((materials[i] & 0xFF) << 16));
+            // canopy depth: blocks from the top (leaves) down to the ground under them, 0 for bare ground
+            if (cells) for (int i = 0; i < size * size; i++) {
+                int canopy = heights[i] == Short.MIN_VALUE ? 0 : Math.clamp(heights[i] - groundAt(i), 0, 255);
+                b.putInt(32 + i * 4, ((heights[i] + 32768) & 0xFFFF) | ((materials[i] & 0xFF) << 16) | (canopy << 24));
+            }
         }
 
         public int bytes() { return 32 + size * size * 4; }

@@ -883,11 +883,18 @@ final class GpuPreview implements AutoCloseable {
                     int hAbs = int(fc & 0xFFFFu) - 32768;
                     if (hAbs > -32000) {
                         float top = float(hAbs - farField.camY.x) + 1.0;
-                        if (q.y < top) {
-                            uint m = (fc >> 16) & 0xFFu;
-                            vec3 n = lastY >= top ? vec3(0.0, 1.0, 0.0)
+                        float canopy = float((fc >> 24) & 0xFFu);
+                        uint m = (fc >> 16) & 0xFFu;
+                        // a column under leaves: the canopy (at most pw_canopyDepth blocks) over open air over the ground
+                        float ground = top - canopy;
+                        bool inCanopy = canopy > 0.0 && q.y < top && q.y >= top - min(canopy, pw_canopyDepth);
+                        bool inGround = q.y < (canopy > 0.0 ? ground : top);
+                        if (inCanopy || inGround) {
+                            float surf = inCanopy ? top : (canopy > 0.0 ? ground : top);
+                            if (!inCanopy && canopy > 0.0) m = 4u; // the ground under trees
+                            vec3 n = lastY >= surf ? vec3(0.0, 1.0, 0.0)
                                 : (abs(d.x) > abs(d.z) ? vec3(-sign(d.x), 0.0, 0.0) : vec3(0.0, 0.0, -sign(d.z)));
-                            vec3 qs = n.y > 0.5 ? vec3(q.x, top, q.z) : q;
+                            vec3 qs = n.y > 0.5 ? vec3(q.x, surf, q.z) : q;
                             vec4 tx = texel(tileOf(m, n), qs, n);
                             vec3 col = (m == 2u || m == 13u) ? tx.rgb : tx.rgb * light(0xF000u, n);
                             if (m == 1u) col = col * pw_waterOpacity + sky(reflect(d, n)) * pw_waterReflection;

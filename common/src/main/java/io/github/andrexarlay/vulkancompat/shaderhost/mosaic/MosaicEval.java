@@ -52,6 +52,9 @@ public final class MosaicEval {
             case "mosaic.ssr.f0" -> new double[] {0.02};
             case "mosaic.ssr.waveHeight" -> new double[] {0.06};
             case "mosaic.ssr.edgeFade" -> new double[] {0.1};
+            case "mosaic.ssr.farLand" -> new double[] {1.0};
+            case "mosaic.ssr.farDistance" -> new double[] {512.0};
+            case "mosaic.ssr.landColor" -> new double[] {0.16, 0.2, 0.11};
             case "mosaic.average.centerWeight" -> new double[] {2.0};
             case "mosaic.atrous.step", "mosaic.atrous.edges" -> new double[] {1.0};
             case "mosaic.noise.scale", "mosaic.voronoi.scale", "mosaic.checker.scale", "mosaic.wave.scale" -> new double[] {5.0};
