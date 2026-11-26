@@ -989,8 +989,10 @@ public final class MosaicEffects {
 
     public static final List<Part> PARTS = List.of(
         new Part("partSky", "Sky", "mosaicDepth(uv) >= 1.0e5 ? 1.0 : 0.0", "The sky: every pixel where no block or entity was hit (sun, moon, stars, the game's clouds)."),
-        new Part("partWater", "Water", "step(0.001, mosaicWaterDepth(uv))", "Water surfaces and what is seen through them."),
-        new Part("partLava", "Lava", "step(0.001, mosaicLavaDepth(uv))", "Lava surfaces."),
+        new Part("partWater", "Water", "(mosaicHitMaterial(uv) == 1.0 ? 1.0 : (throughSurface > 0.5 ? step(0.001, mosaicWaterDepth(uv)) : 0.0))",
+            "Water surfaces (throughSurface 1 also finds water the depth does not stop at - slower: a march per pixel)."),
+        new Part("partLava", "Lava", "(mosaicHitMaterial(uv) == 2.0 ? 1.0 : (throughSurface > 0.5 ? step(0.001, mosaicLavaDepth(uv)) : 0.0))",
+            "Lava surfaces (throughSurface 1: a march per pixel, slower)."),
         new Part("partLeaves", "Leaves", "mosaicHitMaterial(uv) == 5.0 ? 1.0 : 0.0", "Leaves of every tree."),
         new Part("partPlants", "Plants and flowers", "mosaicHitMaterial(uv) == 6.0 ? 1.0 : 0.0", "Grass, ferns, flowers, crops, vines, cactus, bamboo."),
         new Part("partStone", "Stone and ore", "mosaicHitMaterial(uv) == 3.0 ? 1.0 : 0.0", "Stone, deepslate, ores, bricks, terracotta."),
@@ -1013,8 +1015,9 @@ public final class MosaicEffects {
 
     static {
         for (Part p : PARTS) {
-            boolean dist = p.mask().contains("maxDistance"), clouds = p.mask().contains("cloudHeight");
-            String extra = (dist ? ", float maxDistance = 48" : "") + (clouds ? ", float cloudHeight = 192.33, float cloudThickness = 4" : "");
+            boolean dist = p.mask().contains("maxDistance"), clouds = p.mask().contains("cloudHeight"), through = p.mask().contains("throughSurface");
+            String extra = (dist ? ", float maxDistance = 48" : "") + (clouds ? ", float cloudHeight = 192.33, float cloudThickness = 4" : "")
+                + (through ? ", float throughSurface = 0" : "");
             add("Minecraft parts", "vec4 " + p.name() + "(vec4 color, vec2 uv, vec4 look = vec4(0.0, 0.0, 0.0, 1.0), float lookAmount = 0, vec3 tint = vec3(1.0, 1.0, 1.0),"
                     + " float brightness = 1, float saturation = 1, float contrast = 1, float contrastPivot = 0.5, float strength = 1" + extra + ")",
                 p.label(), p.help() + " Wire your shader for this part into look and set lookAmount to 1, or adjust it with tint,"

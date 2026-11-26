@@ -932,9 +932,15 @@ public final class MosaicCodegen {
 
     /** Per-pixel world reads (need the depth guide as well). Sky: material -1, sky light 1, block light 0. */
     private static final String GLSL_WORLD_VIEW = """
+            // the material under a pixel, remembered for the last uv asked (chains of part nodes ask for the same pixel)
+            vec2 mosaic_hm_uv = vec2(-1.0);
+            float mosaic_hm = 0.0;
             float mosaicHitMaterial(vec2 uv) {
+                if (uv == mosaic_hm_uv) return mosaic_hm;
                 float t = mosaicDepth(uv);
-                return t >= 1.0e5 ? -1.0 : mosaicMaterialAt(mosaicEye() + mosaicViewDir(uv) * (t + ms_hitOffset));
+                mosaic_hm = t >= 1.0e5 ? -1.0 : mosaicMaterialAt(mosaicEye() + mosaicViewDir(uv) * (t + ms_hitOffset));
+                mosaic_hm_uv = uv;
+                return mosaic_hm;
             }
             float mosaicHitSkyLight(vec2 uv) {
                 float t = mosaicDepth(uv);
@@ -1026,10 +1032,16 @@ public final class MosaicCodegen {
             """;
 
     private static final String SLANG_WORLD_VIEW = """
+            // the material under a pixel, remembered for the last uv asked (chains of part nodes ask for the same pixel)
+            static float2 mosaic_hm_uv = float2(-1.0, -1.0);
+            static float mosaic_hm = 0.0;
             float mosaicHitMaterial(float2 uv)
             {
+                if (all(uv == mosaic_hm_uv)) return mosaic_hm;
                 float t = mosaicDepth(uv);
-                return t >= 1.0e5 ? -1.0 : mosaicMaterialAt(mosaicEye() + mosaicViewDir(uv) * (t + ms_hitOffset));
+                mosaic_hm = t >= 1.0e5 ? -1.0 : mosaicMaterialAt(mosaicEye() + mosaicViewDir(uv) * (t + ms_hitOffset));
+                mosaic_hm_uv = uv;
+                return mosaic_hm;
             }
             float mosaicHitSkyLight(float2 uv)
             {
