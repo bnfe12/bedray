@@ -105,6 +105,12 @@ public final class AgentCli {
           mosaic mute <graph.json> <id> [true|false]
           mosaic arrange <graph.json>
           mosaic bake <material.mosaic.json> <texture.png> <out-folder>   LabPBR _s / _n (+ colour)
+        Rendering and Bedray hooks (for people and agents)
+          mosaic render <graph.json> <out.png> [--time ticks] [--pitch deg] [--yaw deg] [--size WxH] [--frames N] [--world file]
+                                                     the graph over the preview world, headless, to a PNG
+          mosaic hook <function|user.stage> --slang <body.slang>   a Bedray function / your stage from Slang text
+          mosaic hook <function|user.stage> --reset                back to Bedray's own
+                 stages: user.material, user.light, user.skyLight, user.medium (path tracer), user.sky, user.hdr, user.post
         Bedray's pack as nodes
           mosaic pack functions [filter]             every function of the Slang pack (id, signature)
           mosaic pack function <id>                  its body as a graph file (prints the path; edit it with add / connect / set)
@@ -145,6 +151,16 @@ public final class AgentCli {
             }
             case "config" -> {
                 return config(a);
+            }
+            case "render" -> {
+                need(Need.COMPILE);
+                if (a.size() < 3) return usage();
+                return render(Path.of(a.get(1)), Path.of(a.get(2)), a);
+            }
+            case "hook" -> {
+                List<String> p = new ArrayList<>(a);
+                p.add(0, "pack");
+                return pack(p);
             }
             case "types" -> {
                 need(Need.READ);
@@ -404,6 +420,28 @@ public final class AgentCli {
                 say(file.toString());
                 return 0;
             }
+            case "hook" -> {
+                // a Bedray function (or a renderer stage of your own) from Slang text: one Slang block between its
+                // parameters and its ends, saved as the function's graph, then checked inside its module
+                need(Need.GRAPHS);
+                if (a.size() < 3) return usage();
+                String id = StudioModel.USER_STAGES.getOrDefault(a.get(1 + 1), a.get(2));
+                var fn = lib.functions().get(id);
+                if (fn == null) throw new IllegalArgumentException("no function " + id + " (mosaic pack functions; stages: " + StudioModel.USER_STAGES.keySet() + ")");
+                Path file = StudioModel.functionFile(fn.id());
+                if (a.contains("--reset")) {
+                    Files.deleteIfExists(file);
+                    out.println("reset " + fn.id() + " to Bedray's own");
+                    return 0;
+                }
+                int si = a.indexOf("--slang");
+                if (si < 0 || si + 1 >= a.size()) return usage();
+                String body = Files.readString(Path.of(a.get(si + 1)), StandardCharsets.UTF_8);
+                Files.createDirectories(file.getParent());
+                Files.writeString(file, hookGraph(fn, body), StandardCharsets.UTF_8);
+                out.println("wrote " + file);
+                return pack(new ArrayList<>(List.of("pack", "check", fn.id())));
+            }
             case "check" -> {
                 need(Need.COMPILE);
                 if (a.size() < 3) return usage();
@@ -534,5 +572,133 @@ public final class AgentCli {
         } catch (Exception ignored) {
             // logging is a courtesy
         }
+    }
+
+    /** The graph of a function whose body is Slang text: parameters -> one Slang block -> out ends and the return. */
+    static String hookGraph(io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicSlangLib.Function fn, String body) {
+        com.google.gson.JsonArray nodes = new com.google.gson.JsonArray();
+        StringBuilder head = new StringBuilder("//@");
+        JsonObject code = new JsonObject();
+        JsonObject codeIn = new JsonObject();
+        int y = 60;
+        for (var p : fn.params()) {
+            String dir = p.direction().equals("out") ? "out" : p.direction().equals("inout") ? "inout" : "in";
+            if (!dir.equals("out")) {
+                JsonObject n = new JsonObject();
+                n.addProperty("id", "p_" + p.name());
+                n.addProperty("type", "slang.param");
+                n.addProperty("mask", p.type() + " " + p.name());
+                n.addProperty("x", 40);
+                n.addProperty("y", y);
+                nodes.add(n);
+                codeIn.addProperty(p.name(), "p_" + p.name());
+                y += 90;
+            }
+            head.append(' ').append(dir.equals("out") ? "inout" : dir).append(' ').append(p.type()).append(' ').append(p.name()).append(';');
+        }
+        String ret = fn.isVoid() ? "void" : fn.returnType();
+        head.append(" ret ").append(ret);
+        code.addProperty("id", "code");
+        code.addProperty("type", "slang.code");
+        code.addProperty("mask", head + "\n" + body.strip());
+        code.add("inputs", codeIn);
+        code.addProperty("x", 320);
+        code.addProperty("y", 60);
+        nodes.add(code);
+        y = 60;
+        for (var p : fn.params()) {
+            if (p.direction().equals("in")) continue;
+            JsonObject o = new JsonObject();
+            o.addProperty("id", "o_" + p.name());
+            o.addProperty("type", "slang.out");
+            o.addProperty("mask", p.type() + " " + p.name());
+            JsonObject in = new JsonObject();
+            in.addProperty("value", "code." + p.name());
+            o.add("inputs", in);
+            o.addProperty("x", 640);
+            o.addProperty("y", y);
+            nodes.add(o);
+            y += 90;
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("id", "result");
+        r.addProperty("type", "slang.result");
+        r.addProperty("mask", ret);
+        if (!fn.isVoid()) {
+            JsonObject in = new JsonObject();
+            in.addProperty("value", "code");
+            r.add("inputs", in);
+        }
+        r.addProperty("x", 640);
+        r.addProperty("y", y);
+        nodes.add(r);
+        JsonObject root = new JsonObject();
+        root.add("nodes", nodes);
+        root.addProperty("function", fn.id());
+        return GSON.toJson(root);
+    }
+
+    /**
+     * Renders a graph headlessly over the preview world (the game's capture, or a file given with --world, or the built-in
+     * landscape) and writes the last frame as a PNG: --time ticks, --pitch / --yaw degrees, --size WxH, --frames N (for
+     * Accumulate and TAA to settle). Uses the studio's GPU preview: same passes, voxel rays instead of hardware ones.
+     */
+    private int render(Path graphFile, Path png, List<String> a) throws Exception {
+        MosaicGraph g = MosaicGraph.parse(Files.readString(graphFile, StandardCharsets.UTF_8));
+        String size = opt(a, "--size", settings.previewWidth + "x" + settings.previewHeight);
+        int frames = Integer.parseInt(opt(a, "--frames", "24"));
+        List<GpuPreview.PassRun> runs = new ArrayList<>();
+        var plan = g.multiPass() ? io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicPasses.plan(g) : null;
+        List<String> jsons = new ArrayList<>();
+        if (plan != null) for (var p : plan.all()) jsons.add(p.json());
+        else jsons.add(Files.readString(graphFile, StandardCharsets.UTF_8));
+        for (int i = 0; i < jsons.size(); i++) {
+            MosaicShaderCheck.Result r = MosaicShaderCheck.compile(MosaicCodegen.generate(MosaicGraph.parse(jsons.get(i)), MosaicCodegen.Options.PREVIEW, false));
+            if (!r.ok()) throw new IllegalArgumentException("pass " + i + " does not compile: " + r.errors());
+            if (plan == null) runs.add(new GpuPreview.PassRun(r.spirv(), 1, -1));
+            else {
+                var p = plan.all().get(i);
+                runs.add(new GpuPreview.PassRun(r.spirv(), p.scale(), p.name() == null ? -1 : plan.bindings().get(p.name()), plan.after().contains(p)));
+            }
+        }
+        StudioUi.settings = settings;
+        String worldFile = opt(a, "--world", null);
+        var snap = worldFile != null
+            ? io.github.andrexarlay.vulkancompat.shaderhost.mosaic.MosaicWorld.Snapshot.read(Files.readAllBytes(Path.of(worldFile)))
+            : PreviewWorld.load(gameDirOf(graphFile));
+        if (snap == null) throw new IllegalArgumentException("not a preview world file: " + worldFile);
+        PreviewWorld.View view = PreviewWorld.View.of(snap);
+        String time = opt(a, "--time", null), pitch = opt(a, "--pitch", null), yaw = opt(a, "--yaw", null);
+        if (time != null) view = view.at((float) (Math.floorMod(Integer.parseInt(time) - 6000, 24000) / 24000.0));
+        if (pitch != null) view = view.look(0f, Float.parseFloat(pitch) - view.pitch());
+        if (yaw != null) view = view.look(Float.parseFloat(yaw) - view.yaw(), 0f);
+        view = view.with(g.settings(), settings.previewLook);
+        String[] wh = size.toLowerCase(Locale.ROOT).split("x");
+        try (GpuPreview gpu = GpuPreview.create()) {
+            gpu.worldWidth = Integer.parseInt(wh[0].trim());
+            gpu.worldHeight = Integer.parseInt(wh[1].trim());
+            java.awt.image.BufferedImage img = null;
+            long t0 = System.nanoTime();
+            for (int f = 0; f < Math.max(1, frames); f++) img = gpu.runChain(runs, null, f / 30f, f, null, view);
+            long ms = (System.nanoTime() - t0) / 1_000_000 / Math.max(1, frames);
+            if (png.getParent() != null) Files.createDirectories(png.getParent());
+            ImageIO.write(img, "png", png.toFile());
+            out.println("rendered " + png + "  " + gpu.worldWidth + "x" + gpu.worldHeight + ", " + runs.size() + " passes, " + frames
+                + " frames, " + ms + " ms/frame on " + gpu.deviceName + (PreviewWorld.fromGame(snap) ? ", world from the game" : ", built-in world"));
+        }
+        return 0;
+    }
+
+    /** The game folder a graph lives in (the folder above shaderpacks/), or the one in the settings. */
+    private Path gameDirOf(Path graphFile) {
+        if (settings.gameDir != null && !settings.gameDir.isBlank() && Files.isDirectory(Path.of(settings.gameDir))) return Path.of(settings.gameDir);
+        for (Path p = graphFile.toAbsolutePath(); p != null; p = p.getParent())
+            if (p.getFileName() != null && p.getFileName().toString().equals("shaderpacks") && p.getParent() != null) return p.getParent();
+        return null;
+    }
+
+    private static String opt(List<String> a, String name, String def) {
+        int i = a.indexOf(name);
+        return i >= 0 && i + 1 < a.size() ? a.get(i + 1) : def;
     }
 }

@@ -103,6 +103,10 @@ fast variant uses sky ambient instead. Every node is an ordinary node: open its 
 
 ## AI agents
 
+See [MOSAIC_RENDER_HOOKS.md](MOSAIC_RENDER_HOOKS.md) for the path tracer stages and the agent loop (`mosaic hook`,
+`mosaic render`, `mosaic pack apply`).
+
+
 An AI agent (or you, in a terminal) can do everything through the `mosaic` command: list node types, read a graph,
 add / connect / set / mute / delete nodes, arrange, compile with errors on nodes, bake materials and change the
 studio's design. `--json` gives machine-readable output.

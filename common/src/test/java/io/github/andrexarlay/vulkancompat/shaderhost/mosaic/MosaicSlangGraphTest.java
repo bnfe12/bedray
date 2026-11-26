@@ -89,10 +89,15 @@ class MosaicSlangGraphTest {
     }
 
     @Test
-    void yourMaterialStageIsAGraphOfThePathTracersMaterialHook() {
+    void everyPathTracerStageIsAGraphThatCompiles() {
+        for (String id : java.util.List.of("pathtrace/path_tracer/lightStudio", "pathtrace/path_tracer/skyLightStudio",
+                "pathtrace/path_tracer/mediumStudio", "pathtrace/path_tracer/materialStudio")) yourStageCompiles(id);
+    }
+
+    private void yourStageCompiles(String id) {
         MosaicSlangLib.Library lib = lib();
-        MosaicSlangLib.Function hook = lib.functions().get("pathtrace/path_tracer/materialStudio");
-        assertNotNull(hook, "the path tracer has the material hook");
+        MosaicSlangLib.Function hook = lib.functions().get(id);
+        assertNotNull(hook, "the path tracer has the hook " + id);
         MosaicSlangDecompile.Result r = MosaicSlangDecompile.decompile(hook, lib);
         assertTrue(r.whole(), r.json());
         MosaicGraph.Analysis a = MosaicGraph.analyze(r.json());

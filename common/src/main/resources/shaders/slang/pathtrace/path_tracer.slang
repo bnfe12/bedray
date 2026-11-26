@@ -190,6 +190,25 @@ void materialStudio(inout float3 albedo, inout float roughness, inout float meta
                     float3 worldPosition, float3 normal, float materialId) {
 }
 
+// Mosaic Studio's light stage ("Your light (path tracer)"): every direct-light sample a path vertex takes - the sun, the
+// moon and block emitters - passes its radiance through here: tint the sun by the hour, weaken the moon, colour torches.
+// lightKind: 0 block emitter, 1 sun, 2 moon; direction points toward the light. Identity in Bedray's own build.
+void lightStudio(inout float3 radiance, float3 direction, float3 worldPosition, float lightKind) {
+}
+
+// Mosaic Studio's sky light stage ("Your sky light (path tracer)"): the sky radiance a path collects when it escapes -
+// the light the sky gives to every bounce (and, at bounce 0, the sky the camera sees). Identity in Bedray's own build.
+void skyLightStudio(inout float3 radiance, float3 direction, float bounce) {
+}
+
+// Mosaic Studio's medium stage ("Your medium (path tracer)"): every segment a path flies, in air and in water, adds
+// inScatter (light scattered toward the path, before the segment's transmittance) and multiplies the path by
+// transmittance: fog, haze, coloured water inside the light transport. start and direction are camera-relative,
+// segmentLength in blocks, inWater 1 under water. Identity in Bedray's own build (no scattering, full transmittance).
+void mediumStudio(inout float3 inScatter, inout float3 transmittance, float3 start, float3 direction, float segmentLength,
+                  float inWater) {
+}
+
 // The emitter decision of a first vertex, made on the decoded material - the twin of ptTerminalEmits in
 // experimental/restir_pt.slang.  HIT_FLAG_EMISSIVE is a backend hint the hardware traversal never sets.
 bool ptTerminalEmitsMaterial(MaterialSample material) {
@@ -537,7 +556,12 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
         return zero;
     }
     float3 estimator = leafBack > 0.0 ? leafTerm : bsdf;
-    return estimator * light.radiance * transmittance * beamWeight / max(light.sourcePdf, 1.0e-6);
+    float3 lightRadiance = light.radiance;
+    // Mosaic Studio's light stage (identity unless one is applied); kept non-negative
+    lightStudio(lightRadiance, arrival, surface.hit.worldPosition,
+        light.kind == LightKind.Sun ? 1.0 : (light.kind == LightKind.Moon ? 2.0 : 0.0));
+    lightRadiance = max(lightRadiance, float3(0.0));
+    return estimator * lightRadiance * transmittance * beamWeight / max(light.sourcePdf, 1.0e-6);
 }
 
 // How far up, and past how many blockers, the search for the surface of the
@@ -694,6 +718,15 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             // A ray inside the body that finds no surface still crossed water:
             // the tail is absorbed like every other segment (the legacy bound
             // of 48 blocks keeps an open ray from going black at the far plane).
+            {
+                // Mosaic Studio's medium stage over the open segment (identity unless one is applied)
+                float3 studioIn = float3(0.0), studioT = float3(1.0);
+                float openTail = clamp(ray.tMax - mediumStart, 0.0, 1024.0);
+                mediumStudio(studioIn, studioT, ray.origin + ray.direction * mediumStart, ray.direction, openTail,
+                    medium.inside ? 1.0 : 0.0);
+                result.radiance += throughput * max(studioIn, float3(0.0));
+                throughput *= clamp(studioT, float3(0.0), float3(1.0));
+            }
             if (medium.inside) {
                 float tail = clamp(ray.tMax - mediumStart, 0.0, 48.0);
                 float3 tailMidpoint = ray.origin + ray.direction * (mediumStart + tail * 0.5);
@@ -726,6 +759,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             }
             float3 sky = bodiesVisible ? environment.radiance(escape)
                 : glossyEscape ? environment.viewRadiance(escape) : environment.skyRadiance(escape);
+            skyLightStudio(sky, escape, float(result.surfaceHits)); // Mosaic Studio's sky light stage (identity unless applied)
+            sky = max(sky, float3(0.0));
             result.radiance += throughput * escapeWeight * sky;
             result.flags |= PATH_TRACE_FLAG_ENVIRONMENT;
             break;
@@ -739,6 +774,15 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         // Distance absorption of the segment that ends on this candidate.  The
         // in-scattered light is added at the throughput the segment started
         // with; the transmitted part continues through the extinction.
+        {
+            // Mosaic Studio's medium stage over this segment (identity unless one is applied)
+            float3 studioIn = float3(0.0), studioT = float3(1.0);
+            float studioSegment = max(hit.t - mediumStart, 0.0);
+            mediumStudio(studioIn, studioT, ray.origin + ray.direction * mediumStart, ray.direction, studioSegment,
+                medium.inside ? 1.0 : 0.0);
+            result.radiance += throughput * max(studioIn, float3(0.0));
+            throughput *= clamp(studioT, float3(0.0), float3(1.0));
+        }
         if (medium.inside) {
             float segment = max(hit.t - mediumStart, 0.0);
             float3 midpoint = ray.origin + ray.direction * (mediumStart + segment * 0.5);
