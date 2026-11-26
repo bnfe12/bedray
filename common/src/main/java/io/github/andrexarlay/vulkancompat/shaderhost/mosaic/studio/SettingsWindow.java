@@ -385,6 +385,8 @@ final class SettingsWindow extends Dock.StudioWindow {
             changed();
         }));
         f.row("Projects folder", "Where new projects go when the game folder is unknown (empty: ~/.bedray/projects)", pdir);
+        f.row("Studio memory", "Most memory the Studio the game opens (J) may take; the game runs beside it (applies next start)",
+            slider(384, 4096, draft.studioMemoryMb, v -> draft.studioMemoryMb = v, v -> v + " MB"));
         f.section("Compiling");
         f.row("Compile after an edit (ms)", "Pause after the last change before the graph is compiled, saved and sent to the game",
             slider(100, 3000, draft.compileDelayMs, v -> draft.compileDelayMs = v));

@@ -112,7 +112,15 @@ public final class StudioLauncher {
         for (String e : gameClasspath.split(File.pathSeparator)) if (!e.isBlank()) cp.add(e);
         List<String> out = new ArrayList<>();
         out.add("--enable-native-access=ALL-UNNAMED");
-        out.add("-Xmx2g");
+        // memory: Settings > Editor > Studio memory (the game runs beside it, so the default stays modest)
+        int mb = 1024;
+        try {
+            mb = io.github.andrexarlay.vulkancompat.shaderhost.mosaic.studio.StudioSettings.load().studioMemoryMb;
+        } catch (RuntimeException | LinkageError ignored) {
+            // the default
+        }
+        out.add("-Xmx" + mb + "m");
+        out.add("-XX:+UseSerialGC"); // the smallest collector footprint: Studio is an editor, not a server
         if (hostWindow != 0) out.add("-Dmosaic.embed.hwnd=" + hostWindow);
         if (libraryPath != null && !libraryPath.isBlank()) out.add("-Djava.library.path=" + libraryPath);
         if (lwjglPath != null && !lwjglPath.isBlank()) out.add("-Dorg.lwjgl.librarypath=" + lwjglPath);

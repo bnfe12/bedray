@@ -217,6 +217,9 @@ public final class StudioSettings {
     /** Saved preview cameras: name -> x, y, z, yaw, pitch, time of day (0 noon). Keys 1..9 recall them. */
     public java.util.Map<String, double[]> previewViews = new java.util.LinkedHashMap<>();
 
+    /** Heap of the Studio process the game starts (J), in MB: the game runs beside it. */
+    public int studioMemoryMb = 1024;     // 384..8192
+
     /** The start screen (projects) when Studio starts without a file. */
     public boolean showStartScreen = true;
     /** Where new projects go when the game folder is unknown (empty: ~/.bedray/projects). */
@@ -320,6 +323,7 @@ public final class StudioSettings {
         if (previewViews == null) previewViews = new java.util.LinkedHashMap<>();
         if (previewWorld == null) previewWorld = "";
         if (projectsDir == null) projectsDir = "";
+        studioMemoryMb = Math.clamp(studioMemoryMb, 384, 8192);
         if (projectAuthor == null) projectAuthor = "";
         previewFarSize = Math.clamp(previewFarSize, 0, 1024);
         previewBiomeTemperature = Math.clamp(previewBiomeTemperature, -1.0, 2.0);

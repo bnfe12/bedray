@@ -222,6 +222,7 @@ final class SaveWorld {
                         if (gs[k] < hs[k] && c.block(x, gs[k], z).replaceAll("\\[.*$", "").matches(".*(_log|_stem|_wood|_hyphae)$")) ms[k] |= (byte) 0x80;
                         else if (gs[k] < hs[k] && classify(c.block(x, gs[k], z)) == Material.WOOD) ms[k] |= (byte) 0x80;
                     }
+                r.forget(cx, cz);
             }
         return new MosaicWorld.Far(fs, fox, foz, hs, ms, gs);
     }
@@ -470,6 +471,9 @@ final class SaveWorld {
                 return null;
             }
         }
+
+        /** Lets a chunk go once it has been read (big worlds stay within a small heap). */
+        void forget(int cx, int cz) { chunks.remove(((long) cx << 32) ^ (cz & 0xFFFFFFFFL)); }
 
         Chunk chunk(int cx, int cz) throws IOException {
             long key = ((long) cx << 32) ^ (cz & 0xFFFFFFFFL);
