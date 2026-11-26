@@ -178,6 +178,8 @@ public final class StudioSettings {
     public boolean fitOnOpen = true;
     /** Hints and second lines (what a Scene row does, how to use a panel); off keeps the studio quiet - tooltips still tell. */
     public boolean showHints = false;
+    /** Hover lifts, fades, page transitions and the Peek windows ease in; off: everything instant. */
+    public boolean animations = true;
     /** Area header buttons (split, maximize, pop out, close) only on the area under the pointer. */
     public boolean hoverAreaButtons = true;
     /** Status bar and preview footer in full (node counts, folding, GPU per pass) or short. */

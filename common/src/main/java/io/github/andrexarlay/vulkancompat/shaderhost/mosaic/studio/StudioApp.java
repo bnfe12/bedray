@@ -210,6 +210,23 @@ final class StudioApp {
                 if (ps != null) ss.setSize(Integer.parseInt(ps.split("x")[0]), Integer.parseInt(ps.split("x")[1]));
                 ss.setVisible(true);
                 if (shotStart.equals("settings")) ss.openSettings();
+                if (shotStart.equals("peek")) { // hover the first card: its Peek window
+                    Timer pk = new Timer(1500, e2 -> {
+                        java.util.List<Component> all = new java.util.ArrayList<>();
+                        java.util.ArrayDeque<Component> q = new java.util.ArrayDeque<>(java.util.List.of(ss.getContentPane()));
+                        while (!q.isEmpty()) {
+                            Component c = q.poll();
+                            if (c instanceof StartScreen.Card && c.isShowing()) all.add(c);
+                            if (c instanceof Container ct) q.addAll(java.util.List.of(ct.getComponents()));
+                        }
+                        if (!all.isEmpty()) {
+                            Component c = all.get(Math.min(all.size() - 1, Integer.getInteger("mosaic.selfshot.peekIndex", 0)));
+                            for (var l : c.getMouseListeners()) l.mouseEntered(new java.awt.event.MouseEvent(c, java.awt.event.MouseEvent.MOUSE_ENTERED, 0, 0, 10, 10, 0, false));
+                        }
+                    });
+                    pk.setRepeats(false);
+                    pk.start();
+                }
             });
             st.setRepeats(false);
             st.start();
@@ -254,7 +271,7 @@ final class StudioApp {
                     }
                     int on = 0;
                     for (Window ow : Window.getWindows()) // the start screen and settings opened from it
-                        if (ow.isShowing() && (ow instanceof StartScreen || (ow instanceof SettingsWindow sw && sw != settingsWindow))) {
+                        if (ow.isShowing() && (ow instanceof StartScreen || ow instanceof JWindow || (ow instanceof SettingsWindow sw && sw != settingsWindow))) {
                             java.awt.image.BufferedImage oi = new java.awt.image.BufferedImage(ow.getWidth(), ow.getHeight(), java.awt.image.BufferedImage.TYPE_INT_RGB);
                             java.awt.Graphics2D og = oi.createGraphics();
                             ow.paint(og);

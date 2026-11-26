@@ -338,6 +338,7 @@ final class SettingsWindow extends Dock.StudioWindow {
         f.row("Accent", "Selection, focus and highlights", combo(StudioSettings.Accent.values(), draft.accent, v -> draft.accent = v));
         f.row("Window buttons", "Mosaic set on the right or traffic lights on the left", combo(StudioSettings.WindowButtons.values(), draft.windowButtons, v -> draft.windowButtons = v));
         f.row("Text size", "Scales every font of the studio", slider(80, 160, draft.fontPercent, v -> draft.fontPercent = v));
+        f.wide(check("Animations: hover lifts, fades, page transitions, Peek windows", draft.animations, v -> draft.animations = v));
         String[] scales = {"System", "75 %", "90 %", "100 %", "110 %", "125 %", "150 %", "175 %", "200 %"};
         String curScale = draft.uiScale == 0 ? "System" : draft.uiScale + " %";
         f.row("Interface scale", "Every window, icon and gap bigger or smaller (System: the Windows display scale); applies next start",

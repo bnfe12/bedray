@@ -925,6 +925,193 @@ final class StudioWidgets {
         }
     }
 
+    /** Settings > Look > Animations: off makes every transition instant. */
+    static boolean animations() { return StudioUi.settings == null || StudioUi.settings.animations; }
+
+    /**
+     * A number that eases toward its target on a shared 60 fps timer, repainting its component: hover lifts, colour fades,
+     * page fades. Instant when animations are off.
+     */
+    static final class Anim {
+        private static final java.util.List<Anim> RUNNING = new java.util.ArrayList<>();
+        private static javax.swing.Timer timer;
+        private java.lang.ref.WeakReference<Component> owner;
+
+        void owner(Component c) { owner = new java.lang.ref.WeakReference<>(c); }
+        private final float speed;
+        float value, target;
+
+        Anim(Component owner, float start, float speed) {
+            this.owner = new java.lang.ref.WeakReference<>(owner);
+            this.value = this.target = start;
+            this.speed = speed;
+        }
+
+        Anim(Component owner) { this(owner, 0f, 0.22f); }
+
+        float get() { return value; }
+
+        void to(float t) {
+            target = t;
+            if (!animations()) {
+                value = t;
+                Component c = owner.get();
+                if (c != null) c.repaint();
+                return;
+            }
+            if (!RUNNING.contains(this)) RUNNING.add(this);
+            if (timer == null) {
+                timer = new javax.swing.Timer(16, e -> tick());
+                timer.setCoalesce(true);
+            }
+            if (!timer.isRunning()) timer.start();
+        }
+
+        private static void tick() {
+            for (java.util.Iterator<Anim> it = RUNNING.iterator(); it.hasNext(); ) {
+                Anim a = it.next();
+                Component c = a.owner.get();
+                a.value += (a.target - a.value) * a.speed;
+                if (Math.abs(a.target - a.value) < 0.004f) a.value = a.target;
+                if (c != null) c.repaint();
+                if (c == null || a.value == a.target) it.remove();
+            }
+            if (RUNNING.isEmpty() && timer != null) timer.stop();
+        }
+    }
+
+    /**
+     * Peek: after a short hover, a window beside the item fades in with its big picture, full description and details;
+     * it follows the screen edge (left or right of the item) and goes away when the pointer leaves.
+     */
+    static final class Peek {
+        private static JWindow window;
+        private static javax.swing.Timer delay, fade;
+        private static Component anchor;
+
+        static void later(Component on, Rectangle area, java.util.function.Supplier<java.awt.image.BufferedImage> picture, String title, String text,
+                          java.util.List<String> chips, String foot) {
+            hide();
+            anchor = on;
+            delay = new javax.swing.Timer(animations() ? 420 : 250, e -> open(on, area, picture.get(), title, text, chips, foot));
+            delay.setRepeats(false);
+            delay.start();
+        }
+
+        static void hide() {
+            if (delay != null) delay.stop();
+            if (fade != null) fade.stop();
+            if (window != null) window.dispose();
+            window = null;
+            anchor = null;
+        }
+
+        private static void open(Component on, Rectangle area, java.awt.image.BufferedImage img, String title, String text, java.util.List<String> chips, String foot) {
+            if (!on.isShowing() || anchor != on) return;
+            Window owner = SwingUtilities.getWindowAncestor(on);
+            JWindow w = new JWindow(owner);
+            int pw = 380, ph = img == null ? 0 : 214;
+            JComponent body = new JComponent() {
+                @Override protected void paintComponent(Graphics g0) {
+                    Graphics2D g = smooth(g0);
+                    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                    int W = getWidth(), H = getHeight();
+                    Shape r = new java.awt.geom.RoundRectangle2D.Double(0, 0, W - 1, H - 1, 16, 16);
+                    g.setColor(StudioUi.PANEL);
+                    g.fill(r);
+                    Shape clip = g.getClip();
+                    g.clip(r);
+                    if (img != null) {
+                        double k = Math.max(pw / (double) img.getWidth(), ph / (double) img.getHeight());
+                        int iw = (int) Math.ceil(img.getWidth() * k), ih = (int) Math.ceil(img.getHeight() * k);
+                        g.drawImage(img, (pw - iw) / 2, (ph - ih) / 2, iw, ih, null);
+                    }
+                    g.setClip(clip);
+                    g.setColor(StudioUi.SELECT);
+                    g.draw(r);
+                    g.dispose();
+                }
+            };
+            body.setLayout(new BorderLayout());
+            JPanel txt = new JPanel();
+            txt.setOpaque(false);
+            txt.setLayout(new BoxLayout(txt, BoxLayout.Y_AXIS));
+            txt.setBorder(new javax.swing.border.EmptyBorder(ph + 14, 16, 14, 16));
+            JLabel t = new JLabel(title);
+            t.setAlignmentX(0);
+            t.setFont(StudioUi.UI_B.deriveFont(StudioUi.UI_B.getSize2D() + 3));
+            t.setForeground(StudioUi.TEXT);
+            txt.add(t);
+            txt.add(Box.createVerticalStrut(6));
+            txt.add(wrapped(text, pw - 32, StudioUi.MUTED));
+            if (chips != null && !chips.isEmpty()) {
+                txt.add(Box.createVerticalStrut(8));
+                JLabel c = new JLabel(String.join("   ·   ", chips.stream().filter(s -> !s.isBlank()).toList()));
+                c.setAlignmentX(0);
+                c.setFont(StudioUi.UI_S);
+                c.setForeground(StudioUi.SELECT);
+                txt.add(c);
+            }
+            if (foot != null && !foot.isBlank()) {
+                txt.add(Box.createVerticalStrut(6));
+                txt.add(wrapped(foot, pw - 32, StudioUi.FAINT));
+            }
+            body.add(txt, BorderLayout.CENTER);
+            w.setContentPane(body);
+            w.setBackground(new Color(0, 0, 0, 0));
+            Dimension pref = txt.getPreferredSize();
+            w.setSize(pw, Math.max(ph + 60, pref.height));
+            // beside the item: right if there is room, else left; kept on the screen
+            Point p = new Point(area.x, area.y);
+            SwingUtilities.convertPointToScreen(p, on);
+            Rectangle scr = on.getGraphicsConfiguration().getBounds();
+            int x = p.x + area.width + 12;
+            if (x + w.getWidth() > scr.x + scr.width - 8) x = p.x - w.getWidth() - 12;
+            int y = Math.max(scr.y + 8, Math.min(p.y, scr.y + scr.height - w.getHeight() - 8));
+            int finalX = x;
+            boolean slideRight = x > p.x;
+            window = w;
+            if (!animations()) {
+                w.setLocation(x, y);
+                w.setVisible(true);
+                return;
+            }
+            try { w.setOpacity(0f); } catch (Exception ignored) { }
+            w.setLocation(x + (slideRight ? -10 : 10), y);
+            w.setVisible(true);
+            long t0 = System.nanoTime();
+            fade = new javax.swing.Timer(16, e -> {
+                float k = Math.min(1f, (System.nanoTime() - t0) / 1.6e8f);
+                float ease = 1f - (1f - k) * (1f - k) * (1f - k);
+                try { w.setOpacity(ease); } catch (Exception ignored) { }
+                w.setLocation(finalX + Math.round((slideRight ? -10 : 10) * (1f - ease)), y);
+                if (k >= 1f) ((javax.swing.Timer) e.getSource()).stop();
+            });
+            fade.start();
+        }
+
+        /** Text wrapped to a width (a text area measured at that width: no HTML guessing). */
+        private static JComponent wrapped(String s, int width, Color c) {
+            JTextArea a = new JTextArea(s == null ? "" : s);
+            a.setLineWrap(true);
+            a.setWrapStyleWord(true);
+            a.setEditable(false);
+            a.setFocusable(false);
+            a.setOpaque(false);
+            a.setFont(StudioUi.UI_S);
+            a.setForeground(c);
+            a.setBorder(null);
+            a.setSize(width, Short.MAX_VALUE);
+            Dimension d = new Dimension(width, a.getPreferredSize().height);
+            a.setPreferredSize(d);
+            a.setMaximumSize(d);
+            a.setAlignmentX(0);
+            return a;
+        }
+
+        private static String esc(String s) { return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br>"); }
+    }
+
     static void fitToScreen(JPopupMenu m, Component invoker) {
         GraphicsConfiguration gc = invoker == null ? null : invoker.getGraphicsConfiguration();
         Rectangle screen = gc == null ? GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds() : gc.getBounds();

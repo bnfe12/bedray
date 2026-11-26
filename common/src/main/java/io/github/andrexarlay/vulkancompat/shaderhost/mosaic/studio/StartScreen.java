@@ -35,7 +35,19 @@ final class StartScreen extends JFrame {
     private boolean done;
     private List<ProjectInfo> projects = List.of();
     private final CardLayout pages = new CardLayout();
-    private final JPanel content = new JPanel(pages);
+    /** Pages fade and slide in (Settings > Look > Animations). */
+    private final StudioWidgets.Anim pageIn = new StudioWidgets.Anim(null, 1f, 0.2f);
+    private final JPanel content = new JPanel(pages) {
+        @Override public void paint(Graphics g0) {
+            float v = pageIn.get();
+            if (v >= 0.999f) { super.paint(g0); return; }
+            Graphics2D g = (Graphics2D) g0.create();
+            g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, Math.max(0f, v)));
+            g.translate(0, Math.round((1f - v) * 14));
+            super.paint(g);
+            g.dispose();
+        }
+    };
     private final Map<String, Nav> navs = new LinkedHashMap<>();
     private final JPanel homeRecent = grid(), projectsGrid = grid();
     private final JPanel templatesBox = new JPanel();
@@ -115,7 +127,11 @@ final class StartScreen extends JFrame {
     }
 
     void show(String name) {
+        StudioWidgets.Peek.hide();
         pages.show(content, name);
+        pageIn.owner(content);
+        pageIn.value = 0f;
+        pageIn.to(1f);
         navs.forEach((k, n) -> n.setSelected(k.equals(name)));
     }
 
@@ -293,7 +309,7 @@ final class StartScreen extends JFrame {
         JPanel actions = new JPanel(new GridLayout(1, count, 14, 0)) {
             @Override public void doLayout() {
                 GridLayout gl = (GridLayout) getLayout();
-                int cols = Math.clamp((getWidth() - 16 + 14) / (170 + 14), 1, count);
+                int cols = Math.clamp((getWidth() - 16 + 14) / (156 + 14), 1, count);
                 if (gl.getColumns() != cols) {
                     gl.setColumns(cols);
                     gl.setRows(0);
@@ -478,6 +494,7 @@ final class StartScreen extends JFrame {
         if (!p.version.isBlank()) chips.add("v" + p.version);
         chips.add(ago(ProjectInfo.mtime(ProjectInfo.graphOf(p.dir))));
         Card c = new Card(p.name, p.description.isBlank() ? "No description yet" : p.description, chips, p.description.isBlank());
+        c.foot = (p.author.isBlank() ? "" : "By " + p.author + "   ·   ") + (p.license.isBlank() ? "" : ProjectGit.spdx(p.license) + "   ·   ") + p.dir;
         BufferedImage pic = null;
         try {
             Path f = p.picture();
@@ -501,6 +518,7 @@ final class StartScreen extends JFrame {
 
     private Card templateCard(MosaicTemplates.Template t) {
         Card c = new Card(t.name(), t.description(), List.of(t.category()), false);
+        c.foot = "Template - click to make a project from it";
         c.image = GraphThumbs.get(t.json(), () -> {
             c.image = GraphThumbs.get(t.json(), null);
             c.repaint();
@@ -545,6 +563,9 @@ final class StartScreen extends JFrame {
         Runnable onOpen;
         java.util.function.Supplier<JPopupMenu> menu;
         boolean hover, hoverDots;
+        /** The line under the description in the Peek window (folder, template category...). */
+        String foot;
+        final StudioWidgets.Anim lift = new StudioWidgets.Anim(this);
 
         Card(String title, String text, List<String> chips, boolean faintText) {
             this.title = title;
@@ -554,8 +575,18 @@ final class StartScreen extends JFrame {
             setPreferredSize(new Dimension(CW + 12, CH + 104));
             setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
             MouseAdapter m = new MouseAdapter() {
-                @Override public void mouseEntered(MouseEvent e) { hover = true; repaint(); }
-                @Override public void mouseExited(MouseEvent e) { hover = hoverDots = false; repaint(); }
+                @Override public void mouseEntered(MouseEvent e) {
+                    hover = true;
+                    lift.to(1f);
+                    StudioWidgets.Peek.later(Card.this, new Rectangle(6, 6, CW, CH + 92), () -> image, title, text, chips, foot);
+                }
+                @Override public void mouseExited(MouseEvent e) {
+                    hover = hoverDots = false;
+                    lift.to(0f);
+                    StudioWidgets.Peek.hide();
+                }
+                @Override public void mousePressed(MouseEvent e) { lift.to(0.4f); StudioWidgets.Peek.hide(); }
+                @Override public void mouseReleased(MouseEvent e) { lift.to(hover ? 1f : 0f); }
                 @Override public void mouseMoved(MouseEvent e) {
                     boolean d = dots().contains(e.getPoint());
                     if (d != hoverDots) {
@@ -580,14 +611,15 @@ final class StartScreen extends JFrame {
         @Override protected void paintComponent(Graphics g0) {
             Graphics2D g = StudioWidgets.smooth(g0);
             g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-            int x = 6, y = hover ? 3 : 6, w = CW, h = CH + 92;
-            // shadow
+            float l = lift.get();
+            int x = 6, y = Math.round(6 - 4 * l), w = CW, h = CH + 92;
+            // shadow: deeper as the card lifts
             for (int i = 0; i < 6; i++) {
-                g.setColor(new Color(0, 0, 0, hover ? 14 : 8));
+                g.setColor(new Color(0, 0, 0, Math.round(8 + 8 * l)));
                 g.fill(new RoundRectangle2D.Double(x - i + 1, y - i + 4, w + i * 2 - 2, h + i * 2 - 2, 18 + i, 18 + i));
             }
             Shape card = new RoundRectangle2D.Double(x, y, w, h, 16, 16);
-            g.setColor(hover ? StudioWidgets.mix(PANEL, SELECT, 0.06) : PANEL);
+            g.setColor(StudioWidgets.mix(PANEL, SELECT, 0.07 * l));
             g.fill(card);
             // picture
             Shape clip = g.getClip();
@@ -601,8 +633,8 @@ final class StartScreen extends JFrame {
             g.setPaint(new GradientPaint(0, y + CH - 40, new Color(0, 0, 0, 0), 0, y + CH, new Color(0, 0, 0, 70)));
             g.fillRect(x, y + CH - 40, w, 40);
             g.setClip(clip);
-            g.setColor(hover ? SELECT : EDGE);
-            g.setStroke(new BasicStroke(hover ? 1.6f : 1f));
+            g.setColor(StudioWidgets.mix(EDGE, SELECT, l));
+            g.setStroke(new BasicStroke(1f + 0.6f * l));
             g.draw(card);
             // the menu dots
             if (hover && menu != null) {
@@ -708,6 +740,7 @@ final class StartScreen extends JFrame {
         final String title, text, icon;
         final Color color;
         boolean hover;
+        final StudioWidgets.Anim glow = new StudioWidgets.Anim(this);
 
         Action(String title, String text, String icon, Color color, Runnable run) {
             this.title = title;
@@ -717,8 +750,10 @@ final class StartScreen extends JFrame {
             setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
             setToolTipText(text);
             addMouseListener(new MouseAdapter() {
-                @Override public void mouseEntered(MouseEvent e) { hover = true; repaint(); }
-                @Override public void mouseExited(MouseEvent e) { hover = false; repaint(); }
+                @Override public void mouseEntered(MouseEvent e) { hover = true; glow.to(1f); }
+                @Override public void mouseExited(MouseEvent e) { hover = false; glow.to(0f); }
+                @Override public void mousePressed(MouseEvent e) { glow.to(1.8f); }
+                @Override public void mouseReleased(MouseEvent e) { glow.to(hover ? 1f : 0f); }
                 @Override public void mouseClicked(MouseEvent e) { run.run(); }
             });
         }
@@ -726,12 +761,13 @@ final class StartScreen extends JFrame {
         @Override protected void paintComponent(Graphics g0) {
             Graphics2D g = StudioWidgets.smooth(g0);
             int w = getWidth() - 1, h = getHeight() - 1;
+            float v = glow.get();
             Shape r = new RoundRectangle2D.Double(0, 0, w, h, 16, 16);
-            g.setColor(hover ? StudioWidgets.mix(PANEL, color, 0.16) : PANEL);
+            g.setColor(StudioWidgets.mix(PANEL, color, Math.min(0.3, 0.16 * v)));
             g.fill(r);
-            g.setColor(hover ? color : EDGE);
+            g.setColor(StudioWidgets.mix(EDGE, color, Math.min(1.0, v)));
             g.draw(r);
-            int d = 42, ix = 16, iy = (h - d) / 2;
+            int d = 42 + Math.round(4 * Math.min(1f, v)), ix = 16 - Math.round(2 * Math.min(1f, v)), iy = (h - d) / 2; // the icon swells a little
             g.setColor(StudioWidgets.mix(PANEL, color, 0.3));
             g.fillOval(ix, iy, d, d);
             g.setColor(color.brighter());
@@ -812,6 +848,7 @@ final class StartScreen extends JFrame {
     final class Nav extends JComponent {
         final String text, icon;
         boolean selected, hover;
+        final StudioWidgets.Anim fade = new StudioWidgets.Anim(this);
 
         Nav(String text, String icon, Runnable run) {
             this.text = text;
@@ -821,26 +858,29 @@ final class StartScreen extends JFrame {
             setPreferredSize(new Dimension(200, 38));
             setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
             addMouseListener(new MouseAdapter() {
-                @Override public void mouseEntered(MouseEvent e) { hover = true; repaint(); }
-                @Override public void mouseExited(MouseEvent e) { hover = false; repaint(); }
+                @Override public void mouseEntered(MouseEvent e) { hover = true; fade.to(selected ? 1f : 0.6f); }
+                @Override public void mouseExited(MouseEvent e) { hover = false; fade.to(selected ? 1f : 0f); }
                 @Override public void mouseClicked(MouseEvent e) { run.run(); }
             });
         }
 
         void setSelected(boolean s) {
             selected = s;
-            repaint();
+            fade.to(s ? 1f : hover ? 0.6f : 0f);
         }
 
         @Override protected void paintComponent(Graphics g0) {
             Graphics2D g = StudioWidgets.smooth(g0);
-            if (selected || hover) {
-                g.setColor(selected ? StudioWidgets.mix(PANEL, SELECT, 0.22) : PANEL2);
+            float v = fade.get();
+            if (v > 0.01f) {
+                g.setColor(StudioWidgets.mix(PANEL, StudioWidgets.mix(PANEL2, SELECT, 0.3), Math.min(1f, v)));
                 g.fill(new RoundRectangle2D.Double(0, 0, getWidth() - 1, getHeight() - 1, 10, 10));
             }
-            if (selected) {
+            if (selected || v > 0.7f) {
+                // the accent bar grows from the middle as the item becomes the current one
+                int bh = Math.round((getHeight() - 18) * Math.max(0f, Math.min(1f, (v - 0.6f) / 0.4f)));
                 g.setColor(SELECT);
-                g.fillRoundRect(0, 9, 3, getHeight() - 18, 3, 3);
+                g.fillRoundRect(0, getHeight() / 2 - bh / 2, 3, Math.max(bh, 0), 3, 3);
             }
             g.setColor(selected ? SELECT : MUTED);
             g.setStroke(new BasicStroke(1.7f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
@@ -1141,13 +1181,14 @@ final class StartScreen extends JFrame {
         DefaultListModel<MosaicTemplates.Template> lm = new DefaultListModel<>();
         ts.forEach(lm::addElement);
         JList<MosaicTemplates.Template> list = new JList<>(lm);
+        int[] hoverRow = {-1};
         list.setBackground(PANEL);
         list.setFixedCellHeight(74);
         list.setCellRenderer((l, t, i, sel, foc) -> new JComponent() {
             @Override protected void paintComponent(Graphics g0) {
                 Graphics2D g = StudioWidgets.smooth(g0);
                 g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-                g.setColor(sel ? StudioWidgets.mix(PANEL, SELECT, 0.25) : PANEL);
+                g.setColor(sel ? StudioWidgets.mix(PANEL, SELECT, 0.25) : i == hoverRow[0] ? StudioWidgets.mix(PANEL, SELECT, 0.1) : PANEL);
                 g.fillRect(0, 0, getWidth(), getHeight());
                 BufferedImage img = GraphThumbs.get(t.json(), list::repaint);
                 Shape thumb = new RoundRectangle2D.Double(10, 9, 98, 56, 8, 8);
@@ -1164,6 +1205,26 @@ final class StartScreen extends JFrame {
                 g.drawString(t.category(), 120, 50);
                 g.dispose();
             }
+        });
+        list.addMouseMotionListener(new java.awt.event.MouseMotionAdapter() {
+            @Override public void mouseMoved(MouseEvent e) {
+                int i = list.locationToIndex(e.getPoint());
+                if (i >= 0 && !list.getCellBounds(i, i).contains(e.getPoint())) i = -1;
+                if (i == hoverRow[0]) return;
+                hoverRow[0] = i;
+                list.repaint();
+                if (i < 0) { StudioWidgets.Peek.hide(); return; }
+                var t = lm.get(i);
+                StudioWidgets.Peek.later(list, list.getCellBounds(i, i), () -> GraphThumbs.get(t.json(), () -> { }), t.name(), t.description(),
+                    List.of(t.category()), "Click to start the project from it");
+            }
+        });
+        list.addMouseListener(new MouseAdapter() {
+            @Override public void mouseExited(MouseEvent e) { hoverRow[0] = -1; list.repaint(); StudioWidgets.Peek.hide(); }
+            @Override public void mousePressed(MouseEvent e) { StudioWidgets.Peek.hide(); }
+        });
+        d.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override public void windowClosed(java.awt.event.WindowEvent e) { StudioWidgets.Peek.hide(); }
         });
         for (int i = 0; i < ts.size(); i++) if (ts.get(i).name().equals(template)) list.setSelectedIndex(i);
         if (list.getSelectedIndex() < 0) list.setSelectedIndex(0);
